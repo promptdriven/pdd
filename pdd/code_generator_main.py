@@ -31,10 +31,78 @@ from .architecture_sync import (
     generate_tags_from_architecture,
 )
 from .architecture_registry import extract_modules
+from .architecture_include_validation import validate_prompt_contract_context
 from .validate_prompt_includes import validate_prompt_includes
 
 console = Console()
 logger = logging.getLogger(__name__)
+
+
+class ArchitectureConformanceError(click.UsageError):
+    """Typed exception raised when generated code violates the architecture contract.
+
+    Subclass of :class:`click.UsageError` so existing call sites that catch
+    ``click.UsageError`` continue to work unchanged. Carries structured fields
+    so callers like ``pdd sync`` / ``agentic_sync_runner`` can build a repair
+    directive and retry generation without parsing the message string.
+    """
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        architecture_entry: Dict[str, Any],
+        expected_symbols: List[str],
+        found_symbols: List[str],
+        missing_symbols: List[str],
+        message: Optional[str] = None,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.architecture_entry = architecture_entry or {}
+        self.expected_symbols = list(expected_symbols)
+        self.found_symbols = list(found_symbols)
+        self.missing_symbols = list(missing_symbols)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        if message is None:
+            output_display = self.output_path or "<unknown>"
+            message = (
+                f"Architecture conformance error for {prompt_name}: "
+                f"declared symbols missing from generated code: "
+                f"{', '.join(self.missing_symbols)}. "
+                f"Output: {output_display}. "
+                f"Expected: {self.expected_symbols}. Found: {self.found_symbols}."
+            )
+        super().__init__(message)
+
+    @property
+    def repair_directive(self) -> str:
+        """Multi-line, model-facing instruction naming the missing symbols."""
+        lines: List[str] = []
+        lines.append(
+            f"Architecture conformance error for {self.prompt_name}: "
+            f"the generated code is missing required exports declared in architecture.json."
+        )
+        lines.append("Required missing exports:")
+        for sym in self.missing_symbols:
+            lines.append(f"- {sym}")
+        lines.append("")
+        lines.append(
+            "Do not modify architecture.json. Do not remove existing valid exports."
+        )
+        if self.expected_symbols:
+            lines.append(
+                f"Expected interface symbols: {', '.join(self.expected_symbols)}."
+            )
+        if self.found_symbols:
+            lines.append(
+                f"Currently exported symbols: {', '.join(self.found_symbols)}."
+            )
+        return "\n".join(lines)
+
 
 # --- Helper Functions ---
 def _parse_llm_bool(value: str) -> bool:
@@ -66,6 +134,47 @@ def _should_wire_generated_exports(output_path: str) -> bool:
     if _env_flag_enabled("PDD_SKIP_WIRING"):
         return False
     return _env_flag_enabled("PDD_ENABLE_WIRING")
+
+
+def _find_prompt_contract_project_root(prompt_path: str, output_path: Optional[str]) -> pathlib.Path:
+    """Find the project root used for prompt contract preflight resolution."""
+    starts: List[pathlib.Path] = []
+    try:
+        starts.append(pathlib.Path(prompt_path).resolve().parent)
+    except Exception:
+        pass
+    if output_path:
+        try:
+            starts.append(pathlib.Path(output_path).resolve().parent)
+        except Exception:
+            pass
+    starts.append(pathlib.Path.cwd().resolve())
+
+    seen: set[pathlib.Path] = set()
+    for start in starts:
+        if start in seen:
+            continue
+        seen.add(start)
+        current = start
+        while True:
+            if (current / "architecture.json").exists():
+                return current
+            if current.parent == current:
+                break
+            current = current.parent
+
+    try:
+        current = pathlib.Path(prompt_path).resolve().parent
+        while True:
+            if current.name == "prompts":
+                return current.parent
+            if current.parent == current:
+                break
+            current = current.parent
+    except Exception:
+        pass
+
+    return pathlib.Path.cwd().resolve()
 
 # --- Git Helper Functions ---
 def _run_git_command(command: List[str], cwd: Optional[str] = None) -> Tuple[int, str, str]:
@@ -252,6 +361,7 @@ def _verify_architecture_conformance(
     arch_path: Optional[str],
     language: Optional[str],
     verbose: bool,
+    output_path: Optional[str] = None,
 ) -> None:
     """Check generated code exports against architecture.json interface declarations.
 
@@ -336,10 +446,13 @@ def _verify_architecture_conformance(
     # Compare declared vs actual
     missing = [s for s in declared_symbols if s not in actual_symbols]
     if missing:
-        raise click.UsageError(
-            f"Architecture conformance error for {prompt_name}: "
-            f"declared symbols missing from generated code: {', '.join(missing)}. "
-            f"Expected: {declared_symbols}. Found: {actual_symbols}."
+        raise ArchitectureConformanceError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            architecture_entry=entry or {},
+            expected_symbols=declared_symbols,
+            found_symbols=actual_symbols,
+            missing_symbols=missing,
         )
 
     # Check naming convention: if architecture specifies snake_case but code has camelCase.
@@ -354,10 +467,21 @@ def _verify_architecture_conformance(
                     camel_exports.append(s)
                     break
         if camel_exports:
-            raise click.UsageError(
+            camel_message = (
                 f"Architecture conformance error for {prompt_name}: "
                 f"Python code uses camelCase names ({', '.join(camel_exports[:5])}) "
-                f"but Python convention requires snake_case."
+                f"but Python convention requires snake_case. "
+                f"Output: {output_path or '<unknown>'}. "
+                f"Expected: {declared_symbols}. Found: {actual_symbols}."
+            )
+            raise ArchitectureConformanceError(
+                prompt_name=prompt_name,
+                output_path=output_path or "",
+                architecture_entry=entry or {},
+                expected_symbols=declared_symbols,
+                found_symbols=actual_symbols,
+                missing_symbols=camel_exports,
+                message=camel_message,
             )
 
 
@@ -673,6 +797,20 @@ def code_generator_main(
             prompt_content += "</unit_test_content>\n"
         # ---------------------------------
 
+        # Architecture-conformance repair directive (set by retrying callers
+        # such as agentic_sync_runner / sync_main when a prior generation
+        # failed conformance). Append to the prompt so the model sees the
+        # missing-export instruction on the next attempt. Without this, the
+        # subprocess retry would be an identical generation request and the
+        # repair loop would not actually repair anything (#866).
+        repair_directive_env = os.environ.get("PDD_REPAIR_DIRECTIVE")
+        if repair_directive_env and repair_directive_env.strip():
+            prompt_content += (
+                "\n\n<architecture_repair_directive>\n"
+                f"{repair_directive_env.strip()}\n"
+                "</architecture_repair_directive>\n"
+            )
+
     except FileNotFoundError as e:
         console.print(f"[red]Error: Input file not found: {e.filename}[/red]")
         return "", False, 0.0, "error"
@@ -811,6 +949,25 @@ def code_generator_main(
     # Honor front-matter language if provided (overrides detection for both local and cloud)
     if fm_meta and isinstance(fm_meta.get("language"), str) and fm_meta.get("language"):
         language = fm_meta.get("language")
+
+    if (
+        llm_enabled
+        and output_path
+        and not _env_flag_enabled("PDD_SKIP_PROMPT_CONTRACT_PREFLIGHT")
+    ):
+        contract_root = _find_prompt_contract_project_root(prompt_file, output_path)
+        contract_arch_path = contract_root / "architecture.json"
+        contract_errors = validate_prompt_contract_context(
+            prompt_path=pathlib.Path(prompt_file),
+            output_path=pathlib.Path(output_path),
+            project_root=contract_root,
+            architecture_path=contract_arch_path if contract_arch_path.exists() else None,
+            prompt_content=prompt_content,
+        )
+        if contract_errors:
+            raise click.UsageError(
+                "Prompt contract preflight failed:\n- " + "\n- ".join(contract_errors)
+            )
 
     if output_path and pathlib.Path(output_path).exists():
         try:
@@ -1473,7 +1630,12 @@ def code_generator_main(
                         arch_path=None,  # Uses default architecture.json
                         language=language,
                         verbose=verbose,
+                        output_path=output_path,
                     )
+                except ArchitectureConformanceError as conform_err:
+                    conform_err.total_cost = float(total_cost or 0.0)
+                    conform_err.model_name = model_name or "unknown"
+                    raise  # Re-raise conformance errors as hard failures
                 except click.UsageError:
                     raise  # Re-raise conformance errors as hard failures
                 except Exception as conform_err:

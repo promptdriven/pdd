@@ -1,5 +1,7 @@
 % You are an expert Python engineer. Create a centralized cloud configuration module for PDD CLI commands.
 
+<pdd-dependency>auth_service_python.prompt</pdd-dependency>
+
 <include>context/python_preamble.prompt</include>
 
 % Role & Scope
@@ -22,11 +24,12 @@
        if in async context, raise AuthError directing user to run `pdd auth login` first
      - Always display auth errors to user (critical for debugging auth issues)
      - Catch both expected auth exceptions and unexpected exceptions; return None on failure
-  5) `_ensure_default_env()`: Auto-default `PDD_ENV` when unset, called at start of `get_jwt_token`
+  5) `ensure_default_env()`: Auto-default `PDD_ENV` when unset, called at start of `get_jwt_token`
      - Set "local" if emulator env vars are detected (FUNCTIONS_EMULATOR, FIREBASE_AUTH_EMULATOR_HOST, FIREBASE_EMULATOR_HUB)
      - Set "local" if PDD_CLOUD_URL points to localhost/127.0.0.1/0.0.0.0
      - Set "staging" if PDD_CLOUD_URL contains "prompt-driven-development-stg" or "staging"
      - Default to "prod" for typical CLI usage
+     - Keep `_ensure_default_env()` as a backward-compatible alias that delegates to `ensure_default_env()`
   6) `is_running_in_cloud()`: Return True if running inside a cloud environment
      - Check for `K_SERVICE` env var (Google Cloud Functions/Cloud Run)
      - Check for `FUNCTIONS_EMULATOR` env var (Firebase emulator)
@@ -39,11 +42,15 @@
   8) Module-level function `get_cloud_timeout()`: Return cloud request timeout in seconds
      - Check `PDD_CLOUD_TIMEOUT` env var, fall back to `DEFAULT_CLOUD_TIMEOUT` (900s)
      - Return int, handle invalid env var values gracefully (return default)
-  9) Export module-level constants for env var names, `DEFAULT_BASE_URL`, and cloud endpoints
-  10) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
+  9) Module-level function `get_cloud_request_timeout()`: Return `(connect_timeout, read_timeout)` tuple for `requests`
+     - Use `CLOUD_CONNECT_TIMEOUT` for connect timeout
+     - Use `get_cloud_timeout()` for read timeout
+  10) Export module-level constants for env var names, `DEFAULT_BASE_URL`, timeout defaults, and cloud endpoints
+  11) Re-export auth exception classes (`AuthError`, `NetworkError`, `TokenError`, `UserCancelledError`, `RateLimitError`)
 
 % Constants
-  - `CLOUD_ENDPOINTS` dict with keys for: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, getCommandStatus, updateCommand, cancelCommand
+  - `CLOUD_ENDPOINTS` dict with keys for: generateCode, generateExample, generateTest, generateBugTest, fixCode, crashCode, verifyCode, syncState, trackUsage, getCreditBalance, llmInvoke, registerSession, listSessions, heartbeatSession, deregisterSession, getCommands, getCommandStatus, updateCommand, cancelCommand, submitExample
+    - `submitExample` MUST be present so that `CloudConfig.get_endpoint_url("submitExample")` honors `PDD_CLOUD_URL` (staging/prod/local) for auto-submit callers in `sync_main` and `fix_main`. Hardcoding the production URL at the call sites breaks staging canaries with Firebase audience mismatches (#859).
 
 % Dependencies
   - Import auth functions and exceptions from `..get_jwt_token` (including `_get_cached_jwt`)

@@ -366,7 +366,7 @@
   },
   {
     "reason": "Handles authentication for PDD cloud services.",
-    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication.",
+    "description": "Obtains and caches JWT tokens for cloud API access. Supports Firebase authentication and environment-aware JWT cache validation so staging/prod cached tokens are not reused against the wrong PDD_CLOUD_URL target.",
     "dependencies": [
       "_keyring_timeout_python.prompt"
     ],
@@ -1925,7 +1925,7 @@
   },
   {
     "reason": "CLI entry point for the code generator command.",
-    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output.",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name, and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions.",
     "dependencies": [
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
@@ -1962,6 +1962,11 @@
           {
             "name": "code_generator_main",
             "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False) -> Tuple[str, bool, float, str]"
+          },
+          {
+            "name": "ArchitectureConformanceError",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = 'unknown')",
+            "returns": "ArchitectureConformanceError"
           }
         ]
       }
@@ -2423,10 +2428,11 @@
   },
   {
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
-    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
+    "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
       "agentic_langtest_python.prompt",
-      "auth_service_python.prompt"
+      "auth_service_python.prompt",
+      "core/cloud_python.prompt"
     ],
     "priority": 66,
     "filename": "fix_main_python.prompt",
@@ -2724,8 +2730,11 @@
   },
   {
     "reason": "Coordinates sync workflow steps and state management.",
-    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies.",
-    "dependencies": [],
+    "description": "Manages workflow state, determines next steps, tracks progress, and handles step dependencies. For generate operations, catches ArchitectureConformanceError, accumulates failed-attempt total_cost/model_name, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, stops early on repeated missing-symbol sets, restores the prior environment value, includes failed-attempt cost in success and exception logs, and emits build_conformance_hard_failure_from_error diagnostics before re-raising a final conformance failure.",
+    "dependencies": [
+      "code_generator_main_python.prompt",
+      "agentic_sync_runner_python.prompt"
+    ],
     "priority": 70,
     "filename": "sync_orchestration_python.prompt",
     "filepath": "pdd/sync_orchestration.py",
@@ -5240,8 +5249,12 @@
   },
   {
     "reason": "CLI entry point for the unified sync workflow; auto-submit example helper short-circuits in cloud executors and bounds JWT auth so headless environments cannot stall the sync.",
-    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
-    "dependencies": [],
+    "description": "Orchestrates the complete PDD workflow: auto-deps, generate, example, crash, verify, test, fix, update. The primary command for most users. In one-session mode, the generation phase catches ArchitectureConformanceError, accumulates failed-attempt total_cost/model_name into pre_cost, retries code_generator_main up to MAX_CONFORMANCE_ATTEMPTS with PDD_REPAIR_DIRECTIVE set to the previous failure's repair_directive while budget remains, short-circuits repeated missing-symbol sets, restores the prior environment value, passes only remaining budget after generation into one-session sync, and prints build_conformance_hard_failure_from_error diagnostics before re-raising a final conformance failure. _auto_submit_example skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT call in asyncio.wait_for so a stuck Device Flow on a dev machine cannot eat the whole sync.",
+    "dependencies": [
+      "core/cloud_python.prompt",
+      "code_generator_main_python.prompt",
+      "agentic_sync_runner_python.prompt"
+    ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
     "filepath": "pdd/sync_main.py",
@@ -7299,7 +7312,7 @@
   },
   {
     "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
-    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, posts live progress to GitHub issue comments, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted.",
+    "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects architecture-conformance failures from per-module sync subprocesses (line prefix 'Architecture conformance error for ') and retries the same module up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact missing symbols; stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the missing-symbol set repeats, and on hard failure records a structured '=== architecture conformance failure ===' block plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
@@ -7322,7 +7335,7 @@
             "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
             "returns": "AsyncSyncRunner",
             "sideEffects": [
-              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child remaining-budget caps"
+              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps"
             ]
           },
           {
@@ -8576,6 +8589,128 @@
             "name": "identify_modules",
             "signature": "(issue_content, architecture_json)",
             "returns": "MODULES_TO_SYNC list and DEPS_VALID boolean"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Centralized cloud config: routes endpoint URLs (incl. submitExample) and JWT auth honoring PDD_CLOUD_URL.",
+    "description": "CloudConfig provides static methods for cloud URL resolution (get_base_url, get_endpoint_url with CLOUD_ENDPOINTS map including submitExample), environment inference (ensure_default_env), JWT auth (get_jwt_token), and cloud-environment detection (is_running_in_cloud, is_cloud_enabled). Module-level get_cloud_timeout() reads PDD_CLOUD_TIMEOUT, and get_cloud_request_timeout() returns the requests timeout tuple used by cloud POST calls. Used by sync/fix auto-submit so PDD_CLOUD_URL is honored across staging/prod/local (#859).",
+    "dependencies": [
+      "auth_service_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "core/cloud_python.prompt",
+    "filepath": "pdd/core/cloud.py",
+    "tags": [
+      "cloud",
+      "config",
+      "python",
+      "core"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "CloudConfig.get_base_url",
+            "signature": "() -> str",
+            "returns": "str"
+          },
+          {
+            "name": "CloudConfig.get_endpoint_url",
+            "signature": "(endpoint_name: str) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "CloudConfig.get_jwt_token",
+            "signature": "(verbose: bool = False, app_name: str = 'PDD Code Generator') -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "CloudConfig.ensure_default_env",
+            "signature": "() -> None",
+            "returns": "None"
+          },
+          {
+            "name": "CloudConfig.is_running_in_cloud",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "CloudConfig.is_cloud_enabled",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "get_cloud_timeout",
+            "signature": "() -> int",
+            "returns": "int"
+          },
+          {
+            "name": "get_cloud_request_timeout",
+            "signature": "() -> tuple[int, int]",
+            "returns": "tuple[int, int]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 1200,
+      "y": 600
+    }
+  },
+  {
+    "reason": "Job queue manager for async PDD command execution via subprocesses.",
+    "description": "Async job queue manager that executes PDD commands as subprocesses with concurrency control (semaphore), real-time output streaming, and robust cancellation (SIGTERM/SIGKILL). Surfaces architecture-conformance failures (markers 'Architecture conformance error for ' or '=== architecture conformance failure ===') in job.error with the structured block, 'Reproduce locally:' line, and '--- env ---' fingerprint instead of the generic 'Sync operation failed' so the GitHub App can show missing symbols and a repro command.",
+    "dependencies": [],
+    "priority": 220,
+    "filename": "server/jobs_python.prompt",
+    "filepath": "pdd/server/jobs.py",
+    "tags": [
+      "module",
+      "python",
+      "server"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "Job",
+            "signature": "(id, command, args, options, status, result, error, cost, ...)",
+            "returns": "Job"
+          },
+          {
+            "name": "JobCallbacks",
+            "signature": "()",
+            "returns": "JobCallbacks"
+          },
+          {
+            "name": "JobManager",
+            "signature": "(max_concurrent: int = 1, executor=None, project_root=None)",
+            "returns": "JobManager"
+          },
+          {
+            "name": "JobManager.submit",
+            "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
+            "returns": "Job"
+          },
+          {
+            "name": "JobManager.cancel",
+            "signature": "async (job_id: str) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "JobManager.cleanup_old_jobs",
+            "signature": "(max_age_seconds: float = 3600) -> int",
+            "returns": "int"
+          },
+          {
+            "name": "JobManager.shutdown",
+            "signature": "async () -> None",
+            "returns": "None"
           }
         ]
       }

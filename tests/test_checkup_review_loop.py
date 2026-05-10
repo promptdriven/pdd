@@ -309,6 +309,7 @@ class TestCheckupReviewLoopRuntime:
         assert "max-cost-reached: true" in report
         assert "issue_aligned: unknown" in report
         assert "The API accepts invalid input." in report
+        assert "verification=unverified" in report
 
     def test_codex_findings_are_given_to_claude_then_verified_by_codex(
         self, monkeypatch: Any, tmp_path: Path

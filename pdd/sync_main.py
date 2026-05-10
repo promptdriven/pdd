@@ -517,6 +517,10 @@ def _auto_submit_example(
     except (TypeError, ValueError):
         auth_timeout_s = 300.0
     try:
+        # The lower-level async auth helper checks JWT cache before it knows
+        # which Firebase audience is expected. Infer PDD_ENV from PDD_CLOUD_URL
+        # first so staging/prod cache validation cannot reuse the wrong token.
+        CloudConfig.ensure_default_env()
         jwt_token = asyncio.run(asyncio.wait_for(
             get_jwt_token(
                 firebase_api_key=os.environ.get("NEXT_PUBLIC_FIREBASE_API_KEY"),
@@ -573,7 +577,7 @@ def _auto_submit_example(
 
     headers = {"Authorization": f"Bearer {jwt_token}", "Content-Type": "application/json"}
     response = requests.post(
-        "https://us-central1-prompt-driven-development.cloudfunctions.net/submitExample",
+        CloudConfig.get_endpoint_url("submitExample"),
         json=payload,
         headers=headers,
         timeout=get_cloud_request_timeout(),
@@ -936,25 +940,101 @@ def sync_main(
                 if not _one_session_skipped:
                     # Phase 1: Run pdd generate to create the code file
                     pre_cost = 0.0
+                    pre_model = ""
                     if not pdd_files["code"].exists() or force:
-                        from .code_generator_main import code_generator_main
+                        from .code_generator_main import (
+                            code_generator_main,
+                            ArchitectureConformanceError,
+                        )
+                        from .agentic_sync_runner import (
+                            MAX_CONFORMANCE_ATTEMPTS,
+                            build_conformance_hard_failure_from_error,
+                        )
 
                         if not quiet:
                             rprint("[dim]Running pdd generate...[/dim]")
                         pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
-                        gen_result = code_generator_main(
-                            ctx,
-                            prompt_file=str(pdd_files["prompt"].resolve()),
-                            output=str(pdd_files["code"].resolve()),
-                            original_prompt_file_path=None,
-                            force_incremental_flag=False,
-                            language=resolved_language,
-                            # output is .pddrc-derived (get_pdd_file_paths uses
-                            # context config), so let front-matter override it.
-                            output_from_config=True,
-                        )
+
+                        # Architecture-conformance repair loop (#866). Retry
+                        # generation when conformance fails, injecting the
+                        # repair directive via PDD_REPAIR_DIRECTIVE so the
+                        # next attempt sees the missing-export instruction.
+                        # The plain `pdd sync <module>` path runs in-process,
+                        # so we mutate os.environ directly and restore it after.
+                        import os as _os
+                        _prev_repair = _os.environ.get("PDD_REPAIR_DIRECTIVE")
+                        try:
+                            last_exc: Optional[ArchitectureConformanceError] = None
+                            last_missing: Optional[Tuple[str, ...]] = None
+                            for _attempt in range(MAX_CONFORMANCE_ATTEMPTS):
+                                try:
+                                    gen_result = code_generator_main(
+                                        ctx,
+                                        prompt_file=str(pdd_files["prompt"].resolve()),
+                                        output=str(pdd_files["code"].resolve()),
+                                        original_prompt_file_path=None,
+                                        force_incremental_flag=False,
+                                        language=resolved_language,
+                                        # output is .pddrc-derived (get_pdd_file_paths uses
+                                        # context config), so let front-matter override it.
+                                        output_from_config=True,
+                                    )
+                                    last_exc = None
+                                    break
+                                except ArchitectureConformanceError as exc:
+                                    attempt_cost = float(
+                                        getattr(exc, "total_cost", 0.0) or 0.0
+                                    )
+                                    pre_cost += attempt_cost
+                                    exc.total_cost = pre_cost
+                                    exc_model = getattr(exc, "model_name", "") or ""
+                                    if exc_model and exc_model != "unknown":
+                                        pre_model = exc_model
+                                    new_missing = tuple(
+                                        sorted(set(exc.missing_symbols))
+                                    )
+                                    if (
+                                        last_missing is not None
+                                        and new_missing == last_missing
+                                    ):
+                                        # Stuck on identical symbol set — abort.
+                                        last_exc = exc
+                                        break
+                                    last_missing = new_missing
+                                    last_exc = exc
+                                    if _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                        break
+                                    if (
+                                        remaining_budget is not None
+                                        and pre_cost >= remaining_budget
+                                    ):
+                                        break
+                                    if not quiet:
+                                        rprint(
+                                            "[yellow]Architecture conformance failed; "
+                                            f"retrying generation with repair directive "
+                                            f"(missing: {', '.join(new_missing) or '<none>'}).[/yellow]"
+                                        )
+                                    _os.environ["PDD_REPAIR_DIRECTIVE"] = exc.repair_directive
+                            if last_exc is not None:
+                                # Emit the structured hard-failure block
+                                # (#866 contract: plain CLI path must show the
+                                # same diagnostic the agentic runner emits)
+                                # before re-raising the original click.UsageError.
+                                import sys as _sys
+                                hard_block = build_conformance_hard_failure_from_error(
+                                    last_exc, basename
+                                )
+                                print(hard_block, file=_sys.stderr)
+                                raise last_exc
+                        finally:
+                            if _prev_repair is None:
+                                _os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
+                            else:
+                                _os.environ["PDD_REPAIR_DIRECTIVE"] = _prev_repair
                         # code_generator_main returns (content, was_incremental, cost, model)
-                        pre_cost = gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
+                        pre_cost += gen_result[2] if gen_result and len(gen_result) > 2 else 0.0
+                        pre_model = gen_result[3] if gen_result and len(gen_result) > 3 else pre_model
                     elif not quiet:
                         rprint("[dim]Code file exists, skipping generate.[/dim]")
 
@@ -975,7 +1055,7 @@ def sync_main(
                             pdd_files=pdd_files,
                             project_root=Path.cwd(),
                             target_coverage=final_target_coverage,
-                            budget=remaining_budget,
+                            budget=max(remaining_budget - pre_cost, 0.0),
                             verbose=verbose,
                             quiet=quiet,
                         )
@@ -989,7 +1069,7 @@ def sync_main(
                             save_fingerprint(
                                 basename, resolved_language, "fix",
                                 pdd_files, one_session_result.get("total_cost", 0.0),
-                                one_session_result.get("model_name", "unknown"),
+                                one_session_result.get("model_name", "unknown") or pre_model or "unknown",
                             )
 
                         # Post-sync: auto-submit example to cloud on success
@@ -1058,8 +1138,21 @@ def sync_main(
                 rprint(f"[bold red]An unexpected error occurred during sync for '{lang}':[/bold red] {e}")
                 if verbose:
                     console.print_exception(show_locals=True)
+            exc_cost = float(getattr(e, "total_cost", 0.0) or 0.0)
+            exc_model = getattr(e, "model_name", "") or ""
+            if exc_cost:
+                total_cost += exc_cost
+                if remaining_budget is not None:
+                    remaining_budget -= exc_cost
+            if exc_model and exc_model != "unknown":
+                primary_model = exc_model
             overall_success = False
-            aggregated_results["results_by_language"][lang] = {"success": False, "error": str(e)}
+            aggregated_results["results_by_language"][lang] = {
+                "success": False,
+                "error": str(e),
+                "total_cost": exc_cost,
+                "model_name": exc_model,
+            }
 
     # 7. Final Summary Report
     if not quiet:

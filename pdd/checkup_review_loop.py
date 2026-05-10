@@ -2240,11 +2240,19 @@ def _render_final_report(
         "",
     ])
     if state.fixes:
+        unfinished_review = (
+            remaining_findings
+            or _has_hard_not_clean_state(state)
+            or _has_limit_state(state)
+        )
+        verification = (
+            "unverified" if unfinished_review else "verified"
+        )
         for fix in state.fixes:
             changed = ", ".join(fix.changed_files) if fix.changed_files else "none"
             lines.append(
                 f"- {fix.fixer}: {'success' if fix.success else 'failed'}; "
-                f"changed_files={changed}; {fix.summary}"
+                f"verification={verification}; changed_files={changed}; {fix.summary}"
             )
     else:
         lines.append("- none")

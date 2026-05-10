@@ -1,12 +1,14 @@
 # tests/test_sync_main.py
 
+import base64
+import json
 import os
 import re
 import shutil
 import time
 from pathlib import Path
 from typing import Any, Dict, Generator
-from unittest.mock import MagicMock, call, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import click
 import pytest
@@ -1320,8 +1322,8 @@ class TestOneSessionSyncOutputFromConfig:
         # Successful one-session result so the surrounding loop doesn't error.
         fake_one_session_result = {
             "success": True,
-            "total_cost": 0.0,
-            "model_name": "mock",
+            "total_cost": 0.2,
+            "model_name": "one-session-model",
             "operations_completed": ["generate"],
             "errors": [],
         }
@@ -1377,6 +1379,87 @@ class TestOneSessionSyncOutputFromConfig:
             f"Expected output_from_config=True from one-session sync path, "
             f"got: {kwargs}"
         )
+
+    @pytest.mark.timeout(30)
+    def test_one_session_retries_architecture_conformance_failure(
+        self, mock_project_dir, mock_construct_paths, monkeypatch
+    ):
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% generate a tiny module"
+        )
+
+        fake_decision = MagicMock()
+        fake_decision.operation = "generate"
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "src" / "tinymod.py",
+        }
+        fake_one_session_result = {
+            "success": True,
+            "total_cost": 0.2,
+            "model_name": "one-session-model",
+            "operations_completed": ["generate"],
+            "errors": [],
+        }
+        repair_env_values = []
+
+        def fake_codegen(*_args, **_kwargs):
+            repair_env_values.append(os.environ.get("PDD_REPAIR_DIRECTIVE"))
+            if len(repair_env_values) == 1:
+                raise ArchitectureConformanceError(
+                    prompt_name="tinymod_python.prompt",
+                    output_path=str(fake_pdd_files["code"]),
+                    architecture_entry={"filename": "tinymod_python.prompt"},
+                    expected_symbols=["Tiny.run"],
+                    found_symbols=["Tiny"],
+                    missing_symbols=["Tiny.run"],
+                    total_cost=0.25,
+                    model_name="failed-generate-model",
+                )
+            fake_pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+            fake_pdd_files["code"].write_text(
+                "class Tiny:\n    def run(self):\n        return None\n"
+            )
+            return ("class Tiny:\n    pass\n", False, 0.5, "fixed-generate-model")
+
+        with patch(
+            "pdd.code_generator_main.code_generator_main",
+            side_effect=fake_codegen,
+        ) as mock_codegen, patch(
+            "pdd.sync_main.get_pdd_file_paths",
+            return_value=fake_pdd_files,
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ), patch(
+            "pdd.one_session_sync.run_one_session_sync",
+            return_value=fake_one_session_result,
+        ) as mock_one_session:
+            ctx = create_mock_context({"local": True})
+            results, total_cost, model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        assert mock_codegen.call_count == 2
+        assert repair_env_values[0] is None
+        assert repair_env_values[1] is not None
+        assert "- Tiny.run" in repair_env_values[1]
+        assert "PDD_REPAIR_DIRECTIVE" not in os.environ
+        assert mock_one_session.call_args.kwargs["budget"] == pytest.approx(0.25)
+        assert total_cost == pytest.approx(0.95)
+        assert results["total_cost"] == pytest.approx(0.95)
+        assert model == "one-session-model"
 
 
 # --- Tests for sync skipping LLM-only basenames ---
@@ -1494,12 +1577,18 @@ class TestIssue1048ValidateBasenameAcceptsFrameworkPaths:
     """_validate_basename should accept brackets, parentheses, and dots used by
     frontend frameworks for dynamic routes (Next.js, SvelteKit, Nuxt, Astro)."""
 
-    def test_nextjs_dynamic_route_bracket_id(self, mock_project_dir, mock_construct_paths):
+    def test_nextjs_dynamic_route_bracket_id(self, mock_project_dir, mock_construct_paths, mock_sync_orchestration):
         """Exact reproduction from issue: basename with Next.js [id] dynamic route."""
         # Create prompt file at the bracket path
         bracket_dir = mock_project_dir / "prompts" / "frontend" / "app" / "jobs" / "solving" / "[id]"
         bracket_dir.mkdir(parents=True, exist_ok=True)
         (bracket_dir / "page_python.prompt").write_text("# page prompt")
+        mock_sync_orchestration.return_value = {
+            "success": True,
+            "total_cost": 0.0,
+            "model_name": "mock",
+            "summary": "Sync OK.",
+        }
 
         ctx = create_mock_context({})
         # Should NOT raise UsageError about invalid characters
@@ -1512,6 +1601,7 @@ class TestIssue1048ValidateBasenameAcceptsFrameworkPaths:
         except click.UsageError as e:
             assert "invalid characters" not in str(e).lower(), \
                 f"Bug #1048: _validate_basename rejects brackets: {e}"
+        assert mock_sync_orchestration.called
 
     @pytest.mark.parametrize("basename", [
         "frontend/app/[...slug]/page",
@@ -2071,6 +2161,17 @@ class TestIssue1165_SyncMainEndToEnd:
 # ============================================================================
 # pdd sync MODULE_TIMEOUT cap + _auto_submit_example cloud overhead.
 # ============================================================================
+def _make_unsigned_jwt(payload: dict[str, Any]) -> str:
+    """Build an unsigned JWT-shaped token for cache audience tests."""
+    header = {"alg": "none", "typ": "JWT"}
+
+    def _encode(value: dict[str, Any]) -> str:
+        raw = json.dumps(value, separators=(",", ":")).encode("utf-8")
+        return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+    return f"{_encode(header)}.{_encode(payload)}.signature"
+
+
 class TestAutoSubmitSkipInCloud:
     """In a Cloud Run / Functions executor the interactive Device Flow auth
     cannot complete and the asyncio JWT call blocks for the full auth window
@@ -2157,6 +2258,117 @@ class TestAutoSubmitSkipInCloud:
         mock_get_jwt.assert_called_once()
         # Caller bailed out before reaching the cloud HTTP submit.
         mock_post.assert_not_called()
+
+    @patch("requests.post")
+    @patch("pdd.get_jwt_token.get_jwt_token")
+    @patch("pdd.core.cloud.CloudConfig.is_running_in_cloud", return_value=False)
+    def test_submit_uses_cloudconfig_endpoint(
+        self, mock_in_cloud, mock_get_jwt, mock_post, tmp_path, monkeypatch
+    ):
+        """Regression for #859: PDD_CLOUD_URL must control submitExample."""
+        monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+        monkeypatch.setenv(
+            "PDD_CLOUD_URL",
+            "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",
+        )
+
+        async def _fake_jwt(*args, **kwargs):
+            return "fake_jwt_token"
+
+        mock_get_jwt.side_effect = _fake_jwt
+        mock_post.return_value.status_code = 200
+
+        pdd_files = {
+            "prompt": tmp_path / "x.prompt",
+            "code": tmp_path / "x.py",
+            "example": tmp_path / "x_example.py",
+            "test": tmp_path / "test_x.py",
+        }
+        for f in pdd_files.values():
+            f.write_text("placeholder")
+
+        _real_auto_submit_example("x", "python", pdd_files, self._make_ctx())
+
+        mock_post.assert_called_once()
+        assert (
+            mock_post.call_args.args[0]
+            == "https://us-central1-prompt-driven-development-stg.cloudfunctions.net/submitExample"
+        )
+
+    def test_staging_url_invalidates_prod_cached_jwt_before_submit(
+        self, tmp_path, monkeypatch
+    ):
+        """Regression for #859 follow-up: infer PDD_ENV before cached JWT lookup.
+
+        Without this, the lower-level auth helper sees no PDD_ENV, accepts a
+        prod-audience cached JWT, and posts it to the staging submitExample URL.
+        """
+        monkeypatch.delenv("PDD_FORCE_LOCAL", raising=False)
+        monkeypatch.delenv("PDD_ENV", raising=False)
+        monkeypatch.delenv("PDD_JWT_TOKEN", raising=False)
+        monkeypatch.setenv(
+            "PDD_CLOUD_URL",
+            "https://us-central1-prompt-driven-development-stg.cloudfunctions.net",
+        )
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "prompt-driven-development")
+        monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "firebase-key")
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "github-client")
+
+        now = int(time.time())
+        prod_token = _make_unsigned_jwt({
+            "aud": "prompt-driven-development",
+            "exp": now + 3600,
+        })
+        staging_token = _make_unsigned_jwt({
+            "aud": "prompt-driven-development-stg",
+            "exp": now + 3600,
+        })
+        cache_file = tmp_path / ".pdd" / "jwt_cache"
+        cache_file.parent.mkdir(parents=True)
+        cache_file.write_text(
+            json.dumps({
+                "id_token": prod_token,
+                "expires_at": now + 3600,
+                "cached_at": now,
+            }),
+            encoding="utf-8",
+        )
+
+        pdd_files = {
+            "prompt": tmp_path / "x.prompt",
+            "code": tmp_path / "x.py",
+            "example": tmp_path / "x_example.py",
+            "test": tmp_path / "test_x.py",
+        }
+        for f in pdd_files.values():
+            f.write_text("placeholder")
+
+        with patch("pdd.core.cloud.CloudConfig.is_running_in_cloud", return_value=False), \
+             patch("pdd.get_jwt_token.JWT_CACHE_FILE", cache_file), \
+             patch(
+                 "pdd.get_jwt_token.FirebaseAuthenticator._get_stored_refresh_token",
+                 return_value="refresh-token",
+             ), \
+             patch(
+                 "pdd.get_jwt_token.FirebaseAuthenticator._refresh_firebase_token",
+                 new=AsyncMock(return_value=staging_token),
+             ) as mock_refresh, \
+             patch("requests.post") as mock_post:
+            mock_post.return_value.status_code = 200
+
+            _real_auto_submit_example("x", "python", pdd_files, self._make_ctx())
+
+        mock_refresh.assert_awaited_once_with("refresh-token")
+        mock_post.assert_called_once()
+        assert os.environ["PDD_ENV"] == "staging"
+        assert (
+            mock_post.call_args.args[0]
+            == "https://us-central1-prompt-driven-development-stg.cloudfunctions.net/submitExample"
+        )
+        assert mock_post.call_args.kwargs["headers"]["Authorization"] == (
+            f"Bearer {staging_token}"
+        )
+        assert prod_token not in mock_post.call_args.kwargs["headers"]["Authorization"]
 
 
 class TestModuleTimeoutEnvOverride:

@@ -101,14 +101,17 @@ def _get_expected_jwt_audience() -> Optional[str]:
     if not env or env == "local":
         return None
 
-    project_id = os.environ.get("PDD_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
-    if project_id:
-        return project_id
-
     if env in ("prod", "production"):
         return "prompt-driven-development"
     if env == "staging":
         return os.environ.get("STAGING_PROJECT_ID") or "prompt-driven-development-stg"
+
+    # For named PDD environments above, PDD_ENV is the stronger signal. Generic
+    # ADC variables such as GOOGLE_CLOUD_PROJECT often describe the developer's
+    # local gcloud context, not the Firebase audience selected by PDD_CLOUD_URL.
+    project_id = os.environ.get("PDD_PROJECT_ID") or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    if project_id:
+        return project_id
     return None
 
 
