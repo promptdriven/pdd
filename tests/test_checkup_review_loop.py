@@ -1629,3 +1629,226 @@ class TestPushWithRetryClonedRemote:
         assert any("x-access-token:" in c[2] for c in retry_cmds)
         # No `git remote set-url` was issued for the URL remote.
         assert not any(c[:3] == ["git", "remote", "set-url"] for c in cmds)
+
+
+class TestStaticAnalysisCandidateFindingsIntegration:
+    """The AST drift scan must actually reach the reviewer prompt that
+    `_run_review` sends to the role.  Mocks `_run_role_task` and asserts
+    the prompt the mock receives carries the new static-analysis section
+    when the worktree contains drift, and omits it when it does not.
+    """
+
+    def _make_drift_worktree(self, tmp_path: Path) -> Path:
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        sample = worktree / "pkg" / "sample.py"
+        sample.parent.mkdir(parents=True)
+        sample.write_text(
+            'ENV_KEYS = ["FOO", "BAR", "BAZ"]\n'
+            "\n"
+            "def _canonical_env_keys():\n"
+            '    return ["FOO", "BAR", "BAZ", "QUX", "QUUX"]\n',
+            encoding="utf-8",
+        )
+        return worktree
+
+    def test_drift_candidates_are_embedded_in_prompt_when_present(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import (
+            ReviewLoopState,
+            _run_review,
+        )
+
+        worktree = self._make_drift_worktree(tmp_path)
+        artifacts_dir = tmp_path / "artifacts"
+        artifacts_dir.mkdir()
+
+        # Stub the PR diff resolver to claim our drift fixture is the
+        # PR-touched file (avoids needing a real git repo for the test).
+        # The production code uses ``_pr_changed_python_files`` to derive
+        # the change set from ``git diff --name-only BASE...HEAD``.
+        monkeypatch.setattr(
+            mod,
+            "_pr_changed_python_files",
+            lambda _wt, _pr_metadata=None: ["pkg/sample.py"],
+        )
+
+        captured: Dict[str, str] = {}
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            captured["prompt"] = instruction
+            return True, _json("clean"), 0.0, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        _run_review(
+            reviewer="codex",
+            context=_ctx(tmp_path),
+            worktree=worktree,
+            round_number=1,
+            state=ReviewLoopState(),
+            config=_config(),
+            verbose=False,
+            quiet=True,
+            artifacts_dir=artifacts_dir,
+            mode="review",
+            findings_to_verify=None,
+            fix_result=None,
+        )
+
+        prompt = captured["prompt"]
+        assert "Static-Analysis Candidate Findings" in prompt
+        assert "ENV_KEYS" in prompt
+        assert "_canonical_env_keys" in prompt
+        # The missing items must be visible to the LLM.
+        assert "QUX" in prompt and "QUUX" in prompt
+        # And the candidate-findings JSON artifact must be persisted.
+        artifact = (
+            artifacts_dir
+            / "round-1-review-static-analysis-candidates.json"
+        )
+        assert artifact.is_file()
+
+    def test_no_static_section_when_changed_files_are_empty(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        from pdd.checkup_review_loop import (
+            ReviewLoopState,
+            _run_review,
+        )
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+        artifacts_dir = tmp_path / "artifacts"
+        artifacts_dir.mkdir()
+
+        # No PR-changed files -> no scan -> no section in the prompt.
+        monkeypatch.setattr(
+            mod,
+            "_pr_changed_python_files",
+            lambda _wt, _pr_metadata=None: [],
+        )
+
+        captured: Dict[str, str] = {}
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            captured["prompt"] = instruction
+            return True, _json("clean"), 0.0, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        _run_review(
+            reviewer="codex",
+            context=_ctx(tmp_path),
+            worktree=worktree,
+            round_number=1,
+            state=ReviewLoopState(),
+            config=_config(),
+            verbose=False,
+            quiet=True,
+            artifacts_dir=artifacts_dir,
+            mode="review",
+            findings_to_verify=None,
+            fix_result=None,
+        )
+
+        assert "Static-Analysis Candidate Findings" not in captured["prompt"]
+
+    def test_detector_fires_on_clean_pr_worktree_via_pr_diff(
+        self, tmp_path: Path
+    ) -> None:
+        """Reviewer's blocker #1 (PR #899): the production path uses a fresh
+        ``git fetch pull/N/head`` worktree where ``git status --porcelain``
+        is empty by construction.  The detector must derive its changed-file
+        list from the PR's merge-base diff (``git diff --name-only
+        BASE...HEAD``) so it actually fires on committed changes.
+
+        This test creates a real two-commit-on-a-branch scenario and asserts
+        the detector fires WITHOUT staging any uncommitted edits.
+        """
+        import subprocess
+
+        import pdd.checkup_review_loop as mod
+
+        worktree = tmp_path / "wt"
+        worktree.mkdir()
+
+        def run(*args: str) -> None:
+            subprocess.run(
+                ["git", *args],
+                cwd=worktree,
+                check=True,
+                capture_output=True,
+            )
+
+        run("init", "-q", "-b", "main")
+        run("config", "user.email", "test@example.com")
+        run("config", "user.name", "Test")
+
+        # Base commit: only the canonical source exists.
+        canonical = worktree / "pkg" / "common.py"
+        canonical.parent.mkdir(parents=True)
+        canonical.write_text(
+            'CANONICAL = ("FOO", "BAR", "BAZ", "QUX", "QUUX")\n',
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "base")
+
+        # Branch + PR commit: introduce the drift pattern.
+        run("checkout", "-q", "-b", "pr-branch")
+        bad_test = worktree / "tests" / "test_x.py"
+        bad_test.parent.mkdir(parents=True)
+        bad_test.write_text(
+            'SUBSET = ["FOO", "BAR"]\n',
+            encoding="utf-8",
+        )
+        run("add", ".")
+        run("commit", "-q", "-m", "introduce drift")
+
+        # Sanity: ``git status --porcelain`` is empty (the existing helper
+        # would yield []), but ``git diff --name-only main...HEAD`` lists
+        # the new test file.
+        status_porcelain = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            check=True,
+        ).stdout
+        assert status_porcelain.strip() == "", (
+            "fresh PR worktree must be clean per ``git status``; this is "
+            "the production shape that broke the detector"
+        )
+
+        artifacts = tmp_path / "artifacts"
+        artifacts.mkdir()
+
+        # Production call shape: invoke through the public collector with
+        # the base branch resolved from the PR (here we pass it as a kwarg
+        # / pr_metadata; see the implementation).  The fix must use the
+        # merge-base diff rather than ``_git_changed_files``.
+        results = mod._collect_static_analysis_candidate_findings(
+            worktree,
+            artifacts,
+            round_number=1,
+            mode="review",
+            pr_metadata={"base_ref": "main"},
+        )
+
+        # We expect the cross-file pair to be detected even though the
+        # canonical file is unchanged.  The new test file alone, when
+        # combined with the canonical-source candidates picked up from
+        # other Python files in the same package, must yield a finding.
+        assert results, (
+            "detector must fire on a real PR worktree using the merge-base "
+            "diff (not ``git status --porcelain``)"
+        )
+        # The finding must be the SUBSET-vs-CANONICAL drift.
+        names = {r["summary"] for r in results}
+        assert any("SUBSET" in name and "CANONICAL" in name for name in names), (
+            f"expected SUBSET vs CANONICAL drift, got: {names}"
+        )
