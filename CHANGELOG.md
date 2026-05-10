@@ -1,3 +1,10 @@
+## v0.0.233 (2026-05-10)
+
+### Feat
+
+- PDD enhancement for #798 (#858)
+- implement architecture conformance repair loop, prompt-contract validation, and environment-aware cloud routing for version 0.0.232
+
 ## v0.0.232 (2026-05-08)
 
 ### Feat
