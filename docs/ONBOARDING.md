@@ -90,7 +90,7 @@ To enable syntax highlighting for `.prompt` files in your editor, you'll need to
 Run the interactive setup wizard to configure your credentials. PDD supports
 API keys for direct prompt/LiteLLM commands and stored OAuth/subscription
 logins for agentic CLI workflows such as Claude Max/Pro, Gemini OAuth, and
-Codex ChatGPT login:
+Codex ChatGPT login, plus OpenCode provider auth/config:
 
 ```bash
 pdd setup
@@ -124,7 +124,7 @@ VERTEX_LOCATION=us-central1
 
 For issue-driven agentic CLI workflows, you can instead run the CLI's own
 login flow once, such as `claude auth login`, `gemini` interactive login, or
-`codex login`, then run `pdd setup` so PDD can detect that stored credential.
+`codex login`; for OpenCode run `opencode auth login` or configure `~/.config/opencode/opencode.json` / project `opencode.json`. Then run `pdd setup` so PDD can detect that stored credential.
 
 **To use Vertex AI (optional):**
 
@@ -223,6 +223,7 @@ pdd fix https://github.com/owner/repo/issues/456
    - **Claude Code**: `npm install -g @anthropic-ai/claude-code` (uses your Claude Max/Pro OAuth login from `claude auth login` if present, otherwise `ANTHROPIC_API_KEY`; pdd auto-prefers OAuth — set `PDD_KEEP_ANTHROPIC_API_KEY=1` to force API-key billing)
    - **Gemini CLI**: `npm install -g @google/gemini-cli` (uses `~/.gemini` OAuth login if present, otherwise `GOOGLE_API_KEY`)
    - **Codex CLI**: `npm install -g @openai/codex` (uses `~/.codex/auth.json` ChatGPT login from `codex login` if present, otherwise `OPENAI_API_KEY`)
+   - **OpenCode CLI**: `npm install -g opencode-ai` (uses OpenCode provider auth from `opencode auth login`, OpenCode JSON config, or provider env vars; set `OPENCODE_MODEL=provider/model`)
 
 ### Manual Prompt Workflow
 

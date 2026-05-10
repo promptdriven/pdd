@@ -28,7 +28,7 @@ source ~/.zshrc  # or source ~/.bashrc / fish equivalent
 ### Agentic Fallback
 The agentic fallback example demonstrates using agentic fallback to resolve cross-file dependencies during automated debugging.  
 The example has two files — `src/main.py` and `src/utils.py` — where `main.py` fails without reading `utils.py`.  
-With agentic fallback enabled, the CLI agent (Claude/Gemini/Codex) can read `utils.py`, understand the dependency, and fix `main.py`.
+With agentic fallback enabled, the CLI agent (Claude/Gemini/Codex/OpenCode) can read `utils.py`, understand the dependency, and fix `main.py`.
 Users may intentionally introduce errors in `src/utils.py` to test the agentic fix functionality.
 
 Additional examples demonstrating the use of agentic fallback are provided for Java, TypeScript, and JavaScript.

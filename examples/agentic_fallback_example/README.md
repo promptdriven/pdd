@@ -25,7 +25,7 @@ To fix the error in `main.py` using agentic fallback, run the following command:
 pdd fix examples/agentic_fallback_example/main_python.prompt examples/agentic_fallback_example/src/main.py examples/agentic_fallback_example/tests/test_main.py examples/agentic_fallback_example/error.log --loop --max-attempts 2 --verification-program examples/agentic_fallback_example/tests/test_main.py
 ```
 
-This command will invoke a CLI agent (such as Claude, Gemini, or Codex) that will use agentic fallback to read `utils.py`, understand the dependency, and fix the error in `main.py`.
+This command will invoke a CLI agent (such as Claude, Gemini, Codex, or OpenCode) that will use agentic fallback to read `utils.py`, understand the dependency, and fix the error in `main.py`.
 
 ### Using the `crash` command
 

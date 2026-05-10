@@ -61,7 +61,7 @@ pdd setup
 ```
 
 The setup wizard runs these steps:
-  1.  Detects agentic CLI tools (Claude, Gemini, Codex) and offers installation and API key configuration if needed
+  1.  Detects agentic CLI tools (Claude, Gemini, Codex, OpenCode) and offers installation and credential configuration if needed
   2. Scans for API keys across `.env`, and `~/.pdd/api-env.*`, and the shell environment; prompts to add one if none are found
   3. Configures models from a reference CSV `data/llm_model.csv` of top models (ELO ≥ 1400) across all LiteLLM-supported providers  based on your available keys
   4. Optionally creates a `.pddrc` project config
