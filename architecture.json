@@ -7804,12 +7804,7 @@
   {
     "reason": "Registers all PDD subcommands with the main CLI group in canonical order, determining `pdd --help` command listing.",
     "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
-    "dependencies": [
-      "commands/generate_python.prompt",
-      "commands/fix_python.prompt",
-      "commands/modify_python.prompt",
-      "commands/maintenance_python.prompt"
-    ],
+    "dependencies": [],
     "priority": 70,
     "filename": "commands/__init___python.prompt",
     "filepath": "pdd/commands/__init__.py",
