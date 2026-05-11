@@ -6391,3 +6391,54 @@ class TestRateLimitBackoffFloor:
         from pdd.agentic_common import RATE_LIMIT_BACKOFF_FLOOR
         high_backoff = 90.0
         assert max(high_backoff, RATE_LIMIT_BACKOFF_FLOOR) == 90.0
+
+
+# ---------------------------------------------------------------------------
+# Issue #814: credit-balance / billing 400s as permanent errors
+# ---------------------------------------------------------------------------
+
+
+class TestIssue814BillingErrorsPermanent:
+    """Anthropic billing/credit-balance 400 bodies must classify as permanent.
+
+    Spec section 14 (Error Classification) requires that
+    `_is_permanent_error()` matches:
+      - "credit balance is too low"
+      - "plans & billing"
+      - "insufficient credit" / "insufficient balance" / "insufficient funds"
+
+    so the orchestrator advances to the next provider in
+    `PDD_AGENTIC_PROVIDER` order instead of burning all retries on the same
+    provider.
+    """
+
+    def test_credit_balance_is_too_low_is_permanent(self):
+        # Verbatim shape from Anthropic 400 body
+        body = (
+            'Exit code 1: {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"Your credit balance is too low to access the Anthropic API."}}'
+        )
+        assert _is_permanent_error(body) is True
+
+    def test_plans_and_billing_phrase_is_permanent(self):
+        body = "Please go to Plans & Billing to upgrade or purchase credits."
+        assert _is_permanent_error(body) is True
+
+    def test_insufficient_credit_is_permanent(self):
+        assert _is_permanent_error("insufficient credit on account") is True
+
+    def test_insufficient_balance_is_permanent(self):
+        assert _is_permanent_error("insufficient balance to complete request") is True
+
+    def test_insufficient_funds_is_permanent(self):
+        assert _is_permanent_error("insufficient funds for this operation") is True
+
+    def test_billing_error_is_case_insensitive(self):
+        # _is_permanent_error lowercases its input first; ensure mixed-case bodies match.
+        assert _is_permanent_error("Your CREDIT BALANCE is TOO LOW.") is True
+        assert _is_permanent_error("Plans & Billing") is True
+
+    def test_unrelated_billing_word_does_not_match(self):
+        # Random use of "billing" without the documented phrase must not flag
+        # a transient error as permanent.
+        assert _is_permanent_error("billing pipeline timed out") is False
