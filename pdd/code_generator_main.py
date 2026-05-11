@@ -58,6 +58,7 @@ class ArchitectureConformanceError(click.UsageError):
         message: Optional[str] = None,
         total_cost: float = 0.0,
         model_name: str = "unknown",
+        repair_directive: Optional[str] = None,
     ) -> None:
         self.prompt_name = prompt_name
         self.output_path = output_path or ""
@@ -67,6 +68,11 @@ class ArchitectureConformanceError(click.UsageError):
         self.missing_symbols = list(missing_symbols)
         self.total_cost = float(total_cost or 0.0)
         self.model_name = model_name or "unknown"
+        # Optional explicit repair directive (used by the <pdd-interface>
+        # signature check where the prompt is the source of truth, not
+        # architecture.json). When None, the property falls back to the
+        # default architecture.json-oriented directive.
+        self._repair_directive_override: Optional[str] = repair_directive
         if message is None:
             output_display = self.output_path or "<unknown>"
             message = (
@@ -81,6 +87,8 @@ class ArchitectureConformanceError(click.UsageError):
     @property
     def repair_directive(self) -> str:
         """Multi-line, model-facing instruction naming the missing symbols."""
+        if self._repair_directive_override:
+            return self._repair_directive_override
         lines: List[str] = []
         lines.append(
             f"Architecture conformance error for {self.prompt_name}: "
@@ -355,6 +363,260 @@ def _collect_python_symbols(body: List[ast.stmt], prefix: str) -> List[str]:
     return symbols
 
 
+def _parse_declared_param_names(signature: str) -> Optional[List[str]]:
+    """Parse a ``(arg, arg2=default, ...)`` signature string into parameter names.
+
+    Returns the ordered list of parameter names (positional-only, positional,
+    keyword-only) — variadic ``*args``/``**kwargs`` are intentionally excluded
+    because a variadic catch-all does not satisfy a contract that declares a
+    specific named parameter (a caller passing ``sync_metadata=False`` expects
+    the callee to have that name in its signature).
+
+    Returns ``None`` if the signature is not a parseable paren-list (e.g. a
+    class header like ``class Foo(BaseModel)``); the caller should skip the
+    signature check in that case.
+    """
+    if not signature or not isinstance(signature, str):
+        return None
+    sig = signature.strip()
+    # Real architecture entries sometimes use class headers as "signatures"
+    # (e.g. ``class Order(BaseModel)``). Only treat strings that start with
+    # ``(`` as parameter lists.
+    if not sig.startswith("("):
+        return None
+    try:
+        tree = ast.parse(f"def _f{sig}: pass")
+    except SyntaxError:
+        return None
+    fn = tree.body[0]
+    if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    args = fn.args
+    names: List[str] = []
+    names.extend(a.arg for a in args.posonlyargs)
+    names.extend(a.arg for a in args.args)
+    names.extend(a.arg for a in args.kwonlyargs)
+    return names
+
+
+def _collect_actual_param_names(func_node: ast.AST) -> List[str]:
+    """Return positional + keyword-only parameter names for a FunctionDef-like AST node.
+
+    ``*args`` and ``**kwargs`` are deliberately excluded: a variadic catch-all
+    does not satisfy a declared named parameter for conformance purposes.
+    """
+    if not isinstance(func_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return []
+    args = func_node.args
+    names: List[str] = []
+    names.extend(a.arg for a in args.posonlyargs)
+    names.extend(a.arg for a in args.args)
+    names.extend(a.arg for a in args.kwonlyargs)
+    return names
+
+
+def _find_target_function(
+    tree: ast.Module, name: str
+) -> Optional[ast.AST]:
+    """Locate a declared function in the generated code.
+
+    Tries (in order):
+    1. A module-level ``def name`` / ``async def name``.
+    2. A module-level ``class name`` — returns its ``__init__`` method if any
+       (covers the "class methods: only check ``__init__``" rule).
+
+    Returns ``None`` if neither is present (existing symbol-existence check
+    owns this failure mode).
+    """
+    if not isinstance(tree, ast.Module):
+        return None
+    # Direct function match.
+    for node in tree.body:
+        if (
+            isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and node.name == name
+        ):
+            return node
+    # Class match — return __init__ (if present) for signature check.
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            for child in node.body:
+                if (
+                    isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                    and child.name == "__init__"
+                ):
+                    return child
+            # Class exists but has no __init__ — nothing to compare against.
+            return None
+    return None
+
+
+def _extract_pdd_interface_signatures(
+    prompt_content: Optional[str],
+    prompt_name: str,
+) -> Tuple[List[Tuple[str, List[str]]], bool]:
+    """Extract ``(name, [param_names])`` tuples from a prompt's ``<pdd-interface>``.
+
+    Returns ``(declarations, parse_error_logged)``:
+      - ``declarations``: list of ``(function_name, declared_param_names)``.
+        Functions whose signature is not a parseable paren-list (class headers,
+        TypeScript signatures, etc.) are skipped — they're outside the scope
+        of this check.
+      - ``parse_error_logged``: ``True`` when malformed JSON was found and a
+        warning was emitted; caller should skip the signature check.
+
+    Returns ``([], False)`` when no ``<pdd-interface>`` block is present (the
+    new check is silent in that case to preserve existing behavior).
+    """
+    declarations: List[Tuple[str, List[str]]] = []
+    if not prompt_content:
+        return declarations, False
+
+    # Reuse the canonical parser from architecture_sync (verified non-circular
+    # at module import time).
+    try:
+        from .architecture_sync import parse_prompt_tags
+    except ImportError:
+        return declarations, False
+
+    tags = parse_prompt_tags(prompt_content)
+    parse_error = tags.get("interface_parse_error")
+    if parse_error:
+        logger.warning(
+            "pdd-interface JSON parse error in %s: %s — skipping signature "
+            "conformance check.",
+            prompt_name,
+            parse_error,
+        )
+        return declarations, True
+
+    interface = tags.get("interface")
+    if not isinstance(interface, dict):
+        return declarations, False
+
+    iface_type = interface.get("type", "")
+    candidates: List[Dict[str, Any]] = []
+    if iface_type == "module":
+        module_spec = interface.get("module") or {}
+        candidates.extend(module_spec.get("functions") or [])
+    elif iface_type == "cli":
+        cli_spec = interface.get("cli") or {}
+        candidates.extend(cli_spec.get("commands") or [])
+    # Other iface_types (page, component, api) don't carry callable signatures
+    # we can check this way.
+
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        sig = item.get("signature")
+        if not name or not isinstance(name, str):
+            continue
+        params = _parse_declared_param_names(sig) if isinstance(sig, str) else None
+        if params is None:
+            # Non-paren signature (e.g. "class Foo(BaseModel)") — skip.
+            continue
+        declarations.append((name, params))
+    return declarations, False
+
+
+def _verify_pdd_interface_signatures(
+    generated_code: str,
+    prompt_content: Optional[str],
+    prompt_name: str,
+    output_path: Optional[str],
+    architecture_entry: Dict[str, Any],
+) -> None:
+    """Check that param names declared in ``<pdd-interface>`` exist in the code.
+
+    Operates ONLY on functions/commands whose signature is a parseable paren
+    list. Variadic ``*args``/``**kwargs`` in generated code do NOT satisfy a
+    declared named parameter (e.g. ``def f(**kwargs)`` does not satisfy a
+    declared ``sync_metadata`` kwarg — callers pass it by name).
+
+    Raises ``ArchitectureConformanceError`` listing the missing parameters as
+    dotted ``funcname.paramname`` entries so the existing repair-loop
+    machinery surfaces them. Silently returns when:
+      - no ``<pdd-interface>`` block is present in the prompt;
+      - the JSON inside the block is malformed (a warning is logged);
+      - none of the declared functions exists at module top-level (the
+        existing symbol-existence check owns that error).
+    """
+    declarations, parse_error_logged = _extract_pdd_interface_signatures(
+        prompt_content, prompt_name
+    )
+    if parse_error_logged or not declarations:
+        return
+
+    try:
+        tree = ast.parse(generated_code)
+    except SyntaxError:
+        return  # Can't parse — defer to existing checks/recovery paths.
+
+    missing: List[str] = []
+    declared_param_dotted: List[str] = []
+    found_param_dotted: List[str] = []
+
+    for func_name, declared_params in declarations:
+        target = _find_target_function(tree, func_name)
+        if target is None:
+            # Declared function not found in code — that's the existing
+            # symbol-existence check's responsibility. Do not double-fire.
+            continue
+        actual_params = _collect_actual_param_names(target)
+        for param in declared_params:
+            dotted = f"{func_name}.{param}"
+            declared_param_dotted.append(dotted)
+            if param in actual_params:
+                found_param_dotted.append(dotted)
+            else:
+                missing.append(dotted)
+
+    if not missing:
+        return
+
+    output_display = output_path or "<unknown>"
+    message = (
+        f"Architecture conformance error for {prompt_name}: "
+        f"the prompt's <pdd-interface> declares parameter(s) missing from "
+        f"the generated code: {', '.join(missing)}. "
+        f"Output: {output_display}."
+    )
+
+    # Group missing parameters by function for a readable repair directive.
+    missing_by_func: Dict[str, List[str]] = {}
+    for dotted in missing:
+        func, _, param = dotted.partition(".")
+        missing_by_func.setdefault(func, []).append(param)
+    directive_lines: List[str] = [
+        f"Architecture conformance error for {prompt_name}: "
+        "the prompt's <pdd-interface> declares parameter(s) that are missing "
+        "from the generated code's function signature.",
+    ]
+    for func, params in missing_by_func.items():
+        directive_lines.append(
+            f"- On `{func}`, add the following missing parameter(s) to the "
+            f"signature and corresponding code paths: `{', '.join(params)}`."
+        )
+    directive_lines.append("")
+    directive_lines.append(
+        "Do not remove the declared parameters from the prompt's "
+        "<pdd-interface>. The prompt is the source of truth — update the "
+        "generated code to match it."
+    )
+
+    raise ArchitectureConformanceError(
+        prompt_name=prompt_name,
+        output_path=output_path or "",
+        architecture_entry=architecture_entry or {},
+        expected_symbols=declared_param_dotted,
+        found_symbols=found_param_dotted,
+        missing_symbols=missing,
+        message=message,
+        repair_directive="\n".join(directive_lines),
+    )
+
+
 def _verify_architecture_conformance(
     generated_code: str,
     prompt_name: str,
@@ -362,23 +624,71 @@ def _verify_architecture_conformance(
     language: Optional[str],
     verbose: bool,
     output_path: Optional[str] = None,
+    prompt_content: Optional[str] = None,
 ) -> None:
     """Check generated code exports against architecture.json interface declarations.
 
     Raises ``click.UsageError`` on hard mismatch (missing declared symbols or
     naming convention violations).  Silently returns when no architecture entry
     exists or when the interface section is absent.
+
+    Additionally, when ``prompt_content`` is provided and contains a
+    ``<pdd-interface>`` block, verifies that each declared function/command's
+    declared parameter names exist in the generated code's function signature
+    (Issue #928). This catches cases where the existing symbol-existence
+    check passes but the generated code silently drops a declared kwarg
+    (e.g. ``sync_metadata=False``). The prompt is the source of truth for
+    the interface contract, so this check runs even when ``architecture.json``
+    has no matching entry.
+    """
+    entry = _verify_architecture_json_conformance(
+        generated_code=generated_code,
+        prompt_name=prompt_name,
+        arch_path=arch_path,
+        language=language,
+        output_path=output_path,
+    )
+
+    # Additionally enforce the prompt's <pdd-interface> signature contract.
+    # This catches "missing kwarg" bugs (Issue #928) where the function exists
+    # (so the symbol-existence check above passes) but a declared parameter
+    # like ``sync_metadata=False`` is silently absent from the signature.
+    # The prompt is source of truth for parameter names, so this fires even
+    # if architecture.json has no matching entry.
+    _verify_pdd_interface_signatures(
+        generated_code=generated_code,
+        prompt_content=prompt_content,
+        prompt_name=prompt_name,
+        output_path=output_path,
+        architecture_entry=entry or {},
+    )
+
+
+def _verify_architecture_json_conformance(
+    generated_code: str,
+    prompt_name: str,
+    arch_path: Optional[str],
+    language: Optional[str],
+    output_path: Optional[str],
+) -> Optional[Dict[str, Any]]:
+    """Pre-existing architecture.json symbol-existence + camelCase check.
+
+    Extracted from :func:`_verify_architecture_conformance` so the new
+    ``<pdd-interface>`` signature check (Issue #928) can run independently
+    even when the architecture.json side returns early. Returns the matched
+    architecture entry (or ``None``) so callers can forward it to the
+    secondary check.
     """
     if not arch_path:
         arch_path = "architecture.json"
     arch_file = pathlib.Path(arch_path)
     if not arch_file.exists():
-        return
+        return None
 
     try:
         arch_data = json.loads(arch_file.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
-        return
+        return None
 
     # Find the matching architecture entry
     entry: Optional[Dict[str, Any]] = None
@@ -390,11 +700,11 @@ def _verify_architecture_conformance(
             break
 
     if entry is None:
-        return
+        return None
 
     interface = entry.get("interface")
     if not isinstance(interface, dict):
-        return
+        return entry
 
     # Collect declared symbols from the interface
     declared_symbols: List[str] = []
@@ -413,15 +723,15 @@ def _verify_architecture_conformance(
             pass
     elif iface_type == "page":
         # Pages typically export a default — skip symbol checking
-        return
+        return entry
     elif iface_type == "component":
         comp_spec = interface.get("component", {})
         for prop in comp_spec.get("props", []):
             pass  # Props aren't exported symbols
-        return
+        return entry
 
     if not declared_symbols:
-        return
+        return entry
 
     # Extract actual exports from generated code
     actual_symbols: List[str] = []
@@ -432,7 +742,7 @@ def _verify_architecture_conformance(
             tree = ast.parse(generated_code)
             actual_symbols.extend(_collect_python_symbols(tree.body, prefix=""))
         except SyntaxError:
-            return  # Can't parse — skip conformance
+            return entry  # Can't parse — skip conformance
     elif detected_lang in ("typescript", "javascript", "ts", "js") or any(
         prompt_name.endswith(sfx) for sfx in ("_TypeScript.prompt", "_TypeScriptReact.prompt", "_JavaScript.prompt", "_JavaScriptReact.prompt")
     ):
@@ -441,7 +751,7 @@ def _verify_architecture_conformance(
         )
         actual_symbols = export_pattern.findall(generated_code)
     else:
-        return  # Unsupported language
+        return entry  # Unsupported language
 
     # Compare declared vs actual
     missing = [s for s in declared_symbols if s not in actual_symbols]
@@ -483,6 +793,8 @@ def _verify_architecture_conformance(
                 missing_symbols=camel_exports,
                 message=camel_message,
             )
+
+    return entry
 
 
 def get_git_content_at_ref(file_path: str, git_ref: str = "HEAD") -> Optional[str]:
@@ -1631,6 +1943,7 @@ def code_generator_main(
                         language=language,
                         verbose=verbose,
                         output_path=output_path,
+                        prompt_content=prompt_content,
                     )
                 except ArchitectureConformanceError as conform_err:
                     conform_err.total_cost = float(total_cost or 0.0)
