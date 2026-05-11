@@ -37,7 +37,7 @@ _pdd() {
     local auto_deps_opts="--output --csv --force-scan"
     local verify_opts="--output-results --output-code --output-program --max-attempts --budget"
     local sync_opts="--max-attempts --budget --skip-verify --skip-tests --target-coverage --dry-run --log --no-steer --steer-timeout --agentic --timeout-adder --no-github-state --one-session --no-one-session --durable --durable-branch --no-resume --durable-max-parallel"
-    local checkup_opts="--validate-arch-includes --project-root --strict --no-fix --timeout-adder --no-github-state --pr --issue --review-loop --review-only --reviewers --reviewer --fixer --max-review-rounds --max-review-cost --max-review-minutes --require-all-reviewers-clean --no-require-all-reviewers-clean --continue-on-reviewer-limit --require-final-fresh-review --no-require-final-fresh-review --blocking-severities --clean-reviewer-states"
+    local checkup_opts="--validate-arch-includes --project-root --strict --no-fix --timeout-adder --no-github-state --pr --issue --review-loop --review-only --reviewers --reviewer --fixer --reviewer-fallback --max-review-rounds --max-review-cost --max-review-minutes --require-all-reviewers-clean --no-require-all-reviewers-clean --continue-on-reviewer-limit --require-final-fresh-review --no-require-final-fresh-review --blocking-severities --clean-reviewer-states"
     local pytest_output_opts="--json-only"
 
     # Complete global options before command
