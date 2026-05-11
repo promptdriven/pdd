@@ -439,7 +439,7 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
+    "reason": "Daily Rising Stars resurface check — Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
     "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
     "dependencies": [],
     "priority": 18,
@@ -5777,7 +5777,7 @@
   },
   {
     "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
-    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
+    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt"
@@ -7251,7 +7251,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
@@ -7413,7 +7413,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
+    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7572,7 +7572,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
+    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
     "dependencies": [],
     "priority": 218,
@@ -7629,7 +7629,7 @@
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
@@ -7804,7 +7804,11 @@
     "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument project-wide sync, GitHub issue sync dispatch, prompt-to-architecture sync, auto-deps, and setup.",
     "dependencies": [
       "auto_deps_main_python.prompt",
-      "architecture_sync_python.prompt"
+      "architecture_sync_python.prompt",
+      "sync_main_python.prompt",
+      "agentic_sync_python.prompt",
+      "track_cost_python.prompt",
+      "cli_python.prompt"
     ],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",
@@ -8722,5 +8726,764 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Core API endpoints for order management operations",
+    "description": "RESTful API endpoints for creating, retrieving, updating, and listing orders. Includes authentication middleware and error handling.",
+    "dependencies": [
+      "order_models_Python.prompt"
+    ],
+    "priority": 1,
+    "filename": "order_api_Python.prompt",
+    "filepath": "src/api/orders.py",
+    "tags": [
+      "backend",
+      "api",
+      "fastapi"
+    ],
+    "interface": {
+      "type": "api",
+      "endpoints": [
+        {
+          "method": "POST",
+          "path": "/api/orders",
+          "auth": "JWT required",
+          "requestSchema": "OrderCreateRequest",
+          "responseSchema": "OrderResponse"
+        },
+        {
+          "method": "GET",
+          "path": "/api/orders/{order_id}",
+          "auth": "JWT required",
+          "responseSchema": "OrderResponse"
+        },
+        {
+          "method": "GET",
+          "path": "/api/orders",
+          "auth": "JWT required",
+          "responseSchema": "OrderListResponse"
+        },
+        {
+          "method": "PATCH",
+          "path": "/api/orders/{order_id}/status",
+          "auth": "JWT required",
+          "requestSchema": "OrderStatusUpdateRequest",
+          "responseSchema": "OrderResponse"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Database models and schemas for order entities",
+    "description": "SQLAlchemy models for orders, order items, and related entities. Includes validation, relationships, and database constraints.",
+    "dependencies": [],
+    "priority": 2,
+    "filename": "order_models_Python.prompt",
+    "filepath": "src/models/order.py",
+    "tags": [
+      "backend",
+      "database",
+      "sqlalchemy"
+    ],
+    "interface": {
+      "type": "module",
+      "functions": [
+        {
+          "name": "Order.__init__",
+          "signature": "def __init__(self, user_id: UUID, items: List[OrderItem], status: OrderStatus)",
+          "returns": "Order instance",
+          "sideEffects": "Creates database record"
+        },
+        {
+          "name": "Order.calculate_total",
+          "signature": "def calculate_total(self) -> Decimal",
+          "returns": "Decimal",
+          "sideEffects": "None"
+        },
+        {
+          "name": "Order.update_status",
+          "signature": "def update_status(self, new_status: OrderStatus)",
+          "returns": "None",
+          "sideEffects": "Updates database record"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Main order listing page with filtering and pagination",
+    "description": "Next.js page component for displaying orders with filters for status, date range, and customer. Includes pagination controls and real-time updates.",
+    "dependencies": [
+      "order_api_Python.prompt",
+      "order_components_TypeScriptReact.prompt"
+    ],
+    "priority": 3,
+    "filename": "orders_page_TypeScriptReact.prompt",
+    "filepath": "app/orders/page.tsx",
+    "tags": [
+      "frontend",
+      "nextjs",
+      "typescript"
+    ],
+    "interface": {
+      "type": "page",
+      "route": "/orders",
+      "params": [
+        {
+          "name": "status",
+          "type": "string",
+          "description": "Filter orders by status (pending, processing, shipped, delivered)"
+        },
+        {
+          "name": "start_date",
+          "type": "string",
+          "description": "Start date for date range filter"
+        },
+        {
+          "name": "end_date",
+          "type": "string",
+          "description": "End date for date range filter"
+        },
+        {
+          "name": "user_id",
+          "type": "string",
+          "description": "Filter orders by user/customer"
+        },
+        {
+          "name": "page",
+          "type": "number",
+          "description": "Page number for pagination"
+        },
+        {
+          "name": "limit",
+          "type": "number",
+          "description": "Number of items per page"
+        }
+      ],
+      "dataSources": [
+        {
+          "kind": "api",
+          "source": "/api/orders",
+          "method": "GET",
+          "description": "Fetch orders with filters and pagination",
+          "auth": "JWT token",
+          "inputs": [
+            "status",
+            "start_date",
+            "end_date",
+            "user_id",
+            "page",
+            "limit"
+          ],
+          "outputs": [
+            "orders",
+            "totalCount",
+            "hasNextPage"
+          ],
+          "refreshInterval": "30s"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Detailed view of a specific order",
+    "description": "Next.js page component for displaying full order details, including status timeline and items. Fetches data based on the order ID from the route.",
+    "dependencies": [
+      "order_api_Python.prompt"
+    ],
+    "priority": 4,
+    "filename": "view_order_page_TypeScriptReact.prompt",
+    "filepath": "app/orders/[orderId]/page.tsx",
+    "tags": [
+      "frontend",
+      "nextjs",
+      "typescript"
+    ],
+    "interface": {
+      "type": "page",
+      "route": "/orders/[orderId]",
+      "params": [
+        {
+          "name": "orderId",
+          "type": "string",
+          "description": "The unique identifier of the order to view"
+        }
+      ],
+      "dataSources": [
+        {
+          "kind": "api",
+          "source": "/api/orders/{order_id}",
+          "method": "GET",
+          "description": "Fetch complete order details",
+          "auth": "JWT token",
+          "inputs": [
+            "orderId"
+          ],
+          "outputs": [
+            "order"
+          ],
+          "refreshInterval": "none"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Order creation form and workflow",
+    "description": "Next.js page for creating new orders with item selection, quantity input, and validation. Includes real-time total calculation and submission handling.",
+    "dependencies": [
+      "order_api_Python.prompt",
+      "order_components_TypeScriptReact.prompt"
+    ],
+    "priority": 5,
+    "filename": "create_order_page_TypeScriptReact.prompt",
+    "filepath": "app/orders/create/page.tsx",
+    "tags": [
+      "frontend",
+      "nextjs",
+      "typescript",
+      "form"
+    ],
+    "interface": {
+      "type": "page",
+      "route": "/orders/create",
+      "params": [],
+      "dataSources": [
+        {
+          "kind": "api",
+          "source": "/api/orders",
+          "method": "POST",
+          "description": "Create new order",
+          "auth": "JWT token",
+          "inputs": [
+            "orderData"
+          ],
+          "outputs": [
+            "createdOrder"
+          ],
+          "refreshInterval": "none"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Reusable order-related UI components",
+    "description": "TypeScript React components for order display, status badges, and interactive elements. Includes proper TypeScript types and accessibility features.",
+    "dependencies": [],
+    "priority": 6,
+    "filename": "order_components_TypeScriptReact.prompt",
+    "filepath": "src/components/orders/OrderList.tsx",
+    "tags": [
+      "frontend",
+      "react",
+      "typescript",
+      "ui"
+    ],
+    "interface": {
+      "type": "component",
+      "props": [
+        {
+          "name": "orders",
+          "type": "Order[]",
+          "required": true
+        },
+        {
+          "name": "onStatusChange",
+          "type": "(orderId: string, newStatus: OrderStatus) => void",
+          "required": false
+        },
+        {
+          "name": "loading",
+          "type": "boolean",
+          "required": false
+        }
+      ],
+      "emits": [
+        {
+          "name": "orderSelected",
+          "payload": "Order"
+        },
+        {
+          "name": "statusChanged",
+          "payload": "{ orderId: string, newStatus: OrderStatus }"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Database configuration and connection management",
+    "description": "PostgreSQL database configuration, connection pooling, and migration setup. Includes environment-based configuration and health checks.",
+    "dependencies": [],
+    "priority": 7,
+    "filename": "database_config_Python.prompt",
+    "filepath": "src/database/config.py",
+    "tags": [
+      "backend",
+      "database",
+      "config"
+    ],
+    "interface": {
+      "type": "config",
+      "keys": [
+        {
+          "name": "DATABASE_URL",
+          "type": "string",
+          "required": true,
+          "source": "env"
+        },
+        {
+          "name": "DATABASE_POOL_SIZE",
+          "type": "integer",
+          "default": 10,
+          "source": "env"
+        },
+        {
+          "name": "DATABASE_TIMEOUT",
+          "type": "integer",
+          "default": 30,
+          "source": "env"
+        }
+      ]
+    }
+  },
+  {
+    "reason": "Defines the core data structures used throughout the application to ensure type safety and consistent data exchange.",
+    "description": "Pydantic v2 models representing the domain entities. Includes `Issue` (severity, rule_id, description), `Report` (summary, issues, score), `LLMResponse` (structured output from LLM), and `FixSuggestion`. Defines enums for Severity and RuleCategories.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "models_Python.prompt",
+    "filepath": "src/utils/models.py",
+    "tags": [
+      "core",
+      "utils"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Provides low-level text processing utilities to support heuristic rules and parsing.",
+    "description": "Utility functions for text analysis. Includes tag detection (regex for XML-like tags), ratio heuristics (code vs text), file reading helpers, and string normalization utils.",
+    "dependencies": [],
+    "priority": 2,
+    "filename": "helpers_Python.prompt",
+    "filepath": "src/utils/helpers.py",
+    "tags": [
+      "core",
+      "utils"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Implements the deterministic logic for checking prompt compliance against the PDD Guide.",
+    "description": "Contains the library of heuristic rules derived from the Prompting Guide. Functions analyze text input and return a list of `Issue` objects. Covers modularity checks, context engineering validation, and forbidden tag detection.",
+    "dependencies": [
+      "models_Python.prompt",
+      "helpers_Python.prompt"
+    ],
+    "priority": 3,
+    "filename": "rules_Python.prompt",
+    "filepath": "src/utils/rules.py",
+    "tags": [
+      "core",
+      "logic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Manages interactions with Large Language Models, including provider detection and fallback logic.",
+    "description": "Wrapper around LiteLLM. Handles API key detection (OpenAI, Anthropic, Google), enforces JSON output via schema, manages token budgets/timeouts, and implements the safe fallback mechanism (returns empty/null on failure so heuristics take over).",
+    "dependencies": [
+      "models_Python.prompt"
+    ],
+    "priority": 4,
+    "filename": "llm_Python.prompt",
+    "filepath": "src/utils/llm.py",
+    "tags": [
+      "core",
+      "ai"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Generates compliant prompt scaffolds to automatically fix issues found during linting.",
+    "description": "Logic to rewrite prompts. Takes a `Report` and original text, and produces a new text string that adheres to the PDD structure (Role, Scope, Requirements, Dependencies). Implements the `--fix` scaffolding logic.",
+    "dependencies": [
+      "models_Python.prompt"
+    ],
+    "priority": 5,
+    "filename": "fix_Python.prompt",
+    "filepath": "src/utils/fix.py",
+    "tags": [
+      "core",
+      "logic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Handles the presentation of linting results in various formats.",
+    "description": "Rendering logic for the `Report` object. Supports outputting to Console (via Rich), JSON string, or Markdown file. Handles color coding based on severity.",
+    "dependencies": [
+      "models_Python.prompt"
+    ],
+    "priority": 6,
+    "filename": "report_Python.prompt",
+    "filepath": "src/utils/report.py",
+    "tags": [
+      "core",
+      "utils"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Acts as the central orchestrator, combining heuristics, LLM analysis, and reporting.",
+    "description": "The main entry point for logic. `lint_file` and `lint_text` functions. It runs heuristics, conditionally runs the LLM (merging results additively), calculates scores, and returns a final `Report` object.",
+    "dependencies": [
+      "models_Python.prompt",
+      "rules_Python.prompt",
+      "llm_Python.prompt",
+      "fix_Python.prompt",
+      "report_Python.prompt"
+    ],
+    "priority": 7,
+    "filename": "pipeline_Python.prompt",
+    "filepath": "src/utils/pipeline.py",
+    "tags": [
+      "core",
+      "orchestrator"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {}
+    }
+  },
+  {
+    "reason": "Provides the Command Line Interface for the tool.",
+    "description": "Typer application. Parses arguments (file path, flags for LLM, output format, fix mode). Calls `utils.pipeline` to perform work and uses `utils.report` (or Rich directly) to display results. Handles exit codes.",
+    "dependencies": [
+      "pipeline_Python.prompt"
+    ],
+    "priority": 8,
+    "filename": "cli_Python.prompt",
+    "filepath": "src/cli/main.py",
+    "tags": [
+      "cli"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {}
+    }
+  },
+  {
+    "reason": "Exposes the linting logic via a REST API for integration with other tools.",
+    "description": "FastAPI application. Defines endpoints like `POST /lint` that accept text/files and return the JSON report. Wraps `utils.pipeline`.",
+    "dependencies": [
+      "pipeline_Python.prompt"
+    ],
+    "priority": 9,
+    "filename": "backend_api_Python.prompt",
+    "filepath": "src/backend/api.py",
+    "tags": [
+      "backend",
+      "api"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {}
+    }
+  },
+  {
+    "reason": "Provides a visual, interactive interface for linting prompts.",
+    "description": "Streamlit application. Allows users to paste prompt text or upload files, configure LLM settings via UI, and view the structured report and fix suggestions visually. Calls `utils.pipeline` directly.",
+    "dependencies": [
+      "pipeline_Python.prompt"
+    ],
+    "priority": 10,
+    "filename": "frontend_streamlit_Python.prompt",
+    "filepath": "src/frontend/streamlit_app.py",
+    "tags": [
+      "frontend",
+      "ui"
+    ],
+    "interface": {
+      "type": "page",
+      "page": {
+        "route": "/ (Single Page App)",
+        "params": [],
+        "dataSources": [
+          {
+            "kind": "other",
+            "source": "utils.pipeline",
+            "method": "lint_text",
+            "description": "Direct python call to the pipeline orchestrator to lint input text."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Core package configuration file needed for Python packaging and metadata",
+    "description": "Defines package metadata, dependencies, entry points, and build configuration for the edit-file-tool. Includes console script entry point for CLI usage.",
+    "dependencies": [],
+    "priority": 1,
+    "filename": "pyproject_TOML.prompt",
+    "filepath": "pyproject.toml",
+    "tags": [
+      "config",
+      "packaging"
+    ],
+    "interface": {
+      "type": "module",
+      "package_config": {
+        "packageType": "both",
+        "entryPoints": {
+          "console_scripts": {
+            "edit-file": "edit_file_tool.cli:main"
+          }
+        },
+        "sourceLayout": "src",
+        "installModes": [
+          "pip"
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Main CLI interface for the edit-file-tool command-line utility",
+    "description": "Implements the command-line interface with argument parsing for file path, edit instructions, model selection, caching options, and verbosity. Handles CLI entry point and cost display.",
+    "dependencies": [
+      "corePython.prompt",
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "corePython.prompt",
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt"
+    ],
+    "priority": 2,
+    "filename": "cli_Python.prompt",
+    "filepath": "src/edit_file_tool/cli.py",
+    "tags": [
+      "cli",
+      "interface"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "edit-file",
+            "flags": [
+              {
+                "name": "verbose",
+                "type": "bool",
+                "description": "Enable verbose output with detailed cost breakdowns"
+              },
+              {
+                "name": "model",
+                "type": "str",
+                "default": "claude-sonnet-4-6",
+                "description": "Claude model to use for editing"
+              },
+              {
+                "name": "cache",
+                "type": "str",
+                "default": "auto",
+                "choices": [
+                  "auto",
+                  "always",
+                  "never"
+                ],
+                "description": "Cache mode for prompt caching optimization"
+              }
+            ],
+            "description": "Edit files using natural language instructions with Claude"
+          }
+        ],
+        "entryPoint": "cli:main"
+      }
+    }
+  },
+  {
+    "reason": "Core async wrapper for the Claude API with text_editor_20250124 tool integration",
+    "description": "Implements the main async function for file editing using Claude's text_editor_20250124 tool. Handles tool invocation, result processing, conversation iterations, and cost calculation. Includes enhanced insert support to parse natural language insertion requests (before/after/at line) into precise tool parameters.",
+    "dependencies": [
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt",
+      "think_tool_capability_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "cost_tracker_utility_Python.prompt",
+      "cache_manager_utility_Python.prompt",
+      "think_tool_capability_Python.prompt"
+    ],
+    "externalApiDependencies": [
+      "Anthropic Claude API"
+    ],
+    "priority": 3,
+    "filename": "corePython.prompt",
+    "filepath": "src/edit_file_tool/core.py",
+    "tags": [
+      "async",
+      "api",
+      "core"
+    ],
+    "interface": {
+      "type": "module",
+      "async_module": {
+        "asyncFunctions": [
+          {
+            "name": "edit_file",
+            "signature": "edit_file(file_path: str, edit_instructions: str, model: str = 'claude-sonnet-4-6', verbose: bool = False, use_cache: Union[str, bool] = 'auto', max_iterations: int = 10) -> Tuple[bool, str, float]",
+            "returns": "Tuple of (success, error_message, cost_in_usd)",
+            "errorHandling": "Retries up to max_iterations, returns error message on failure",
+            "retryPolicy": "Maximum 10 conversation iterations",
+            "description": "Primary function to edit files using natural language instructions, supporting enhanced insertion logic"
+          }
+        ],
+        "apiWrapper": true,
+        "rateLimiting": "Anthropic API rate limits apply",
+        "costTracking": true
+      }
+    }
+  },
+  {
+    "reason": "Utility module for tracking and calculating LLM API costs",
+    "description": "Calculates costs based on input/output tokens for different Claude models. Returns cost in USD as float with accurate pricing including cache write/read costs.",
+    "dependencies": [],
+    "priority": 4,
+    "filename": "cost_tracker_utility_Python.prompt",
+    "filepath": "src/edit_file_tool/cost_tracker_utility.py",
+    "tags": [
+      "utility",
+      "cost"
+    ],
+    "interface": {
+      "type": "module",
+      "utility": {
+        "purpose": "Track and calculate LLM API usage costs with model-specific pricing",
+        "functions": [
+          {
+            "name": "calculate_cost",
+            "signature": "calculate_cost(model: str, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0, cache_read_tokens: int = 0) -> float",
+            "returns": "Cost in USD as float",
+            "description": "Calculate total cost including standard tokens and cache operations"
+          }
+        ],
+        "stateless": true
+      }
+    }
+  },
+  {
+    "reason": "Utility module managing Anthropic's native prompt caching for cost optimization",
+    "description": "Implements intelligent caching that separates content from instructions in API requests. Auto-detects when caching is beneficial based on file size and complexity, with manual override options.",
+    "dependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "priority": 5,
+    "filename": "cache_manager_utility_Python.prompt",
+    "filepath": "src/edit_file_tool/cache_manager_utility.py",
+    "tags": [
+      "utility",
+      "caching",
+      "optimization"
+    ],
+    "interface": {
+      "type": "module",
+      "utility": {
+        "purpose": "Manage prompt caching to reduce API costs by up to 53% for large files",
+        "functions": [
+          {
+            "name": "should_use_cache",
+            "signature": "should_use_cache(file_path: str, file_size: int, use_cache: Union[str, bool] = 'auto') -> bool",
+            "returns": "Boolean indicating whether caching should be used",
+            "description": "Determine if caching is beneficial based on file characteristics and user preference"
+          }
+        ],
+        "stateless": true
+      }
+    }
+  },
+  {
+    "reason": "Implements Claude's think tool capability for complex editing planning and token efficiency",
+    "description": "Provides externalized thinking space for Claude when planning complex edits, reducing token usage by 13-43% and preventing token overflow in multi-step edits.",
+    "dependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "runtimeDependencies": [
+      "cost_tracker_utility_Python.prompt"
+    ],
+    "priority": 6,
+    "filename": "think_tool_capability_Python.prompt",
+    "filepath": "src/edit_file_tool/think_tool_capability.py",
+    "tags": [
+      "utility",
+      "thinking",
+      "optimization"
+    ],
+    "interface": {
+      "type": "module",
+      "utility": {
+        "purpose": "Leverage Claude's think tool for externalized planning and reduced token usage",
+        "functions": [
+          {
+            "name": "invoke_with_thinking",
+            "signature": "invoke_with_thinking(messages: List[dict], tools: List[dict], model: str) -> Tuple[dict, float]",
+            "returns": "Tuple of (tool_result, cost_in_usd)",
+            "description": "Invoke Claude API with think tool enabled for complex reasoning"
+          }
+        ],
+        "stateless": true
+      }
+    }
+  },
+  {
+    "reason": "Package initialization file to make edit_file_tool a proper Python package",
+    "description": "Defines package-level imports and metadata, exposing the main edit_file function and EditTool20250124 class for direct usage.",
+    "dependencies": [
+      "corePython.prompt"
+    ],
+    "priority": 7,
+    "filename": "init_Python.prompt",
+    "filepath": "src/edit_file_tool/__init__.py",
+    "tags": [
+      "config",
+      "package"
+    ],
+    "interface": {
+      "type": "module",
+      "package_config": {
+        "packageType": "library",
+        "sourceLayout": "src"
+      }
+    }
+  },
+  {
+    "filename": "child_Python.prompt",
+    "dependencies": [
+      "parent_Python.prompt"
+    ]
+  },
+  {
+    "filename": "parent_Python.prompt",
+    "dependencies": []
   }
 ]
