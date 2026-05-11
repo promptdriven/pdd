@@ -854,6 +854,51 @@ class TestHealModule:
             "/repo/agentic_split.py",
         ]
 
+    def test_crash_drift_with_missing_run_report_on_clean_checkout_is_skipped(self):
+        """Crash drift caused only by missing run_report on a clean CI checkout is not real drift.
+
+        sync_determine_operation flags any module whose fingerprint exists but
+        whose ephemeral run_report does not as ``operation='crash'`` with reason
+        ``All files exist but needs validation - no run_report``. Run reports
+        are not committed to git, so every CI build hits this for every
+        untouched module — healing it burns a full ``pdd sync`` cycle and
+        routinely times out. The fingerprint already attests workflow
+        completion; skip the heal.
+        """
+        drift = DriftInfo(
+            "commands/checkup",
+            "python",
+            "crash",
+            "All files exist but needs validation - no run_report",
+            code_path="/repo/pdd/commands/checkup.py",
+            prompt_path="/repo/prompts/commands/checkup_python.prompt",
+        )
+
+        with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is None
+        mock_run.assert_not_called()
+
+    def test_crash_drift_with_real_failure_is_still_healed(self):
+        """Crash drift with a real failing run_report (exit_code != 0) must still heal."""
+        drift = DriftInfo(
+            "broken_mod",
+            "python",
+            "crash",
+            "All files exist but needs validation - exit_code=1",
+            code_path="/repo/broken_mod.py",
+            prompt_path="/repo/prompts/broken_mod_python.prompt",
+        )
+        mock_result = MagicMock(returncode=0, stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+            result = heal_module(drift, self._make_env())
+
+        assert result is True
+        pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
+        assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "sync", "broken_mod"]]
+
     def test_verify_drift_runs_pdd_sync_to_preserve_semantics(self):
         """operation=='verify' (user-edited example needs validation) must NOT run pdd example.
 

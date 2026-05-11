@@ -270,6 +270,24 @@ def _is_review_only_example_drift(drift: DriftInfo) -> bool:
     )
 
 
+def _is_ci_missing_run_report_crash(drift: DriftInfo) -> bool:
+    """Return True for crash drift that is just a missing run_report artifact.
+
+    sync_determine_operation classifies a module as ``operation='crash'`` with
+    reason ``All files exist but needs validation - no run_report`` whenever the
+    fingerprint exists but the ephemeral run_report does not. On any clean CI
+    checkout, run_reports are absent by design (they are not committed) — the
+    fingerprint already attests workflow completion. Healing this phantom drift
+    burns a full ``pdd sync`` cycle on modules untouched by the PR and
+    routinely times out the heal step.
+    """
+    if drift.operation != "crash":
+        return False
+    return drift.reason.startswith(
+        "All files exist but needs validation - no run_report"
+    )
+
+
 def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] = None) -> Tuple[List[DriftInfo], List[DriftInfo]]:
     """Detect prompt and example drift across PDD modules.
 
@@ -1164,6 +1182,14 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         # (verify preserves user edits, generate regenerates code, etc.).
         # This preserves the original pdd-sync-based behavior for the rarer
         # drift types that can't be served by pdd example alone.
+        if _is_ci_missing_run_report_crash(drift):
+            console.print(
+                f"[yellow]⚠ Skipping auto-heal sync for {drift.basename} "
+                "(operation=crash): the 'no run_report' classification on a clean "
+                "CI checkout is not real drift — the fingerprint already attests "
+                "workflow completion.[/yellow]"
+            )
+            return None
         skip_reason = _get_heal_sync_skip_reason(drift.basename)
         if skip_reason:
             console.print(
