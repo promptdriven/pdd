@@ -1005,6 +1005,39 @@ class TestSyncOneModule:
 
         assert _parse_conformance_failure("", stderr) is None
 
+    def test_parse_conformance_failure_pdd_interface_param_shape(self):
+        # New shape emitted by code_generator_main._verify_pdd_interface_signatures
+        # when the prompt's <pdd-interface> declares a parameter the generated
+        # code is missing (#928). The conformance parser must recognize this
+        # so _sync_one_module retries with the repair directive.
+        stderr = (
+            "Architecture conformance error for update_main_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main.sync_metadata. "
+            "Output: pdd/update_main.py."
+        )
+
+        parsed = _parse_conformance_failure("", stderr)
+
+        assert parsed is not None, "new <pdd-interface> shape must be parseable"
+        repair_directive, missing_symbols = parsed
+        assert missing_symbols == ("update_main.sync_metadata",)
+        assert "- update_main.sync_metadata" in repair_directive
+
+    def test_parse_conformance_failure_pdd_interface_multiple_params(self):
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: foo.bar, foo.baz. "
+            "Output: pdd/foo.py."
+        )
+
+        parsed = _parse_conformance_failure("", stderr)
+
+        assert parsed is not None
+        _, missing_symbols = parsed
+        assert missing_symbols == ("foo.bar", "foo.baz")
+
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(
             basenames=["foo"],

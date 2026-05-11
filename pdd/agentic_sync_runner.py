@@ -188,6 +188,9 @@ def _format_duration(start: Optional[float], end: Optional[float]) -> str:
 _CONFORMANCE_PREFIX = "Architecture conformance error for "
 _MISSING_DECLARED_MARKER = "declared symbols missing from generated code"
 _MISSING_CAMELCASE_MARKER = "Python code uses camelCase names"
+_MISSING_PDD_INTERFACE_PARAMS_MARKER = (
+    "declares parameter(s) missing from the generated code"
+)
 
 
 def _parse_conformance_failure(
@@ -199,16 +202,21 @@ def _parse_conformance_failure(
     Returns (repair_directive, missing_symbols_sorted_tuple) when a conformance
     error is detected, or None otherwise.
 
-    Two output shapes are supported:
+    Three inline output shapes are supported, plus a bullet fallback:
 
-    * Inline form emitted by ``ArchitectureConformanceError.__init__`` —
+    * Default form emitted by ``ArchitectureConformanceError.__init__`` —
       ``... declared symbols missing from generated code: A, B.c, D. Expected: ...``
       The missing symbols are a comma-separated list on the same line, ending
       at the next sentence-terminating period (followed by space/EOL or
-      ``Expected:``). The camelCase variant is similar but parenthesised:
+      ``Expected:``).
+    * camelCase variant — parenthesised:
       ``... Python code uses camelCase names (foo, barBaz) but ...``
+    * ``<pdd-interface>`` signature variant emitted by
+      ``code_generator_main._verify_pdd_interface_signatures`` —
+      ``... declares parameter(s) missing from the generated code:
+       foo.bar, baz.qux. Output: ...``
     * Bullet form from a richer multi-line message (kept for forward
-      compatibility), where bullets follow the marker line.
+      compatibility), where bullets follow any of the marker lines.
     """
     combined = (stdout or "") + "\n" + (stderr or "")
     if _CONFORMANCE_PREFIX not in combined:
@@ -247,13 +255,26 @@ def _parse_conformance_failure(
     for m in camel_re.finditer(combined):
         missing.extend(_split_symbols(m.group(1)))
 
-    # 3) Bullet form: capture bullet lines following the marker.
+    # 3) Inline <pdd-interface> signature-conformance form:
+    #    "... <pdd-interface> declares parameter(s) missing from the
+    #     generated code: foo.bar, baz.qux. Output: ..."
+    # Emitted by code_generator_main._verify_pdd_interface_signatures.
+    pdd_iface_re = re.compile(
+        r"declares parameter\(s\) missing from the generated code:\s*(.+?)"
+        r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE,
+    )
+    for m in pdd_iface_re.finditer(combined):
+        missing.extend(_split_symbols(m.group(1)))
+
+    # 4) Bullet form: capture bullet lines following the marker.
     capture = False
     for line in combined.splitlines():
         stripped = line.strip()
         if (
             _MISSING_DECLARED_MARKER in stripped
             or _MISSING_CAMELCASE_MARKER in stripped
+            or _MISSING_PDD_INTERFACE_PARAMS_MARKER in stripped
         ):
             capture = True
             continue
