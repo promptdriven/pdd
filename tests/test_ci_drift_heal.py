@@ -2303,3 +2303,112 @@ class TestStructuralInvariants:
              patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             assert _enforce_structural_invariants(self._make_drift()) is False
+
+
+# --------------------------------------------------------------------------- #
+# Tests for metadata-sync integration (PR #920)                                #
+# --------------------------------------------------------------------------- #
+
+
+class TestRunMetadataSyncSafe:
+    """`_run_metadata_sync_safe` wraps `run_metadata_sync` for the update heal path."""
+
+    def test_returns_true_when_prompt_path_none(self):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        assert _run_metadata_sync_safe(None, None) is True
+
+    def test_returns_true_when_prompt_path_empty_string(self):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        assert _run_metadata_sync_safe("", None) is True
+
+    def test_returns_true_when_prompt_file_does_not_exist(self, tmp_path):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        missing = tmp_path / "nope.prompt"
+        assert _run_metadata_sync_safe(str(missing), None) is True
+
+    def test_returns_false_and_logs_when_orchestrator_raises(self, tmp_path, capsys):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        with patch("pdd.metadata_sync.run_metadata_sync",
+                   side_effect=RuntimeError("orchestrator exploded")):
+            assert _run_metadata_sync_safe(str(prompt), None) is False
+        out = capsys.readouterr().out
+        assert "orchestrator exploded" in out
+
+    def test_returns_false_and_logs_when_result_not_ok(self, tmp_path, capsys):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        from pdd.metadata_sync import MetadataSyncResult, StageStatus
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        bad = MetadataSyncResult(
+            prompt_path=prompt,
+            stages={
+                "prompt": StageStatus(status="ok"),
+                "tags": StageStatus(status="failed", reason="bad tags"),
+            },
+        )
+        with patch("pdd.metadata_sync.run_metadata_sync", return_value=bad):
+            assert _run_metadata_sync_safe(str(prompt), None) is False
+        out = capsys.readouterr().out
+        assert "tags" in out
+
+    def test_returns_true_when_result_ok(self, tmp_path):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        from pdd.metadata_sync import MetadataSyncResult, StageStatus
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        good = MetadataSyncResult(
+            prompt_path=prompt,
+            stages={s: StageStatus(status="ok") for s in
+                    ("prompt", "tags", "architecture", "run_report", "fingerprint")},
+        )
+        with patch("pdd.metadata_sync.run_metadata_sync", return_value=good):
+            assert _run_metadata_sync_safe(str(prompt), None) is True
+
+
+class TestHealModuleInvokesMetadataSync:
+    """`heal_module(op='update')` must invoke `_run_metadata_sync_safe`
+    after churn + invariants gates and revert+fail if it returns False.
+    """
+
+    def _make_update_drift(self, tmp_path):
+        from pdd.ci_drift_heal import DriftInfo
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("Prompt body for foo.\n")
+        code = tmp_path / "foo.py"
+        code.write_text("def foo(): return 1\n")
+        return DriftInfo(
+            basename="foo",
+            language="python",
+            operation="update",
+            reason="code drift",
+            code_path=str(code),
+            prompt_path=str(prompt),
+        )
+
+    def test_invokes_metadata_sync_on_successful_update(self, tmp_path):
+        from pdd.ci_drift_heal import heal_module
+        drift = self._make_update_drift(tmp_path)
+        env = {}
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_structural_invariants", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True) as mock_sync:
+            result = heal_module(drift, env)
+        assert mock_sync.called, "metadata_sync was not invoked on update heal"
+        assert mock_sync.call_args.args[0] == drift.prompt_path
+        assert result is not False
+
+    def test_reverts_and_fails_when_metadata_sync_fails(self, tmp_path):
+        from pdd.ci_drift_heal import heal_module
+        drift = self._make_update_drift(tmp_path)
+        env = {}
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_structural_invariants", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False), \
+             patch("pdd.ci_drift_heal._revert_prompt_file") as mock_revert:
+            result = heal_module(drift, env)
+        assert result is False
+        assert mock_revert.called, "prompt was not reverted on metadata_sync failure"

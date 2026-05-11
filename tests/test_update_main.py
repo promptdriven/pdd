@@ -2766,3 +2766,572 @@ def test_regeneration_mode_uses_sentinel_when_prompt_file_empty(tmp_path, monkey
     assert mock_update_prompt.called
     kwargs = mock_update_prompt.call_args.kwargs
     assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
+
+
+# --- Tests for sync_metadata integration (PR #920) -----------------------------
+# Cover both single-file paths (where _run_single_file_metadata_sync wraps the
+# orchestrator) and repo-mode paths (where per-pair run_metadata_sync replaces
+# the legacy save_fingerprint + post-loop architecture/PRD sync).
+
+from pdd.metadata_sync import MetadataSyncResult, StageStatus
+
+
+def _make_sync_result(prompt_path, code_path, stages=None):
+    # Build a MetadataSyncResult with a default all-ok stage map.
+    if stages is None:
+        stages = {
+            "prompt": StageStatus(status="ok"),
+            "tags": StageStatus(status="ok"),
+            "architecture": StageStatus(status="ok"),
+            "run_report": StageStatus(status="ok"),
+            "fingerprint": StageStatus(status="ok"),
+        }
+    return MetadataSyncResult(
+        prompt_path=Path(prompt_path),
+        code_path=Path(code_path),
+        dry_run=False,
+        stages=stages,
+    )
+
+
+def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # Legacy true-update path: assert orchestrator is invoked after update_prompt
+    call_order = []
+    mock_update_prompt.side_effect = lambda **kw: (call_order.append("update_prompt") or ("updated prompt text", 0.123, "test-model"))
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        def _sync(prompt_path, code_path, dry_run):
+            call_order.append("run_metadata_sync")
+            return _make_sync_result(prompt_path, code_path)
+        mock_sync.side_effect = _sync
+
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result == ("updated prompt text", 0.123, "test-model")
+    assert mock_sync.call_count == 1
+    kwargs = mock_sync.call_args.kwargs
+    assert kwargs["prompt_path"] == Path("updated_prompt.prompt")
+    assert kwargs["code_path"] == Path(minimal_input_files["modified_code_file"])
+    assert kwargs["dry_run"] is False
+    # update_prompt must run before run_metadata_sync
+    assert call_order == ["update_prompt", "run_metadata_sync"]
+
+
+def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
+    mock_ctx,
+    mock_construct_paths,
+    mock_git_update,
+    mock_open_file,
+):
+    # Legacy git-update path: orchestrator runs after git_update succeeds
+    mock_construct_paths.return_value = (
+        {},
+        {
+            "input_prompt_file": "prompt content",
+            "modified_code_file": "def git_modified_code(): pass",
+        },
+        {"output": "updated_prompt_git.prompt"},
+        None,
+    )
+    call_order = []
+    mock_git_update.side_effect = lambda **kw: (call_order.append("git_update") or ("updated prompt from git", 0.5, "git-model"))
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        def _sync(prompt_path, code_path, dry_run):
+            call_order.append("run_metadata_sync")
+            return _make_sync_result(prompt_path, code_path)
+        mock_sync.side_effect = _sync
+
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="some_prompt_file.prompt",
+            modified_code_file="modified_code.py",
+            input_code_file=None,
+            output="git_output.prompt",
+            use_git=True,
+            sync_metadata=True,
+        )
+
+    assert result == ("updated prompt from git", 0.5, "git-model")
+    assert mock_sync.call_count == 1
+    kwargs = mock_sync.call_args.kwargs
+    assert kwargs["prompt_path"] == Path("updated_prompt_git.prompt")
+    assert kwargs["code_path"] == Path("modified_code.py")
+    assert kwargs["dry_run"] is False
+    assert call_order == ["git_update", "run_metadata_sync"]
+
+
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_sync_metadata_true_invokes_run_metadata_sync_in_regeneration_legacy(
+    mock_resolve_pair,
+    mock_ctx,
+    mock_update_prompt,
+    tmp_path,
+):
+    # Regeneration path: derived prompt path must be passed to orchestrator
+    code_file = tmp_path / "modified_code.py"
+    code_file.write_text("def foo(): return 1\n")
+    derived_prompt = tmp_path / "modified_code_python.prompt"
+    mock_resolve_pair.return_value = (str(derived_prompt), str(code_file))
+
+    mock_ctx.obj["quiet"] = True
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
+
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 1
+    kwargs = mock_sync.call_args.kwargs
+    assert kwargs["prompt_path"] == Path(str(derived_prompt))
+    assert kwargs["code_path"] == Path(str(code_file))
+    assert kwargs["dry_run"] is False
+
+
+def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_true_update(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+
+
+def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_git_update(
+    mock_ctx,
+    mock_construct_paths,
+    mock_git_update,
+    mock_open_file,
+):
+    mock_construct_paths.return_value = (
+        {},
+        {
+            "input_prompt_file": "prompt content",
+            "modified_code_file": "def git_modified_code(): pass",
+        },
+        {"output": "updated_prompt_git.prompt"},
+        None,
+    )
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="some_prompt_file.prompt",
+            modified_code_file="modified_code.py",
+            input_code_file=None,
+            output="git_output.prompt",
+            use_git=True,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+
+
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_regeneration(
+    mock_resolve_pair,
+    mock_ctx,
+    mock_update_prompt,
+    tmp_path,
+):
+    code_file = tmp_path / "modified_code.py"
+    code_file.write_text("def foo(): return 1\n")
+    derived_prompt = tmp_path / "modified_code_python.prompt"
+    mock_resolve_pair.return_value = (str(derived_prompt), str(code_file))
+    mock_ctx.obj["quiet"] = True
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+
+
+def test_sync_metadata_helper_swallows_orchestrator_exception_and_logs(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+    capsys,
+):
+    # Orchestrator raising must not propagate; helper must print [metadata-sync]
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")):
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    # Rich strips [error] / [metadata-sync] style markup; assert on rendered content.
+    assert "orchestrator" in out
+    assert "boom" in out
+
+
+def test_sync_metadata_failed_stage_prints_error_line(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+    capsys,
+):
+    # When a stage is failed, the helper must print stage name + reason
+    failed_stages = {
+        "prompt": StageStatus(status="failed", reason="missing arch"),
+    }
+
+    def _sync(prompt_path, code_path, dry_run):
+        return MetadataSyncResult(
+            prompt_path=Path(prompt_path),
+            code_path=Path(code_path),
+            dry_run=False,
+            stages=failed_stages,
+        )
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync):
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    # Rich strips style markup like [error] / [metadata-sync]; assert rendered text.
+    assert "prompt" in out
+    assert "missing arch" in out
+
+
+# --- Repo-mode sync_metadata integration ----------------------------------
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_with_sync_metadata_invokes_orchestrator_not_legacy_save_fingerprint(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+):
+    # sync_metadata=True: per-pair orchestrator replaces save_fingerprint + post-loop arch sync
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    # orchestrator called once per successful pair
+    assert mock_sync.call_count == mock_update_file_pair.call_count
+    assert mock_sync.call_count >= 1
+    # legacy paths NOT invoked
+    mock_save_fp.assert_not_called()
+    mock_arch.assert_not_called()
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestrator(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+):
+    # sync_metadata=False: legacy save_fingerprint runs, orchestrator does not
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=False,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+    assert mock_save_fp.call_count == mock_update_file_pair.call_count
+    assert mock_save_fp.call_count >= 1
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_sync_metadata_batch_continues_when_one_pair_orchestrator_raises(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+    capsys,
+):
+    # A RuntimeError on one pair must not abort processing of subsequent pairs
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    # temp_git_repo has 3 pairs that all show as changed; first call raises,
+    # remaining calls return a normal result. Assert call count >= 2.
+    call_outcomes = [RuntimeError("first pair boom")]
+
+    def _sync(prompt_path, code_path, dry_run):
+        if call_outcomes and isinstance(call_outcomes[0], BaseException):
+            exc = call_outcomes.pop(0)
+            raise exc
+        return _make_sync_result(prompt_path, code_path)
+
+    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync) as mock_sync:
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    # Reached the summary table despite the first orchestrator call raising
+    captured = capsys.readouterr()
+    assert "Repository Update Summary" in captured.out
+    # Orchestrator was retried on the remaining pairs (>=2 total calls)
+    assert mock_sync.call_count >= 2
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_summary_table_includes_metadata_column_when_sync_metadata_true(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+    capsys,
+    monkeypatch,
+):
+    # Force a wide console so Rich doesn't truncate the Metadata column header.
+    from rich.console import Console as _Console
+    _um = sys.modules["pdd.update_main"]
+    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
+
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    captured = capsys.readouterr()
+    assert "Metadata" in captured.out
+    assert "synced" in captured.out
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_summary_table_metadata_column_shows_skipped_when_sync_metadata_false(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+    capsys,
+    monkeypatch,
+):
+    # Force a wide console so Rich doesn't truncate the Metadata column header.
+    from rich.console import Console as _Console
+    _um = sys.modules["pdd.update_main"]
+    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
+
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint"), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=False,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+    captured = capsys.readouterr()
+    assert "Metadata" in captured.out
+    assert "skipped" in captured.out
