@@ -2612,8 +2612,25 @@ def _render_final_report(
         "| Reviewer | Status |",
         "|----------|--------|",
     ]
+    fallback_took_over = (
+        state.active_reviewer is not None
+        and bool(reviewers)
+        and state.active_reviewer != reviewers[0]
+    )
     for reviewer in reviewers:
-        lines.append(f"| {reviewer} | {state.reviewer_status.get(reviewer, 'missing')} |")
+        status = state.reviewer_status.get(reviewer, "missing")
+        is_superseded = (
+            fallback_took_over
+            and reviewer != state.active_reviewer
+            and status in HARD_NOT_CLEAN_STATES
+        )
+        if is_superseded:
+            cell = (
+                f"{status} (optional, superseded by {state.active_reviewer})"
+            )
+        else:
+            cell = status
+        lines.append(f"| {reviewer} | {cell} |")
     lines.extend([
         f"| fresh-final | {state.fresh_final_status} |",
         "",

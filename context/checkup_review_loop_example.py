@@ -253,7 +253,11 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 # line as `fixer` for traceability but does not independently review the PR.
 # Tokens in {"failed", "degraded", "missing"} mean not-clean for the active
 # reviewer; a superseded primary failure can remain visible after a clean
-# fallback takeover.
+# fallback takeover. When that happens, the superseded primary's row in
+# `### Per-Reviewer Status` is annotated with `(optional, superseded by
+# <fallback>)` so downstream verdict adapters drop the failed primary from
+# the required-reviewer set and resolve the report to `ship_degraded`
+# instead of `unknown`.
 #
 # Fixer disagreement is not terminal. If the fixer returns `not_valid` or
 # `blocked`, the active reviewer either accepts the rationale by omitting the

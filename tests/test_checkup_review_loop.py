@@ -1051,6 +1051,15 @@ class TestCheckupReviewLoopRuntime:
         assert "issue_aligned: true" in report
         assert "could not complete" not in report
         assert any(role == "gemini" for role, _ in calls)
+        # End-to-end ship_degraded contract: the superseded primary's row
+        # in the Per-Reviewer Status table MUST contain the literal
+        # `optional` so the pdd_cloud `checkup_verdict_adapter` parser
+        # drops codex from the required-reviewer set. Without this the
+        # adapter's rule r1 trips on `codex=degraded` and the verdict is
+        # forced to `unknown` — the exact failure #923 was opened against.
+        assert (
+            "| codex | degraded (optional, superseded by gemini) |" in report
+        ), report
 
     def test_no_reviewer_fallback_preserves_legacy_behavior(
         self, monkeypatch: Any, tmp_path: Path
@@ -1081,6 +1090,11 @@ class TestCheckupReviewLoopRuntime:
         # "degraded". The earlier OR mask hid regressions in that gate.
         assert "codex=failed" in report
         assert "could not complete" in report
+        # Legacy path: no fallback configured, no takeover, so the report
+        # MUST NOT carry the `optional` annotation anywhere. If it did, a
+        # verdict adapter could mis-classify a hard primary failure as
+        # ship_degraded.
+        assert "optional" not in report.lower(), report
 
     def test_reviewer_fallback_equal_to_fixer_is_ignored(
         self, monkeypatch: Any, tmp_path: Path
@@ -1234,6 +1248,12 @@ class TestCheckupReviewLoopRuntime:
         assert "gemini=degraded" in report
         assert "could not complete" in report
         assert "gemini" in report.lower()
+        # Fallback ALSO failed — no successful takeover happened — so
+        # neither row may be tagged `optional`. The verdict adapter must
+        # continue to see both reviewers as required and short-circuit
+        # to `unknown`; silently demoting one to optional would let a
+        # fully-broken review-loop ship as ship_degraded.
+        assert "optional" not in report.lower(), report
 
     def test_reviewer_fallback_takes_over_subsequent_rounds(
         self, monkeypatch: Any, tmp_path: Path
@@ -1324,6 +1344,14 @@ class TestCheckupReviewLoopRuntime:
         assert "gemini=clean" in report
         assert "active-reviewer: gemini" in report
         assert "issue_aligned: true" in report
+        # And the takeover must propagate the verdict-adapter contract on
+        # the multi-round path too (fix step + verify step + later rounds):
+        # the superseded primary's row is tagged `optional` so the verdict
+        # adapter's rule r1 ignores codex=degraded and r4 upgrades the
+        # ship to ship_degraded.
+        assert (
+            "| codex | degraded (optional, superseded by gemini) |" in report
+        ), report
 
 
 class TestPromptInjection:
