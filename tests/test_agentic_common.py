@@ -6535,3 +6535,79 @@ class TestIssue814BillingErrorsPermanent:
         assert any("credit balance" in line.lower() for line in permanent_lines), (
             "Diagnostic must include a snippet of the error output: " f"{permanent_lines}"
         )
+
+    def test_anthropic_is_error_json_envelope_skips_retries(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """Issue #814 end-to-end repro: the exact JSON envelope the original
+        reporter captured in `.pdd/agentic-logs/session_*.jsonl`.
+
+        Claude Code CLI exits 0 but returns `is_error: true` + an
+        `api_error_status: 400` + a result body containing "Credit balance is
+        too low". `_parse_provider_json` extracts `data["result"]` as the
+        output and propagates `success=False`. `_run_with_provider`'s caller
+        in `run_agentic_task` then calls `_is_permanent_error(output)` —
+        which must match the billing pattern and break out of the retry
+        loop, allowing the orchestrator to advance to the next provider.
+
+        Without the Issue #814 fix the orchestrator burns 3 retries on the
+        same anthropic 400 before moving on; with the fix it advances on
+        the first failure.
+        """
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        # Exact body shape captured in issue #814 (513-byte response).
+        # Claude Code exits 0 with this JSON in stdout when the API itself
+        # returns a billing-class 400.
+        anthropic_400 = MagicMock()
+        anthropic_400.returncode = 0
+        anthropic_400.stdout = json.dumps({
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 400,
+            "result": (
+                "Your credit balance is too low to access the Anthropic API. "
+                "Please go to Plans & Billing to upgrade or purchase credits."
+            ),
+            "total_cost_usd": 0.0,
+            "session_id": "abc-123",
+        })
+        anthropic_400.stderr = ""
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_400, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, msg, cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+
+        # End-to-end assertions matching the original reporter's expected fix:
+        # 1. Workflow succeeds via the fallback provider
+        assert success is True, f"Expected fallback success, got msg={msg!r}"
+        assert provider == "google"
+        # 2. Exactly 2 subprocess calls — one anthropic (permanent error), one google (success)
+        #    NOT 4+ (which would mean retries on anthropic burned the budget)
+        assert mock_subprocess_run.call_count == 2, (
+            f"Expected single anthropic attempt + single google attempt; got "
+            f"{mock_subprocess_run.call_count}. Pre-fix this would be 4 "
+            f"(3 anthropic retries + 1 google)."
+        )
+        # 3. No backoff sleep — permanent errors must NOT delay the fallback
+        sleep_mock.assert_not_called()
