@@ -2260,60 +2260,79 @@ def _mark_budget_exhausted(
         state.stop_reason = f"Max review duration reached: {config.max_minutes:g} minutes."
 
 
+# Multi-word / specific substrings used to classify transient/infra failures.
+# Each phrase is intentionally long enough that benign trace output (e.g.
+# "Author:", "logging request", "subprocess.run() helper") cannot match it.
+# Shared between `_failure_status` (which promotes them to "degraded") and
+# `_plain_text_clean_review` (which must refuse to call the output "clean"
+# when any of them appear alongside a clean marker).
+_TRANSIENT_DEGRADED_MARKERS = (
+    # Provider / capacity
+    "rate limit",
+    "quota",
+    "timeout",
+    "timed out",
+    "context length",
+    "context window",
+    "context limit",
+    "context_length_exceeded",
+    "maximum context",
+    "context exceeded",
+    # Authentication / authorization
+    "authentication failed",
+    "authentication error",
+    "unauthorized",
+    "login required",
+    "please log in",
+    "not logged in",
+    "please sign in",
+    # Network
+    "connection refused",
+    "connection reset",
+    "network unreachable",
+    "network is unreachable",
+    "dns resolution",
+    "name resolution",
+    # Sandbox / permissions
+    "permission denied",
+    "sandbox error",
+    "sandbox denied",
+    "failed to create sandbox",
+)
+
+# Non-zero exit codes signal an infra/CLI failure (zero exit is success-y
+# context and must NOT match).  Use a regex so "exit code 0" stays out.
+_TRANSIENT_EXIT_CODE_RE = re.compile(
+    r"(?:exit code|exit status|non-zero exit status|exited with status) "
+    r"(?:[1-9]\d*)"
+)
+
+
+def _looks_like_transient_infra_failure(lowered: str) -> bool:
+    """Return True if `lowered` contains any transient infra-failure marker.
+
+    Caller is responsible for lowercasing the input.  This is the predicate
+    that gates both `_failure_status` (degrading vs failing) and
+    `_plain_text_clean_review` (refusing to classify the output as clean).
+    """
+    if any(marker in lowered for marker in _TRANSIENT_DEGRADED_MARKERS):
+        return True
+    return bool(_TRANSIENT_EXIT_CODE_RE.search(lowered))
+
+
 def _failure_status(output: str, *, allow_degraded: bool = True) -> str:
     lowered = (output or "").lower()
-    # Multi-word / specific substrings.  Each phrase is intentionally long
-    # enough that benign trace output (e.g. "Author:", "logging request",
-    # "subprocess.run() helper") cannot match it.
-    degraded_markers = (
-        # Provider / capacity
-        "rate limit",
-        "quota",
-        "timeout",
-        "timed out",
-        "context length",
-        "context window",
-        "context limit",
-        "context_length_exceeded",
-        "maximum context",
-        "context exceeded",
-        # Authentication / authorization
-        "authentication failed",
-        "authentication error",
-        "unauthorized",
-        "login required",
-        "please log in",
-        "not logged in",
-        "please sign in",
-        # Network
-        "connection refused",
-        "connection reset",
-        "network unreachable",
-        "network is unreachable",
-        "dns resolution",
-        "name resolution",
-        # Sandbox / permissions
-        "permission denied",
-        "sandbox error",
-        "sandbox denied",
-        "failed to create sandbox",
-    )
-    if allow_degraded and any(marker in lowered for marker in degraded_markers):
-        return "degraded"
-    # Non-zero exit codes signal an infra/CLI failure (zero exit is success-y
-    # context and must NOT match).  Use a regex so "exit code 0" stays out.
-    if allow_degraded and re.search(
-        r"(?:exit code|exit status|non-zero exit status|exited with status) "
-        r"(?:[1-9]\d*)",
-        lowered,
-    ):
+    if allow_degraded and _looks_like_transient_infra_failure(lowered):
         return "degraded"
     return "failed"
 
 
 def _plain_text_clean_review(output: str) -> bool:
     lowered = (output or "").lower()
-    if any(marker in lowered for marker in ("rate limit", "quota", "timeout", "timed out")):
+    # If the output looks like a transient infra failure, it must not be
+    # classified as clean even when a clean marker line is also present —
+    # otherwise the fallback/`degraded` path in `_failure_status` is skipped.
+    if _looks_like_transient_infra_failure(lowered):
         return False
 
     clean_lines = {
