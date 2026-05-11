@@ -6483,3 +6483,55 @@ class TestIssue814BillingErrorsPermanent:
         assert "Google success" in msg
         assert mock_subprocess_run.call_count == 2
         sleep_mock.assert_not_called()
+
+    def test_permanent_error_emits_default_mode_diagnostic(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        mock_console,
+        tmp_path,
+    ):
+        """Issue #814 (second half): surface a clear diagnostic in default
+        (non-verbose) mode so the user sees which provider was skipped and a
+        snippet of the error, instead of the workflow silently advancing."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep"):
+            success, *_ = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+        assert success is True
+
+        printed = [
+            str(call.args[0])
+            for call in mock_console.print.call_args_list
+            if call.args
+        ]
+        permanent_lines = [line for line in printed if "permanent error" in line.lower()]
+        assert permanent_lines, (
+            "Expected a default-mode permanent-error diagnostic, got: " f"{printed}"
+        )
+        assert any("credit balance" in line.lower() for line in permanent_lines), (
+            "Diagnostic must include a snippet of the error output: " f"{permanent_lines}"
+        )
