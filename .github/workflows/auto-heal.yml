@@ -239,10 +239,20 @@ jobs:
           PR_NUMBER: ${{ steps.pf.outputs.pr_number }}
         run: |
           set -euo pipefail
+          # gcloud builds submit reads --config from the LOCAL filesystem
+          # (not from inside the GCS source tarball). Extract the cloudbuild
+          # config from the staged tarball into a temp dir first. The
+          # extracted scripts also stay on the runner, but they're the same
+          # 5 files cloudbuild itself unpacks at build time — not pdd_cloud
+          # source.
+          ctx_dir=$(mktemp -d)
+          trap 'rm -rf "$ctx_dir"' EXIT
+          gsutil cp gs://pdd-stg-build-contexts/auto-heal-pr-latest.tgz "$ctx_dir/source.tgz"
+          tar -xzf "$ctx_dir/source.tgz" -C "$ctx_dir"
           build_id=$(gcloud builds submit \
             gs://pdd-stg-build-contexts/auto-heal-pr-latest.tgz \
             --project=prompt-driven-development-stg \
-            --config=cloudbuild-pdd-cli-auto-heal-pr.yaml \
+            --config="$ctx_dir/cloudbuild-pdd-cli-auto-heal-pr.yaml" \
             --substitutions=_PUBLIC_PR_NUMBER="$PR_NUMBER" \
             --async \
             --format='value(id)')
