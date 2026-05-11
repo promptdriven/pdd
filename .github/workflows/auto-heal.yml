@@ -194,6 +194,12 @@ jobs:
             echo "::error::requester unresolved; refusing to authorize"
             exit 1
           fi
+          
+          if [[ "$REQUESTER" == *"[bot]" ]]; then
+            echo "authorized: $REQUESTER is a trusted GitHub App identity (bot)"
+            exit 0
+          fi
+          
           # 204 = is a collaborator. 404 = not a collaborator.
           # Anything else = fail loud (don't silently confuse denial with
           # API/transport errors).
