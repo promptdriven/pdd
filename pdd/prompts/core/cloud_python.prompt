@@ -58,9 +58,9 @@
   - Use `rich.console.Console` for status messages
 
 <pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
-<pdd.core.errors><!-- Invalid selector for context/core/errors_example.py: Class 'AuthError' not found in source --></pdd.core.errors>
+<pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
 <utils.auth_service>
-    <!-- Invalid selector for context/auth_service_example.py: Malformed selector: 'JWT_CACHE_FILE'. Expected format: lines:N-M | def:name | class:Name[.method] | section:Heading | pattern:/regex/ | path:key.path -->
+    <include>context/auth_service_example.py</include>
 </utils.auth_service>
 <utils.keyring_timeout>
     <include>context/_keyring_timeout_example.py</include>

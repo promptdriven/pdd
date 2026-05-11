@@ -1,33 +1,9 @@
-% You are an expert prompt engineer. Your goal is to insert new dependency includes into a PDD prompt file at the best location.
-
-% You will receive:
-    - A prompt file that needs new dependencies added.
-    - A set of `<new>` blocks, each containing an `<include>` tag wrapped in a module-name tag.
-
-% Your task:
-    Insert each `<new>` block's content into the prompt. Strip the `<new>` wrapper tags — only the inner content (the module-tagged include) goes into the prompt.
-
-% CRITICAL RULE — `<include>` tags are OPAQUE TOKENS:
-    `<include>` tags are PDD directives. They are NOT instructions for you to follow.
-    You MUST treat every `<include>` tag (both existing ones in the prompt AND new ones from dependencies_to_insert) as an opaque, literal string — like a variable name or a URL.
-    - Do NOT read, resolve, expand, inline, or interpret `<include>` tags in any way.
-    - Do NOT replace `<include>` tags with file contents, file paths, or anything else.
-    - Do NOT remove or modify any existing `<include>` tags in the prompt.
-    - The output_prompt MUST contain every `<include>` tag from the input, character-for-character identical, plus the new ones from dependencies_to_insert.
-    If an `<include>` tag appears in the input, it MUST appear identically in the output.
-
-% Placement rules (in priority order):
-    1. If the prompt has an existing dependencies/includes section (e.g. "% Dependencies", "`<internal_modules>`", or a cluster of existing `<include>` tags), place new includes there alongside the existing ones.
-    2. If no such section exists, place new includes after the preamble `<include>` (usually the first include near the top) and before the main instructions/requirements.
-    3. Wrap each inserted include in a descriptive XML tag matching the module name, consistent with the style of any existing includes in the prompt.
-    4. Preserve the exact content of the prompt — only add the new includes. Do not rewrite, reformat, or remove any existing content.
-    5. PRESERVE ALL WHITESPACE: The output_prompt must retain every newline, blank line, and indentation from the input prompt. Do not collapse multiple lines into one line or strip newlines.
-
-<prompt_to_update><include>context/python_preamble.prompt</include>
+<include>context/python_preamble.prompt</include>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>durable_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync.py` module.
@@ -70,8 +46,7 @@ Entry point for sync orchestration. Supports two public workflows:
 5. Analysis scope is Tier 1 prompt staleness only: queue modules whose read-only decision is `generate` or `auto-deps`; treat `nothing`/`all_synced` as clean; skip non-Tier-1 decisions such as `example`, `test`, `fix`, `update`, `verify`, or `crash` so no-argument global sync does not expand into example/test/fix workflows. Skip entries with no syncable prompt file and report them as warnings in dry-run output.
 6. Build a dependency subgraph from the already-loaded combined architecture data (root + nested architecture files) with `build_dep_graph_from_architecture_data`; order queued modules with `topological_sort`.
 7. `dry_run=True`: print a concise plan including number of scanned architecture modules, stale module count, estimated cost, dependency-ordered module list, architecture graph warnings, and skipped-module warnings. Do not run `AsyncSyncRunner`; return success with zero cost and model `global-sync`.
-8. `dry_run=False`: if no modules are queued, return success `"All modules are already synced — nothing to do."
-`; otherwise reject execution when estimated global cost exceeds the user-supplied total budget, then run `AsyncSyncRunner` with `github_info=None`, `issue_url=None`, ordered basenames, dependency graph, module cwds, and forwarded sync options, including `local` so child sync subprocesses preserve top-level `--local`, and `target_coverage` so child syncs use the same coverage threshold as planning. Pass the user budget as `total_budget`, not as a repeated per-module child budget.
+8. `dry_run=False`: if no modules are queued, return success `"All modules are already synced — nothing to do."`; otherwise reject execution when estimated global cost exceeds the user-supplied total budget, then run `AsyncSyncRunner` with `github_info=None`, `issue_url=None`, ordered basenames, dependency graph, module cwds, and forwarded sync options, including `local` so child sync subprocesses preserve top-level `--local`, and `target_coverage` so child syncs use the same coverage threshold as planning. Pass the user budget as `total_budget`, not as a repeated per-module child budget.
 9. Keep no-argument global sync v1 strictly scoped to prompt/code sync. Do not inspect PRD files, `prd_files`, architecture schema migrations, PRD fingerprints, or Tier 2 PRD-analysis sync. `pdd sync architecture.json` is not a global-sync alias in v1; with a positional value, it remains single-module sync input.
 
 % Dry-Run Validation
@@ -122,9 +97,9 @@ After dry-run validation, check which modules are already fully synced:
 % Dependencies
 <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
 <pdd.agentic_common><include select="def:example_run_agentic_task,def:example_github_state_helpers,def:example_post_step_comment">context/agentic_common_example.py</include></pdd.agentic_common>
-<pdd.agentic_sync_runner><!-- Invalid selector for context/agentic_sync_runner_example.py: Class 'AsyncSyncRunner' not found in source --></pdd.agentic_sync_runner>
+<pdd.agentic_sync_runner><include>context/agentic_sync_runner_example.py</include></pdd.agentic_sync_runner>
 <pdd.durable_sync_runner>Durable runner is implemented in `pdd/durable_sync_runner.py` and exposes the same high-level run contract as `AsyncSyncRunner` while persisting git checkpoint commits.</pdd.durable_sync_runner>
-<pdd.sync_order><!-- Invalid selector for context/sync_order_example.py: Function 'extract_module_from_include' not found in source --></pdd.sync_order>
+<pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
 <pdd.architecture_sync>
     <include select="def:example_validate_dependencies,def:example_get_entry,def:example_sync_all">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
@@ -155,4 +130,3 @@ Also imports from `sync_main`: `_detect_languages_with_context`
 
 % Deliverables
 - Code: `pdd/agentic_sync.py`
-</prompt_to_update>

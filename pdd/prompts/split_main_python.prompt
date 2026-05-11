@@ -11,6 +11,8 @@
 }
 </pdd-interface>
 
+<pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python function, "split_main", that will be the CLI wrapper for splitting a prompt into a sub_prompt and modified_prompt. This function will handle reading the input files, calling the split function, and managing the output locations.
 
 <include>context/python_preamble.prompt</include>

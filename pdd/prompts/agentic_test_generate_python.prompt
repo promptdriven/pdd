@@ -1,4 +1,5 @@
 <include>context/python_preamble.prompt</include>
+<pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 
 % Goal
 Write the pdd/agentic_test_generate.py module.
