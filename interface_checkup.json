@@ -1,0 +1,69 @@
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_checkup_review_loop",
+        "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool, quiet: bool, use_github_state: bool) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]",
+        "sideEffects": [
+          "Creates one PR worktree for the entire loop session via _setup_pr_worktree",
+          "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
+          "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
+          "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper (refuses to leave tokenized URL in git config)",
+          "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
+          "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/",
+          "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"
+        ]
+      },
+      {
+        "name": "parse_reviewers",
+        "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]",
+        "returns": "Tuple[str, ...]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ],
+    "dataclasses": [
+      "ReviewLoopContext",
+      "ReviewLoopConfig",
+      "ReviewLoopState",
+      "ReviewFinding",
+      "ReviewResult",
+      "FixResult"
+    ],
+    "config_knobs": [
+      "reviewers",
+      "reviewer",
+      "fixer",
+      "review_only",
+      "max_rounds",
+      "max_cost",
+      "max_minutes",
+      "require_all_reviewers_clean",
+      "continue_on_reviewer_limit",
+      "require_final_fresh_review",
+      "blocking_severities",
+      "clean_reviewer_states",
+      "timeout_adder",
+      "reasoning_time"
+    ],
+    "artifacts_layout": {
+      "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
+      "per_round": [
+        "round-{N}-{review|verify}-{role}.prompt.txt",
+        "round-{N}-{review|verify}-{role}.output.txt",
+        "round-{N}-{review|verify}-{role}.findings.json",
+        "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
+        "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
+        "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",
+        "dedup-state-round-{N}.json"
+      ],
+      "final": [
+        "final-report.md",
+        "final-state.json"
+      ]
+    }
+  }
+}
