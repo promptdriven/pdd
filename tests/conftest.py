@@ -160,6 +160,94 @@ def _isolate_provider_env(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_cli_binary_presence(request, monkeypatch):
+    """Default every agentic CLI binary to "not installed" and the OpenCode
+    filesystem credential signals to "absent" before each test.
+
+    Fix A-prime of ``promptdriven/pdd_cloud#1405``: the autonomous-solve PR
+    ``promptdriven/pdd#858`` shipped 4 tests in ``test_agentic_common.py``
+    that silently passed only because the verifier's minimal worker
+    container had no agentic CLIs installed under ``~/.local/bin`` and
+    no OpenCode auth file at ``~/.local/share/opencode/auth.json``. On a
+    developer machine where the user had ``npm install -g opencode-ai``'d
+    the CLI or run ``opencode auth login``, those tests would have leaked
+    real filesystem state — passing for the wrong reason or failing
+    surprisingly. Fix B (``promptdriven/pdd#899``) and Fix C
+    (``promptdriven/pdd#902``) cover the env-var-leak shape; this fixture
+    covers the CLI-binary-presence + auth-file shape.
+
+    Canonical source
+    ----------------
+    The agentic-CLI name set is sourced from
+    ``pdd.cli_detector.CLI_PREFERENCE`` — the same ordered list the
+    production CLI-detection path consults. Using the public constant
+    (not a duplicate hardcoded literal) means a new agentic CLI added
+    to the codebase is automatically isolated and the Fix B static-
+    analysis detector does not flag this fixture as drift.
+
+    What gets isolated
+    -------------------
+    1. ``pdd.agentic_common._find_cli_binary(name)`` returns ``None`` for
+       every name in ``CLI_PREFERENCE``. Non-agentic names (``git``,
+       ``sh``, ...) pass through to the real implementation so legitimate
+       subprocess tests are unaffected.
+    2. ``pdd.agentic_common._opencode_auth_file_has_credentials`` returns
+       ``False`` unconditionally.
+    3. ``pdd.agentic_common._iter_opencode_config_texts`` yields an empty
+       iterable unconditionally.
+
+    Opt-back-in
+    -----------
+    Tests that need a CLI to be "installed" or credentials to be present
+    override these via ``monkeypatch.setattr`` after the autouse fixture
+    runs, or use the existing per-test fixtures in
+    ``test_agentic_common.py`` (``mock_shutil_which`` patches
+    ``_find_cli_binary``; ``mock_env`` patches the credential helpers).
+    Both compose correctly with this autouse fixture — explicit per-test
+    patches replace our defaults and unwind before our teardown.
+
+    Why this fixture imports lazily
+    --------------------------------
+    Importing ``pdd.agentic_common`` and ``pdd.cli_detector`` at conftest
+    collection time would pull in litellm and other heavy modules even
+    for trivial test sessions. The imports are deferred to first-fixture-
+    use, matching the lazy-import pattern of ``_isolate_provider_env``
+    and ``_isolate_claude_oauth_probe``.
+
+    Opt-out via marker
+    ------------------
+    Tests that exercise ``_find_cli_binary`` itself (the production
+    CLI-detection function — see ``TestCliDiscovery`` / ``TestCliDiscoveryBug``)
+    must be able to run the real function with their own mocks underneath.
+    Mark such tests/classes with ``@pytest.mark.uses_real_cli_detector``
+    to skip the autouse isolation. The marker is registered via
+    ``pytest_configure`` below.
+    """
+    if request.node.get_closest_marker("uses_real_cli_detector"):
+        return  # explicit opt-out for tests that exercise the real CLI detector
+    # Lazy imports: avoid pulling agentic_common / cli_detector into
+    # conftest's import graph. See docstring for rationale.
+    import pdd.agentic_common as ac
+    from pdd.cli_detector import CLI_PREFERENCE
+
+    agentic_clis = frozenset(CLI_PREFERENCE)
+    real_find = ac._find_cli_binary
+
+    def _isolated_find(name, *args, **kwargs):
+        if name in agentic_clis:
+            return None
+        return real_find(name, *args, **kwargs)
+
+    monkeypatch.setattr(ac, "_find_cli_binary", _isolated_find, raising=True)
+    monkeypatch.setattr(
+        ac, "_opencode_auth_file_has_credentials", lambda path: False, raising=True
+    )
+    monkeypatch.setattr(
+        ac, "_iter_opencode_config_texts", lambda cwd=None: iter(()), raising=True
+    )
+
+
+@pytest.fixture(autouse=True)
 def _isolate_claude_oauth_probe(monkeypatch):
     """Default the Issue #813 OAuth probe to False so tests are CI-portable.
 
@@ -265,6 +353,16 @@ def pytest_configure(config: pytest.Config) -> None:
         os.environ["PDD_RUN_ALL_TESTS"] = "1"
     else:
         os.environ.setdefault("PDD_RUN_ALL_TESTS", "0")
+
+    # Fix A-prime (promptdriven/pdd_cloud#1405): register the opt-out marker
+    # for tests that exercise the real CLI-detection path with their own
+    # mocks underneath (TestCliDiscovery / TestCliDiscoveryBug). See the
+    # ``_isolate_cli_binary_presence`` fixture docstring for context.
+    config.addinivalue_line(
+        "markers",
+        "uses_real_cli_detector: skip the Fix A-prime autouse CLI-binary "
+        "isolation fixture; for tests that test _find_cli_binary itself.",
+    )
 
 
 @pytest.hookimpl(hookwrapper=True)
