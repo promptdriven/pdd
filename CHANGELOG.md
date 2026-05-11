@@ -1,3 +1,17 @@
+## v0.0.234 (2026-05-11)
+
+### Feat
+
+- **tests**: CLI-binary isolation fixture (#1405 Fix A-prime) (#903)
+- **tests**: universal provider-env isolation fixture (#1405 Fix C) (#902)
+- **checkup**: detect hardcoded list drift from canonical source (#1405 fix B) (#899)
+- integrate OpenCode as an agentic provider with credential detection, subprocess execution, and comprehensive test suite updates.
+
+### Fix
+
+- **llm**: polish Gemini 3 clamp helper — prompt alignment + type guards (PR #900 follow-up) (#901)
+- **llm**: clamp temperature to 1.0 for Gemini 3 models (litellm warning) (#900)
+
 ## v0.0.233 (2026-05-10)
 
 ### Feat
