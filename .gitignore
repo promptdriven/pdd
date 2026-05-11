@@ -282,3 +282,5 @@ fake_test_output.py
 github_token
 diff_base.txt
 modules.txt
+# auto-heal smoke test marker — this PR exists only to register the
+# auto-heal check name with branch protection; close without merging.
