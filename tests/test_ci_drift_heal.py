@@ -149,6 +149,34 @@ class TestDetectDrift:
             assert len(drifts) == 1, f"expected 1 drift for op={op}"
             assert drifts[0].operation == op, f"op collapsed to {drifts[0].operation} for {op}"
 
+    def test_phantom_crash_missing_run_report_is_filtered_at_detection(self):
+        """Crash drift caused only by a missing run_report on a clean CI
+        checkout must be filtered during detection, not returned as a drift
+        that heal_module then "skips".
+
+        Returning ``None`` from heal_module classifies the module as
+        ``skipped`` in the main loop, and PR-mode auto-heal refuses to commit
+        any healed modules when there are skipped modules — so the real heals
+        would be silently dropped. Keeping the phantom off the drift list
+        avoids this and exercises the end-to-end "one real heal + one phantom
+        crash → commit still proceeds" invariant.
+        """
+        phantom = MagicMock(
+            operation="crash",
+            reason="All files exist but needs validation - no run_report",
+        )
+        real = MagicMock(operation="example", reason="Example stale")
+        files, infer, sync = self._setup_mocks({"checkup": phantom, "api": real})
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync):
+            prompt_drifts, example_drifts = detect_drift()
+
+        basenames = {d.basename for d in (*prompt_drifts, *example_drifts)}
+        assert "checkup" not in basenames
+        assert "api" in basenames
+
     def test_no_drift(self):
         """Modules with operation=='nothing' are not collected."""
         decision = MagicMock(operation="nothing")
