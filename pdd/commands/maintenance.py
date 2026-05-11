@@ -1,242 +1,28 @@
 """
-Maintenance commands (sync, auto_deps, setup).
+Maintenance and setup commands for the PDD CLI: ``sync``, ``auto-deps``,
+``setup``, and the ``metadata`` command group.
 """
-import click
+from __future__ import annotations
+
+import warnings
 from typing import Any, Dict, Optional, Tuple
-from pathlib import Path
 
-from ..architecture_sync import sync_prompts_to_architecture
-from ..sync_main import sync_main
-from ..auto_deps_main import auto_deps_main
+import click
+from rich.console import Console
+
 from ..agentic_sync import _is_github_issue_url, run_agentic_sync, run_global_sync
-from ..construct_paths import _find_pddrc_file, _load_pddrc_config
-from ..track_cost import track_cost
+from ..auto_deps_main import auto_deps_main
 from ..core.errors import handle_error
-from ..core.utils import _run_setup_utility
+from ..metadata_tags import generate_metadata_tags
+from ..sync_main import sync_main
+from ..track_cost import track_cost
 
-DEFAULT_SYNC_BUDGET = 20.0
+console = Console()
 
-@click.command("sync")
-@click.argument("basename", required=False)
-@click.option(
-    "--max-attempts",
-    type=int,
-    default=None,
-    help="Maximum number of fix attempts. Default: 3 or .pddrc value.",
-)
-@click.option(
-    "--budget",
-    type=float,
-    default=None,
-    help="Maximum total cost for the sync process. Default: 20.0 or .pddrc value.",
-)
-@click.option(
-    "--skip-verify",
-    is_flag=True,
-    default=False,
-    help="Skip the functional verification step.",
-)
-@click.option(
-    "--skip-tests",
-    is_flag=True,
-    default=False,
-    help="Skip unit test generation and fixing.",
-)
-@click.option(
-    "--target-coverage",
-    type=float,
-    default=None,
-    help="Desired code coverage percentage. Default: 90.0 or .pddrc value.",
-)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Analyze sync state without executing operations. Shows what sync would do.",
-)
-@click.option(
-    "--log",
-    is_flag=True,
-    default=False,
-    hidden=True,
-    help="Deprecated: Use --dry-run instead.",
-)
-@click.option(
-    "--no-steer",
-    "no_steer",
-    is_flag=True,
-    default=False,
-    help="Disable interactive steering of sync operations.",
-)
-@click.option(
-    "--steer-timeout",
-    type=float,
-    default=None,
-    help="Timeout in seconds for steering prompts (default: 8.0).",
-)
-@click.option(
-    "--agentic",
-    is_flag=True,
-    default=False,
-    help="Use agentic mode for Python (skip iterative loops, trust agent results).",
-)
-@click.option(
-    "--timeout-adder",
-    type=float,
-    default=0.0,
-    help="Additional seconds added on top of the per-module wall-clock cap "
-    "(stacks with PDD_MODULE_TIMEOUT_SECONDS, default 2700s; agentic sync mode).",
-)
-@click.option(
-    "--no-github-state",
-    is_flag=True,
-    default=False,
-    help="Disable GitHub comment updates (agentic sync mode).",
-)
-@click.option(
-    "--one-session/--no-one-session",
-    default=None,
-    help="Run example/crash/verify/test/fix in a single agentic session. Default: enabled for agentic sync (issue URL), disabled for single-module sync.",
-)
-@click.option(
-    "--durable",
-    is_flag=True,
-    default=False,
-    help="Use isolated worktrees and checkpoint commits for GitHub issue sync.",
-)
-@click.option(
-    "--durable-branch",
-    default=None,
-    help="Branch to use for durable checkpoint commits. Default: sync/issue-<N>.",
-)
-@click.option(
-    "--no-resume",
-    is_flag=True,
-    default=False,
-    help="In durable mode, ignore existing checkpoint trailers and rerun modules.",
-)
-@click.option(
-    "--durable-max-parallel",
-    type=int,
-    default=None,
-    help="Maximum parallel module worktrees in durable mode. Default: current runner concurrency.",
-)
-@click.pass_context
-@track_cost
-def sync(
-    ctx: click.Context,
-    basename: Optional[str],
-    max_attempts: Optional[int],
-    budget: Optional[float],
-    skip_verify: bool,
-    skip_tests: bool,
-    target_coverage: Optional[float],
-    dry_run: bool,
-    log: bool,
-    no_steer: bool,
-    steer_timeout: Optional[float],
-    agentic: bool,
-    timeout_adder: float,
-    no_github_state: bool,
-    one_session: Optional[bool],
-    durable: bool,
-    durable_branch: Optional[str],
-    no_resume: bool,
-    durable_max_parallel: Optional[int],
-) -> Optional[Tuple[str, float, str]]:
-    """
-    Synchronize prompts with code and tests.
 
-    BASENAME is the base name of the prompt file (e.g., 'my_module' for
-    'prompts/my_module_python.prompt'), a GitHub issue URL for agentic
-    multi-module sync, or omitted for project-wide Tier 1 architecture sync.
-    """
-    # Handle deprecated --log flag
-    if log:
-        click.echo(
-            click.style(
-                "Warning: --log is deprecated, use --dry-run instead.",
-                fg="yellow"
-            ),
-            err=True
-        )
-        dry_run = True
-
-    # No basename -> global Tier 1 sync
-    if basename is None:
-        if durable or durable_branch or no_resume or durable_max_parallel is not None:
-            raise click.UsageError("Durable sync options require a GitHub issue URL.")
-        effective_one_session = one_session if one_session is not None else False
-        return _run_global_sync_dispatch(
-            ctx=ctx,
-            budget=budget,
-            skip_verify=skip_verify,
-            skip_tests=skip_tests,
-            target_coverage=target_coverage,
-            dry_run=dry_run,
-            agentic=agentic,
-            no_steer=no_steer,
-            max_attempts=max_attempts,
-            one_session=effective_one_session,
-            timeout_adder=timeout_adder,
-        )
-
-    # Detect GitHub issue URL -> dispatch to agentic sync
-    if _is_github_issue_url(basename):
-        if not durable and (
-            durable_branch is not None or no_resume or durable_max_parallel is not None
-        ):
-            raise click.UsageError(
-                "--durable-branch, --no-resume, and --durable-max-parallel require --durable."
-            )
-        # Default to one-session for agentic sync unless explicitly disabled
-        effective_one_session = one_session if one_session is not None else True
-        return _run_agentic_sync_dispatch(
-            ctx=ctx,
-            issue_url=basename,
-            budget=budget,
-            skip_verify=skip_verify,
-            skip_tests=skip_tests,
-            dry_run=dry_run,
-            agentic=agentic,
-            no_steer=no_steer,
-            max_attempts=max_attempts,
-            timeout_adder=timeout_adder,
-            no_github_state=no_github_state,
-            one_session=effective_one_session,
-            durable=durable,
-            durable_branch=durable_branch,
-            no_resume=no_resume,
-            durable_max_parallel=durable_max_parallel,
-        )
-
-    if durable or durable_branch or no_resume or durable_max_parallel is not None:
-        raise click.UsageError("Durable sync options require a GitHub issue URL.")
-
-    try:
-        # Default to multi-step for single-module sync unless explicitly enabled
-        effective_one_session = one_session if one_session is not None else False
-        result, total_cost, model_name = sync_main(
-            ctx=ctx,
-            basename=basename,
-            max_attempts=max_attempts,
-            budget=budget,
-            skip_verify=skip_verify,
-            skip_tests=skip_tests,
-            target_coverage=target_coverage,
-            dry_run=dry_run,
-            no_steer=no_steer,
-            steer_timeout=steer_timeout,
-            agentic_mode=agentic,
-            one_session=effective_one_session,
-        )
-        return str(result), total_cost, model_name
-    except click.Abort:
-        raise
-    except Exception as exception:
-        handle_error(exception, "sync", ctx.obj.get("quiet", False))
-        return None
-
+# ---------------------------------------------------------------------------
+# Helper dispatchers
+# ---------------------------------------------------------------------------
 
 def _run_agentic_sync_dispatch(
     ctx: click.Context,
@@ -250,17 +36,21 @@ def _run_agentic_sync_dispatch(
     max_attempts: Optional[int],
     timeout_adder: float,
     no_github_state: bool,
-    one_session: bool = False,
+    one_session: bool = True,
     durable: bool = False,
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
 ) -> Optional[Tuple[str, float, str]]:
-    """Dispatch to agentic sync runner for GitHub issue URLs."""
-    ctx.ensure_object(dict)
-    quiet = ctx.obj.get("quiet", False)
-    verbose = ctx.obj.get("verbose", False)
+    """Dispatch to ``run_agentic_sync`` and display results.
 
+    Returns ``(message, cost, model)`` on success or ``None`` if a generic
+    exception was caught. Raises ``click.exceptions.Exit(1)`` on functional
+    failure.
+    """
+    obj = ctx.obj or {}
+    quiet = bool(obj.get("quiet", False))
+    verbose = bool(obj.get("verbose", False))
     try:
         success, message, cost, model = run_agentic_sync(
             issue_url=issue_url,
@@ -276,30 +66,22 @@ def _run_agentic_sync_dispatch(
             timeout_adder=timeout_adder,
             use_github_state=not no_github_state,
             one_session=one_session,
-            reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             durable=durable,
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
         )
-
-        if not quiet:
-            status = "Success" if success else "Failed"
-            click.echo(f"Status: {status}")
-            click.echo(f"Message: {message}")
-            click.echo(f"Cost: ${cost:.4f}")
-            click.echo(f"Model: {model}")
-
-        if not success:
-            raise click.exceptions.Exit(1)
-
-        return message, cost, model
-
     except (click.Abort, click.exceptions.Exit):
         raise
-    except Exception as exception:
-        handle_error(exception, "sync", ctx.obj.get("quiet", False))
+    except Exception as exc:  # noqa: BLE001
+        handle_error(exc, "sync", quiet)
         return None
+
+    if not quiet:
+        console.print(f"[cyan]{message}[/cyan]")
+    if not success:
+        raise click.exceptions.Exit(1)
+    return message, cost, model
 
 
 def _run_global_sync_dispatch(
@@ -307,219 +89,234 @@ def _run_global_sync_dispatch(
     budget: Optional[float],
     skip_verify: bool,
     skip_tests: bool,
-    target_coverage: Optional[float],
     dry_run: bool,
     agentic: bool,
     no_steer: bool,
     max_attempts: Optional[int],
+    target_coverage: Optional[float],
     one_session: bool = False,
     timeout_adder: float = 0.0,
 ) -> Optional[Tuple[str, float, str]]:
-    """Dispatch to global sync runner for no-argument `pdd sync`."""
-    ctx.ensure_object(dict)
-    quiet = ctx.obj.get("quiet", False)
-    verbose = ctx.obj.get("verbose", False)
-    effective_budget = _resolve_global_sync_budget(budget)
-    effective_target_coverage = _resolve_global_sync_target_coverage(target_coverage)
-
+    """Dispatch to ``run_global_sync`` for project-wide architecture sync."""
+    obj = ctx.obj or {}
+    quiet = bool(obj.get("quiet", False))
+    verbose = bool(obj.get("verbose", False))
+    local = bool(obj.get("local", False))
     try:
         success, message, cost, model = run_global_sync(
             verbose=verbose,
             quiet=quiet,
-            budget=effective_budget,
+            budget=budget,
             skip_verify=skip_verify,
             skip_tests=skip_tests,
             agentic_mode=agentic,
             no_steer=no_steer,
             max_attempts=max_attempts,
             dry_run=dry_run,
-            target_coverage=effective_target_coverage,
+            target_coverage=target_coverage,
             one_session=one_session,
-            local=ctx.obj.get("local", False),
+            local=local,
             timeout_adder=timeout_adder,
         )
-
-        if not quiet:
-            status = "Success" if success else "Failed"
-            click.echo(f"Status: {status}")
-            click.echo(f"Message: {message}")
-            click.echo(f"Cost: ${cost:.4f}")
-            click.echo(f"Model: {model}")
-
-        if not success:
-            raise click.exceptions.Exit(1)
-
-        return message, cost, model
-
     except (click.Abort, click.exceptions.Exit):
         raise
-    except Exception as exception:
-        handle_error(exception, "sync", ctx.obj.get("quiet", False))
+    except Exception as exc:  # noqa: BLE001
+        handle_error(exc, "sync", quiet)
         return None
 
-
-def _resolve_global_sync_budget(budget: Optional[float]) -> float:
-    """Resolve no-argument global sync budget from CLI, .pddrc, or default."""
-    if budget is not None:
-        return budget
-
-    pddrc_path = _find_pddrc_file(Path.cwd())
-    if pddrc_path:
-        try:
-            config = _load_pddrc_config(pddrc_path)
-            contexts = config.get("contexts", {})
-            default_context = contexts.get("default", {})
-            default_budget = default_context.get("defaults", {}).get("budget")
-            if default_budget is not None:
-                resolved_budget = float(default_budget)
-                if resolved_budget > 0:
-                    return resolved_budget
-        except (TypeError, ValueError):
-            pass
-
-    return DEFAULT_SYNC_BUDGET
+    if not quiet:
+        console.print(f"[cyan]{message}[/cyan]")
+    if not success:
+        raise click.exceptions.Exit(1)
+    return message, cost, model
 
 
-def _resolve_global_sync_target_coverage(target_coverage: Optional[float]) -> Optional[float]:
-    """Resolve no-argument global sync target coverage from CLI or .pddrc."""
-    if target_coverage is not None:
-        return target_coverage
+def _run_setup_utility() -> None:
+    """Run the interactive setup utility (API keys, model config, etc.).
 
-    pddrc_path = _find_pddrc_file(Path.cwd())
-    if pddrc_path:
-        try:
-            config = _load_pddrc_config(pddrc_path)
-            contexts = config.get("contexts", {})
-            default_context = contexts.get("default", {})
-            default_target = default_context.get("defaults", {}).get("target_coverage")
-            if default_target is not None:
-                resolved_target = float(default_target)
-                if resolved_target >= 0:
-                    return resolved_target
-        except (TypeError, ValueError):
-            pass
-
-    return None
+    Imported lazily to avoid pulling heavy/optional dependencies at module
+    load time. Best-effort: if the setup utility is unavailable this is a
+    no-op so the ``setup`` command can still install completions.
+    """
+    try:
+        from ..setup_utility import run_setup_utility  # type: ignore
+    except Exception:  # noqa: BLE001
+        return
+    try:
+        run_setup_utility()
+    except Exception:  # noqa: BLE001
+        # Setup utility failures shouldn't crash the CLI; install_completion
+        # already succeeded by this point.
+        return
 
 
-def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> None:
-    """Render a concise summary for prompt-to-architecture sync."""
-    summary = (
-        f"Dry run: would update {result['updated_count']} module(s); "
-        f"skipped {result['skipped_count']}."
-        if dry_run
-        else f"Updated {result['updated_count']} module(s); skipped {result['skipped_count']}."
-    )
-    click.echo(summary)
+# ---------------------------------------------------------------------------
+# sync command
+# ---------------------------------------------------------------------------
 
-    for entry in result.get("results", []):
-        if entry.get("updated"):
-            click.echo(f"UPDATED {entry['filename']}")
-        elif not entry.get("success"):
-            click.echo(f"ERROR {entry['filename']}: {entry.get('error')}")
-
-    sync_errors = result.get("errors", [])
-    validation = result.get("validation", {})
-    validation_errors = validation.get("errors", [])
-    validation_warnings = validation.get("warnings", [])
-
-    if sync_errors:
-        click.echo("Sync errors:")
-        for error in sync_errors:
-            click.echo(f"- {error}")
-
-    if validation_errors:
-        click.echo("Validation errors:")
-        for error in validation_errors:
-            click.echo(f"- {error['message']}")
-
-    if validation_warnings:
-        click.echo("Validation warnings:")
-        for warning in validation_warnings:
-            click.echo(f"- {warning['message']}")
-
-
-@click.command("sync-architecture")
-@click.argument("filenames", nargs=-1)
-@click.option(
-    "--dry-run",
-    is_flag=True,
-    default=False,
-    help="Analyze prompt-to-architecture sync without writing architecture.json.",
-)
+@click.command(name="sync")
+@click.argument("basename", required=False)
+@click.option("--max-attempts", type=int, default=None, help="Maximum number of fix attempts.")
+@click.option("--budget", type=float, default=None, help="Maximum total cost allowed (USD).")
+@click.option("--skip-verify", is_flag=True, default=False, help="Skip functional verification.")
+@click.option("--skip-tests", is_flag=True, default=False, help="Skip unit test generation/fixing.")
+@click.option("--target-coverage", type=float, default=None, help="Desired code coverage percentage.")
+@click.option("--dry-run", is_flag=True, default=False, help="Analyze state without executing.")
+@click.option("--log", "log_flag", is_flag=True, default=False, help="Deprecated: alias for --dry-run.")
+@click.option("--one-session", "one_session_flag", is_flag=True, default=False,
+              help="Run example/crash/verify/test/fix in a single agentic session.")
+@click.option("--no-one-session", "no_one_session_flag", is_flag=True, default=False,
+              help="Disable single-session mode (default for single-module sync).")
+@click.option("--no-steer", is_flag=True, default=False, help="Disable interactive steering.")
+@click.option("--steer-timeout", type=float, default=8.0, help="Steering prompt timeout in seconds.")
+@click.option("--agentic", is_flag=True, default=False, help="Enable agentic mode for single-module sync.")
+@click.option("--timeout-adder", type=float, default=0.0, help="Extra timeout (seconds) per step for agentic sync.")
+@click.option("--no-github-state", is_flag=True, default=False, help="Disable GitHub state persistence.")
+@click.option("--durable", is_flag=True, default=False, help="Use durable issue sync with checkpoint commits.")
+@click.option("--durable-branch", type=str, default=None, help="Override durable branch name.")
+@click.option("--no-resume", is_flag=True, default=False, help="Do not resume an existing durable sync.")
+@click.option("--durable-max-parallel", type=int, default=None, help="Max parallel children for durable sync.")
 @click.pass_context
 @track_cost
-def sync_architecture(
+def sync(
     ctx: click.Context,
-    filenames: Tuple[str, ...],
+    basename: Optional[str],
+    max_attempts: Optional[int],
+    budget: Optional[float],
+    skip_verify: bool,
+    skip_tests: bool,
+    target_coverage: Optional[float],
     dry_run: bool,
+    log_flag: bool,
+    one_session_flag: bool,
+    no_one_session_flag: bool,
+    no_steer: bool,
+    steer_timeout: float,
+    agentic: bool,
+    timeout_adder: float,
+    no_github_state: bool,
+    durable: bool,
+    durable_branch: Optional[str],
+    no_resume: bool,
+    durable_max_parallel: Optional[int],
 ) -> Optional[Tuple[Dict[str, Any], float, str]]:
-    """Sync architecture.json from prompt metadata tags."""
-    ctx.ensure_object(dict)
-    quiet = ctx.obj.get("quiet", False)
+    """Synchronize a prompt with its code, tests, and examples."""
+    obj = ctx.obj or {}
+    quiet = bool(obj.get("quiet", False))
 
-    try:
-        result = sync_prompts_to_architecture(
-            filenames=list(filenames) or None,
-            dry_run=dry_run,
+    # Handle deprecated --log flag (alias for --dry-run).
+    if log_flag:
+        message = "--log is deprecated; use --dry-run instead."
+        warnings.warn(message, DeprecationWarning, stacklevel=2)
+        console.print(f"[yellow]Warning: {message}[/yellow]")
+        dry_run = True
+
+    # Validate durable flags.
+    is_issue_url = basename is not None and _is_github_issue_url(basename)
+    if durable and not is_issue_url:
+        raise click.UsageError(
+            "--durable requires a GitHub issue URL as the BASENAME argument."
+        )
+    if (durable_branch is not None or no_resume or durable_max_parallel is not None) and not durable:
+        raise click.UsageError(
+            "--durable-branch, --no-resume, and --durable-max-parallel require --durable."
         )
 
-        if not quiet:
-            _echo_architecture_sync_result(result, dry_run=dry_run)
+    # Resolve one_session: default True for issue URL sync, False otherwise.
+    if one_session_flag:
+        one_session = True
+    elif no_one_session_flag:
+        one_session = False
+    else:
+        one_session = bool(is_issue_url)
 
-        if not result.get("success"):
+    try:
+        if basename is None:
+            result = _run_global_sync_dispatch(
+                ctx=ctx,
+                budget=budget,
+                skip_verify=skip_verify,
+                skip_tests=skip_tests,
+                dry_run=dry_run,
+                agentic=agentic,
+                no_steer=no_steer,
+                max_attempts=max_attempts,
+                target_coverage=target_coverage,
+                one_session=one_session,
+                timeout_adder=timeout_adder,
+            )
+            if result is None:
+                return None
+            message, cost, model = result
+            return {"global_sync": True, "message": message}, cost, model
+
+        if is_issue_url:
+            result = _run_agentic_sync_dispatch(
+                ctx=ctx,
+                issue_url=basename,
+                budget=budget,
+                skip_verify=skip_verify,
+                skip_tests=skip_tests,
+                dry_run=dry_run,
+                agentic=agentic,
+                no_steer=no_steer,
+                max_attempts=max_attempts,
+                timeout_adder=timeout_adder,
+                no_github_state=no_github_state,
+                one_session=one_session,
+                durable=durable,
+                durable_branch=durable_branch,
+                no_resume=no_resume,
+                durable_max_parallel=durable_max_parallel,
+            )
+            if result is None:
+                return None
+            message, cost, model = result
+            return {"issue_url": basename, "message": message}, cost, model
+
+        # Single-module sync.
+        res, cost, model = sync_main(
+            ctx=ctx,
+            basename=basename,
+            max_attempts=max_attempts,
+            budget=budget,
+            skip_verify=skip_verify,
+            skip_tests=skip_tests,
+            target_coverage=target_coverage,
+            dry_run=dry_run,
+            no_steer=no_steer,
+            steer_timeout=steer_timeout,
+            agentic_mode=agentic,
+            one_session=one_session,
+        )
+        if isinstance(res, dict) and res.get("overall_success") is False:
             raise click.exceptions.Exit(1)
-
-        return result, 0.0, "local"
-    except click.Abort:
+        return res, cost, model
+    except (click.Abort, click.exceptions.Exit, click.ClickException):
         raise
-    except click.exceptions.Exit:
-        raise
-    except Exception as exception:
-        handle_error(exception, "sync-architecture", quiet)
+    except Exception as exc:  # noqa: BLE001
+        handle_error(exc, "sync", quiet)
         return None
 
 
-@click.command("auto-deps")
+# ---------------------------------------------------------------------------
+# auto-deps command
+# ---------------------------------------------------------------------------
+
+@click.command(name="auto-deps")
 @click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
-# exists=False to allow manual handling of quoted paths or paths with globs that shell didn't expand
-@click.argument("directory_path", type=click.Path(exists=False, file_okay=False))
-@click.option(
-    "--output",
-    type=click.Path(writable=True),
-    default=None,
-    help="Specify where to save the modified prompt (file or directory).",
-)
-@click.option(
-    "--csv",
-    type=click.Path(writable=True),
-    default=None,
-    help="Specify the CSV file that contains or will contain dependency information.",
-)
-@click.option(
-    "--force-scan",
-    is_flag=True,
-    default=False,
-    help="Force rescanning of all potential dependency files even if they exist in the CSV file.",
-)
-@click.option(
-    "--include-docs",
-    is_flag=True,
-    default=False,
-    help="Include documentation files (.md, .txt, .rst) in dependency discovery.",
-)
-@click.option(
-    "--no-dedup",
-    is_flag=True,
-    default=False,
-    help="Skip redundant inline content removal after inserting includes.",
-)
-@click.option(
-    "--concurrency",
-    type=int,
-    default=1,
-    help="Maximum number of parallel LLM calls for dependency analysis (default: 1).",
-)
+@click.argument("directory_path", type=str)
+@click.option("--output", type=click.Path(writable=True), default=None,
+              help="Where to save the modified prompt file.")
+@click.option("--csv", "csv_path", type=click.Path(writable=True), default=None,
+              help="Path to the project dependencies CSV file.")
+@click.option("--force-scan", is_flag=True, default=False, help="Force re-scanning all files.")
+@click.option("--include-docs", is_flag=True, default=False,
+              help="Include .md/.txt/.rst documentation files in dependency discovery.")
+@click.option("--no-dedup", is_flag=True, default=False,
+              help="Disable redundant inline content removal after inserting includes.")
+@click.option("--concurrency", type=int, default=1, show_default=True,
+              help="Number of parallel workers for file summarization LLM calls.")
 @click.pass_context
 @track_cost
 def auto_deps(
@@ -527,54 +324,160 @@ def auto_deps(
     prompt_file: str,
     directory_path: str,
     output: Optional[str],
-    csv: Optional[str],
+    csv_path: Optional[str],
     force_scan: bool,
     include_docs: bool,
     no_dedup: bool,
     concurrency: int,
 ) -> Optional[Tuple[str, float, str]]:
-    """Analyze project dependencies and update the prompt file."""
+    """Analyze and insert dependencies into a prompt file."""
+    obj = ctx.obj if ctx.obj is not None else {}
+    if ctx.obj is None:
+        ctx.obj = obj
+    quiet = bool(obj.get("quiet", False))
+
+    # Strip surrounding quotes that may survive shell parsing in some setups.
+    cleaned_directory = directory_path
+    if cleaned_directory and len(cleaned_directory) >= 2 and (
+        (cleaned_directory[0] == '"' and cleaned_directory[-1] == '"')
+        or (cleaned_directory[0] == "'" and cleaned_directory[-1] == "'")
+    ):
+        cleaned_directory = cleaned_directory[1:-1]
+
+    # Surface new options on ctx.obj for downstream code that prefers that path.
+    obj["include_docs"] = include_docs
+    obj["no_dedup"] = no_dedup
+    obj["concurrency"] = concurrency
+
     try:
-        # Strip quotes from directory_path if present (e.g. passed incorrectly)
-        if directory_path:
-            directory_path = directory_path.strip('"').strip("'")
-
-        # Pass additional options via ctx.obj for downstream consumption
-        ctx.ensure_object(dict)
-        ctx.obj["include_docs"] = include_docs
-        ctx.obj["no_dedup"] = no_dedup
-        ctx.obj["concurrency"] = concurrency
-
-        result, total_cost, model_name = auto_deps_main(
+        result = auto_deps_main(
             ctx=ctx,
             prompt_file=prompt_file,
-            directory_path=directory_path,
-            auto_deps_csv_path=csv,
+            directory_path=cleaned_directory,
             output=output,
+            auto_deps_csv_path=csv_path,
             force_scan=force_scan,
             include_docs=include_docs,
             no_dedup=no_dedup,
             concurrency=concurrency,
         )
-        return result, total_cost, model_name
-    except click.Abort:
+    except (click.Abort, click.exceptions.Exit, click.ClickException):
         raise
-    except Exception as exception:
-        handle_error(exception, "auto-deps", ctx.obj.get("quiet", False))
+    except Exception as exc:  # noqa: BLE001
+        handle_error(exc, "auto-deps", quiet)
         return None
 
+    if result is None:
+        return None
+    if isinstance(result, tuple):
+        return result  # type: ignore[return-value]
+    return result, 0.0, "auto-deps"
 
-@click.command("setup")
+
+# ---------------------------------------------------------------------------
+# setup command
+# ---------------------------------------------------------------------------
+
+@click.command(name="setup")
 @click.pass_context
-def setup(ctx: click.Context):
-    """Run the interactive setup utility."""
+def setup(ctx: click.Context) -> None:
+    """Install shell completion and run the setup utility."""
+    obj = ctx.obj or {}
+    quiet = bool(obj.get("quiet", False))
     try:
-        # Import here to allow proper mocking
         from .. import cli as cli_module
-        quiet = ctx.obj.get("quiet", False) if ctx.obj else False
-        # First install completion
         cli_module.install_completion(quiet=quiet)
-        # Then run setup utility
         _run_setup_utility()
-    except Exception as e:
-        handle_error(e, "setup", False)
+    except (click.Abort, click.exceptions.Exit, click.ClickException):
+        raise
+    except Exception as exc:  # noqa: BLE001
+        handle_error(exc, "setup", quiet)
+
+
+# ---------------------------------------------------------------------------
+# metadata command group
+# ---------------------------------------------------------------------------
+
+@click.group(name="metadata")
+def metadata_group() -> None:
+    """Generate or refresh PDD metadata tags in prompt files."""
+
+
+@metadata_group.command(name="tags")
+@click.argument("prompt_file", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--from",
+    "source",
+    type=click.Choice(["prompt-code", "architecture"]),
+    default="prompt-code",
+    show_default=True,
+    help="Source for tag synthesis: prompt + code, or architecture.json.",
+)
+@click.option("--force", is_flag=True, default=False,
+              help="Refresh existing tags instead of preserving them.")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print a unified diff without writing.")
+@click.option("--output", type=click.Path(writable=True), default=None,
+              help="Write merged prompt to PATH instead of in-place.")
+@click.pass_context
+@track_cost
+def metadata_tags(
+    ctx: click.Context,
+    prompt_file: str,
+    source: str,
+    force: bool,
+    dry_run: bool,
+    output: Optional[str],
+) -> Optional[Tuple[Dict[str, Any], float, str]]:
+    """Generate or refresh metadata tags for a prompt file."""
+    obj = ctx.obj or {}
+    quiet = bool(obj.get("quiet", False))
+    try:
+        result = generate_metadata_tags(
+            prompt_file=prompt_file,
+            source=source,
+            force=force,
+            dry_run=dry_run,
+            output_path=output,
+            strength=obj.get("strength"),
+            temperature=obj.get("temperature"),
+            verbose=obj.get("verbose"),
+        )
+    except (click.Abort, click.exceptions.Exit, click.ClickException):
+        raise
+    except Exception as exc:  # noqa: BLE001
+        handle_error(exc, "metadata tags", quiet)
+        return None
+
+    # generate_metadata_tags may return (success, errors) or a richer tuple.
+    if isinstance(result, tuple) and len(result) >= 2:
+        success = bool(result[0])
+        errors = result[1] if isinstance(result[1], (list, tuple)) else []
+        cost = result[2] if len(result) > 2 else 0.0
+        model = result[3] if len(result) > 3 else "metadata-tags"
+    else:
+        success, errors, cost, model = True, [], 0.0, "metadata-tags"
+
+    if not success:
+        for err in errors:
+            console.print(f"[red]Error: {err}[/red]")
+        raise click.ClickException("metadata tags generation failed")
+
+    return {"success": True}, float(cost), str(model)
+
+
+# ---------------------------------------------------------------------------
+# Aliases / exports for the command registry
+# ---------------------------------------------------------------------------
+
+# ``pdd.commands.__init__`` imports these symbols by name.
+sync_code = sync
+metadata = metadata_group
+
+
+def register(cli: click.Group) -> None:
+    """Register maintenance subcommands with the given Click group."""
+    cli.add_command(sync)
+    cli.add_command(auto_deps)
+    cli.add_command(setup)
+    cli.add_command(metadata_group)

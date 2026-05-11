@@ -1,0 +1,88 @@
+<pdd-reason>Generates or refreshes PDD metadata tags in prompt files from prompt+code or architecture.json.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "generate_metadata_tags", "signature": "(prompt_path: str, source: str = 'prompt-code', force: bool = False, dry_run: bool = False, output: Optional[str] = None, strength: float = 0.5, temperature: float = 0.0, verbose: bool = False) -> Dict[str, Any]", "returns": "Dict[str, Any]"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write `pdd/metadata_tags.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  This module synthesizes or refreshes the three PDD metadata tags
+  (`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`) in an existing prompt
+  file. It implements the `prompt+code → tags` direction that complements
+  `architecture_sync.py` (`tags → architecture.json`) and
+  `preprocess.py --pdd-tags` (`architecture.json → tags`). The output of this
+  module is a prompt file with valid, validated tags, so that
+  `pdd sync-architecture` can subsequently update `architecture.json`
+  reliably.
+
+% Non-Responsibilities
+  - Does NOT modify `architecture.json` (that is `architecture_sync.py`'s job).
+  - Does NOT remove or reorder existing `<include>` directives or prompt prose.
+  - Does NOT invent or guess code that is not present in the repository.
+
+% Requirements
+  1. **Public entrypoint** `generate_metadata_tags(prompt_path, source='prompt-code', force=False, dry_run=False, output=None, strength=0.5, temperature=0.0, verbose=False) -> Dict[str, Any]`:
+     - Returns a dict with keys: `success` (bool), `prompt_path` (str), `tags_added` (List[str], a subset of `['reason','interface','dependency']`), `tags_preserved` (List[str]), `cost` (float), `diff` (str, populated for `--dry-run`), `errors` (List[str]).
+     - `source` must be one of `prompt-code` (default) or `architecture`. Reject other values with `ValueError`.
+     - Read the prompt content from `prompt_path` and the corresponding code file (if any) using the standard PDD `BASENAME_LANGUAGE.prompt` → `pdd/<basename>.py` convention (use `pdd.path_resolution` helpers if available; otherwise infer from the suffix). Missing code is acceptable and degrades gracefully — the LLM is told to synthesize `<pdd-interface>` from prompt text only.
+  2. **Tag preservation**:
+     - When `force=False` (default), preserve any existing tag value (`<pdd-reason>`, `<pdd-interface>`, or `<pdd-dependency>` entries) that already validates. Only synthesize missing or invalid tags.
+     - When `force=True`, regenerate all three tags from scratch, overwriting existing values.
+     - Use `architecture_sync.has_pdd_tags` to detect existing tags and `re.findall` with non-greedy patterns to extract each tag's body.
+  3. **Source: `prompt-code`** (LLM-first synthesis):
+     - Use `pdd.llm_invoke.llm_invoke` to ask the LLM to produce a JSON object matching the Pydantic v2 schema below, given the prompt text, the code file (truncated to 800 lines if longer), and any tags currently present.
+     - Schema (Pydantic v2):
+       ```
+       class TagPayload(BaseModel):
+           reason: str = Field(..., min_length=20, max_length=200)
+           interface: Dict[str, Any]
+           dependencies: List[str] = Field(default_factory=list)
+       ```
+     - Validate `interface` with `architecture_sync.validate_interface_structure`. On failure, retry once with the validator errors fed back to the LLM. After a second failure, return `success=False` with the validator errors in `errors`.
+     - Reject reasons longer than 120 characters by truncating at the nearest word boundary and appending `…` (warning logged when `verbose=True`).
+  4. **Source: `architecture`**:
+     - Look up the matching architecture entry via `architecture_sync.get_architecture_entry_for_prompt(prompt_filename)`.
+     - When found, emit tags via `architecture_sync.generate_tags_from_architecture(entry)`.
+     - When not found, return `success=False` with a single error `architecture entry not found for <prompt_filename>` — do NOT fall back to `prompt-code` silently.
+  5. **Deterministic validation guardrail**:
+     - For `<pdd-reason>` and each `<pdd-dependency>` tag, parse the entire tag with `xml.etree.ElementTree.fromstring` to confirm well-formedness.
+     - For `<pdd-interface>`, do NOT parse the tag body as XML (its JSON body may contain `<` or `&` and would falsely fail XML parsing). Instead, extract the body between the literal `<pdd-interface>` and `</pdd-interface>` delimiters, parse it with `json.loads`, and validate the resulting object with `architecture_sync.validate_interface_structure`.
+     - If any tag fails validation, do NOT write the file; populate `errors` and return `success=False`.
+  6. **Idempotent in-place merge**:
+     - Build the merged prompt content by replacing each existing tag in place (preserving its position) and prepending any newly added tag at the top of the file, BEFORE the first non-tag line.
+     - Existing `<include>` directives, prose sections, and other non-PDD tags MUST be left untouched. Verify this by computing the SHA-256 of the prompt content with all `<pdd-*>...</pdd-*>` blocks stripped, before and after; abort with an error if they differ.
+  7. **Output behavior**:
+     - When `dry_run=True`, do NOT write; populate `diff` with a unified diff (`difflib.unified_diff`) between the original and merged content.
+     - When `output` is provided, write to that path instead of `prompt_path`. Otherwise write in place to `prompt_path` with `utf-8` encoding.
+  8. **Cost tracking**: Accumulate `cost` from each `llm_invoke` call (key `cost` in the returned dict). The `architecture` source contributes `0.0`.
+  9. **Errors**: Catch and convert all expected failures (missing file, schema rejection, validator failure, unsupported `source`) into entries in `errors`. Only unexpected exceptions propagate.
+  10. **Logging**: Use `rich.console.Console` to print a summary table when `verbose=True`: `tags_added`, `tags_preserved`, `cost`, and the resulting `success` status.
+
+% Dependencies
+  <architecture_sync_helpers>
+  <include select="def:has_pdd_tags,def:generate_tags_from_architecture,def:validate_interface_structure,def:get_architecture_entry_for_prompt">pdd/architecture_sync.py</include>
+  </architecture_sync_helpers>
+  <llm_invoke_interface>
+  <include mode="interface">pdd/llm_invoke.py</include>
+  </llm_invoke_interface>
+
+% Instructions
+  - Implement the function and a small private helper `_synthesize_tags_from_prompt_code(...)` that wraps the `llm_invoke` + Pydantic validation + retry loop.
+  - Keep the module pure: no Click decorators, no `sys.exit`. The CLI wrapper lives in `pdd/commands/maintenance.py`.
+  - Prefer composing existing helpers from `pdd.architecture_sync` over re-implementing tag emission or interface validation.
+
+% Deliverables
+  - Code: `pdd/metadata_tags.py`

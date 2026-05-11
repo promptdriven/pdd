@@ -7800,9 +7800,12 @@
     }
   },
   {
-    "reason": "Registers maintenance CLI commands: sync, auto-deps, and setup with all options.",
+    "reason": "Registers maintenance CLI commands: sync, auto-deps, setup, and metadata with all options.",
     "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument or explicit `architecture.json` global sync with resolved default budget, and GitHub issue sync dispatch.",
-    "dependencies": [],
+    "dependencies": [
+      "auto_deps_main_python.prompt",
+      "metadata_tags_python.prompt"
+    ],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",
     "filepath": "pdd/commands/maintenance.py",
@@ -7816,7 +7819,7 @@
         "commands": [
           {
             "name": "sync",
-            "description": "Synchronize one prompt module, all stale architecture modules when no basename is provided, or modules affected by a GitHub issue URL"
+            "description": "Synchronize a prompt with its code, tests, and examples"
           },
           {
             "name": "auto-deps",
@@ -7825,6 +7828,10 @@
           {
             "name": "setup",
             "description": "Install shell completion and run setup utility"
+          },
+          {
+            "name": "metadata",
+            "description": "Generate or refresh PDD metadata tags in prompt files"
           }
         ]
       }
@@ -8714,6 +8721,65 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Generates or refreshes PDD metadata tags in prompt files from prompt+code or architecture.json.",
+    "description": "LLM-first synthesizer for the prompt+code -> tags direction, with Pydantic v2 schema, XML/JSON round-trip validation, idempotent in-place merge, and a `--from architecture` source that delegates to architecture_sync helpers.",
+    "dependencies": [
+      "architecture_sync_python.prompt",
+      "llm_invoke_python.prompt"
+    ],
+    "priority": 71,
+    "filename": "metadata_tags_python.prompt",
+    "filepath": "pdd/metadata_tags.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_metadata_tags",
+            "signature": "(prompt_path: str, source: str = 'prompt-code', force: bool = False, dry_run: bool = False, output: Optional[str] = None, strength: float = 0.5, temperature: float = 0.0, verbose: bool = False) -> Dict[str, Any]",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 21280,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Registers all PDD subcommands (including the new metadata group) with the main CLI group.",
+    "description": "Command registration module that aggregates and registers every PDD subcommand with the main CLI group via cli.add_command().",
+    "dependencies": [],
+    "priority": 72,
+    "filename": "commands/__init___python.prompt",
+    "filepath": "pdd/commands/__init__.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "register_commands",
+            "signature": "(cli: click.Group) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13200,
+      "y": 2400
     }
   }
 ]
