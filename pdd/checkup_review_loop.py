@@ -165,6 +165,16 @@ class ReviewResult:
     findings: List[ReviewFinding] = field(default_factory=list)
     summary: str = ""
     raw_output: str = ""
+    # Diagnostics surfaced on the final report when the reviewer fails or
+    # degrades. ``status_classification`` is a short best-effort tag
+    # (``auth``/``network``/``timeout``/``rate-limit``/``crash``/``unknown``).
+    # ``status_exit_code`` is parsed out of ``raw_output`` best-effort
+    # (``"no exit code"`` if absent). ``status_reason`` is the last ~20
+    # lines of stderr/stdout so an operator can paste it into a support
+    # ticket.
+    status_classification: str = ""
+    status_exit_code: str = ""
+    status_reason: str = ""
 
 
 @dataclass
@@ -199,6 +209,15 @@ class ReviewLoopConfig:
     # are reported as "degraded" instead of "failed". They still stop mutation
     # unless a distinct fallback reviewer completes and takes over.
     continue_on_reviewer_limit: bool = False
+    # When enabled, and the primary reviewer ends in ``failed`` or
+    # ``missing`` status (NOT ``degraded`` — degraded means reduced
+    # quality and must not silently lose signal), run a second review
+    # pass using the configured fixer's identity as a fallback reviewer.
+    # The fallback's result is recorded as a real reviewer row so the
+    # downstream verdict adapter sees a clean real-reviewer entry rather
+    # than the legacy ``fixer`` sentinel. Off by default to preserve
+    # existing CI expectations.
+    fallback_reviewer_on_failure: bool = False
     # Kept for report compatibility. A clean verifier pass by the primary
     # reviewer satisfies this; no separate fresh reviewer is spawned.
     require_final_fresh_review: bool = True
@@ -248,6 +267,12 @@ class ReviewLoopState:
     fix_attempts_by_key: Dict[str, int] = field(default_factory=dict)
     dispute_notes_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_feedback_by_key: Dict[str, str] = field(default_factory=dict)
+    # Captured diagnostics for each reviewer invocation that ended in a
+    # failed/degraded/missing status. Keyed by reviewer role name; the
+    # most recent attempt wins. Each value is a dict with keys
+    # ``classification``, ``exit_code``, ``reason`` (last ~20 lines of
+    # stderr/stdout), and ``status``.
+    reviewer_status_details: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -396,6 +421,50 @@ def run_checkup_review_loop(
                     reviewer = fallback
                     state.active_reviewer = fallback
                 else:
+                    fallback_result = None
+                    if not fallback_used:
+                        fallback_result = _maybe_run_fallback_reviewer(
+                            primary_reviewer=reviewer,
+                            primary_status=review.status,
+                            fixer=fixer,
+                            context=context,
+                            worktree=worktree,
+                            round_number=round_number,
+                            state=state,
+                            config=config,
+                            verbose=verbose,
+                            quiet=quiet,
+                            artifacts_dir=artifacts_dir,
+                            pr_metadata=pr_metadata,
+                        )
+                    if fallback_result is not None:
+                        fallback_used = True
+                        _mark_non_required_findings_advisory(state, config)
+                        _write_dedup_snapshot(artifacts_dir, round_number, state)
+                        if _budget_exhausted(config, state, deadline):
+                            _mark_budget_exhausted(config, state, deadline)
+                            break
+                        state.active_reviewer = fallback_result.reviewer
+                        if fallback_result.status == "clean":
+                            state.fresh_final_status = "clean"
+                            state.stop_reason = (
+                                f"Primary reviewer {reviewer} unavailable "
+                                f"({review.status}); secondary reviewer {fixer} "
+                                "clean (fallback)."
+                            )
+                            break
+                        if fallback_result.status == "findings":
+                            state.stop_reason = (
+                                f"Primary reviewer {reviewer} unavailable "
+                                f"({review.status}); secondary reviewer {fixer} "
+                                "reported findings (fallback)."
+                            )
+                            break
+                        state.stop_reason = (
+                            f"Reviewer fallback {fixer} could not complete: "
+                            f"{fallback_result.status}."
+                        )
+                        break
                     state.stop_reason = (
                         f"Primary reviewer {reviewer} could not complete: "
                         f"{review.status}."
@@ -930,6 +999,170 @@ def _collect_static_analysis_candidate_findings(
     return candidates
 
 
+def _maybe_run_fallback_reviewer(
+    *,
+    primary_reviewer: str,
+    primary_status: str,
+    fixer: str,
+    context: ReviewLoopContext,
+    worktree: Path,
+    round_number: int,
+    state: ReviewLoopState,
+    config: ReviewLoopConfig,
+    verbose: bool,
+    quiet: bool,
+    artifacts_dir: Path,
+    pr_metadata: Optional[Dict[str, Any]],
+) -> Optional[ReviewResult]:
+    """Run the fixer's role as a fallback reviewer when the primary fails.
+
+    Triggers only when:
+    * ``config.fallback_reviewer_on_failure`` is True (opt-in).
+    * The loop is not in review-only mode (a fixer is configured).
+    * ``primary_status`` is ``failed`` or ``missing`` (NOT ``degraded`` —
+      degraded means reduced quality and must not silently lose signal).
+    * ``primary_reviewer`` and ``fixer`` are distinct roles.
+
+    On a clean fallback, the result is recorded via ``_record_review`` so
+    the fixer's role name overwrites the ``"fixer"`` sentinel in
+    ``state.reviewer_status`` — this is what gives the downstream verdict
+    adapter (rule r1.5) a clean real-reviewer row to consume.
+
+    Returns the ``ReviewResult`` from the fallback pass, or ``None`` if no
+    fallback was attempted.
+    """
+    if not config.fallback_reviewer_on_failure:
+        return None
+    if config.review_only:
+        return None
+    if primary_status not in {"failed", "missing"}:
+        # Degraded never promotes — preserves the existing
+        # "degraded cannot ship" semantics.
+        return None
+    if not fixer or fixer == primary_reviewer:
+        return None
+
+    if not quiet:
+        console.print(
+            f"[yellow]Primary reviewer {primary_reviewer} returned "
+            f"{primary_status}; running fallback reviewer {fixer}.[/yellow]"
+        )
+    fallback = _run_review(
+        reviewer=fixer,
+        context=context,
+        worktree=worktree,
+        round_number=round_number,
+        state=state,
+        config=config,
+        verbose=verbose,
+        quiet=quiet,
+        artifacts_dir=artifacts_dir,
+        mode="fallback",
+        pr_metadata=pr_metadata,
+    )
+    _record_review(state, fallback)
+    return fallback
+
+
+def _extract_failure_diagnostics(
+    output: str,
+    *,
+    success: bool,
+) -> Tuple[str, str, str]:
+    """Pull a best-effort exit code, classification, and stderr tail from a
+    failed/degraded reviewer invocation.
+
+    ``_run_role_task`` only returns ``(success, output, cost, model)`` — there
+    is no separate stderr channel — so ``output`` is the diagnostic text in
+    the failure path. The classification regex is intentionally simple and
+    best-effort; unknown failures fall through to ``"unknown"``.
+    """
+    text = output or ""
+    lowered = text.lower()
+
+    if not success and not text.strip():
+        return "no exit code", "unknown", "(no output captured from reviewer role)"
+
+    # Best-effort exit code extraction.
+    exit_code = "no exit code"
+    match = re.search(r"exit code[:\s]+(-?\d+)", lowered)
+    if match:
+        exit_code = match.group(1)
+
+    # Classification: order matters — most specific first.
+    classification = "unknown"
+    if any(
+        marker in lowered
+        for marker in (
+            "rate limit",
+            "rate-limit",
+            "quota exceeded",
+            "quota exhausted",
+            "429",
+            "too many requests",
+        )
+    ):
+        classification = "rate-limit"
+    elif any(
+        marker in lowered
+        for marker in (
+            "timed out",
+            "timeout expired",
+            "timeout:",
+            "deadline exceeded",
+        )
+    ):
+        classification = "timeout"
+    elif any(
+        marker in lowered
+        for marker in (
+            "authentication failed",
+            "not logged in",
+            "unauthorized",
+            "invalid api key",
+            "access token could not be refreshed",
+            "401",
+            "403",
+        )
+    ):
+        classification = "auth"
+    elif any(
+        marker in lowered
+        for marker in (
+            "connection refused",
+            "connection reset",
+            "network is unreachable",
+            "dns",
+            "could not resolve",
+            "socket",
+            "no route to host",
+            "ssl",
+        )
+    ):
+        classification = "network"
+    elif any(
+        marker in lowered
+        for marker in (
+            "traceback",
+            "segmentation fault",
+            "core dumped",
+            "panic:",
+            "fatal error:",
+            "killed",
+        )
+    ):
+        classification = "crash"
+
+    # Last ~20 lines of stderr/stdout — enough for an operator to paste
+    # into an upstream provider's support ticket without flooding the
+    # GitHub issue comment.
+    tail_lines = [line for line in text.splitlines() if line.strip()]
+    tail = "\n".join(tail_lines[-20:]).strip()
+    if not tail:
+        tail = "(no output captured from reviewer role)"
+    return exit_code, classification, tail
+
+
 def _run_review(
     *,
     reviewer: str,
@@ -983,6 +1216,9 @@ def _run_review(
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
 
     if not success:
+        exit_code, classification, reason = _extract_failure_diagnostics(
+            output, success=success
+        )
         result = ReviewResult(
             reviewer=reviewer,
             status=_failure_status(
@@ -993,6 +1229,9 @@ def _run_review(
             findings=[],
             summary=output[:1000],
             raw_output=output,
+            status_classification=classification,
+            status_exit_code=exit_code,
+            status_reason=reason,
         )
     else:
         result = _parse_review_output(
@@ -1001,6 +1240,19 @@ def _run_review(
             round_number,
             allow_degraded=config.continue_on_reviewer_limit,
         )
+        # The parsed output may still classify as failed/degraded (e.g.,
+        # a model that produced text but no parseable JSON, or a rate
+        # limit marker embedded in the output). Surface diagnostics in
+        # that case too.
+        if result.status in HARD_NOT_CLEAN_STATES:
+            exit_code, classification, reason = _extract_failure_diagnostics(
+                output, success=True
+            )
+            result.status_classification = (
+                result.status_classification or classification
+            )
+            result.status_exit_code = result.status_exit_code or exit_code
+            result.status_reason = result.status_reason or reason
         if _should_attempt_parse_repair(output, result):
             repaired = _run_review_parse_repair(
                 reviewer=reviewer,
@@ -2112,6 +2364,20 @@ def _record_review(
         state.issue_aligned = result.issue_aligned
     if track_reviewer_status:
         state.reviewer_status[result.reviewer] = result.status
+        # When the reviewer ended in a non-clean state and we captured any
+        # diagnostic detail, persist it so the final report can surface
+        # what actually happened. The most recent attempt wins.
+        if result.status in HARD_NOT_CLEAN_STATES and (
+            result.status_classification
+            or result.status_exit_code
+            or result.status_reason
+        ):
+            state.reviewer_status_details[result.reviewer] = {
+                "status": result.status,
+                "classification": result.status_classification or "unknown",
+                "exit_code": result.status_exit_code or "no exit code",
+                "reason": result.status_reason or "",
+            }
     for finding in result.findings:
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
@@ -2650,8 +2916,43 @@ def _render_final_report(
         else:
             cell = status
         lines.append(f"| {reviewer} | {cell} |")
+    lines.append(f"| fresh-final | {state.fresh_final_status} |")
+
+    # Reviewer Diagnostics — only render when at least one reviewer
+    # ended in a non-clean state with captured detail. This keeps the
+    # existing report shape intact for happy-path runs so substring
+    # assertions in older tests continue to match.
+    if state.reviewer_status_details:
+        lines.extend(["", "### Reviewer Diagnostics", ""])
+        for reviewer_name in reviewers:
+            detail = state.reviewer_status_details.get(reviewer_name)
+            if not detail:
+                continue
+            lines.append(
+                f"- {reviewer_name} ({detail.get('status', 'unknown')}): "
+                f"classification={detail.get('classification', 'unknown')}, "
+                f"exit code: {detail.get('exit_code', 'no exit code')}"
+            )
+            reason = (detail.get("reason") or "").strip()
+            if reason:
+                lines.append("")
+                lines.append("```")
+                lines.extend(reason.splitlines())
+                lines.append("```")
+                lines.append("")
+        # Render any reviewer keys that aren't in the role order (e.g.,
+        # a reviewer that ran but isn't in the configured roles list)
+        # so nothing gets silently dropped.
+        for reviewer_name, detail in state.reviewer_status_details.items():
+            if reviewer_name in reviewers:
+                continue
+            lines.append(
+                f"- {reviewer_name} ({detail.get('status', 'unknown')}): "
+                f"classification={detail.get('classification', 'unknown')}, "
+                f"exit code: {detail.get('exit_code', 'no exit code')}"
+            )
+
     lines.extend([
-        f"| fresh-final | {state.fresh_final_status} |",
         "",
         "### Findings",
         "",
