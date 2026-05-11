@@ -127,9 +127,18 @@ _SECRET_SCRUB_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"\bghu_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bghs_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bghr_[A-Za-z0-9]{20,}\b"),
-    # Bearer tokens in Authorization headers and stand-alone.
-    re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.IGNORECASE),
-    re.compile(r"Authorization\s*:\s*\S+", re.IGNORECASE),
+    # Bearer tokens — must cover the full base64/JWT alphabet (``+``, ``/``,
+    # ``=`` are legal). The prior ``[A-Za-z0-9._-]+`` would only redact the
+    # leading run before ``+`` or ``/`` and leak the rest into the public
+    # comment. ``Bearer\s+`` keeps the match anchored to a real header so
+    # hyphen-joined words like ``bearer-token-rotation-policy`` still pass.
+    re.compile(r"Bearer\s+\S+", re.IGNORECASE),
+    # Authorization header value — match the entire value to end of line so
+    # non-Bearer schemes (``Token``, ``Basic``, etc.) and tokens containing
+    # ``+``/``/``/``=`` are fully redacted. Prior pattern only consumed one
+    # non-space token after ``Authorization:`` and left ``<scheme> <token>``
+    # values with the credential exposed.
+    re.compile(r"Authorization\s*:\s*[^\r\n]+", re.IGNORECASE),
     # Anthropic-style keys.
     re.compile(r"\bclaude[_-]?api[_-]?key[\"'\s:=]+[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
 )
