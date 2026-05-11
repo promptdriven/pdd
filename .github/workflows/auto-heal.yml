@@ -249,15 +249,17 @@ jobs:
           trap 'rm -rf "$ctx_dir"' EXIT
           gsutil cp gs://pdd-stg-build-contexts/auto-heal-pr-latest.tgz "$ctx_dir/source.tgz"
           tar -xzf "$ctx_dir/source.tgz" -C "$ctx_dir"
-          # Use our own bucket for staging + logs so the dispatcher SA
+          # Use our own bucket for source staging so the dispatcher SA
           # doesn't need access to the default `<project>_cloudbuild`
           # bucket (which is restricted by org policy on this project).
+          # No --gcs-log-dir: cloudbuild-pdd-cli-auto-heal-pr.yaml sets
+          # `options.logging: CLOUD_LOGGING_ONLY` which conflicts with a
+          # GCS log bucket; logs go to Cloud Logging.
           build_id=$(gcloud builds submit \
             gs://pdd-stg-build-contexts/auto-heal-pr-latest.tgz \
             --project=prompt-driven-development-stg \
             --config="$ctx_dir/cloudbuild-pdd-cli-auto-heal-pr.yaml" \
             --gcs-source-staging-dir=gs://pdd-stg-build-contexts/_staging \
-            --gcs-log-dir=gs://pdd-stg-build-contexts/_logs \
             --substitutions=_PUBLIC_PR_NUMBER="$PR_NUMBER" \
             --async \
             --format='value(id)')
