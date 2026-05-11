@@ -349,7 +349,10 @@ def run_checkup_review_loop(
                 _mark_budget_exhausted(config, state, deadline)
                 break
             if review.status in HARD_NOT_CLEAN_STATES:
-                fallback = config.reviewer_fallback
+                fallback_candidates = _normalize_reviewers(
+                    [config.reviewer_fallback] if config.reviewer_fallback else []
+                )
+                fallback = fallback_candidates[0] if fallback_candidates else None
                 if (
                     not fallback_used
                     and fallback

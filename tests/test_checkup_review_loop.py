@@ -1108,6 +1108,96 @@ class TestCheckupReviewLoopRuntime:
         assert "could not complete" in report
         assert not any(label.startswith("checkup-review-loop-review-claude") for _, label in calls)
 
+    def test_reviewer_fallback_provider_alias_of_fixer_is_ignored(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewer_fallback="anthropic"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not complete" in report
+        assert not any(label.startswith("checkup-review-loop-review-claude") for _, label in calls)
+        assert not any(label.startswith("checkup-review-loop-review-anthropic") for _, label in calls)
+
+    def test_reviewer_fallback_provider_alias_of_primary_is_ignored(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            return False, "ERROR: authentication failed: token expired", 0.0, ""
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewer_fallback="openai"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not complete" in report
+        codex_review_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-review-codex")
+        ]
+        assert len(codex_review_calls) == 1
+
+    def test_reviewer_fallback_normalized_alias_takes_over(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewer_fallback="google"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "gemini=clean" in report
+        assert any(role == "gemini" for role, _ in calls)
+
     def test_reviewer_fallback_also_fails_breaks_loop(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
