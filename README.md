@@ -2686,13 +2686,14 @@ Options:
 - `--review-loop`: In PR mode, run the primary-reviewer/fixer loop. The primary reviewer reviews the PR, the fixer addresses actionable findings, fixes are committed and pushed to the PR branch, and the primary reviewer verifies until clean or a limit is reached.
 - `--review-only`: With `--review-loop`, run only the primary reviewer first pass. This never invokes the fixer, commits, or pushes.
 - `--reviewer ROLE`: Primary reviewer role for `--review-loop` (for example, `codex`).
-- `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
+- `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used. Acts as a fallback reviewer if the primary reviewer fails.
 - `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
 - `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 10.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
 - `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
 - `--continue-on-reviewer-limit`: Report provider, rate, context-window, and timeout failures as `degraded` instead of `failed`. Degraded reviewers are still not clean and do not continue mutation.
+- `--no-reviewer-fallback`: Disable the automatic promotion of the secondary reviewer to authoritative reviewer when the primary reviewer suffers a hard failure. Defaults to fallback enabled (`--reviewer-fallback`).
 
 **How it works (8-step workflow with iterative fix-verify loop):**
 
@@ -2720,7 +2721,7 @@ Each step posts its findings as a comment on the GitHub issue, providing a detai
 
 **PR Verification Mode**: Use `--pr` and `--issue` to verify an existing PR against the issue it is intended to resolve. Without `--review-loop`, this mode remains verification-only and refuses to apply fixes or push to the PR branch.
 
-**Review-Loop Mode**: Add `--review-loop` to PR mode when you want PDD to use a primary reviewer and separate fixer on the same PR. The loop uses one isolated worktree for the PR branch, treats the reviewer as the authority, sends every valid finding to the fixer, commits and pushes successful fixes back to the PR head ref, then re-runs the same reviewer to verify the fixes and perform another full PR review. Failed pushes abort before verification, and reviewer provider failures remain not-clean.
+**Review-Loop Mode**: Add `--review-loop` to PR mode when you want PDD to use a primary reviewer and separate fixer on the same PR. The loop uses one isolated worktree for the PR branch, treats the reviewer as the authority, sends every valid finding to the fixer, commits and pushes successful fixes back to the PR head ref, then re-runs the same reviewer to verify the fixes and perform another full PR review. Failed pushes abort before verification. If the primary reviewer encounters a critical failure (e.g., auth or network error), the loop will surface diagnostic details (exit code, error class, and stderr tail) in the final report and dynamically promote the configured fixer to act as the fallback reviewer to complete the loop.
 
 Example:
 ```bash

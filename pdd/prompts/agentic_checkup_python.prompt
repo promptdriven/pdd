@@ -1,5 +1,74 @@
+<pdd-reason>Entry point for agentic checkup. Fetches issue/PR context and dispatches to orchestrators.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_checkup",
+        "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, review_only: bool = False, reviewers: str = \"codex,claude\", reviewer: Optional[str] = None, fixer: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 10.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, reviewer_fallback: bool = True) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "_extract_json_from_text",
+        "signature": "(text: str) -> Optional[Dict[str, Any]]",
+        "returns": "Optional[Dict[str, Any]]",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "_load_pddrc_content",
+        "signature": "(project_root: Path) -> str",
+        "returns": "str",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "_fetch_comments",
+        "signature": "(comments_url: str) -> str",
+        "returns": "str",
+        "sideEffects": [
+          "None"
+        ]
+      },
+      {
+        "name": "_fetch_pr_context",
+        "signature": "(owner: str, repo: str, pr_number: int) -> str",
+        "returns": "str",
+        "sideEffects": [
+          "Reads PR metadata, changed files, PR comments, and PR reviews with gh api"
+        ]
+      },
+      {
+        "name": "_post_checkup_comment",
+        "signature": "(owner: str, repo: str, issue_number: int, report: Dict[str, Any]) -> None",
+        "returns": "None",
+        "sideEffects": [
+          "Posts structured checkup results as GitHub comment"
+        ]
+      },
+      {
+        "name": "_post_error_comment",
+        "signature": "(owner: str, repo: str, issue_number: int, message: str) -> None",
+        "returns": "None",
+        "sideEffects": [
+          "Posts error message as GitHub comment"
+        ]
+      }
+    ]
+  }
+}
+</pdd-interface>
 <include>context/python_preamble.prompt</include>
-<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_change_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_sync_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
 % Goal
@@ -9,17 +78,17 @@ Write the `pdd/agentic_checkup.py` module.
 Entry point for the agentic checkup workflow. Accepts a GitHub issue URL, fetches issue content and comments, loads project context (architecture.json, .pddrc), then dispatches to the multi-step orchestrator that explores the project, identifies problems, and optionally fixes them.
 
 % Requirements
-1. Function: `run_agentic_checkup(issue_url: str, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, review_only: bool = False, reviewers: str = "codex,claude", reviewer: Optional[str] = None, fixer: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 10.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None) -> Tuple[bool, str, float, str]`
+1. Function: `run_agentic_checkup(issue_url: str, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, review_only: bool = False, reviewers: str = "codex,claude", reviewer: Optional[str] = None, fixer: Optional[str] = None, max_review_rounds: int = 5, max_review_cost: float = 10.0, max_review_minutes: float = 90.0, require_all_reviewers_clean: bool = True, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = True, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, reviewer_fallback: bool = True) -> Tuple[bool, str, float, str]`
 2. Return 4-tuple: (success, message, total_cost, model_used)
 3. Check `gh` CLI availability via `_check_gh_cli()` (reused from `agentic_change.py`)
 4. Parse GitHub issue URL via `_parse_issue_url()` (reused from `agentic_change.py`)
 5. When `pr_url` is set (PR-verification mode), additionally parse it via `_parse_pr_url()` (reused from `agentic_change.py`) into `(pr_owner, pr_repo, pr_number)`. Return `(False, "Invalid GitHub PR URL: ...", 0.0, "")` if parsing fails. The orchestrator runs against the PR's head branch instead of the issue's HEAD.
 6. Fetch issue content (title + body) and comments via `gh api`
 7. Escape curly braces in all user content via `_escape_format_braces()` for safe `.format()` calls
-8. Find project root via `_find_project_root()` (reused from `agentic_sync.py`)
+8. Find project root via `find_project_root()` (reused from `architecture_registry.py`)
 9. Load `architecture.json` via `_load_architecture_json()` (reused from `agentic_sync.py`)
 10. Load `.pddrc` content from project root
-11. When `review_loop=True`, require PR mode and dispatch to `run_checkup_review_loop()` with a `ReviewLoopContext` and `ReviewLoopConfig`. Map `review_only`, `reviewers`, explicit `reviewer`, explicit `fixer`, `blocking_severities`, and `clean_reviewer_states` onto the config; pass `None` through to take documented defaults. This path owns the primary-reviewer/fixer loop and returns its final Step-7-style markdown report. `review_only=True` runs only the primary reviewer first pass and must not invoke the fixer or push changes. `use_github_state=False` is a writes-only suppression switch — the dispatcher still fetches issue/PR content via `gh api` for the loop context; do not parse stdin or stdout.
+11. When `review_loop=True`, require PR mode and dispatch to `run_checkup_review_loop()` with a `ReviewLoopContext` and `ReviewLoopConfig`. Map `review_only`, `reviewers`, explicit `reviewer`, explicit `fixer`, `blocking_severities`, `clean_reviewer_states`, and `reviewer_fallback` onto the config; pass `None` through to take documented defaults. This path owns the primary-reviewer/fixer loop and returns its final Step-7-style markdown report. `review_only=True` runs only the primary reviewer first pass and must not invoke the fixer or push changes. `use_github_state=False` is a writes-only suppression switch — the dispatcher still fetches issue/PR content via `gh api` for the loop context; do not parse stdin or stdout.
 11a. `_fetch_pr_context(owner, repo, pr_number)` must fetch and format the PR title/body/base/head/state, changed-file inventory with small patch excerpts, PR conversation comments, and submitted PR reviews. Keep the returned context bounded with truncation so reviewer prompts remain within budget.
 11b. In review-loop mode, truncate the raw, unescaped issue/comment context, PR context, `.pddrc`, and architecture JSON before constructing `ReviewLoopContext`. The review-loop prompt is an f-string, not a `.format()` template, so do not double braces in JSON/code snippets. The prompt should provide enough context for serious PR review without burying the manual-review rubric under hundreds of kilobytes of bot logs or full architecture data.
 12. Otherwise dispatch to `run_agentic_checkup_orchestrator()` with all gathered context, including `pr_url`/`pr_owner`/`pr_repo`/`pr_number` when in PR mode (else `None`).
@@ -34,13 +103,14 @@ Entry point for the agentic checkup workflow. Accepts a GitHub issue URL, fetche
 - `_fetch_pr_context(owner: str, repo: str, pr_number: int) -> str`: fetch and format PR details, changed files, PR comments, and reviews for review-loop prompts
 
 % Dependencies
-<pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
-<pdd.agentic_checkup_orchestrator><include select="def:run_agentic_checkup_orchestrator">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
-<pdd.checkup_review_loop><include select="def:run_checkup_review_loop">context/checkup_review_loop_example.py</include></pdd.checkup_review_loop>
-<pdd.agentic_sync><include select="def:_find_project_root,def:_load_architecture_json">context/agentic_sync_example.py</include></pdd.agentic_sync>
-<pdd.agentic_common>
-    <include select="def:_fetch_comments,def:_escape_format_braces,def:_extract_json_from_text">context/agentic_common_example.py</include>
-</pdd.agentic_common>
+<pdd.agentic_change>
+  <include>context/agentic_change_example.py</include>
+  <include select="def:_escape_format_braces,def:_check_gh_cli,def:_parse_issue_url,def:_parse_pr_url">pdd/agentic_change.py</include>
+</pdd.agentic_change>
+<pdd.agentic_checkup_orchestrator><include select="def:run_agentic_checkup_orchestrator">pdd/agentic_checkup_orchestrator.py</include></pdd.agentic_checkup_orchestrator>
+<pdd.checkup_review_loop><include select="def:run_checkup_review_loop,class:ReviewLoopConfig,class:ReviewLoopContext">pdd/checkup_review_loop.py</include></pdd.checkup_review_loop>
+<pdd.agentic_sync><include select="def:_load_architecture_json">pdd/agentic_sync.py</include></pdd.agentic_sync>
+<pdd.architecture_registry><include select="def:find_project_root">pdd/architecture_registry.py</include></pdd.architecture_registry>
 
 % Error Handling
 - Return `(False, "GitHub CLI (gh) not found...", 0.0, "")` if `gh` command not available

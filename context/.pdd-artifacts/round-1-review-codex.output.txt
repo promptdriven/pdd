@@ -1,0 +1,3 @@
+```json
+{"status": "clean", "findings": [], "reason": "all good"}
+```

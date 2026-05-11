@@ -1,3 +1,76 @@
+<pdd-reason>PR-mode primary-reviewer/fixer review loop for pdd checkup to ensure issues and PRs are reviewed.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_checkup_review_loop",
+        "signature": "(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool = False, quiet: bool = False, use_github_state: bool = True) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]",
+        "sideEffects": [
+          "Creates one PR worktree for the entire loop session via _setup_pr_worktree",
+          "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
+          "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
+          "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper (refuses to leave tokenized URL in git config)",
+          "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
+          "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/",
+          "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"
+        ]
+      },
+      {
+        "name": "parse_reviewers",
+        "signature": "(value: str | Sequence[str] | None) -> Tuple[str, ...]",
+        "returns": "Tuple[str, ...]",
+        "sideEffects": [
+          "None"
+        ]
+      }
+    ],
+    "dataclasses": [
+      "ReviewLoopContext",
+      "ReviewLoopConfig",
+      "ReviewLoopState",
+      "ReviewFinding",
+      "ReviewResult",
+      "FixResult"
+    ],
+    "config_knobs": [
+      "reviewers",
+      "reviewer",
+      "fixer",
+      "review_only",
+      "max_rounds",
+      "max_cost",
+      "max_minutes",
+      "require_all_reviewers_clean",
+      "continue_on_reviewer_limit",
+      "require_final_fresh_review",
+      "blocking_severities",
+      "clean_reviewer_states",
+      "reviewer_fallback",
+      "timeout_adder",
+      "reasoning_time"
+    ],
+    "artifacts_layout": {
+      "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
+      "per_round": [
+        "round-{N}-{review|verify}-{role}.prompt.txt",
+        "round-{N}-{review|verify}-{role}.output.txt",
+        "round-{N}-{review|verify}-{role}.findings.json",
+        "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
+        "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
+        "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",
+        "dedup-state-round-{N}.json"
+      ],
+      "final": [
+        "final-report.md",
+        "final-state.json"
+      ]
+    }
+  }
+}
+</pdd-interface>
 % Write `pdd/checkup_review_loop.py`, implementing `pdd checkup --review-loop`.
 
 <include>context/python_preamble.prompt</include>
@@ -12,7 +85,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 % Public API
 1. `parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]`.
 2. `run_checkup_review_loop(*, context: ReviewLoopContext, config: ReviewLoopConfig, cwd: Path, verbose: bool = False, quiet: bool = False, use_github_state: bool = True) -> Tuple[bool, str, float, str]`.
-3. Dataclasses (all dataclasses must be importable from this module): `ReviewLoopContext`, `ReviewLoopConfig`, `ReviewLoopState`, `ReviewFinding`, `ReviewResult`, `FixResult`.
+3. Dataclasses (all dataclasses must be importable from this module): `ReviewLoopContext`, `ReviewLoopConfig` (must include `reviewer_fallback: bool` defaulting to `True`), `ReviewLoopState`, `ReviewFinding`, `ReviewResult`, `FixResult`.
 
 % Reviewer/fixer roles
 - Default role order: reviewer=`codex`, fixer=`claude`. `ReviewLoopConfig.reviewers` remains as backward-compatible shorthand where the first normalized role is the reviewer and the second normalized role is the fixer. Explicit `ReviewLoopConfig.reviewer` and `ReviewLoopConfig.fixer` override that shorthand.
@@ -74,6 +147,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 12n. In `mode="verify"`, the reviewer prompt MUST explicitly say the verifier pass is not a narrow checkbox verification. It must first verify every previous finding and fixer response, then perform a fresh full PR review again using the same manual-review standard. It must look for newly visible issues, missed issues, regressions from the fix, and prompt/example/architecture/docs/test drift, and it must explain that the loop repeats until the reviewer reports no actionable findings or `max_rounds` is reached.
 
 % Findings model
+12o. `ReviewResult` and `ReviewLoopState` must capture and track `status_reason`, `exit_code`, `stderr_tail`, and `error_class`. Capture the last 20 lines of `stderr`, the exit code, and the error classification (e.g., auth, network, timeout, crash) from the reviewer subprocess, and populate them into `ReviewResult`.
 13. Normalize reviewer output into `ReviewFinding(severity, reviewer, area, evidence, finding, required_fix, location, status, round_number)`.
     - Accept JSON in fenced ```json blocks, fenced ``` blocks, or first/last brace fallback.
     - Fall back to `[severity] message` bracket parsing for free-text reviewers.
@@ -92,6 +166,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 15a. Disagreement protocol: track fix attempts by finding key. If the fixer returns `not_valid`, `partially_fixed`, or `blocked`, include that disposition and rationale in the verifier prompt. If the primary reviewer accepts the rationale, the finding disappears from the verifier's findings and is marked fixed/resolved. If the primary reviewer rejects the rationale, it must re-report the finding with concrete evidence and a reason the fixer should act on it; the finding remains open and returns to the fixer on the next round. No fixer disposition is terminal by itself.
 
 % Loop semantics
+15b. Implement promote-on-failure: If the primary reviewer ends in a `HARD_NOT_CLEAN` state (like `failed`, `degraded`, or `missing`) and `config.reviewer_fallback` is enabled, dynamically run the same review pass using the configured secondary reviewer (the fixer). If the secondary reviewer succeeds, the loop can complete successfully, noting in the report that the primary was unavailable.
 16. The primary reviewer runs first in `mode="review"`. If it reports no actionable findings, stop clean and mark `fresh_final_status="clean"` for Step-7 report compatibility without spawning another reviewer.
 16a. In `review_only=True`, stop after that first primary-reviewer pass. If findings exist, mark reviewer status `findings`, leave `fresh_final_status="missing"`, and write a final report whose stop reason says review-only mode reported findings. If no findings exist, mark reviewer status and fresh-final clean. Do not run the fixer, fetch PR push metadata, commit, or push.
 17. The fixer receives all of the primary reviewer's actionable findings, not only the highest-priority severities. After the fixer edits, commits, and pushes successfully, the same primary reviewer re-runs in `mode="verify"` with the original findings and the fixer's structured response injected into the prompt.
@@ -118,6 +193,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 25. `_write_artifact(path, content)` MUST `mkdir(parents=True, exist_ok=True)` and write UTF-8.
 
 % Final report
+25a. Bubble up failure diagnostics (`status_reason`, `exit_code`, `error_class`, and `stderr_tail`) into the final report comment (in the per-reviewer status table or a dedicated diagnostics section) when a critical failure occurs, making them actionable for users and the retry orchestrator.
 26. Begin the report with `## Step 7/8: Review Loop Final Report`. Required keys, in order:
     - `PR: {pr_url}`
     - `Issue: {issue_url}`
@@ -138,11 +214,18 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 30. Return `(success=True, report_str, total_cost, last_model)` whenever the loop completes and produces a report — even when reviewer-status is non-clean. Downstream verdict adapters classify ship/not-ready/unknown from the report. Only return `success=False` when the function would otherwise be unable to produce a report (e.g., catastrophic interpreter-level error — but in this module's normal flow this does not occur).
 
 % Dependencies
-<pdd.agentic_common><include select="def:run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include></pdd.agentic_common>
-<pdd.agentic_change><include select="def:_run_gh_command">context/agentic_change_example.py</include></pdd.agentic_change>
-<pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
-<pdd.agentic_e2e_fix_orchestrator><include select="def:push_with_retry">context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix_orchestrator>
-<pdd.list_drift_detection><include select="def:detect_static_list_drift,class:StaticListDriftFinding">../pdd/list_drift_detection.py</include></pdd.list_drift_detection>
+<pdd.agentic_common>
+<include select="def:run_agentic_task">pdd/agentic_common.py</include>
+<include select="def:example_github_state_helpers">context/agentic_common_example.py</include>
+</pdd.agentic_common>
+<pdd.agentic_change><include select="def:_run_gh_command">pdd/agentic_change.py</include></pdd.agentic_change>
+<pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">pdd/agentic_checkup_orchestrator.py</include></pdd.agentic_checkup_orchestrator>
+<pdd.agentic_e2e_fix_orchestrator><include select="def:push_with_retry">pdd/agentic_e2e_fix_orchestrator.py</include></pdd.agentic_e2e_fix_orchestrator>
+<pdd.list_drift_detection><include select="def:detect_static_list_drift,class:StaticListDriftFinding">pdd/list_drift_detection.py</include></pdd.list_drift_detection>
+
+
+% Tests
+- Cover (a) primary failed + secondary clean → loop completes with secondary, and (b) failure-reason surfaced in the final report.
 
 % Deliverables
 - Code: `pdd/checkup_review_loop.py`
