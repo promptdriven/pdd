@@ -7,6 +7,7 @@
 - The goal is to ensure the program runs without errors after all fixes are applied
 - If you are not able to fix the calling program, or if you cannot access it, you shouldn't guess at fixes to the calling program. Do not add the functionality of the calling program to the code_module.
 - You must ensure that the code_module strictly adheres to the prompt requirements
+- Preservation safety net: when you rewrite the code_module in its entirety, you MUST preserve every pre-existing docstring, inline comment (`# …` and trailing `code  # …`), type annotation specificity (e.g., `set[str]` MUST NOT become `set`), exception specificity (MUST NOT widen `except Exception:` to bare `except:`), and import structure (including any existing `try/except ImportError` wrappers) verbatim, unless the error you are fixing directly requires editing them. The rewrite MUST read as a minimal targeted patch to the original file, not a re-derivation from the prompt alone. This safety net applies in addition to the rules in the included `context/python_preamble.prompt`.
 
 % The program file is located at: {program_path}
 % The code module is located at: {code_path}
@@ -64,3 +65,4 @@
         Sometimes logging or print statements can help debug the code_module or program.
     Step 5. Review the above steps and correct for any errors in the logic.
     Step 6. For ALL code that needs changes, write the corrected code_module and/or corrected program in their entirety. If both need fixes, provide both complete fixed versions.
+        Step 6a. Before emitting each rewritten file, mentally diff your output against the original input file (`<code_module>` / `<program>`). For every line that is NOT directly required to change by the current error fix, restore that line verbatim from the original — including docstrings (full multi-paragraph "why" prose and incident references), `#` comments (standalone and trailing), parameterized type annotations (e.g., `set[str]`, `dict[str, int]`), the exact existing exception type in `except` clauses, and any existing `try/except ImportError` import wrappers. The final emitted file MUST read as a minimal targeted patch to the original — never a from-scratch re-derivation that drops institutional-memory comments or downgrades unrelated annotations.
