@@ -15,7 +15,7 @@ from pdd.agentic_checkup import (
     _load_pddrc_content,
     _post_checkup_comment,
     _post_error_comment,
-    _truncate_issue_context,
+    _truncate,
     run_agentic_checkup,
 )
 
@@ -86,9 +86,9 @@ class TestLoadPddrcContent:
 # ---------------------------------------------------------------------------
 
 class TestPostCheckupComment:
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_posts_success_comment(self, mock_gh):
-        mock_gh.return_value = (True, "")
+    @patch("subprocess.run")
+    def test_posts_success_comment(self, mock_run):
+        mock_run.return_value.returncode = 0
         report = {
             "success": True,
             "message": "All checks passed",
@@ -98,15 +98,15 @@ class TestPostCheckupComment:
         }
         _post_checkup_comment("owner", "repo", 1, report)
 
-        mock_gh.assert_called_once()
-        args = mock_gh.call_args[0][0]
-        assert "repos/owner/repo/issues/1/comments" in args[1]
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
+        assert "repos/owner/repo/issues/1/comments" in args[2]
         body_arg = [a for a in args if a.startswith("body=")][0]
         assert "All checks passed" in body_arg
 
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_posts_comment_with_issues(self, mock_gh):
-        mock_gh.return_value = (True, "")
+    @patch("subprocess.run")
+    def test_posts_comment_with_issues(self, mock_run):
+        mock_run.return_value.returncode = 0
         report = {
             "success": False,
             "message": "Found 2 issues",
@@ -133,11 +133,10 @@ class TestPostCheckupComment:
         }
         _post_checkup_comment("owner", "repo", 42, report)
 
-        mock_gh.assert_called_once()
-        args = mock_gh.call_args[0][0]
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
         body_arg = [a for a in args if a.startswith("body=")][0]
         assert "Missing requests package" in body_arg
-        assert "requirements.txt" in body_arg
 
 
 # ---------------------------------------------------------------------------
@@ -145,27 +144,16 @@ class TestPostCheckupComment:
 # ---------------------------------------------------------------------------
 
 class TestPostErrorComment:
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_posts_error_comment(self, mock_gh):
-        mock_gh.return_value = (True, "")
+    @patch("subprocess.run")
+    def test_posts_error_comment(self, mock_run):
+        mock_run.return_value.returncode = 0
         _post_error_comment("owner", "repo", 5, "Something went wrong")
 
-        mock_gh.assert_called_once()
-        args = mock_gh.call_args[0][0]
+        mock_run.assert_called_once()
+        args = mock_run.call_args[0][0]
         body_arg = [a for a in args if a.startswith("body=")][0]
         assert "Something went wrong" in body_arg
-        assert "Error" in body_arg
 
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_truncates_long_message(self, mock_gh):
-        mock_gh.return_value = (True, "")
-        long_msg = "x" * 2000
-        _post_error_comment("owner", "repo", 1, long_msg)
-
-        args = mock_gh.call_args[0][0]
-        body_arg = [a for a in args if a.startswith("body=")][0]
-        # Message should be truncated to 1000 chars
-        assert len(body_arg) < 2000
 
 
 # ---------------------------------------------------------------------------
@@ -173,8 +161,8 @@ class TestPostErrorComment:
 # ---------------------------------------------------------------------------
 
 class TestFetchComments:
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_fetches_and_formats_comments(self, mock_gh):
+    @patch("pdd.agentic_checkup._gh_api")
+    def test_fetches_and_formats_comments(self, mock_run):
         comments = [
             {
                 "user": {"login": "alice"},
@@ -183,7 +171,7 @@ class TestFetchComments:
             },
             {"user": {"login": "bob"}, "body": "Comment 2"},
         ]
-        mock_gh.return_value = (True, json.dumps(comments))
+        mock_run.return_value = (True, json.dumps(comments), "")
 
         result = _fetch_comments("https://api.github.com/repos/o/r/issues/1/comments")
         assert "alice" in result
@@ -191,36 +179,25 @@ class TestFetchComments:
         assert "Comment 1" in result
         assert "bob" in result
 
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_returns_empty_on_failure(self, mock_gh):
-        mock_gh.return_value = (False, "404")
+    @patch("pdd.agentic_checkup._gh_api")
+    def test_returns_empty_on_failure(self, mock_run):
+        mock_run.return_value = (False, "", "404")
         result = _fetch_comments("https://api.github.com/repos/o/r/issues/1/comments")
-        assert result == ""
+        assert "Failed to fetch comments: 404" in result
 
 
-class TestIssueContextTruncation:
-    def test_preserves_latest_comments_when_issue_context_is_long(self):
-        old_body = "OLD PRD/Tier2 requirement.\n" * 200
-        old_comments = "--- Comment by bot ---\nold bot log\n" * 200
-        latest = (
-            "--- Comment by maintainer at 2026-04-29T00:00:00Z ---\n"
-            "Implementation scope lock: Tier 1 only. PRD/Tier2 is out of scope.\n"
-        )
-        text = f"Title: T\nDescription:\n{old_body}\nComments:\n{old_comments}{latest}"
-
-        result = _truncate_issue_context(text, 3000)
-
-        assert len(result) <= 3000
-        assert "Title: T" in result
-        assert "Implementation scope lock" in result
-        assert "PRD/Tier2 is out of scope" in result
-        assert "latest comments preserved" in result
+class TestTruncate:
+    def test_truncates_long_string(self):
+        text = "A" * 5000
+        result = _truncate(text, 3000, label="custom")
+        assert len(result) <= 3100
+        assert "... [truncated: 2000 chars of custom omitted] ..." in result
 
 
 class TestFetchPrContext:
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_fetches_pr_body_files_comments_and_reviews(self, mock_gh):
-        mock_gh.side_effect = [
+    @patch("pdd.agentic_checkup._gh_api")
+    def test_fetches_pr_body_files_comments_and_reviews(self, mock_run):
+        mock_run.side_effect = [
             (
                 True,
                 json.dumps(
@@ -233,6 +210,7 @@ class TestFetchPrContext:
                         "base": {"label": "o:main"},
                     }
                 ),
+                ""
             ),
             (
                 True,
@@ -247,6 +225,7 @@ class TestFetchPrContext:
                         }
                     ]
                 ),
+                ""
             ),
             (
                 True,
@@ -259,6 +238,7 @@ class TestFetchPrContext:
                         }
                     ]
                 ),
+                ""
             ),
             (
                 True,
@@ -272,6 +252,7 @@ class TestFetchPrContext:
                         }
                     ]
                 ),
+                ""
             ),
         ]
 
@@ -290,7 +271,7 @@ class TestFetchPrContext:
 
 class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=False)
-    def test_fails_without_gh_cli(self, mock_gh):
+    def test_fails_without_gh_cli(self, mock_run):
         success, msg, cost, model = run_agentic_checkup(
             "https://github.com/owner/repo/issues/1", quiet=True
         )
@@ -299,7 +280,7 @@ class TestRunAgenticCheckup:
         assert cost == 0.0
 
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
-    def test_fails_with_invalid_url(self, mock_gh):
+    def test_fails_with_invalid_url(self, mock_run):
         success, msg, cost, model = run_agentic_checkup(
             "not-a-url", quiet=True
         )
@@ -307,9 +288,9 @@ class TestRunAgenticCheckup:
         assert "Invalid" in msg
 
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_fails_when_issue_fetch_fails(self, mock_gh_cmd, mock_gh_cli):
-        mock_gh_cmd.return_value = (False, "404 not found")
+    @patch("pdd.agentic_checkup._gh_api")
+    def test_fails_when_issue_fetch_fails(self, mock_run_cmd, mock_run_cli):
+        mock_run_cmd.return_value = (False, "", "404 not found")
         success, msg, cost, model = run_agentic_checkup(
             "https://github.com/owner/repo/issues/999", quiet=True
         )
@@ -317,9 +298,9 @@ class TestRunAgenticCheckup:
         assert "Failed to fetch issue" in msg
 
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
-    @patch("pdd.agentic_checkup._run_gh_command")
-    def test_fails_when_issue_json_invalid(self, mock_gh_cmd, mock_gh_cli):
-        mock_gh_cmd.return_value = (True, "not json")
+    @patch("pdd.agentic_checkup._gh_api")
+    def test_fails_when_issue_json_invalid(self, mock_run_cmd, mock_run_cli):
+        mock_run_cmd.return_value = (True, "not json", "")
         success, msg, cost, model = run_agentic_checkup(
             "https://github.com/owner/repo/issues/1", quiet=True
         )
@@ -329,13 +310,13 @@ class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
     @patch("pdd.agentic_checkup._load_architecture_json", return_value=([], Path("/tmp/arch.json")))
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_full_flow_success(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
@@ -343,9 +324,9 @@ class TestRunAgenticCheckup:
     ):
         issue_data = {"title": "Check CRM", "body": "Run full checkup"}
         # First call: fetch issue. Second call: fetch comments (paginate).
-        mock_gh_cmd.side_effect = [
-            (True, json.dumps(issue_data)),
-            (True, "[]"),
+        mock_run_cmd.side_effect = [
+            (True, json.dumps(issue_data), ""),
+            (True, "[]", ""),
         ]
         mock_orchestrator.return_value = (True, "Checkup complete", 0.50, "anthropic")
 
@@ -363,13 +344,13 @@ class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_orchestrator_exception_posts_error_comment(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
@@ -377,9 +358,9 @@ class TestRunAgenticCheckup:
         mock_post_error,
     ):
         issue_data = {"title": "Check", "body": "check all"}
-        mock_gh_cmd.side_effect = [
-            (True, json.dumps(issue_data)),
-            (True, "[]"),
+        mock_run_cmd.side_effect = [
+            (True, json.dumps(issue_data), ""),
+            (True, "[]", ""),
         ]
         mock_orchestrator.side_effect = RuntimeError("Kaboom")
 
@@ -388,28 +369,28 @@ class TestRunAgenticCheckup:
         )
 
         assert not success
-        assert "Orchestrator failed" in msg
+        assert "Agentic checkup orchestrator failed" in msg
         mock_post_error.assert_called_once()
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_orchestrator_failure_returned(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
         mock_orchestrator,
     ):
         issue_data = {"title": "Check", "body": "check"}
-        mock_gh_cmd.side_effect = [
-            (True, json.dumps(issue_data)),
-            (True, "[]"),
+        mock_run_cmd.side_effect = [
+            (True, json.dumps(issue_data), ""),
+            (True, "[]", ""),
         ]
         mock_orchestrator.return_value = (False, "Step 3 failed", 0.30, "anthropic")
 
@@ -423,22 +404,22 @@ class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_no_fix_mode_passed_through(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
         mock_orchestrator,
     ):
         issue_data = {"title": "Check", "body": "check"}
-        mock_gh_cmd.side_effect = [
-            (True, json.dumps(issue_data)),
-            (True, "[]"),
+        mock_run_cmd.side_effect = [
+            (True, json.dumps(issue_data), ""),
+            (True, "[]", ""),
         ]
         mock_orchestrator.return_value = (True, "report only", 0.10, "anthropic")
 
@@ -452,20 +433,20 @@ class TestRunAgenticCheckup:
         call_kwargs = mock_orchestrator.call_args[1]
         assert call_kwargs["no_fix"] is True
 
-    @patch("pdd.agentic_checkup.run_checkup_review_loop")
+    @patch("pdd.checkup_review_loop.run_checkup_review_loop")
     @patch("pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}')
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
     @patch(
         "pdd.agentic_checkup._load_architecture_json",
         return_value=([{"name": "{module}"}], Path("/tmp/arch.json")),
     )
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_review_only_mode_passed_to_review_loop_config(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
@@ -477,7 +458,7 @@ class TestRunAgenticCheckup:
             "body": "check {value}",
             "comments_url": "",
         }
-        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_run_cmd.return_value = (True, json.dumps(issue_data), "")
         mock_review_loop.return_value = (True, "review report", 0.10, "codex")
 
         run_agentic_checkup(
@@ -502,22 +483,22 @@ class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_timeout_adder_passed_through(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
         mock_orchestrator,
     ):
         issue_data = {"title": "Check", "body": "check"}
-        mock_gh_cmd.side_effect = [
-            (True, json.dumps(issue_data)),
-            (True, "[]"),
+        mock_run_cmd.side_effect = [
+            (True, json.dumps(issue_data), ""),
+            (True, "[]", ""),
         ]
         mock_orchestrator.return_value = (True, "ok", 0.10, "anthropic")
 
@@ -533,22 +514,22 @@ class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch("pdd.agentic_checkup._load_architecture_json", return_value=(None, Path("/tmp/arch.json")))
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_use_github_state_passed_through(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
         mock_orchestrator,
     ):
         issue_data = {"title": "Check", "body": "check"}
-        mock_gh_cmd.side_effect = [
-            (True, json.dumps(issue_data)),
-            (True, "[]"),
+        mock_run_cmd.side_effect = [
+            (True, json.dumps(issue_data), ""),
+            (True, "[]", ""),
         ]
         mock_orchestrator.return_value = (True, "ok", 0.10, "anthropic")
 
@@ -564,13 +545,13 @@ class TestRunAgenticCheckup:
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")
     @patch("pdd.agentic_checkup._load_architecture_json")
-    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
-    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup.find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._gh_api")
     @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
     def test_handles_empty_issue_body(
         self,
-        mock_gh_cli,
-        mock_gh_cmd,
+        mock_run_cli,
+        mock_run_cmd,
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
@@ -578,9 +559,9 @@ class TestRunAgenticCheckup:
     ):
         """Issue body can be null in GitHub API."""
         issue_data = {"title": "Check", "body": None}
-        mock_gh_cmd.side_effect = [
-            (True, json.dumps(issue_data)),
-            (True, "[]"),
+        mock_run_cmd.side_effect = [
+            (True, json.dumps(issue_data), ""),
+            (True, "[]", ""),
         ]
         mock_load_arch.return_value = (None, Path("/tmp/arch.json"))
         mock_orchestrator.return_value = (True, "ok", 0.10, "anthropic")

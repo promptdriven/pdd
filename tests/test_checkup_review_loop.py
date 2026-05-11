@@ -480,11 +480,10 @@ class TestCheckupReviewLoopRuntime:
         )
 
         assert success is True
-        assert "reviewer-status: codex=failed claude=fixer fresh-final=missing" in report
-        assert "Primary reviewer codex could not complete" in report
-        assert "issue_aligned: unknown" in report
-        assert "No findings remain." not in report
-        assert "Required review did not complete" in report
+        assert "reviewer-status: codex=failed claude=clean fresh-final=clean" in report
+        assert "Primary reviewer codex was unavailable; loop completed with fallback claude." in report
+        assert "issue_aligned: true" in report
+        assert "No findings remain." in report
 
     def test_same_reviewer_and_fixer_is_rejected(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import run_checkup_review_loop
@@ -647,6 +646,7 @@ class TestCheckupReviewLoopRuntime:
             config=_config(
                 continue_on_reviewer_limit=True,
                 clean_reviewer_states=("clean", "degraded"),
+                reviewer_fallback=False,
             ),
             cwd=tmp_path,
             quiet=True,
@@ -751,7 +751,7 @@ class TestCheckupReviewLoopRuntime:
 
         success, report, _cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
-            config=_config(max_rounds=1),
+            config=_config(max_rounds=1, reviewer_fallback=False),
             cwd=tmp_path,
             quiet=True,
             use_github_state=False,
@@ -783,7 +783,7 @@ class TestCheckupReviewLoopRuntime:
 
         success, report, _cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
-            config=_config(max_rounds=1),
+            config=_config(max_rounds=1, reviewer_fallback=False),
             cwd=tmp_path,
             quiet=True,
             use_github_state=False,

@@ -165,6 +165,10 @@ class ReviewResult:
     findings: List[ReviewFinding] = field(default_factory=list)
     summary: str = ""
     raw_output: str = ""
+    status_reason: str = ""
+    exit_code: Optional[int] = None
+    stderr_tail: str = ""
+    error_class: str = ""
 
 
 @dataclass
@@ -204,6 +208,7 @@ class ReviewLoopConfig:
     reasoning_time: Optional[float] = None
     blocking_severities: Tuple[str, ...] = DEFAULT_BLOCKING_SEVERITIES
     clean_reviewer_states: Tuple[str, ...] = DEFAULT_CLEAN_REVIEWER_STATES
+    reviewer_fallback: bool = True
 
 
 @dataclass
@@ -245,6 +250,10 @@ class ReviewLoopState:
     fix_attempts_by_key: Dict[str, int] = field(default_factory=dict)
     dispute_notes_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_feedback_by_key: Dict[str, str] = field(default_factory=dict)
+    status_reason: str = ""
+    exit_code: Optional[int] = None
+    stderr_tail: str = ""
+    error_class: str = ""
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -346,6 +355,27 @@ def run_checkup_review_loop(
             if _budget_exhausted(config, state, deadline):
                 _mark_budget_exhausted(config, state, deadline)
                 break
+            if review.status in HARD_NOT_CLEAN_STATES and config.reviewer_fallback and fixer and fixer != reviewer:
+                if not quiet:
+                    console.print(f"[yellow]Primary reviewer {reviewer} failed. Falling back to {fixer}...[/yellow]")
+                
+                review = _run_review(
+                    reviewer=fixer,
+                    context=context,
+                    worktree=worktree,
+                    round_number=round_number,
+                    state=state,
+                    config=config,
+                    verbose=verbose,
+                    quiet=quiet,
+                    artifacts_dir=artifacts_dir,
+                    pr_metadata=pr_metadata,
+                )
+                _record_review(state, review)
+                if review.status not in HARD_NOT_CLEAN_STATES:
+                    state.stop_reason = f"Primary reviewer {reviewer} was unavailable; loop completed with fallback {fixer}."
+                    reviewer = fixer  # Take over as primary
+
             if review.status in HARD_NOT_CLEAN_STATES:
                 state.stop_reason = (
                     f"Primary reviewer {reviewer} could not complete: "
@@ -439,6 +469,29 @@ def run_checkup_review_loop(
         _record_review(state, verify)
         _mark_non_required_findings_advisory(state, config)
         _write_dedup_snapshot(artifacts_dir, round_number, state)
+        if verify.status in HARD_NOT_CLEAN_STATES and config.reviewer_fallback and fixer and fixer != reviewer:
+            if not quiet:
+                console.print(f"[yellow]Verifier {reviewer} failed. Falling back to {fixer}...[/yellow]")
+            verify = _run_review(
+                reviewer=fixer,
+                context=context,
+                worktree=worktree,
+                round_number=round_number,
+                state=state,
+                config=config,
+                verbose=verbose,
+                quiet=quiet,
+                artifacts_dir=artifacts_dir,
+                mode="verify",
+                findings_to_verify=fix_findings,
+                fix_result=fix,
+                pr_metadata=pr_metadata,
+            )
+            _record_review(state, verify)
+            if verify.status not in HARD_NOT_CLEAN_STATES:
+                state.stop_reason = f"Primary reviewer {reviewer} was unavailable; loop completed with fallback {fixer}."
+                reviewer = fixer
+
         if verify.status in HARD_NOT_CLEAN_STATES:
             # A failed/degraded verifier cannot confirm that fixes landed.
             # Keep the findings open and stop with an unknown/not-ready report.
@@ -944,6 +997,9 @@ def _run_review(
             findings=[],
             summary=output[:1000],
             raw_output=output,
+            status_reason=output[:100],
+            error_class=_failure_status(output, allow_degraded=config.continue_on_reviewer_limit),
+            stderr_tail=output[-2000:],
         )
     else:
         result = _parse_review_output(
@@ -2063,6 +2119,10 @@ def _record_review(
         state.issue_aligned = result.issue_aligned
     if track_reviewer_status:
         state.reviewer_status[result.reviewer] = result.status
+        state.status_reason = getattr(result, "status_reason", "")
+        state.exit_code = getattr(result, "exit_code", None)
+        state.stderr_tail = getattr(result, "stderr_tail", "")
+        state.error_class = getattr(result, "error_class", "")
     for finding in result.findings:
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
@@ -2487,6 +2547,9 @@ def _resolve_issue_aligned(state: ReviewLoopState) -> str:
 def _has_hard_not_clean_state(state: ReviewLoopState) -> bool:
     if state.fresh_final_status in HARD_NOT_CLEAN_STATES:
         return True
+    # If the loop stopped with fallback successfully, it is not a hard block
+    if "was unavailable; loop completed with fallback" in state.stop_reason:
+        return False
     return any(status in HARD_NOT_CLEAN_STATES for status in state.reviewer_status.values())
 
 
@@ -2531,6 +2594,29 @@ def _render_final_report(
         lines.append(f"| {reviewer} | {state.reviewer_status.get(reviewer, 'missing')} |")
     lines.extend([
         f"| fresh-final | {state.fresh_final_status} |",
+    ])
+    if _has_hard_not_clean_state(state) and getattr(state, "error_class", ""):
+        lines.extend([
+            "",
+            "### Diagnostics",
+            "",
+            f"**Error Class**: {state.error_class}",
+            f"**Exit Code**: {state.exit_code if getattr(state, 'exit_code', None) is not None else 'N/A'}",
+            f"**Reason**: {state.status_reason}",
+        ])
+        if getattr(state, "stderr_tail", ""):
+            lines.extend([
+                "",
+                "<details><summary>stderr tail</summary>",
+                "",
+                "```",
+                state.stderr_tail,
+                "```",
+                "",
+                "</details>"
+            ])
+
+    lines.extend([
         "",
         "### Findings",
         "",
