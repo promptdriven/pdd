@@ -7802,9 +7802,12 @@
     }
   },
   {
-    "reason": "Registers maintenance CLI commands: sync, auto-deps, and setup with all options.",
-    "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument or explicit `architecture.json` global sync with resolved default budget, and GitHub issue sync dispatch.",
-    "dependencies": [],
+    "reason": "Registers maintenance CLI commands: sync, sync-architecture, auto-deps, and setup with all options.",
+    "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument project-wide sync, GitHub issue sync dispatch, prompt-to-architecture sync, auto-deps, and setup.",
+    "dependencies": [
+      "auto_deps_main_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",
     "filepath": "pdd/commands/maintenance.py",
@@ -7818,7 +7821,11 @@
         "commands": [
           {
             "name": "sync",
-            "description": "Synchronize one prompt module, all stale architecture modules when no basename is provided, or modules affected by a GitHub issue URL"
+            "description": "Synchronize a prompt with its code, tests, and examples"
+          },
+          {
+            "name": "sync-architecture",
+            "description": "Sync architecture.json from prompt metadata tags"
           },
           {
             "name": "auto-deps",
