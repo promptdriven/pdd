@@ -1686,6 +1686,7 @@ def _prepend_cli_path(monkeypatch, cli_name: str, path_to_prepend) -> None:
     monkeypatch.setitem(_COMMON_CLI_PATHS, cli_name, [path_to_prepend] + original_paths)
 
 
+@pytest.mark.uses_real_cli_detector
 class TestCliDiscoveryBug:
     """
     Tests for CLI binary discovery bug.
@@ -1840,6 +1841,7 @@ class TestCliDiscoveryBug:
         )
 
 
+@pytest.mark.uses_real_cli_detector
 class TestCliDiscovery:
     """
     Tests for the CLI discovery fix implementation.
