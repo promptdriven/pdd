@@ -6536,6 +6536,57 @@ class TestIssue814BillingErrorsPermanent:
             "Diagnostic must include a snippet of the error output: " f"{permanent_lines}"
         )
 
+    def test_permanent_error_diagnostic_suppressed_under_quiet(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        mock_console,
+        tmp_path,
+    ):
+        """Issue #814 (codex follow-up): the default-mode permanent-error
+        diagnostic must honor the quiet contract — callers passing
+        quiet=True must see no stdout for the permanent-error skip, while
+        fallback still succeeds."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep"):
+            success, *_ = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5, quiet=True
+            )
+        assert success is True
+
+        printed = [
+            str(call.args[0])
+            for call in mock_console.print.call_args_list
+            if call.args
+        ]
+        permanent_lines = [line for line in printed if "permanent error" in line.lower()]
+        assert not permanent_lines, (
+            "quiet=True must suppress the permanent-error diagnostic, got: "
+            f"{permanent_lines}"
+        )
+
     def test_anthropic_is_error_json_envelope_skips_retries(
         self,
         mock_shutil_which,

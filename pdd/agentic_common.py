@@ -2071,12 +2071,15 @@ def run_agentic_task(
                     # Issue #814: emit a default-mode (non-verbose) diagnostic so
                     # the user sees which provider was skipped and why, instead
                     # of the workflow silently advancing to the next provider.
-                    stripped = (output or "").strip()
-                    snippet = stripped.splitlines()[0][:200] if stripped else "(no detail)"
-                    console.print(
-                        f"[yellow]Provider {provider} reported a permanent error; "
-                        f"skipping retries — {snippet}[/yellow]"
-                    )
+                    # Suppressed under quiet=True so callers honoring the quiet
+                    # contract (e.g. Issue #813 paths) stay silent on stdout.
+                    if not quiet:
+                        stripped = (output or "").strip()
+                        snippet = stripped.splitlines()[0][:200] if stripped else "(no detail)"
+                        console.print(
+                            f"[yellow]Provider {provider} reported a permanent error; "
+                            f"skipping retries — {snippet}[/yellow]"
+                        )
                     break
 
                 # Failed - retry with backoff if attempts remain

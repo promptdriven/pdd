@@ -2,12 +2,12 @@
   "pdd_version": "0.0.233",
   "timestamp": "2026-05-11T21:05:00+00:00",
   "command": "fix",
-  "prompt_hash": "9c29fbe5ae20c3e1e6b6763f587cc3a59190888fdafafa30ead28ed596bd3d97",
-  "code_hash": "7a21490fb30d4b5f925155a5480b5d95a104ac07d9c7e7e359bd32dc8422944f",
+  "prompt_hash": "fdf87b19f10690ee1ed623fd1003fade1f639990198cc51d5d0df18c6a79ac5a",
+  "code_hash": "7f38ae1f074c3a1cc46db1aaaeae89177d7912bb5aec54008b743e44e9104c55",
   "example_hash": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
-  "test_hash": "7b46f720348c4ead4d7e971cc15dec1c557b18a70cdf4af27012921813080389",
+  "test_hash": "69988552b59d83b083d95a0f3154e991bcfcf0529ef1f3fe1d0809593b53b283",
   "test_files": {
-    "test_agentic_common.py": "7b46f720348c4ead4d7e971cc15dec1c557b18a70cdf4af27012921813080389",
+    "test_agentic_common.py": "69988552b59d83b083d95a0f3154e991bcfcf0529ef1f3fe1d0809593b53b283",
     "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "1988f9b022bd4071f95aef13ba6a6a6681279711ad6f718744195b8e0b9dac9e",
     "test_agentic_common_worktree.py": "b726b24513865a7e3c23700b192bac001ab09190d7371b6d6714f0cf076c58e2"
   },
@@ -15,6 +15,6 @@
     "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
     "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
-    "pdd/agentic_common.py": "7a21490fb30d4b5f925155a5480b5d95a104ac07d9c7e7e359bd32dc8422944f"
+    "pdd/agentic_common.py": "7f38ae1f074c3a1cc46db1aaaeae89177d7912bb5aec54008b743e44e9104c55"
   }
 }
