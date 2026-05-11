@@ -8,7 +8,7 @@
 % Requirements
   - Import all command functions and groups from the sibling modules in `pdd/commands/`.
   - Define a `register_commands(cli: click.Group) -> None` function.
-  - In `register_commands`, use `cli.add_command()` to register in the current CLI order:
+  - In `register_commands`, use `cli.add_command()` to register in EXACTLY this order (the order matches the current `pdd/commands/__init__.py` and determines `pdd --help` command listing — do not reorder):
     - `generate`, `test`, `example` (from `.generate`)
     - `fix` (from `.fix`)
     - `split`, `change`, `update` (from `.modify`)
@@ -16,15 +16,15 @@
     - `checkup` (from `.checkup`)
     - `auto_deps`, `setup` (from `.maintenance`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
-    - `connect` (from `.connect`)
-    - `auth_group` (from `.auth`)
     - `preprocess` (from `.misc`)
     - `extracts` (from `.extracts`)
-    - `sessions` (from `.sessions`)
     - `report_core` (from `.report`)
-    - `templates_group` (from `.templates`)
-    - `install_completion_cmd` (as name="install_completion"), `verify` (from `.utility`)
+    - `install_completion_cmd` (as `name="install_completion"`), `verify` (from `.utility`)
     - `which` (from `.which`)
+    - `templates_group` (from `.templates`)
+    - `connect` (from `.connect`)
+    - `auth_group` (from `.auth`)
+    - `sessions` (from `.sessions`)
     - `firecrawl_cache` (from `.firecrawl`)
 
 % Deliverables
