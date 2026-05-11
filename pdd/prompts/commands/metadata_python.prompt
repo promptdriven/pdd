@@ -1,0 +1,77 @@
+<pdd-reason>Registers the `metadata` CLI group and its `finalize` subcommand for auditing/finalizing dev-unit metadata.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "commands": [
+      {"name": "metadata", "description": "Inspect and finalize PDD dev-unit metadata (.pdd/meta/) state"},
+      {"name": "metadata finalize", "description": "Finalize or audit metadata for a single dev unit"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>metadata_finalize_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write `pdd/commands/metadata.py`.
+
+% Role & Scope
+  This module exposes the `metadata` Click group and the `finalize` subcommand. It is a thin CLI wrapper over `pdd.metadata_finalize.finalize_metadata`. It does not perform any LLM calls or trigger code generation.
+
+<include>context/python_preamble.prompt</include>
+
+% Program Specification (README.md):
+    <README.md>
+    <include select="section:23. metadata">./README.md</include>
+    </README.md>
+
+% Requirements
+  1. **Group**:
+     - Define `metadata_group = click.Group(name="metadata", help="Inspect and finalize PDD dev-unit metadata.")`.
+     - Export `metadata_group` so `pdd/commands/__init__.py` can register it.
+  2. **`finalize` subcommand**:
+     - Signature: `pdd metadata finalize [OPTIONS] TARGET`.
+     - `TARGET` is required: a basename, a prompt file path, or a code/example/test file path that maps to a single dev unit.
+     - Options:
+       - `--dry-run` (bool flag, default False): print the current metadata state without writing. No fingerprint write; no `_run.json` deletion.
+       - `--json` (bool flag, default False): emit the report as a single JSON object to stdout instead of human-readable text. Useful for `pdd auto-heal` and CI scripts.
+       - `--language TEXT`: override language detection (e.g., `python`, `typescript`). Passed through to `finalize_metadata`.
+       - `--context TEXT`: override `.pddrc` context selection. Passed as `context_override`.
+       - `--quiet` (bool flag, default False): suppress non-error output in non-`--json` mode. Has no effect when `--json` is set.
+     - Logic: call `from ..metadata_finalize import finalize_metadata` and invoke it with the parsed options.
+  3. **Exit codes** (git-plumbing style):
+     - `0`: report produced; in normal mode the fingerprint was written and any stale `_run.json` was cleared.
+     - `1`: dry-run only — produced a report and detected drift (`fingerprint_state != "current"` OR `run_report_state in ("stale",)`). Normal mode never returns 1; it writes and returns 0.
+     - `2`: error — target could not be resolved, language could not be detected, lock could not be acquired, or any unexpected exception.
+     - Implement exits via `raise click.exceptions.Exit(code)` so Click's machinery is respected.
+  4. **Human-readable output** (non-`--json`, non-`--quiet`):
+     - One-line header: `metadata: <basename> [<language>]`.
+     - Show resolved paths (prompt/code/example/test) with `[present]` or `[MISSING]` markers.
+     - Show `fingerprint: <state>` (with `stale_components` list if any).
+     - Show `run_report: <state>`.
+     - In normal mode, append `wrote fingerprint` and (if applicable) `cleared stale run report` lines.
+     - Emit warnings (one per line, prefixed with `warning:`) at the end.
+  5. **JSON output** (`--json`):
+     - Dump `dataclasses.asdict(report)` with `indent=2` and `default=str` so `Path` objects serialize. The schema must match the `MetadataReport` dataclass.
+  6. **Decorators**:
+     - Do NOT apply `@track_cost` (no LLM cost).
+     - Do NOT apply `@log_operation` (this command does not update the run report; it only clears stale ones, which `finalize_metadata` handles internally).
+  7. **Error handling**:
+     - Wrap the call in `try/except`:
+       - `click.exceptions.Exit` and `click.Abort`: re-raise.
+       - `ValueError` (resolution failures from `finalize_metadata`): print `error: <message>` to stderr and exit 2.
+       - Any other `Exception`: print `error: <message>` to stderr and exit 2. Do NOT use `handle_error` (which formats LLM-style errors).
+
+% Dependencies
+  <metadata_finalize_example>
+    <include select="def:finalize_metadata,class:MetadataReport" mode="interface">pdd/metadata_finalize.py</include>
+  </metadata_finalize_example>
+
+% Instructions
+  - Keep the module small (~120 lines). It is a thin CLI shim.
+  - Use `click.echo` for stdout, `click.echo(..., err=True)` for stderr.
+  - Do not import any heavyweight modules at top-level beyond `click` and `dataclasses`/`json`; import `finalize_metadata` lazily inside the command body.
+
+% Deliverables
+  - Code: `pdd/commands/metadata.py`
