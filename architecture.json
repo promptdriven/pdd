@@ -7800,6 +7800,38 @@
     }
   },
   {
+    "reason": "Registers all PDD subcommands with the main CLI group in canonical order, determining `pdd --help` command listing.",
+    "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
+    "dependencies": [
+      "commands/generate_python.prompt",
+      "commands/fix_python.prompt",
+      "commands/modify_python.prompt",
+      "commands/maintenance_python.prompt"
+    ],
+    "priority": 70,
+    "filename": "commands/__init___python.prompt",
+    "filepath": "pdd/commands/__init__.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "register_commands",
+            "description": "Register all subcommands with the main CLI group in canonical order"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13000,
+      "y": 2000
+    }
+  },
+  {
     "reason": "Registers maintenance CLI commands: sync, sync-architecture, auto-deps, and setup with all options.",
     "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument project-wide sync, GitHub issue sync dispatch, prompt-to-architecture sync, auto-deps, and setup.",
     "dependencies": [
