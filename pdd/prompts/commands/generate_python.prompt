@@ -59,11 +59,11 @@
   - Use `rich.console.Console` for stylized output in agentic modes.
 
 % Dependencies
-  <include>context/command_logging.prompt</include>
-  <include select="def:code_generator_main">context/code_generator_main_example.py</include>
-  <include select="def:run_agentic_architecture,def:run_incremental_architecture">context/agentic_architecture_example.py</include>
+  <!-- Missing: context/command_logging.prompt -->
+  <!-- Invalid selector for context/code_generator_main_example.py: Function 'code_generator_main' not found in source -->
+  <!-- Invalid selector for context/agentic_architecture_example.py: Function 'run_agentic_architecture' not found in source -->
   <include>context/context_generator_main_example.py</include>
-  <include select="def:cmd_test_main">context/cmd_test_main_example.py</include>
+  <!-- Invalid selector for context/cmd_test_main_example.py: Function 'cmd_test_main' not found in source -->
   <include>context/agentic_test_example.py</include>
   <include>context/track_cost_example.py</include>
   <utils.auth_service>

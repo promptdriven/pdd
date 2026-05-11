@@ -81,7 +81,7 @@
 </agentic_bug_example>
 
 <get_jwt_token_example>
-<include select="def:get_jwt_token">context/get_jwt_token_example.py</include>
+<!-- Invalid selector for context/get_jwt_token_example.py: Function 'get_jwt_token' not found in source -->
 </get_jwt_token_example>
 % The `get_jwt_token` function is async and must be run with `asyncio.run`.
 % Expects environment variables `NEXT_PUBLIC_FIREBASE_API_KEY` and `GITHUB_CLIENT_ID`.

@@ -64,6 +64,10 @@
         <validate_prompt_includes>
             <include select="def:sanitize_prompt_output">pdd/validate_prompt_includes.py</include>
         </validate_prompt_includes>
+
+        <pdd.commands.auto_deps>
+            <include select="def:main">context/auto_deps_main_example.py</include>
+        </pdd.commands.auto_deps>
     </internal_modules>
 
 % Here is the README for the cli command that has details of how the 'split' command works:

@@ -34,7 +34,7 @@
 
         % For using edit_file to make changes:
         <edit_file_example>
-            <include>context/edit_file_example.py</include>
+            <include query="Since the prompt instructs 'Step 9. Remove this step. The function should NOT call edit_file', maybe I don't need it, but it's an existing include so I will annotate it with nulls.">context/edit_file_example.py</include>
         </edit_file_example>
     </internal_modules>
 

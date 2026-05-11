@@ -65,7 +65,7 @@ Thin CLI wrapper around `run_agentic_split_orchestrator`. Resolves and validates
 % Dependencies
 <pdd.agentic_split_orchestrator><include optional>context/agentic_split_orchestrator_example.py</include></pdd.agentic_split_orchestrator>
 <pdd.agentic_common>
-    <include select="def:load_workflow_state,def:clear_workflow_state">context/agentic_common_example.py</include>
+    <!-- Invalid selector for context/agentic_common_example.py: Function 'load_workflow_state' not found in source -->
 </pdd.agentic_common>
 <pdd.get_language><include>context/get_language_example.py</include></pdd.get_language>
 <pdd.agentic_common_worktree><include select="def:get_git_root">pdd/agentic_common_worktree.py</include></pdd.agentic_common_worktree>

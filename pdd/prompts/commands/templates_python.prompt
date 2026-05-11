@@ -5,9 +5,14 @@
 
 <include>context/python_preamble.prompt</include>
 
+% Dependencies
+<pdd.commands.__init__>
+    <include>context/__init__example.py</include>
+</pdd.commands.__init__>
+
 % Program Specification (README.md):
     <README.md>
-    <include>./README.md</include>
+    <include query="templates command group specifications">./README.md</include>
     </README.md>
 
 % Requirements

@@ -28,7 +28,7 @@ def fix_verification_errors_loop(
     <include>context/fix_verification_errors_example.py</include>
 </fix_verification_errors_example>
 <agentic_verify_example><include>context/agentic_verify_example.py</include></agentic_verify_example>
-<agentic_langtest_example><include>context/agentic_langtest_example.py</include></agentic_langtest_example>
+<agentic_langtest_example><include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include></agentic_langtest_example>
 <get_language_example><include>context/get_language_example.py</include></get_language_example>
 
 % Helpers:

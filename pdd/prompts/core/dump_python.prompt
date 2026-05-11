@@ -8,7 +8,7 @@
 
 % Program Specification (README.md):
     <README.md>
-    <include>./README.md</include>
+    <include select="section:Core Dump Debug Bundles">./README.md</include>
     </README.md>
 
 % Requirements

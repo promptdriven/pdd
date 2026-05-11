@@ -53,7 +53,7 @@
 
 % Dependencies
   Use models from pdd/server/models.py: WSMessage, StdoutMessage, StderrMessage, ProgressMessage, JobStatus
-  <pdd.server.models><include>context/server/models_example.py</include></pdd.server.models>
+  <pdd.server.models><!-- Invalid selector for context/server/models_example.py: Class 'WSMessage' not found in source --></pdd.server.models>
 
   Use job manager for job status and control:
   <pdd.server.jobs><include>context/job_manager_example.py</include></pdd.server.jobs>

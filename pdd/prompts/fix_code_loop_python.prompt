@@ -19,8 +19,8 @@ The `fix_code_loop` module is a core component of the PDD orchestration layer. I
 
 % Dependencies:
 <module_dependencies>
-  <pdd.agentic_crash><include>context/agentic_crash_example.py</include></pdd.agentic_crash>
-  <pdd.agentic_langtest><include>context/agentic_langtest_example.py</include></pdd.agentic_langtest>
+  <pdd.agentic_crash><include query="all logic related to _safe_run_agentic_crash and normal agentic crash handlers">context/agentic_crash_example.py</include></pdd.agentic_crash>
+  <pdd.agentic_langtest><include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include></pdd.agentic_langtest>
   <pdd.get_language><include>context/get_language_example.py</include></pdd.get_language>
   <pdd.fix_code_module_errors><include>context/fix_code_module_errors_example.py</include></pdd.fix_code_module_errors>
   <pdd.python_preamble><include>context/python_preamble.prompt</include></pdd.python_preamble>

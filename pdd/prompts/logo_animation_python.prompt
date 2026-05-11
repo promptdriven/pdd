@@ -4,7 +4,7 @@
 
 % The branding document provides the Prompt Driven logo and specifies the colors to use.
 <branding>
-    <include>../docs/branding.md</include>
+    <!-- Missing: ../docs/branding.md -->
 </branding>
 
 % The module should be designed to run the animation in the background without blocking the main program. It should expose two primary functions:

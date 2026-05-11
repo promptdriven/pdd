@@ -31,7 +31,7 @@
   5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
 
 % Dependencies
-  <include>context/command_logging.prompt</include>
+  <!-- Missing: context/command_logging.prompt -->
   <detect_change_main_example>
   <pdd.detect_change_main><include>context/detect_change_main_example.py</include></pdd.detect_change_main>
   </detect_change_main_example>

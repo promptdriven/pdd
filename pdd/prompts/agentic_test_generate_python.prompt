@@ -58,8 +58,9 @@ Detect which files changed between two mtime snapshots (new, modified, deleted).
 
 % Dependencies
 <module_dependencies>
-    <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
+    <pdd.agentic_common><include select="def:example_run_agentic_task">context/agentic_common_example.py</include></pdd.agentic_common>
     <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
+    <pdd.agentic_langtest><include>context/agentic_langtest_example.py</include></pdd.agentic_langtest>
 </module_dependencies>
 
 % Deliverables
