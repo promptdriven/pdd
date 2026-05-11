@@ -3335,3 +3335,220 @@ def test_repo_mode_summary_table_metadata_column_shows_skipped_when_sync_metadat
     captured = capsys.readouterr()
     assert "Metadata" in captured.out
     assert "skipped" in captured.out
+
+
+# --- Regression: PRD sync must still run with sync_metadata=True (PR #920) ---
+#
+# Before the fix, the entire post-update arch + PRD block was wrapped in
+# `if not sync_metadata:`, so opting into --sync-metadata silently dropped
+# PRD propagation. The orchestrator handles per-pair arch updates, but PRD
+# sync must still run keyed off the arch-stage outcome.
+
+
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_sync_metadata_true_still_runs_prd_sync_when_arch_changed(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    temp_git_repo,
+    monkeypatch,
+):
+    # Pre-seed a PRD file in the repo so _find_prd_file resolves.
+    Path(temp_git_repo / "PRD.md").write_text("# Original PRD\n", encoding="utf-8")
+    Path(temp_git_repo / "architecture.json").write_text("[]", encoding="utf-8")
+
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    # Orchestrator reports a real architecture update so PRD sync should run.
+    def _orchestrator(prompt_path, code_path, dry_run):
+        return MetadataSyncResult(
+            prompt_path=Path(prompt_path),
+            code_path=Path(code_path),
+            dry_run=False,
+            stages={
+                "prompt": StageStatus(status="ok"),
+                "tags": StageStatus(status="ok"),
+                "architecture": StageStatus(status="ok", detail="updated fields: ['reason']"),
+                "run_report": StageStatus(status="ok"),
+                "fingerprint": StageStatus(status="ok"),
+            },
+        )
+
+    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
+         patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
+        # Force agentic PRD-sync to claim it didn't need an update.
+        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    # PRD sync must have been invoked because arch reported `updated fields:`
+    prd_calls = [
+        c for c in mock_agentic.call_args_list
+        if c.kwargs.get("label") == "prd-sync"
+    ]
+    assert prd_calls, (
+        "PRD sync should run when sync_metadata=True and the orchestrator "
+        "reports an architecture update"
+    )
+
+
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_sync_metadata_true_skips_prd_when_arch_not_updated(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    temp_git_repo,
+):
+    Path(temp_git_repo / "PRD.md").write_text("# Original PRD\n", encoding="utf-8")
+    Path(temp_git_repo / "architecture.json").write_text("[]", encoding="utf-8")
+
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    # Orchestrator reports arch as "no changes" — PRD sync must NOT run.
+    def _orchestrator(prompt_path, code_path, dry_run):
+        return MetadataSyncResult(
+            prompt_path=Path(prompt_path),
+            code_path=Path(code_path),
+            dry_run=False,
+            stages={
+                "prompt": StageStatus(status="ok"),
+                "tags": StageStatus(status="ok"),
+                "architecture": StageStatus(status="ok", detail="no changes"),
+                "run_report": StageStatus(status="ok"),
+                "fingerprint": StageStatus(status="ok"),
+            },
+        )
+
+    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
+         patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
+        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    prd_calls = [
+        c for c in mock_agentic.call_args_list
+        if c.kwargs.get("label") == "prd-sync"
+    ]
+    assert not prd_calls, (
+        "PRD sync should NOT run when no arch entries actually changed"
+    )
+
+
+# --- Regression: partial:<stage> status surfaces skipped stages (PR #920) ---
+
+
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_summary_emits_partial_when_arch_stage_skipped(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    temp_git_repo,
+    capsys,
+    monkeypatch,
+):
+    from rich.console import Console as _Console
+    _um = sys.modules["pdd.update_main"]
+    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
+
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    # Orchestrator reports the architecture stage as "skipped" (e.g. the
+    # module isn't registered in architecture.json). result.ok is still True,
+    # but the metadata column must surface this as ``partial:architecture``.
+    def _orchestrator(prompt_path, code_path, dry_run):
+        return MetadataSyncResult(
+            prompt_path=Path(prompt_path),
+            code_path=Path(code_path),
+            dry_run=False,
+            stages={
+                "prompt": StageStatus(status="ok"),
+                "tags": StageStatus(status="ok"),
+                "architecture": StageStatus(status="skipped", reason="no arch entry"),
+                "run_report": StageStatus(status="ok"),
+                "fingerprint": StageStatus(status="ok"),
+            },
+        )
+
+    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator):
+        ctx = click.Context(click.Command("update"))
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    captured = capsys.readouterr()
+    assert "partial:architecture" in captured.out, captured.out

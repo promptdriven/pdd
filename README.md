@@ -2390,7 +2390,15 @@ pdd update --sync-metadata src/my_module.py
 pdd update --sync-metadata
 ```
 
-When `--sync-metadata` is enabled, the summary table shows a `metadata` column with one of `synced`, `partial:<stage>`, `failed:<stage>`, `skipped`, or `dry-run`. If any layer is incomplete, the failing stage is named explicitly so it is obvious whether tags, architecture, run reports, or the fingerprint is the unresolved gap.
+When `--sync-metadata` is enabled, the summary table shows a `metadata` column with one of:
+
+- `synced` — every metadata stage wrote successfully.
+- `partial:<stage>` — orchestration succeeded but one or more stages were skipped (for example, the prompt is not registered in `architecture.json`); the first skipped stage is named.
+- `failed:<stage>` — a stage hit a hard failure; the failing stage is named.
+- `skipped` — the orchestrator did not run for this pair (e.g. the pair was unchanged or the per-pair call returned no result).
+- `dry-run` — the call was made with `dry_run=True`; no on-disk state was written.
+
+If any layer is incomplete, the relevant stage is named explicitly so it is obvious whether tags, architecture, run reports, or the fingerprint is the unresolved gap.
 
 Example (overwrite original prompt - default behavior):
 ```

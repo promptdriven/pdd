@@ -473,12 +473,11 @@ def test_tags_stage_preserves_existing_pdd_tags(tmp_path: Path) -> None:
 def test_tags_stage_prepends_arch_tags_when_missing(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path, prompt_text=PROMPT_NO_TAGS)
     arch_path = tmp_path / "architecture.json"
-    arch_path.write_text(json.dumps({
-        "modules": [
-            {"prompt": "demo_python.prompt", "reason": "seed reason",
-             "dependencies": ["x.prompt"]}
-        ]
-    }), encoding="utf-8")
+    # Real architecture.json shape: bare list of entries keyed by "filename".
+    arch_path.write_text(json.dumps([
+        {"filename": "demo_python.prompt", "filepath": "demo.py",
+         "reason": "seed reason", "dependencies": ["x.prompt"]}
+    ]), encoding="utf-8")
     with patch.object(ms, "update_architecture_from_prompt", return_value=_arch_update_ok()), \
          patch.object(ms, "clear_run_report"), \
          patch.object(ms, "save_fingerprint"):
@@ -492,9 +491,10 @@ def test_tags_stage_prepends_arch_tags_when_missing(tmp_path: Path) -> None:
 def test_tags_stage_dry_run_does_not_write(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path, prompt_text=PROMPT_NO_TAGS)
     arch_path = tmp_path / "architecture.json"
-    arch_path.write_text(json.dumps({
-        "modules": [{"prompt": "demo_python.prompt", "reason": "r", "dependencies": []}]
-    }), encoding="utf-8")
+    arch_path.write_text(json.dumps([
+        {"filename": "demo_python.prompt", "filepath": "demo.py",
+         "reason": "r", "dependencies": []}
+    ]), encoding="utf-8")
     original = ws["prompt_path"].read_text(encoding="utf-8")
     with patch.object(ms, "update_architecture_from_prompt", return_value=_arch_update_ok()):
         result = run_metadata_sync(ws["prompt_path"], dry_run=True, architecture_path=arch_path)
@@ -509,10 +509,10 @@ def test_tags_stage_dry_run_does_not_write(tmp_path: Path) -> None:
 def test_architecture_stage_forwards_refreshed_prompt_content_override(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path, prompt_text=PROMPT_NO_TAGS)
     arch_path = tmp_path / "architecture.json"
-    arch_path.write_text(json.dumps({
-        "modules": [{"prompt": "demo_python.prompt", "reason": "seed reason",
-                     "dependencies": ["x.prompt"]}]
-    }), encoding="utf-8")
+    arch_path.write_text(json.dumps([
+        {"filename": "demo_python.prompt", "filepath": "demo.py",
+         "reason": "seed reason", "dependencies": ["x.prompt"]}
+    ]), encoding="utf-8")
     captured = {}
 
     def _fake_upd(**kwargs: Any) -> Dict[str, Any]:
@@ -665,3 +665,140 @@ def test_system_exit_in_stage_propagates(tmp_path: Path) -> None:
     with patch.object(ms, "parse_prompt_tags", side_effect=SystemExit(1)):
         with pytest.raises(SystemExit):
             run_metadata_sync(ws["prompt_path"], dry_run=True)
+
+
+# ---------------------------------------------------------------------------
+# Regression: real-shape architecture.json with subdirectory-organized prompts
+# (PR #920 review).
+#
+# Before the fix:
+#  * `_load_arch_entry_for_prompt` only handled `{"modules": [...]}` and keyed
+#    on "prompt"/"prompt_file" (real arch.json is a bare list keyed by
+#    "filename"). Lookup always failed.
+#  * `run_metadata_sync` passed `prompt_path.name` (basename only) to
+#    `update_architecture_from_prompt`. Real arch.json entries for
+#    subdirectory-organized prompts use the full subdirectory path
+#    ("commands/foo_python.prompt" per Issue #617). The exact-match lookup
+#    inside `update_architecture_from_prompt` always missed.
+#  * Net effect: every subdirectory prompt failed the architecture stage,
+#    fingerprint was gated off, and CI auto-heal would revert and exit 1.
+# ---------------------------------------------------------------------------
+
+def _make_subdir_workspace(
+    tmp_path: Path,
+    arch_filename: str = "subpkg/demo_python.prompt",
+    prompt_name: str = "demo_python.prompt",
+    prompt_text: str = PROMPT_NO_TAGS,
+    register_in_arch: bool = True,
+) -> Dict[str, Path]:
+    """Build a workspace with prompts/<subdir>/<name> + real-shape arch.json."""
+    (tmp_path / ".pddrc").write_text("# marker\n", encoding="utf-8")
+    prompts = tmp_path / "prompts"
+    subdir = prompts / Path(arch_filename).parent
+    subdir.mkdir(parents=True, exist_ok=True)
+    prompt_path = subdir / prompt_name
+    prompt_path.write_text(prompt_text, encoding="utf-8")
+    arch_path = tmp_path / "architecture.json"
+    entries: List[Dict[str, Any]] = []
+    if register_in_arch:
+        entries.append({
+            "filename": arch_filename,
+            "filepath": f"{Path(arch_filename).parent}/demo.py",
+            "reason": "subdir seed reason",
+            "dependencies": ["x.prompt"],
+        })
+    # Real architecture.json is a bare list at the top level.
+    arch_path.write_text(json.dumps(entries), encoding="utf-8")
+    return {
+        "repo_root": tmp_path,
+        "prompts_dir": prompts,
+        "prompt_path": prompt_path,
+        "arch_path": arch_path,
+    }
+
+
+def test_subdir_prompt_with_real_arch_shape_succeeds(tmp_path: Path) -> None:
+    """Subdir prompt with a real-shape arch.json entry must NOT fail
+    architecture, and must NOT skip the fingerprint stage."""
+    ws = _make_subdir_workspace(tmp_path)
+    result = run_metadata_sync(
+        ws["prompt_path"], dry_run=True, architecture_path=ws["arch_path"]
+    )
+    assert result.failing_stage is None, (
+        f"unexpected failure: {result.failing_stage} → "
+        f"{result.stages.get(result.failing_stage or '').reason!r}"
+    )
+    assert result.stages["architecture"].status in ("dry_run", "ok"), \
+        result.stages["architecture"]
+    assert result.stages["fingerprint"].status in ("dry_run", "ok"), \
+        result.stages["fingerprint"]
+
+
+def test_subdir_prompt_forwards_relative_filename_to_arch_call(tmp_path: Path) -> None:
+    """The architecture stage must receive the prompts-dir-relative filename
+    (e.g. "subpkg/demo_python.prompt"), not just the basename."""
+    ws = _make_subdir_workspace(tmp_path, arch_filename="subpkg/demo_python.prompt")
+    captured: Dict[str, Any] = {}
+
+    def _capture(**kwargs: Any) -> Dict[str, Any]:
+        captured.update(kwargs)
+        return _arch_update_ok()
+
+    with patch.object(ms, "update_architecture_from_prompt", side_effect=_capture):
+        run_metadata_sync(
+            ws["prompt_path"], dry_run=True, architecture_path=ws["arch_path"]
+        )
+    assert captured["prompt_filename"] == "subpkg/demo_python.prompt"
+
+
+def test_subdir_prompt_tag_lookup_uses_real_arch_shape(tmp_path: Path) -> None:
+    """The tags stage's arch-entry lookup must find the real-shape entry for a
+    subdirectory-organized prompt, so tags can be seeded when missing."""
+    ws = _make_subdir_workspace(tmp_path, arch_filename="subpkg/demo_python.prompt")
+    entry = ms._load_arch_entry_for_prompt(
+        ws["prompt_path"], ws["arch_path"], prompts_dir=ws["prompts_dir"]
+    )
+    assert entry is not None, "lookup must succeed for real-shape arch"
+    assert entry.get("filename") == "subpkg/demo_python.prompt"
+
+
+def test_subdir_prompt_without_arch_entry_is_skipped_not_failed(tmp_path: Path) -> None:
+    """A subdir prompt that has no architecture entry (unregistered module)
+    must report architecture as `skipped`, not `failed`, so fingerprint is
+    written and CI auto-heal does not revert the prompt."""
+    ws = _make_subdir_workspace(
+        tmp_path, arch_filename="subpkg/demo_python.prompt", register_in_arch=False
+    )
+    result = run_metadata_sync(
+        ws["prompt_path"], dry_run=True, architecture_path=ws["arch_path"]
+    )
+    assert result.stages["architecture"].status == "skipped"
+    assert "No architecture entry found" in (result.stages["architecture"].reason or "")
+    # Fingerprint must NOT be gated off by a skipped (vs failed) arch stage.
+    assert result.stages["fingerprint"].status == "dry_run"
+    assert result.failing_stage is None
+    assert result.ok is True
+
+
+def test_subdir_prompt_basename_fallback_when_outside_prompts_dir(tmp_path: Path) -> None:
+    """When a prompt sits outside any `prompts/` ancestor, the basename is
+    used (legacy/flat layout)."""
+    (tmp_path / ".pddrc").write_text("", encoding="utf-8")
+    # No `prompts/` ancestor.
+    prompt_path = tmp_path / "demo_python.prompt"
+    prompt_path.write_text(PROMPT_WITH_TAGS, encoding="utf-8")
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps([
+        {"filename": "demo_python.prompt", "filepath": "demo.py",
+         "reason": "r", "dependencies": []}
+    ]), encoding="utf-8")
+    captured: Dict[str, Any] = {}
+
+    def _capture(**kwargs: Any) -> Dict[str, Any]:
+        captured.update(kwargs)
+        return _arch_update_ok()
+
+    with patch.object(ms, "update_architecture_from_prompt", side_effect=_capture):
+        result = run_metadata_sync(prompt_path, dry_run=True, architecture_path=arch_path)
+    assert captured["prompt_filename"] == "demo_python.prompt"
+    assert result.failing_stage is None

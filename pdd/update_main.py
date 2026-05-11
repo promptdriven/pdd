@@ -1240,17 +1240,22 @@ def update_main(
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
-        # --- Post-update: Architecture sync ---
+        # --- Post-update: Architecture sync (+ PRD sync if arch changed) ---
+        # The PRD-sync block always runs (independent of `sync_metadata`) so
+        # that opting into `--sync-metadata` does not silently drop PRD
+        # propagation. The orchestrator handles per-pair arch updates when
+        # `sync_metadata=True`, so we only run the legacy arch loop when
+        # `sync_metadata=False`; the PRD step keys off the resulting count
+        # of architecture entries that actually changed.
         arch_entries_updated = 0
         prd_status = "skipped"
 
-        if not sync_metadata:
-            # Determine prompts directory and architecture path
-            prompts_dir = Path(repo_root) / "prompts"
-            from .architecture_registry import find_architecture_for_project
-            arch_files = find_architecture_for_project(Path(repo_root))
-            architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
+        from .architecture_registry import find_architecture_for_project
+        arch_files = find_architecture_for_project(Path(repo_root))
+        architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
+        prompts_dir = Path(repo_root) / "prompts"
 
+        if not sync_metadata:
             successful_prompts = [
                 res["prompt_file"] for res in results
                 if "Success" in res.get("status", "")
@@ -1271,56 +1276,73 @@ def update_main(
                     except Exception:
                         # Architecture sync is best-effort; don't fail the update
                         pass
+        else:
+            # The orchestrator already ran update_architecture_from_prompt per
+            # pair. Count entries whose architecture stage reported a real
+            # update so the downstream PRD-sync decision matches the legacy
+            # semantics (only run when arch actually changed).
+            for sync_res in metadata_results.values():
+                arch_stage = sync_res.stages.get("architecture")
+                if (
+                    arch_stage is not None
+                    and arch_stage.status == "ok"
+                    and arch_stage.detail
+                    and arch_stage.detail.startswith("updated fields:")
+                    and arch_stage.detail != "updated fields: []"
+                ):
+                    arch_entries_updated += 1
 
-            # --- Post-update: PRD sync (only if architecture changed) ---
-            if arch_entries_updated > 0:
-                prd_file = _find_prd_file(Path(repo_root))
-                if prd_file is None:
-                    prd_status = "not found"
-                else:
-                    try:
-                        from .agentic_common import run_agentic_task
+        # --- Post-update: PRD sync (only if architecture changed) ---
+        if arch_entries_updated > 0:
+            prd_file = _find_prd_file(Path(repo_root))
+            if prd_file is None:
+                prd_status = "not found"
+            else:
+                try:
+                    from .agentic_common import run_agentic_task
 
-                        prd_content = prd_file.read_text(encoding="utf-8")
-                        arch_json = architecture_path.read_text(encoding="utf-8")
+                    prd_content = prd_file.read_text(encoding="utf-8")
+                    arch_json = architecture_path.read_text(encoding="utf-8")
 
-                        instruction = (
-                            "You are reviewing whether a PRD (Product Requirements Document) needs updating "
-                            "after architecture changes.\n\n"
-                            f"Current PRD:\n{prd_content}\n\n"
-                            f"Updated architecture.json:\n{arch_json}\n\n"
-                            f"Architecture entries updated: {arch_entries_updated}\n\n"
-                            "If the PRD needs updating to reflect these architecture changes, output the "
-                            "complete updated PRD between <updated-prd> and </updated-prd> tags.\n"
-                            "If no update is needed, output: NO_UPDATE_NEEDED"
+                    instruction = (
+                        "You are reviewing whether a PRD (Product Requirements Document) needs updating "
+                        "after architecture changes.\n\n"
+                        f"Current PRD:\n{prd_content}\n\n"
+                        f"Updated architecture.json:\n{arch_json}\n\n"
+                        f"Architecture entries updated: {arch_entries_updated}\n\n"
+                        "If the PRD needs updating to reflect these architecture changes, output the "
+                        "complete updated PRD between <updated-prd> and </updated-prd> tags.\n"
+                        "If no update is needed, output: NO_UPDATE_NEEDED"
+                    )
+
+                    llm_output = run_agentic_task(
+                        instruction=instruction,
+                        cwd=Path(repo_root),
+                        verbose=ctx.obj.get("verbose", False),
+                        quiet=True,
+                        label="prd-sync",
+                    )
+
+                    if llm_output and "<updated-prd>" in llm_output:
+                        import re
+                        match = re.search(
+                            r"<updated-prd>(.*?)</updated-prd>",
+                            llm_output,
+                            re.DOTALL,
                         )
-
-                        llm_output = run_agentic_task(
-                            instruction=instruction,
-                            cwd=Path(repo_root),
-                            verbose=ctx.obj.get("verbose", False),
-                            quiet=True,
-                            label="prd-sync",
-                        )
-
-                        if llm_output and "<updated-prd>" in llm_output:
-                            import re
-                            match = re.search(
-                                r"<updated-prd>(.*?)</updated-prd>",
-                                llm_output,
-                                re.DOTALL,
-                            )
-                            if match:
-                                prd_file.write_text(match.group(1).strip() + "\n", encoding="utf-8")
-                                prd_status = "updated"
-                            else:
-                                prd_status = "unchanged"
+                        if match:
+                            prd_file.write_text(match.group(1).strip() + "\n", encoding="utf-8")
+                            prd_status = "updated"
                         else:
                             prd_status = "unchanged"
-                    except Exception:
-                        prd_status = "error"
-            else:
-                prd_status = "skipped (no arch changes)"
+                    else:
+                        prd_status = "unchanged"
+                except Exception:
+                    prd_status = "error"
+        else:
+            prd_status = "skipped (no arch changes)"
+
+        from .metadata_sync import STAGE_ORDER
 
         def _metadata_column_value(prompt_file_key: str) -> str:
             res = metadata_results.get(prompt_file_key)
@@ -1332,13 +1354,19 @@ def update_main(
                 return f"failed:{failing}"
             if any(s.status == "dry_run" for s in stages.values()):
                 return "dry-run"
-            if res.ok:
-                return "synced"
-            non_ok = next(
-                (n for n, s in stages.items() if s.status not in ("ok", "skipped", "dry_run")),
+            # ``partial:<stage>`` surfaces the first skipped stage (e.g. an
+            # unregistered module → architecture stage skipped). Result is
+            # still ``ok`` (skipped is a non-failure), but the column makes it
+            # obvious that not every metadata layer was actually written.
+            skipped = next(
+                (n for n in STAGE_ORDER if stages.get(n) and stages[n].status == "skipped"),
                 None,
             )
-            return f"partial:{non_ok}" if non_ok else "skipped"
+            if skipped:
+                return f"partial:{skipped}"
+            if res.ok:
+                return "synced"
+            return "skipped"
 
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Prompt File", style="dim", width=50)
@@ -1365,7 +1393,7 @@ def update_main(
         console.print(table)
         if budget_reached:
             console.print(f"[info]Budget cap reached: ${budget:.2f}[/info]")
-        if not sync_metadata and (arch_entries_updated > 0 or prd_status != "skipped (no arch changes)"):
+        if arch_entries_updated > 0 or prd_status != "skipped (no arch changes)":
             console.print(f"\n[info]Architecture entries updated: {arch_entries_updated}[/info]")
             console.print(f"[info]PRD status: {prd_status}[/info]")
         console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")

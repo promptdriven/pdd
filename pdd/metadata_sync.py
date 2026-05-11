@@ -11,6 +11,7 @@ from rich.theme import Theme
 
 from .architecture_sync import (
     generate_tags_from_architecture,
+    get_architecture_entry_for_prompt,
     has_pdd_tags,
     parse_prompt_tags,
     update_architecture_from_prompt,
@@ -154,26 +155,39 @@ def _refresh_tags_content(prompt_content: str, arch_entry: Optional[Dict[str, An
 
 
 def _load_arch_entry_for_prompt(
-    prompt_path: Path, architecture_path: Optional[Path]
+    prompt_path: Path,
+    architecture_path: Optional[Path],
+    prompts_dir: Optional[Path] = None,
 ) -> Optional[Dict[str, Any]]:
-    """Best-effort lookup of the architecture.json entry for this prompt."""
+    """Best-effort lookup of the architecture.json entry for this prompt.
+
+    Delegates to :func:`pdd.architecture_sync.get_architecture_entry_for_prompt`,
+    which handles both the bare-list and ``{"modules": [...]}`` shapes of
+    ``architecture.json`` and keys entries by their ``filename`` field
+    (subdirectory-aware per Issue #617). Tries the prompts-dir-relative path
+    first (e.g. ``commands/foo_python.prompt``) and falls back to the basename
+    so flat-layout repos keep working.
+    """
     if architecture_path is None or not architecture_path.exists():
         return None
     try:
-        import json
-
-        data = json.loads(architecture_path.read_text(encoding="utf-8"))
+        candidates: List[str] = []
+        if prompts_dir is not None:
+            try:
+                rel = prompt_path.resolve().relative_to(prompts_dir.resolve()).as_posix()
+                candidates.append(rel)
+            except ValueError:
+                pass
+        if prompt_path.name not in candidates:
+            candidates.append(prompt_path.name)
+        for filename in candidates:
+            entry = get_architecture_entry_for_prompt(filename, architecture_path)
+            if entry is not None:
+                return entry
+    except (KeyboardInterrupt, SystemExit):
+        raise
     except Exception:
         return None
-    modules = data.get("modules") if isinstance(data, dict) else None
-    if not isinstance(modules, list):
-        return None
-    target = prompt_path.name
-    for entry in modules:
-        if not isinstance(entry, dict):
-            continue
-        if entry.get("prompt") == target or entry.get("prompt_file") == target:
-            return entry
     return None
 
 
@@ -255,11 +269,23 @@ def run_metadata_sync(
             _stage_log_exit(stage, "skipped", "prompt stage failed")
         return result
 
+    # Compute the prompts-dir-relative filename used by both the tags-stage
+    # arch lookup and the architecture stage. Falls back to the basename when
+    # the prompt sits outside ``prompts_dir`` (e.g. flat layouts).
+    try:
+        arch_prompt_filename = (
+            prompt_path.resolve().relative_to(prompts_dir.resolve()).as_posix()
+        )
+    except (ValueError, OSError):
+        arch_prompt_filename = prompt_path.name
+
     # ---- Stage 2: tags ----
     _stage_log_enter("tags")
     refreshed_prompt_content: str = prompt_content  # carry forward to architecture stage
     try:
-        arch_entry = _load_arch_entry_for_prompt(prompt_path, architecture_path)
+        arch_entry = _load_arch_entry_for_prompt(
+            prompt_path, architecture_path, prompts_dir=prompts_dir
+        )
         new_content = _refresh_tags_content(prompt_content, arch_entry)
         if new_content is None or new_content == prompt_content:
             # Already has tags or nothing to do — stable / idempotent.
@@ -305,7 +331,7 @@ def run_metadata_sync(
             _stage_log_exit("architecture", "skipped", reason)
         else:
             arch_result = update_architecture_from_prompt(
-                prompt_filename=prompt_path.name,
+                prompt_filename=arch_prompt_filename,
                 prompts_dir=prompts_dir,
                 architecture_path=architecture_path,
                 dry_run=dry_run,
@@ -313,22 +339,34 @@ def run_metadata_sync(
             )
             if not arch_result.get("success", False):
                 err = arch_result.get("error") or "architecture update failed"
-                raise RuntimeError(err)
-            updated = arch_result.get("updated", False)
-            changes = arch_result.get("changes") or {}
-            change_keys = list(changes.keys()) if isinstance(changes, dict) else []
-            if dry_run:
-                detail = (
-                    f"would update fields: {change_keys}" if updated else "no changes"
-                )
-                result.stages["architecture"] = StageStatus(status="dry_run", detail=detail)
-                _stage_log_exit("architecture", "dry_run", detail)
+                # Unregistered modules (no entry in architecture.json) are a
+                # normal state for tools, scripts, and not-yet-tracked code.
+                # Treat that as "skipped" so the fingerprint isn't gated off
+                # and CI auto-heal doesn't revert a clean prompt update for a
+                # module that simply isn't in the architecture index.
+                if isinstance(err, str) and err.startswith("No architecture entry found for:"):
+                    result.stages["architecture"] = StageStatus(
+                        status="skipped", reason=err
+                    )
+                    _stage_log_exit("architecture", "skipped", err)
+                else:
+                    raise RuntimeError(err)
             else:
-                detail = (
-                    f"updated fields: {change_keys}" if updated else "no changes"
-                )
-                result.stages["architecture"] = StageStatus(status="ok", detail=detail)
-                _stage_log_exit("architecture", "ok", detail)
+                updated = arch_result.get("updated", False)
+                changes = arch_result.get("changes") or {}
+                change_keys = list(changes.keys()) if isinstance(changes, dict) else []
+                if dry_run:
+                    detail = (
+                        f"would update fields: {change_keys}" if updated else "no changes"
+                    )
+                    result.stages["architecture"] = StageStatus(status="dry_run", detail=detail)
+                    _stage_log_exit("architecture", "dry_run", detail)
+                else:
+                    detail = (
+                        f"updated fields: {change_keys}" if updated else "no changes"
+                    )
+                    result.stages["architecture"] = StageStatus(status="ok", detail=detail)
+                    _stage_log_exit("architecture", "ok", detail)
     except (KeyboardInterrupt, SystemExit):
         raise
     except Exception as exc:
