@@ -183,7 +183,7 @@ jobs:
           owner: promptdriven
           repositories: pdd_cloud
 
-      - name: Authorize requester (must be pdd_cloud direct collaborator)
+      - name: Authorize requester (must be pdd_cloud collaborator)
         if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
@@ -197,12 +197,17 @@ jobs:
           # 204 = is a collaborator. 404 = not a collaborator.
           # Anything else = fail loud (don't silently confuse denial with
           # API/transport errors).
+          # NOTE: NO ?affiliation=direct — App-token queries treat that
+          # filter strictly, and it excludes org-owners-with-admin-via-org
+          # who SHOULD be authorized. The unfiltered endpoint returns 204
+          # for any kind of collaborator (direct, team, outside, org owner),
+          # which is what the auth model wants.
           http_code=$(gh api -i \
-            "repos/promptdriven/pdd_cloud/collaborators/$REQUESTER?affiliation=direct" \
+            "repos/promptdriven/pdd_cloud/collaborators/$REQUESTER" \
             2>/dev/null | head -n1 | awk '{print $2}' || true)
           case "$http_code" in
             204|200)
-              echo "authorized: $REQUESTER is a pdd_cloud direct collaborator"
+              echo "authorized: $REQUESTER is a pdd_cloud collaborator"
               ;;
             404)
               echo "::error::$REQUESTER is not a pdd_cloud collaborator; auto-heal blocked. A pdd_cloud collaborator must comment '/heal' to authorize."
