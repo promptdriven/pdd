@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Command registration module.
 """
@@ -6,13 +8,12 @@ import click
 from .generate import generate, test, example
 from .fix import fix
 from .modify import split, change, update
-from .maintenance import sync, sync_architecture, auto_deps, setup
+from .maintenance import sync, auto_deps, setup, sync_code, metadata
 from .checkup import checkup
 from .analysis import detect_change, conflicts, bug, crash, trace
 from .connect import connect
 from .auth import auth_group
 from .misc import preprocess
-from .extracts import extracts
 from .sessions import sessions
 from .report import report_core
 from .templates import templates_group
@@ -30,17 +31,17 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(change)
     cli.add_command(update)
     cli.add_command(sync)
-    cli.add_command(sync_architecture)
-    cli.add_command(checkup)
     cli.add_command(auto_deps)
     cli.add_command(setup)
+    cli.add_command(sync_code)
+    cli.add_command(metadata)
+    cli.add_command(checkup)
     cli.add_command(detect_change)
     cli.add_command(conflicts)
     cli.add_command(bug)
     cli.add_command(crash)
     cli.add_command(trace)
     cli.add_command(preprocess)
-    cli.add_command(extracts)
     cli.add_command(report_core)
     cli.add_command(install_completion_cmd, name="install_completion")
     cli.add_command(verify)
