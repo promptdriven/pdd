@@ -1022,7 +1022,10 @@ class TestSyncOneModule:
         assert parsed is not None, "new <pdd-interface> shape must be parseable"
         repair_directive, missing_symbols = parsed
         assert missing_symbols == ("update_main.sync_metadata",)
-        assert "- update_main.sync_metadata" in repair_directive
+        # Directive must target ``update_main`` as the function to fix, not
+        # ask the model to add an export named ``update_main.sync_metadata``.
+        assert "On `update_main`" in repair_directive
+        assert "`sync_metadata`" in repair_directive
 
     def test_parse_conformance_failure_pdd_interface_multiple_params(self):
         stderr = (
@@ -1037,6 +1040,87 @@ class TestSyncOneModule:
         assert parsed is not None
         _, missing_symbols = parsed
         assert missing_symbols == ("foo.bar", "foo.baz")
+
+    def test_parse_conformance_failure_pdd_interface_directive_targets_params(self):
+        """The repair directive for pdd-interface failures must tell the model
+        to add a *parameter* to a *function*, not to add an export named
+        ``func.param``. The previous generic 'Required missing exports'
+        directive was misleading the LLM into creating top-level exports
+        named ``update_main.sync_metadata`` instead of adding the kwarg.
+        """
+        stderr = (
+            "Architecture conformance error for update_main_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main.sync_metadata. "
+            "Output: pdd/update_main.py."
+        )
+
+        directive, _ = _parse_conformance_failure("", stderr)
+
+        assert "Required missing exports" not in directive
+        assert "On `update_main`" in directive
+        assert "missing parameter(s)" in directive
+        assert "`sync_metadata`" in directive
+
+    def test_parse_conformance_failure_pdd_interface_directive_dotted_method(self):
+        """Dotted method names like ``ContentSelector.select.mode`` must be
+        regrouped via rsplit so the directive targets
+        ``ContentSelector.select`` with parameter ``mode``, not
+        ``ContentSelector`` with parameter ``select.mode``.
+        """
+        stderr = (
+            "Architecture conformance error for content_selector_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: ContentSelector.select.mode. "
+            "Output: pdd/content_selector.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        assert missing == ("ContentSelector.select.mode",)
+        assert "On `ContentSelector.select`" in directive
+        assert "`mode`" in directive
+        assert "select.mode" not in directive.replace("ContentSelector.select.mode", "")
+
+    def test_parse_conformance_failure_pdd_interface_directive_bare_function(self):
+        """A bare missing function name (no dot) must surface as a missing
+        function directive, not a parameter directive — the prompt-only
+        missing-function path emits these.
+        """
+        stderr = (
+            "Architecture conformance error for foo_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main. "
+            "Output: pdd/foo.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        assert missing == ("update_main",)
+        assert "missing function(s)/method(s)" in directive
+        assert "`update_main`" in directive
+
+    def test_parse_conformance_failure_mixed_legacy_and_pdd_interface(self):
+        """When both legacy-export and pdd-interface shapes appear in the
+        output, the directive must contain both sections so the model gets
+        both kinds of repair instructions in one retry attempt.
+        """
+        combined = (
+            "Architecture conformance error for foo_python.prompt: "
+            "declared symbols missing from generated code: SomeClass. "
+            "Output: pdd/foo.py.\n"
+            "Architecture conformance error for foo_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            "from the generated code: update_main.sync_metadata. "
+            "Output: pdd/foo.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", combined)
+
+        assert "SomeClass" in missing
+        assert "update_main.sync_metadata" in missing
+        assert "Required missing exports" in directive
+        assert "On `update_main`" in directive
 
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(
