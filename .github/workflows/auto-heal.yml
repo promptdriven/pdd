@@ -88,7 +88,9 @@ jobs:
           # For issue_comment, require /heal as a standalone first token on
           # the first line. Rejects /healthcheck, /healz, etc.
           if [ "$EVENT_NAME" = "issue_comment" ]; then
-            first_token=$(printf '%s' "$BODY" | head -n1 | awk '{print $1}')
+            # tr -d '\r' guards against CRLF line endings that some clients
+            # may submit (GitHub doesn't contractually normalize to LF).
+            first_token=$(printf '%s' "$BODY" | head -n1 | tr -d '\r' | awk '{print $1}')
             if [ "$first_token" != "/heal" ]; then
               echo "Comment first token '$first_token' is not '/heal'; ignoring."
               echo "skip=true" >> "$GITHUB_OUTPUT"
