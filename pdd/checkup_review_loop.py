@@ -187,6 +187,7 @@ class ReviewLoopConfig:
     reviewers: Sequence[str] = DEFAULT_REVIEWERS
     reviewer: Optional[str] = None
     fixer: Optional[str] = None
+    reviewer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
     max_cost: float = 10.0
@@ -316,6 +317,7 @@ def run_checkup_review_loop(
         )
 
     pending_findings: Optional[List[ReviewFinding]] = None
+    fallback_used = False
     for round_number in range(1, config.max_rounds + 1):
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
@@ -347,11 +349,48 @@ def run_checkup_review_loop(
                 _mark_budget_exhausted(config, state, deadline)
                 break
             if review.status in HARD_NOT_CLEAN_STATES:
-                state.stop_reason = (
-                    f"Primary reviewer {reviewer} could not complete: "
-                    f"{review.status}."
-                )
-                break
+                fallback = config.reviewer_fallback
+                if (
+                    not fallback_used
+                    and fallback
+                    and fallback != fixer
+                    and fallback != reviewer
+                ):
+                    fallback_used = True
+                    fallback_review = _run_review(
+                        reviewer=fallback,
+                        context=context,
+                        worktree=worktree,
+                        round_number=round_number,
+                        state=state,
+                        config=config,
+                        verbose=verbose,
+                        quiet=quiet,
+                        artifacts_dir=artifacts_dir,
+                        pr_metadata=pr_metadata,
+                    )
+                    _record_review(state, fallback_review)
+                    _mark_non_required_findings_advisory(state, config)
+                    _write_dedup_snapshot(artifacts_dir, round_number, state)
+                    if _budget_exhausted(config, state, deadline):
+                        _mark_budget_exhausted(config, state, deadline)
+                        break
+                    if fallback not in roles:
+                        roles.append(fallback)
+                    if fallback_review.status in HARD_NOT_CLEAN_STATES:
+                        state.stop_reason = (
+                            f"Reviewer fallback {fallback} could not complete: "
+                            f"{fallback_review.status}."
+                        )
+                        break
+                    review = fallback_review
+                    reviewer = fallback
+                else:
+                    state.stop_reason = (
+                        f"Primary reviewer {reviewer} could not complete: "
+                        f"{review.status}."
+                    )
+                    break
 
             fix_findings = _actionable_findings(state, review.findings)
             if config.review_only:
@@ -2213,7 +2252,11 @@ def _mark_budget_exhausted(
 
 def _failure_status(output: str, *, allow_degraded: bool = True) -> str:
     lowered = (output or "").lower()
+    # Multi-word / specific substrings.  Each phrase is intentionally long
+    # enough that benign trace output (e.g. "Author:", "logging request",
+    # "subprocess.run() helper") cannot match it.
     degraded_markers = (
+        # Provider / capacity
         "rate limit",
         "quota",
         "timeout",
@@ -2224,8 +2267,32 @@ def _failure_status(output: str, *, allow_degraded: bool = True) -> str:
         "context_length_exceeded",
         "maximum context",
         "context exceeded",
+        # Authentication / authorization
+        "authentication failed",
+        "authentication error",
+        "unauthorized",
+        "login required",
+        "please log in",
+        "not logged in",
+        "please sign in",
+        # Network
+        "connection refused",
+        "connection reset",
+        "network unreachable",
+        "network is unreachable",
+        "dns resolution",
+        "name resolution",
+        # Sandbox / permissions
+        "permission denied",
+        "sandbox error",
+        "sandbox denied",
+        "failed to create sandbox",
     )
     if allow_degraded and any(marker in lowered for marker in degraded_markers):
+        return "degraded"
+    # Non-zero exit codes signal an infra/CLI failure (zero exit is success-y
+    # context and must NOT match).  Use a regex so "exit code 0" stays out.
+    if allow_degraded and re.search(r"exit code (?:[1-9]\d*)", lowered):
         return "degraded"
     return "failed"
 
