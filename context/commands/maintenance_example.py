@@ -12,9 +12,12 @@ The commands are designed to be invoked via the Click CLI framework.
 """
 
 import os
+import sys
 import shutil
 from pathlib import Path
 from unittest.mock import MagicMock, patch
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 import click
 from click.testing import CliRunner

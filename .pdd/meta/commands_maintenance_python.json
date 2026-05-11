@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-11T23:23:06.660216+00:00",
+  "command": "fix",
+  "prompt_hash": "ae9014530962168e5ee9a1d10be310daa84ef6f2cae8c32746394715e8782e23",
+  "code_hash": "ba72caa1bc23e77eda2438fa86d7ce879b75218ecec87bc75c6a6405d137e554",
+  "example_hash": "c88f6bccd0bec41a6beb521fc7c14ac507960442846c6ee715d7ddc3d36d3746",
+  "test_hash": "080cc6ae2c2f8275bb6997a02f05d5ce475206efd0bbc35c95540471a621af5e",
+  "test_files": {
+    "test_maintenance.py": "080cc6ae2c2f8275bb6997a02f05d5ce475206efd0bbc35c95540471a621af5e"
+  },
+  "include_deps": {
+    "context/__init__example.py": "84208a445d03a336e465709ec0687eb969c8d865e6739bf8b79f2c8a8aad351a",
+    "context/agentic_sync_example.py": "9bcc2f199a1463e8c424d8210ea6d5f34ad6fb5fcb1022aa879a9ecba0f8d5d6",
+    "context/auto_deps_main_example.py": "9b9c36c18d39494b6e31b46f6e4758c25135b6fa3d1672fbb7365844f7d2de04",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/sync_main_example.py": "3eb17c0e79c0402489782f7e758d7063dfbd820428c5e5b695415290ebf2a7f8",
+    "context/track_cost_example.py": "30c33d5c1c945e0e8f0c0f9861f8b952d1eb4f22e6cbc8c05089b160b1a4c8eb"
+  }
+}

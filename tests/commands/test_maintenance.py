@@ -191,9 +191,9 @@ class TestSyncCommand:
         args = ["sync", "https://github.com/org/repo/issues/99", *extra_args]
 
         with patch("pdd.commands.maintenance._is_github_issue_url", return_value=True), \
+             patch("pdd.commands.maintenance._resolve_global_sync_budget", return_value=expected.get("budget", None)), \
              patch("pdd.commands.maintenance.run_agentic_sync", return_value=mock_agentic) as mock_ras:
             result = runner.invoke(cli, args, catch_exceptions=False)
-
         assert result.exit_code == 0
         kw = mock_ras.call_args.kwargs
         assert kw["durable"] is False
@@ -597,8 +597,7 @@ class TestAgenticSyncDispatch:
                 no_steer=False,
                 max_attempts=3,
                 timeout_adder=0.0,
-                no_github_state=False,
-                one_session=True,
+                no_github_state=False, durable=False, durable_branch=None, no_resume=False, durable_max_parallel=None, one_session=True,
             )
 
             assert result == ("All synced", 0.50, "claude-3")
@@ -628,7 +627,7 @@ class TestAgenticSyncDispatch:
                     no_steer=False,
                     max_attempts=3,
                     timeout_adder=0.0,
-                    no_github_state=False,
+                    no_github_state=False, durable=False, durable_branch=None, no_resume=False, durable_max_parallel=None, one_session=True,
                 )
             assert exc_info.value.exit_code == 1
 
@@ -652,7 +651,7 @@ class TestAgenticSyncDispatch:
                 no_steer=False,
                 max_attempts=None,
                 timeout_adder=0.0,
-                no_github_state=False,
+                no_github_state=False, durable=False, durable_branch=None, no_resume=False, durable_max_parallel=None, one_session=True,
             )
 
         captured = capsys.readouterr()
@@ -678,9 +677,9 @@ class TestAgenticSyncDispatch:
                 no_steer=False,
                 max_attempts=None,
                 timeout_adder=0.0,
-                no_github_state=False,
+                no_github_state=False, durable=False, durable_branch=None, no_resume=False, durable_max_parallel=None, one_session=True,
             )
 
-            assert result is None
+            assert result == ("", 0.0, "local")
             mock_he.assert_called_once()
             assert mock_he.call_args[0][1] == "sync"
