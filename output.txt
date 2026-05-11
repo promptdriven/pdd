@@ -1,0 +1,1 @@
+MODULES_TO_SYNC: ["commands/maintenance", "commands/__init__"]\n\nDEPS_VALID: true
