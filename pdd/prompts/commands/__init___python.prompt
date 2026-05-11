@@ -1,3 +1,16 @@
+<pdd-reason>Registers all PDD subcommands with the main CLI group in canonical order, determining `pdd --help` command listing.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "register_commands", "description": "Register all subcommands with the main CLI group in canonical order"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write the command registration module `pdd/commands/__init__.py`.
 
 % Role & Scope
