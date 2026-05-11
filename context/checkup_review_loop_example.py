@@ -66,6 +66,7 @@ class ReviewLoopConfig:
     reviewers: Sequence[str] = ("codex", "claude")
     reviewer: Optional[str] = None
     fixer: Optional[str] = None
+    reviewer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
     max_cost: float = 10.0
@@ -106,6 +107,7 @@ class ReviewLoopState:
     total_cost: float = 0.0
     last_model: str = "unknown"
     reviewer_status: Dict[str, str] = field(default_factory=dict)
+    active_reviewer: Optional[str] = None
     findings_by_key: Dict[str, ReviewFinding] = field(default_factory=dict)
     fixes: List[FixResult] = field(default_factory=list)
     stop_reason: str = ""
@@ -213,6 +215,7 @@ EXAMPLE_DEDUP_STATE_PAYLOAD: List[Dict[str, str]] = [EXAMPLE_NORMALIZED_FINDING]
 
 EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "reviewer_status": {"codex": "clean", "claude": "fixer"},
+    "active_reviewer": "codex",
     "fresh_final_status": "clean",
     "stop_reason": "Primary reviewer is satisfied after reviewing the fixer response.",
     "total_cost": 1.23,
@@ -239,19 +242,21 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 #   PR: <pr_url>
 #   Issue: <issue_url>
 #   issue_aligned: true|false
+#   active-reviewer: <role>
 #   reviewer-status: <role>=<status> ... fresh-final=<status>
 #   fresh-final-review: clean|findings|failed|degraded|missing
 #   max-rounds-reached: true|false
 #   max-cost-reached: true|false
 #   max-duration-reached: true|false
 #
-# The primary reviewer is the ship gate. The fixer role appears in the status
+# The active reviewer is the ship gate. The fixer role appears in the status
 # line as `fixer` for traceability but does not independently review the PR.
-# Tokens in {"failed", "degraded", "missing"} ALWAYS mean not-clean —
-# provider-side outages must never silently ship.
+# Tokens in {"failed", "degraded", "missing"} mean not-clean for the active
+# reviewer; a superseded primary failure can remain visible after a clean
+# fallback takeover.
 #
 # Fixer disagreement is not terminal. If the fixer returns `not_valid` or
-# `blocked`, the primary reviewer either accepts the rationale by omitting the
+# `blocked`, the active reviewer either accepts the rationale by omitting the
 # finding on verification, or rejects it by re-reporting the finding with a
 # reason that is passed back to the fixer. The loop stops after max rounds if
 # the reviewer still sees required findings.
@@ -261,6 +266,7 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "PR: https://github.com/owner/repo/pull/1\n"
     "Issue: https://github.com/owner/repo/issues/2\n"
     "issue_aligned: true\n"
+    "active-reviewer: codex\n"
     "reviewer-status: codex=clean claude=fixer fresh-final=clean\n"
     "fresh-final-review: clean\n"
     "max-rounds-reached: false\n"

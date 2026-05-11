@@ -346,6 +346,8 @@ def run_agentic_checkup(
             loop instead of the legacy single-pass checkup path.
         review_only: When true with ``review_loop``, run only the primary
             reviewer first pass and do not invoke the fixer or push changes.
+        reviewer_fallback: Optional secondary reviewer role to try once when
+            the primary reviewer cannot complete.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).

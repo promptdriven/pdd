@@ -195,8 +195,9 @@ class ReviewLoopConfig:
     # Kept for CLI/API compatibility. The loop has one authoritative reviewer,
     # so this is no longer used as a ship gate.
     require_all_reviewers_clean: bool = True
-    # When enabled, provider/rate/context-limit failures are reported as
-    # "degraded" instead of "failed". They still stop mutation and cannot ship.
+    # When enabled, provider/rate/context-limit/auth/network/sandbox failures
+    # are reported as "degraded" instead of "failed". They still stop mutation
+    # unless a distinct fallback reviewer completes and takes over.
     continue_on_reviewer_limit: bool = False
     # Kept for report compatibility. A clean verifier pass by the primary
     # reviewer satisfies this; no separate fresh reviewer is spawned.
@@ -234,6 +235,7 @@ class ReviewLoopState:
     total_cost: float = 0.0
     last_model: str = "unknown"
     reviewer_status: Dict[str, str] = field(default_factory=dict)
+    active_reviewer: Optional[str] = None
     findings_by_key: Dict[str, ReviewFinding] = field(default_factory=dict)
     raw_outputs: List[Tuple[str, str]] = field(default_factory=list)
     fixes: List[FixResult] = field(default_factory=list)
@@ -276,13 +278,17 @@ def run_checkup_review_loop(
         state = ReviewLoopState(
             stop_reason=role_error,
             reviewer_status={reviewer or DEFAULT_REVIEWER: "failed"},
+            active_reviewer=reviewer or DEFAULT_REVIEWER,
         )
         return True, _render_final_report(context, state, roles), 0.0, "unknown"
 
     reviewer_status = {reviewer: "missing"}
     if not config.review_only:
         reviewer_status[fixer] = "fixer"
-    state = ReviewLoopState(reviewer_status=reviewer_status)
+    state = ReviewLoopState(
+        reviewer_status=reviewer_status,
+        active_reviewer=reviewer,
+    )
     deadline = time.monotonic() + (config.max_minutes * 60.0)
     worktree, setup_error = _setup_pr_worktree(
         cwd,
@@ -388,6 +394,7 @@ def run_checkup_review_loop(
                         break
                     review = fallback_review
                     reviewer = fallback
+                    state.active_reviewer = fallback
                 else:
                     state.stop_reason = (
                         f"Primary reviewer {reviewer} could not complete: "
@@ -2295,7 +2302,11 @@ def _failure_status(output: str, *, allow_degraded: bool = True) -> str:
         return "degraded"
     # Non-zero exit codes signal an infra/CLI failure (zero exit is success-y
     # context and must NOT match).  Use a regex so "exit code 0" stays out.
-    if allow_degraded and re.search(r"exit code (?:[1-9]\d*)", lowered):
+    if allow_degraded and re.search(
+        r"(?:exit code|exit status|non-zero exit status|exited with status) "
+        r"(?:[1-9]\d*)",
+        lowered,
+    ):
         return "degraded"
     return "failed"
 
@@ -2478,6 +2489,7 @@ def _write_final_state(
     """Persist the canonical machine-readable verdict at end of loop."""
     payload = {
         "reviewer_status": dict(state.reviewer_status),
+        "active_reviewer": state.active_reviewer,
         "fresh_final_status": state.fresh_final_status,
         "issue_aligned": issue_aligned,
         "stop_reason": state.stop_reason,
@@ -2557,6 +2569,8 @@ def _resolve_issue_aligned(state: ReviewLoopState) -> str:
 def _has_hard_not_clean_state(state: ReviewLoopState) -> bool:
     if state.fresh_final_status in HARD_NOT_CLEAN_STATES:
         return True
+    if state.active_reviewer:
+        return state.reviewer_status.get(state.active_reviewer) in HARD_NOT_CLEAN_STATES
     return any(status in HARD_NOT_CLEAN_STATES for status in state.reviewer_status.values())
 
 
@@ -2582,6 +2596,7 @@ def _render_final_report(
         f"PR: {context.pr_url}",
         f"Issue: {context.issue_url}",
         f"issue_aligned: {issue_aligned}",
+        f"active-reviewer: {state.active_reviewer or 'unknown'}",
         f"reviewer-status: {status_pairs}",
         f"fresh-final-review: {state.fresh_final_status}",
         f"max-rounds-reached: {str(state.max_rounds_reached).lower()}",

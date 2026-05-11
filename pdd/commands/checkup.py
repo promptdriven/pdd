@@ -151,8 +151,9 @@ from ..core.errors import handle_error
     is_flag=True,
     default=False,
     help=(
-        "Report provider/rate/context-limit reviewer failures as degraded instead "
-        "of failed. This never marks the reviewer clean or continues mutation."
+        "Report provider/rate/context-limit/auth/network/sandbox reviewer "
+        "failures as degraded instead of failed. This never marks an active "
+        "reviewer clean or continues mutation without a completed review."
     ),
 )
 @click.option(

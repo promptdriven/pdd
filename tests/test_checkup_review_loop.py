@@ -1012,6 +1012,7 @@ class TestCheckupReviewLoopRuntime:
         assert "reviewer_status" in final_state
         assert final_state["reviewer_status"]["codex"] == "clean"
         assert final_state["reviewer_status"]["claude"] == "fixer"
+        assert final_state["active_reviewer"] == "codex"
         assert "findings" in final_state
 
     def test_reviewer_fallback_used_when_primary_fails(
@@ -1046,6 +1047,8 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         assert "codex=degraded" in report
         assert "gemini=clean" in report
+        assert "active-reviewer: gemini" in report
+        assert "issue_aligned: true" in report
         assert "could not complete" not in report
         assert any(role == "gemini" for role, _ in calls)
 
@@ -1319,6 +1322,8 @@ class TestCheckupReviewLoopRuntime:
         # Report should reflect codex preserved as degraded, gemini as clean.
         assert "codex=degraded" in report
         assert "gemini=clean" in report
+        assert "active-reviewer: gemini" in report
+        assert "issue_aligned: true" in report
 
 
 class TestPromptInjection:
@@ -1478,6 +1483,12 @@ class TestParseHelpers:
             "exit code 127: command not found", allow_degraded=True
         ) == "degraded"
         assert _failure_status(
+            "Command returned non-zero exit status 2", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "process exited with status 64", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
             "permission denied while creating sandbox", allow_degraded=True
         ) == "degraded"
         assert _failure_status(
@@ -1505,6 +1516,9 @@ class TestParseHelpers:
         # exit code 0 is a success-y context — must not be flagged degraded.
         assert _failure_status(
             "trace line: exit code 0: ok", allow_degraded=True
+        ) == "failed"
+        assert _failure_status(
+            "trace line: exit status 0: ok", allow_degraded=True
         ) == "failed"
         # "subprocess" appearing in a traceback path must not flag degraded.
         assert _failure_status(
