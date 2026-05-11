@@ -96,16 +96,28 @@ export PYTHONPATH="${WORK_DIR}/pdd:${PYTHONPATH:-}"
 export LLM_CALL_TIMEOUT="${LLM_CALL_TIMEOUT:-60}"
 export PDD_EXTRACTS_STRENGTH="${PDD_EXTRACTS_STRENGTH:-0.5}"
 
-# ── Exchange refresh token for fresh JWT ──────────────────────────────────
+# ── Exchange refresh token for fresh JWT (with retry) ─────────────────────
+# The Firebase secure-token endpoint occasionally fails transiently when many
+# Cloud Batch tasks call it concurrently. Retry with exponential backoff so a
+# single blip doesn't kill cloud_regression cases (which exit 1 without a JWT).
 if [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
-    JWT_RESPONSE=$(curl -s "https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" \
-        -H "Content-Type: application/x-www-form-urlencoded" \
-        -d "grant_type=refresh_token&refresh_token=${PDD_REFRESH_TOKEN}")
+    JWT_MAX_ATTEMPTS=4
+    JWT_ATTEMPT=0
+    JWT_LAST_ERROR=""
+    while [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; do
+        JWT_ATTEMPT=$((JWT_ATTEMPT + 1))
+        JWT_RESPONSE=$(curl -sS --max-time 15 \
+            "https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}" \
+            -H "Content-Type: application/x-www-form-urlencoded" \
+            -d "grant_type=refresh_token&refresh_token=${PDD_REFRESH_TOKEN}" 2>&1) || JWT_RESPONSE=""
 
-    # Check for error in response before extracting token
-    JWT_ERROR=$(echo "${JWT_RESPONSE}" | python3 -c "
+        JWT_ERROR=$(echo "${JWT_RESPONSE}" | python3 -c "
 import sys, json
-d = json.load(sys.stdin)
+try:
+    d = json.load(sys.stdin)
+except Exception as e:
+    print(f'parse_failed: {e}')
+    sys.exit(0)
 err = d.get('error', {})
 if isinstance(err, dict):
     print(err.get('message', ''))
@@ -113,14 +125,29 @@ elif err:
     print(err)
 else:
     print('')
-" 2>/dev/null || echo "parse_failed")
+" 2>/dev/null || echo "parse_exception")
 
-    if [ -n "${JWT_ERROR}" ] && [ "${JWT_ERROR}" != "" ]; then
-        echo "WARNING: JWT token exchange failed: ${JWT_ERROR}"
-        echo "Cloud regression tests will likely fail."
-    else
-        export PDD_JWT_TOKEN=$(echo "${JWT_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['id_token'])")
-        echo "JWT token obtained from refresh token (${#PDD_JWT_TOKEN} chars)"
+        if [ -z "${JWT_ERROR}" ]; then
+            PDD_JWT_TOKEN_CANDIDATE=$(echo "${JWT_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id_token',''))" 2>/dev/null || echo "")
+            if [ -n "${PDD_JWT_TOKEN_CANDIDATE}" ]; then
+                export PDD_JWT_TOKEN="${PDD_JWT_TOKEN_CANDIDATE}"
+                echo "JWT token obtained from refresh token (${#PDD_JWT_TOKEN} chars, attempt ${JWT_ATTEMPT}/${JWT_MAX_ATTEMPTS})"
+                break
+            fi
+            JWT_ERROR="empty_id_token"
+        fi
+
+        JWT_LAST_ERROR="${JWT_ERROR}"
+        if [ "${JWT_ATTEMPT}" -lt "${JWT_MAX_ATTEMPTS}" ]; then
+            JWT_BACKOFF=$((2 ** JWT_ATTEMPT))
+            echo "WARNING: JWT exchange attempt ${JWT_ATTEMPT}/${JWT_MAX_ATTEMPTS} failed (${JWT_ERROR}); retrying in ${JWT_BACKOFF}s"
+            sleep "${JWT_BACKOFF}"
+        fi
+    done
+
+    if [ -z "${PDD_JWT_TOKEN:-}" ]; then
+        echo "ERROR: JWT exchange failed after ${JWT_MAX_ATTEMPTS} attempts: ${JWT_LAST_ERROR}"
+        echo "cloud_regression tasks will fail at the auth check; non-cloud tasks proceed unaffected."
     fi
 fi
 
