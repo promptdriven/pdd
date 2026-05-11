@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-11T17:44:59.017972+00:00",
+  "command": "fix",
+  "prompt_hash": "4d7953368ef259f16da1466922ab20a1857c97a66d7a8276da165a2657627725",
+  "code_hash": "038fc16f5525e80fa60e0383911daa43a3f9792fad90e8843fdaafceb3fd8972",
+  "example_hash": "2dbb4af94e77e54a08f0a20723a489223c1cce15981da7882a00109b1aac5dca",
+  "test_hash": "31becfc90711df404bca616fe75ef2d0f6a10b54c7793ea9215c3d083b45606c",
+  "test_files": {
+    "test_update_main.py": "31becfc90711df404bca616fe75ef2d0f6a10b54c7793ea9215c3d083b45606c"
+  },
+  "include_deps": {
+    "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
+    "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
+    "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
+    "context/git_update_example.py": "811304cee2cb890879ee68a816aed49dff2e7b50cfdca3125e16e0ae99819574",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/update_prompt_example.py": "56b9d8c7aa823c2996a3dc5741a47844e223bfd088366d74e48b6a099b5a11c4"
+  }
+}
