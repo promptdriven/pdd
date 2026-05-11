@@ -30,19 +30,19 @@
 % Internal module examples:
 <path_resolution_example><include>context/path_resolution_example.py</include></path_resolution_example>
 <utils.anthropic_thinking>
-    <include>context/anthropic_thinking_test.py</include>
+    <!-- Missing: context/anthropic_thinking_test.py -->
 </utils.anthropic_thinking>
 <utils.auth_service>
-    <include select="def:clear_jwt_cache,class:AuthService">context/auth_service_example.py</include>
+    <!-- Invalid selector for context/auth_service_example.py: Class 'AuthService' not found in source -->
 </utils.auth_service>
 <pdd.core.path_resolver>
-    <include>pdd/core/path_resolver.py</include>
+    <!-- Missing: pdd/core/path_resolver.py -->
 </pdd.core.path_resolver>
 <pdd.server.token_counter>
     <include select="def:get_context_limit">pdd/server/token_counter.py</include>
 </pdd.server.token_counter>
 <pdd.core.provider_manager>
-    <include>pdd/core/provider_manager.py</include>
+    <!-- Missing: pdd/core/provider_manager.py -->
 </pdd.core.provider_manager>
 <pdd.core.cloud>
     <include select="def:get_cloud_request_timeout,class:CloudConfig">pdd/core/cloud.py</include>
@@ -239,7 +239,7 @@
 
 % Cloud API Documentation:
    <cloud_api_documentation>
-      <include>../docs/api-documentation.md</include>
+      <!-- Missing: ../docs/api-documentation.md -->
    </cloud_api_documentation>
 
 % Multi-Credential Providers:

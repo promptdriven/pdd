@@ -18,7 +18,7 @@
 <include>context/python_preamble.prompt</include>
 
 <pdd.agentic_common>
-<include>context/agentic_common_example.py</include>
+<include select="def:example_run_agentic_task,def:example_post_pr_comment">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 <pdd.ci_validation>
 <include>context/ci_validation_example.py</include>
@@ -48,7 +48,7 @@ Module providing CI polling, log retrieval, and fix-iteration loop infrastructur
     - If stderr contains "resource not accessible by integration" → log a yellow warning that the GitHub App may lack `checks:read` permission, then return `("no_checks", [])` immediately, even with partial check JSON in stdout.
     - If `latest_checks` is empty → mark `saw_ambiguous_error=True`, log the stderr (yellow), and continue polling.
     - If `latest_checks` is non-empty and none of the stderr patterns above matched but stderr is non-empty → log the stderr with an explicit prefix making it clear the result will be classified as failed from the exit code (e.g. `"CI polling warning (classifying as failed from exit code 1): {stderr}"`), then fall through to `_classify_check_result` so a real check failure isn't lost. Without this log, the LLM fix loop can be triggered silently when a transport error masquerades as a real failure.
-14. Include `<include>context/agentic_common_example.py</include>` for `run_agentic_task` signature and `post_pr_comment` usage, and `<include>context/ci_validation_example.py</include>` for the implementation pattern.
+14. Include `<include select="def:example_run_agentic_task,def:example_post_pr_comment">context/agentic_common_example.py</include>` for `run_agentic_task` signature and `post_pr_comment` usage, and `<include>context/ci_validation_example.py</include>` for the implementation pattern.
 
 % Deliverables
 - Code: `pdd/ci_validation.py`

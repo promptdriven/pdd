@@ -20,12 +20,12 @@
 
 % Here is the information on all the commands of pdd that you are animating for the sync command:
 <README>
-    <include>README.md</include>
+    <include query="information on all the commands of pdd">README.md</include>
 </README>
 
 % The branding document has the Prompt Driven logo you will use for animation and specifies the colors to use:
 <branding>
-    <include>../docs/branding.md</include>
+    <!-- Missing: ../docs/branding.md -->
 </branding>
 
 % Here is how to use the internal modules:

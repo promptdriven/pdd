@@ -51,10 +51,10 @@
     <include select="def:_parse_pr_url,def:_is_github_issue_url">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 <pdd.architecture_sync>
-    <include select="def:run_validate_arch_includes_cli">context/architecture_sync_example.py</include>
+    <!-- Invalid selector for context/architecture_sync_example.py: Function 'run_validate_arch_includes_cli' not found in source -->
 </pdd.architecture_sync>
 <pdd.agentic_checkup_orchestrator>
-    <include select="def:run_agentic_checkup">context/agentic_checkup_orchestrator_example.py</include>
+    <!-- Invalid selector for context/agentic_checkup_orchestrator_example.py: Function 'run_agentic_checkup' not found in source -->
 </pdd.agentic_checkup_orchestrator>
 <pdd.agentic_sync>
     <include>context/agentic_sync_example.py</include>

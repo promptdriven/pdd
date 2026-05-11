@@ -23,7 +23,7 @@
      - Purpose: Frontend uses this to ensure same cloud URL as CLI
 
 % Dependencies
-  <pdd.core.cloud><include>context/cloud_example.py</include></pdd.core.cloud>
+  <pdd.core.cloud><!-- Invalid selector for context/cloud_example.py: Class 'CloudConfig' not found in source --></pdd.core.cloud>
   <config_example><include>context/server/routes/config_example.py</include></config_example>
 
 % Technical Constraints

@@ -36,7 +36,7 @@
 
 % Here is documentation for GitHub's Device Flow:
 <device_flow>
-    <include>context/device_flow.txt</include>
+    <!-- Missing: context/device_flow.txt -->
 </device_flow>
 
 % Core Requirements:

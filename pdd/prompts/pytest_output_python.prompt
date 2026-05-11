@@ -2,6 +2,11 @@
 
 <include>context/python_preamble.prompt</include>
 
+% Dependencies
+<context.change.16.fix_error_loop>
+    <include select="def:extract_test_results">context/change/16/fix_error_loop.py</include>
+</context.change.16.fix_error_loop>
+
 % Here are the inputs and outputs of the CLI:
     Command Line Interface Input arguments: 
         'test_file' - A string containing the path to the test file.

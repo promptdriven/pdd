@@ -138,10 +138,10 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 30. Return `(success=True, report_str, total_cost, last_model)` whenever the loop completes and produces a report — even when reviewer-status is non-clean. Downstream verdict adapters classify ship/not-ready/unknown from the report. Only return `success=False` when the function would otherwise be unable to produce a report (e.g., catastrophic interpreter-level error — but in this module's normal flow this does not occur).
 
 % Dependencies
-<pdd.agentic_common><include select="def:run_agentic_task,def:example_github_state_helpers">context/agentic_common_example.py</include></pdd.agentic_common>
-<pdd.agentic_change><include select="def:_run_gh_command">context/agentic_change_example.py</include></pdd.agentic_change>
-<pdd.agentic_checkup_orchestrator><include select="def:_setup_pr_worktree,def:_get_git_root">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
-<pdd.agentic_e2e_fix_orchestrator><include select="def:push_with_retry">context/agentic_e2e_fix_orchestrator_example.py</include></pdd.agentic_e2e_fix_orchestrator>
+<pdd.agentic_common><!-- Invalid selector for context/agentic_common_example.py: Function 'run_agentic_task' not found in source --></pdd.agentic_common>
+<pdd.agentic_change><!-- Invalid selector for context/agentic_change_example.py: Function '_run_gh_command' not found in source --></pdd.agentic_change>
+<pdd.agentic_checkup_orchestrator><!-- Invalid selector for context/agentic_checkup_orchestrator_example.py: Function '_setup_pr_worktree' not found in source --></pdd.agentic_checkup_orchestrator>
+<pdd.agentic_e2e_fix_orchestrator><!-- Invalid selector for context/agentic_e2e_fix_orchestrator_example.py: Function 'push_with_retry' not found in source --></pdd.agentic_e2e_fix_orchestrator>
 <pdd.list_drift_detection><include select="def:detect_static_list_drift,class:StaticListDriftFinding">../pdd/list_drift_detection.py</include></pdd.list_drift_detection>
 
 % Deliverables

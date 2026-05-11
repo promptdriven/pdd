@@ -5,6 +5,11 @@ Implement the `pdd firecrawl-cache` debugging command group for automatic Firecr
 
 <include>context/python_preamble.prompt</include>
 
+% Dependencies
+<pdd.commands.__init__>
+    <include>context/__init__example.py</include>
+</pdd.commands.__init__>
+
 % Requirements
 1. Define `@click.group("firecrawl-cache")` as `firecrawl_cache_group()` and export `firecrawl_cache = firecrawl_cache_group`.
 2. Use `get_firecrawl_cache_stats`, `clear_firecrawl_cache`, and `get_firecrawl_cache` from `..firecrawl_cache`.

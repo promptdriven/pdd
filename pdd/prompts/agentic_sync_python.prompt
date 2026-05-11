@@ -96,9 +96,9 @@ After dry-run validation, check which modules are already fully synced:
 % Dependencies
 <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
 <pdd.agentic_common><include select="def:example_run_agentic_task,def:example_github_state_helpers,def:example_post_step_comment">context/agentic_common_example.py</include></pdd.agentic_common>
-<pdd.agentic_sync_runner><include select="class:AsyncSyncRunner,def:_find_pdd_executable">context/agentic_sync_runner_example.py</include></pdd.agentic_sync_runner>
+<pdd.agentic_sync_runner><!-- Invalid selector for context/agentic_sync_runner_example.py: Class 'AsyncSyncRunner' not found in source --></pdd.agentic_sync_runner>
 <pdd.durable_sync_runner>Durable runner is implemented in `pdd/durable_sync_runner.py` and exposes the same high-level run contract as `AsyncSyncRunner` while persisting git checkpoint commits.</pdd.durable_sync_runner>
-<pdd.sync_order><include select="def:extract_module_from_include,def:topological_sort,def:build_dependency_graph">context/sync_order_example.py</include></pdd.sync_order>
+<pdd.sync_order><!-- Invalid selector for context/sync_order_example.py: Function 'extract_module_from_include' not found in source --></pdd.sync_order>
 <pdd.architecture_sync>
     <include select="def:example_validate_dependencies,def:example_get_entry,def:example_sync_all">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>

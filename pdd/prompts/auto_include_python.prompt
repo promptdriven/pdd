@@ -44,13 +44,13 @@ PDD prompt files use `<include>file.py</include>` tags to pull in dependency fil
 `include_directives` is a single string containing a mix of `<new>` and `<update>` XML blocks, joined with newlines. Each block is one directive. Example of a complete `include_directives` string:
 
     <new>
-    <core.api><include select="class:Handler">core/api.py</include></core.api>
+    <core.api><!-- Missing: core/api.py --></core.api>
     </new>
     <new>
-    <utils.validators><include>utils/validators.py</include></utils.validators>
+    <utils.validators><!-- Missing: utils/validators.py --></utils.validators>
     </new>
     <update>
-    <include select="def:require_admin">auth_helpers.py</include>
+    <!-- Missing: auth_helpers.py -->
     </update>
 
 - `<new>` blocks: files to add to the prompt, wrapped in a module-name tag with optional select/query attributes
@@ -83,7 +83,7 @@ The `<include>` tag puts the file path between the opening and closing tags. Opt
 
 % Dependencies
 <internal_modules>
-    <llm_invoke_example><include select="def:example_structured_output,def:example_reasoning">context/llm_invoke_example.py</include></llm_invoke_example>
+    <llm_invoke_example><!-- Invalid selector for context/llm_invoke_example.py: Function 'example_structured_output' not found in source --></llm_invoke_example>
     <load_prompt_template_example><include>context/load_prompt_template_example.py</include></load_prompt_template_example>
     <summarize_directory_example><include>./context/summarize_directory_example.py</include></summarize_directory_example>
     <embed_retrieve_example><include query="example of using embed_and_retrieve for pre-filtering candidates by cosine similarity when exceeding 50, with fallback to all candidates if embedding fails">context/embed_retrieve_example.py</include></embed_retrieve_example>

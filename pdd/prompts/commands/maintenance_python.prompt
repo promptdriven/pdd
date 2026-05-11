@@ -24,7 +24,7 @@
 
 % Program Specification (README.md):
     <README.md>
-    <include select="section:sync,section:auto-deps,section:setup">./README.md</include>
+    <!-- Invalid selector for ./README.md: Markdown section 'sync' not found -->
     </README.md>
 
 % Requirements
@@ -52,16 +52,16 @@
 
 % Dependencies
   <sync_main_example>
-  <include select="def:sync_main,def:_run_agentic_sync_dispatch">context/sync_main_example.py</include>
+  <!-- Invalid selector for context/sync_main_example.py: Function 'sync_main' not found in source -->
   </sync_main_example>
   <auto_deps_main_example>
-  <include select="def:auto_deps_main">context/auto_deps_main_example.py</include>
+  <!-- Invalid selector for context/auto_deps_main_example.py: Function 'auto_deps_main' not found in source -->
   </auto_deps_main_example>
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
   <agentic_sync_example>
-  <include select="def:run_agentic_sync,def:run_global_sync,def:_is_github_issue_url">context/agentic_sync_example.py</include>
+  <!-- Invalid selector for context/agentic_sync_example.py: Function 'run_agentic_sync' not found in source -->
   </agentic_sync_example>
   <pdd.cli>
   <include select="def:install_completion">context/change/15/initial_cli.py</include>

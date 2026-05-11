@@ -47,10 +47,10 @@
 
 % Dependencies
   <auth_service><include select="def:get_auth_status,def:logout,def:verify_auth,def:get_jwt_cache_info,def:has_refresh_token,def:get_cached_jwt">context/auth_service_example.py</include></auth_service>
-  <get_jwt_token><include select="def:get_jwt_token,class:AuthError">context/get_jwt_token_example.py</include></get_jwt_token>
+  <get_jwt_token><!-- Invalid selector for context/get_jwt_token_example.py: Function 'get_jwt_token' not found in source --></get_jwt_token>
   <cloud_config><include>context/core/cloud_example.py</include></cloud_config>
-  <commands_init><include select="def:main_cli">context/commands/__init___example.py</include></commands_init>
-  <pdd.commands.register_commands><include select="def:main_cli">context/commands/__init___example.py</include></pdd.commands.register_commands>
+  <commands_init><!-- Invalid selector for context/commands/__init___example.py: Function 'main_cli' not found in source --></commands_init>
+  <pdd.commands.register_commands><!-- Invalid selector for context/commands/__init___example.py: Function 'main_cli' not found in source --></pdd.commands.register_commands>
   <pdd.keyring_timeout>
       <include>context/_keyring_timeout_example.py</include>
   </pdd.keyring_timeout>
