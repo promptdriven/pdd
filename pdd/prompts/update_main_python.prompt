@@ -19,6 +19,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 8. Without --output, overwrite input_prompt_file in place.
 9. use_git and input_code_file are mutually exclusive (raise ValueError).
 10. Before any legacy path writes generated/updated `.prompt` content, call `sanitize_prompt_output(content, destination_path)` so invalid `<include>` tags or selected includes are cleaned before a later `pdd sync` preprocess pass.
+11. On every successful update path (single-file true update, single-file regeneration, and each per-pair success in repo mode), call `save_fingerprint` from `pdd.operation_log` after the updated prompt has been written to disk. Resolve `(basename, language)` via `infer_module_identity(prompt_file_path)` so the fingerprint key matches what `pdd sync` / drift detection reads. Pass the post-update prompt path, code path, cost, and model used. Wrap the call in a best-effort `try`/`except Exception` that logs but does not fail the update if fingerprint persistence raises. This applies even when only `_run.json` reports are cleared, so subsequent drift checks see a current `code_hash` rather than a stale fingerprint.
 
 % Modes
 1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
@@ -57,7 +58,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 - After resolving pairs, call `ensure_pddrc_for_scan` from `pddrc_initializer` to auto-create `.pddrc` if needed.
 - **Change detection**: Use `get_git_changed_files` + `is_code_changed` to filter pairs. Also include pairs with empty (0-byte) prompt files regardless of code changes. Include dependency hashes from fingerprints are checked so that changes to shared include files (preambles, examples) trigger updates.
 - Progress bar: Rich Progress with spinner, bar, percentage, time remaining, and running total cost.
-- **Post-update fingerprinting**: After successful update, `save_fingerprint` for the pair via `infer_module_identity`.
+- **Post-update fingerprinting**: After successful update, `save_fingerprint` for the pair via `infer_module_identity` (see Requirement 11).
 - **Post-update architecture sync**: Use `find_architecture_for_project` to locate architecture files. For each successfully updated prompt, call `update_architecture_from_prompt` if architecture file exists.
 - **Post-update PRD sync**: If architecture entries were updated, find PRD file and use `run_agentic_task` to review/update PRD content (parse `<updated-prd>` tags from LLM output).
 - Summary table: prompt file, status, cost, model, error columns. Show architecture/PRD status if relevant.
