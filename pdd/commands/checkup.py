@@ -184,6 +184,18 @@ from ..core.errors import handle_error
         "treated as not-clean regardless of this flag."
     ),
 )
+@click.option(
+    "--fallback-reviewer-on-failure",
+    is_flag=True,
+    default=False,
+    help=(
+        "Opt-in. When the primary reviewer ends in 'failed' or 'missing' "
+        "(NOT 'degraded'), run a second review pass using the configured "
+        "fixer's identity as a fallback reviewer. A clean fallback is "
+        "promoted to a real reviewer row so downstream verdict adapters "
+        "see a clean real-reviewer entry."
+    ),
+)
 @click.pass_context
 @track_cost
 def checkup(
@@ -211,6 +223,7 @@ def checkup(
     require_final_fresh_review: bool,
     blocking_severities: Optional[str],
     clean_reviewer_states: Optional[str],
+    fallback_reviewer_on_failure: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -353,6 +366,7 @@ def checkup(
             require_final_fresh_review=require_final_fresh_review,
             blocking_severities=blocking_severities,
             clean_reviewer_states=clean_reviewer_states,
+            fallback_reviewer_on_failure=fallback_reviewer_on_failure,
         )
 
         if not quiet:

@@ -1015,6 +1015,145 @@ class TestCheckupReviewLoopRuntime:
         assert final_state["active_reviewer"] == "codex"
         assert "findings" in final_state
 
+    def test_reviewer_diagnostics_are_surfaced_in_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A failed reviewer's stderr/exit-code must reach the final report."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        codex_stderr = (
+            "rate limit exceeded\n"
+            "error: openai responded with 429\n"
+            "exit code 7"
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, codex_stderr, 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "### Reviewer Diagnostics" in report
+        assert "rate-limit" in report
+        assert "exit code: 7" in report
+        assert "rate limit exceeded" in report
+        assert "openai responded with 429" in report
+
+    def test_fallback_reviewer_promotes_fixer_when_primary_fails_and_flag_set(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        labels: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            labels.append(kwargs["label"])
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed", 0.0, ""
+            return True, _json("clean"), 0.2, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert any(
+            "fallback-claude" in label or "review-claude" in label
+            for label in labels
+        ), labels
+        assert "claude=clean" in report
+        assert "claude=fixer" not in report
+        assert "fallback" in report.lower()
+        assert "codex=failed" in report
+        assert "Primary reviewer codex could not complete" not in report
+        assert "fresh-final: clean" in report or "fresh-final=clean" in report
+
+    def test_fallback_does_not_trigger_on_degraded_status(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        roles_called: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            roles_called.append(role)
+            if role == "codex":
+                return False, "rate limit exceeded", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                fallback_reviewer_on_failure=True,
+                continue_on_reviewer_limit=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "claude" not in roles_called, roles_called
+        assert "codex=degraded" in report
+        assert "claude=fixer" in report
+
+    def test_fallback_disabled_preserves_legacy_failed_unknown_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        roles_called: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            roles_called.append(role)
+            if role == "codex":
+                return False, "rate limit exceeded", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "claude" not in roles_called, roles_called
+        assert "reviewer-status: codex=failed claude=fixer fresh-final=missing" in report
+        assert "Primary reviewer codex could not complete" in report
+        assert "issue_aligned: unknown" in report
+        assert "Required review did not complete" in report
+
     def test_reviewer_fallback_used_when_primary_fails(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

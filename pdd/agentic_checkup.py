@@ -329,6 +329,7 @@ def run_agentic_checkup(
     require_final_fresh_review: bool = True,
     blocking_severities: Optional[str] = None,
     clean_reviewer_states: Optional[str] = None,
+    fallback_reviewer_on_failure: bool = False,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -462,6 +463,7 @@ def run_agentic_checkup(
             reasoning_time=reasoning_time,
             blocking_severities=parse_severity_list(blocking_severities),
             clean_reviewer_states=parse_state_list(clean_reviewer_states),
+            fallback_reviewer_on_failure=fallback_reviewer_on_failure,
         )
         return run_checkup_review_loop(
             context=loop_context,
