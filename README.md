@@ -2688,7 +2688,7 @@ Options:
 - `--reviewer ROLE`: Primary reviewer role for `--review-loop` (for example, `codex`).
 - `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
 - `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
-- `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop.
+- `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop and the superseded primary's row in the final report is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters drop the failed primary from the required-reviewer set and resolve to `ship_degraded` instead of `unknown`.
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
 - `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 10.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
