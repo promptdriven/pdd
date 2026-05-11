@@ -8,12 +8,13 @@
 % Requirements
   - Import all command functions and groups from the sibling modules in `pdd/commands/`.
   - Define a `register_commands(cli: click.Group) -> None` function.
-  - In `register_commands`, use `cli.add_command()` to register:
+  - In `register_commands`, use `cli.add_command()` to register in the current CLI order:
     - `generate`, `test`, `example` (from `.generate`)
     - `fix` (from `.fix`)
     - `split`, `change`, `update` (from `.modify`)
-    - `sync`, `sync_architecture`, `auto_deps`, `setup` (from `.maintenance`)
+    - `sync`, `sync_architecture` (from `.maintenance`)
     - `checkup` (from `.checkup`)
+    - `auto_deps`, `setup` (from `.maintenance`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
     - `connect` (from `.connect`)
     - `auth_group` (from `.auth`)
