@@ -6,11 +6,33 @@ name: auto-heal
 #
 # Compute runs in pdd_cloud's GCP project (prompt-driven-development-stg)
 # via Cloud Build using a pre-staged build-context tarball. This workflow
-# only dispatches the build and surfaces its status.
+# only dispatches the build and surfaces its status; no LLM or PEM
+# secrets ever land on a GitHub-Actions runner.
 #
-# Authorization: only people who are collaborators on the private
-# promptdriven/pdd_cloud repo can trigger heal runs. Verified with a
-# short-lived GitHub App token.
+# ---- Two distinct GitHub Apps ----
+# These MUST be different Apps (separation of duty):
+#   App A — `pdd-cloud-auth-reader`: Metadata: Read on promptdriven/pdd_cloud
+#     only. Used HERE to authorize the requester. PEM stored in this repo's
+#     GHA secrets (PDD_CLOUD_APP_ID, PDD_CLOUD_APP_PRIVATE_KEY).
+#   App B — `prompt-driven-github-staging` (existing): write perms on
+#     promptdriven/pdd. Used INSIDE the Cloud Build to push the heal commit
+#     back to the PR branch. PEM stored only in GCP Secret Manager
+#     (gemini-dispatch-gh-app-private-key).
+#
+# ---- Security boundaries ----
+# - `pull_request_target` runs workflow code from main, never from PR head,
+#   so a fork PR cannot modify the auth gate. PR code only runs inside
+#   Cloud Build, which has no access to this workflow's GHA secrets.
+# - The dispatcher SA is impersonable ONLY by this exact workflow file at
+#   refs/heads/main (WIF attribute_condition + principalSet pinning to
+#   attribute.workflow_ref). Any new workflow on this repo cannot mint a
+#   token for the dispatcher SA.
+# - Fork PRs short-circuit BEFORE the App token is minted; "neutral" check
+#   conclusion lets them merge (treated as passing by branch protection)
+#   without an actual heal.
+# - Every event-derived value is passed through `env:` and read via shell
+#   variables — never interpolated directly into `run:` blocks. Markdown
+#   summaries are built from workflow-controlled values only.
 
 on:
   pull_request_target:
@@ -24,51 +46,101 @@ permissions:
   checks: write
   id-token: write   # Workload Identity Federation to GCP
 
+# Do NOT cancel in-progress runs. Cancelling a required check mid-flight
+# muddies merge semantics; let parallel runs race for the latest SHA's check.
+# Cancelled-then-success on an older SHA does not affect protection on the
+# newer SHA, so there is no abuse vector to consider.
 concurrency:
   group: auto-heal-${{ github.event.pull_request.number || github.event.issue.number }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   heal:
+    # Non-draft PR events, or a /heal comment on a PR (issue-comment events
+    # for issues that aren't PRs are filtered out). `startsWith('/heal')`
+    # also matches /healthcheck — the pre-flight step rejects false positives
+    # before any privileged work runs.
     if: |
-      (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false) ||
+      (github.event_name == 'pull_request_target'
+        && github.event.pull_request.draft == false) ||
       (github.event_name == 'issue_comment'
+        && github.event.action == 'created'
         && github.event.issue.pull_request != null
         && startsWith(github.event.comment.body, '/heal'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - name: Resolve PR + requester
-        id: pr
+      - name: Pre-flight (validate trigger + resolve PR)
+        id: pf
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          EVENT_NAME: ${{ github.event_name }}
+          BODY: ${{ github.event.comment.body }}
+          PR_NUMBER_FROM_PR: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA_FROM_PR: ${{ github.event.pull_request.head.sha }}
+          PR_HEAD_REPO_FROM_PR: ${{ github.event.pull_request.head.repo.full_name }}
+          REQUESTER_FROM_PR: ${{ github.event.pull_request.user.login }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          REQUESTER_FROM_COMMENT: ${{ github.event.comment.user.login }}
+          REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
-          if [ "${{ github.event_name }}" = "pull_request_target" ]; then
-            pr_number="${{ github.event.pull_request.number }}"
-            pr_head_sha="${{ github.event.pull_request.head.sha }}"
-            requester="${{ github.event.pull_request.user.login }}"
-          else
-            pr_number="${{ github.event.issue.number }}"
-            pr_head_sha=$(gh api "repos/${{ github.repository }}/pulls/$pr_number" --jq .head.sha)
-            requester="${{ github.event.comment.user.login }}"
+          # For issue_comment, require /heal as a standalone first token on
+          # the first line. Rejects /healthcheck, /healz, etc.
+          if [ "$EVENT_NAME" = "issue_comment" ]; then
+            first_token=$(printf '%s' "$BODY" | head -n1 | awk '{print $1}')
+            if [ "$first_token" != "/heal" ]; then
+              echo "Comment first token '$first_token' is not '/heal'; ignoring."
+              echo "skip=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
           fi
+
+          if [ "$EVENT_NAME" = "pull_request_target" ]; then
+            pr_number="$PR_NUMBER_FROM_PR"
+            pr_head_sha="$PR_HEAD_SHA_FROM_PR"
+            pr_head_repo="$PR_HEAD_REPO_FROM_PR"
+            requester="$REQUESTER_FROM_PR"
+          else
+            pr_number="$ISSUE_NUMBER"
+            pr_meta=$(gh api "repos/$REPO/pulls/$pr_number" \
+              --jq '[.head.sha, (.head.repo.full_name // "")] | @tsv')
+            pr_head_sha=$(printf '%s' "$pr_meta" | cut -f1)
+            pr_head_repo=$(printf '%s' "$pr_meta" | cut -f2)
+            requester="$REQUESTER_FROM_COMMENT"
+          fi
+
+          if [ -z "$pr_number" ] || [ -z "$pr_head_sha" ] || [ -z "$requester" ]; then
+            echo "::error::Failed to resolve PR fields (number=$pr_number sha=$pr_head_sha requester=$requester)"
+            exit 1
+          fi
+
+          fork=false
+          if [ "$pr_head_repo" != "$REPO" ]; then
+            fork=true
+          fi
+
           {
+            echo "skip=false"
+            echo "fork=$fork"
             echo "pr_number=$pr_number"
             echo "pr_head_sha=$pr_head_sha"
+            echo "pr_head_repo=$pr_head_repo"
             echo "requester=$requester"
           } >> "$GITHUB_OUTPUT"
 
       - name: Post check_run (in_progress) on PR head SHA
+        if: steps.pf.outputs.skip != 'true'
         id: check_start
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_HEAD_SHA: ${{ steps.pr.outputs.pr_head_sha }}
+          PR_HEAD_SHA: ${{ steps.pf.outputs.pr_head_sha }}
+          REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           check_id=$(gh api -X POST \
-            "repos/${{ github.repository }}/check-runs" \
+            "repos/$REPO/check-runs" \
             -f name='auto-heal' \
             -f head_sha="$PR_HEAD_SHA" \
             -f status='in_progress' \
@@ -76,68 +148,156 @@ jobs:
             --jq .id)
           echo "check_id=$check_id" >> "$GITHUB_OUTPUT"
 
+      # Short-circuit fork PRs BEFORE minting any App token. Auto-heal pushes
+      # commits back to the PR branch which is impossible on a fork; "neutral"
+      # is treated as passing by GitHub branch protection, so fork PRs are
+      # not permanently blocked from merging.
+      - name: Short-circuit fork PRs (neutral conclusion)
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CHECK_ID: ${{ steps.check_start.outputs.check_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Summary is built from workflow-controlled values only. Never
+          # interpolate event-derived strings (PR title, comment body, branch
+          # names) into rendered markdown on a check.
+          gh api -X PATCH "repos/$REPO/check-runs/$CHECK_ID" \
+            -f status='completed' \
+            -f conclusion='neutral' \
+            -f "output[title]=auto-heal skipped (fork PR)" \
+            -f "output[summary]=Fork PRs are not auto-healed because the heal pushes commits to the PR branch (not possible across forks). [Workflow run]($RUN_URL)."
+
       - name: Mint pdd_cloud App token
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
         id: app_token
-        uses: actions/create-github-app-token@v1
+        # SHA-pinned to v3.1.1 (https://github.com/actions/create-github-app-token/releases/tag/v3.1.1)
+        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
         with:
           app-id: ${{ secrets.PDD_CLOUD_APP_ID }}
           private-key: ${{ secrets.PDD_CLOUD_APP_PRIVATE_KEY }}
           owner: promptdriven
           repositories: pdd_cloud
 
-      - name: Authorize requester (must be pdd_cloud collaborator)
-        id: authz
+      - name: Authorize requester (must be pdd_cloud direct collaborator)
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
-          REQUESTER: ${{ steps.pr.outputs.requester }}
+          REQUESTER: ${{ steps.pf.outputs.requester }}
         run: |
           set -euo pipefail
-          if gh api "repos/promptdriven/pdd_cloud/collaborators/$REQUESTER" --silent 2>/dev/null; then
-            echo "authorized: $REQUESTER is a pdd_cloud collaborator"
-          else
-            echo "::error::$REQUESTER is not a pdd_cloud collaborator; auto-heal blocked. A pdd_cloud collaborator must comment '/heal' to authorize."
+          if [ -z "$REQUESTER" ]; then
+            echo "::error::requester unresolved; refusing to authorize"
             exit 1
           fi
+          # 204 = is a collaborator. 404 = not a collaborator.
+          # Anything else = fail loud (don't silently confuse denial with
+          # API/transport errors).
+          http_code=$(gh api -i \
+            "repos/promptdriven/pdd_cloud/collaborators/$REQUESTER?affiliation=direct" \
+            2>/dev/null | head -n1 | awk '{print $2}' || true)
+          case "$http_code" in
+            204|200)
+              echo "authorized: $REQUESTER is a pdd_cloud direct collaborator"
+              ;;
+            404)
+              echo "::error::$REQUESTER is not a pdd_cloud collaborator; auto-heal blocked. A pdd_cloud collaborator must comment '/heal' to authorize."
+              exit 1
+              ;;
+            *)
+              echo "::error::pdd_cloud collaborator check returned HTTP '$http_code'; refusing to authorize. Likely transient — retry, or verify the App's installation and Metadata:Read permission."
+              exit 1
+              ;;
+          esac
 
       - name: Authenticate to GCP via Workload Identity Federation
-        uses: google-github-actions/auth@v2
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        # SHA-pinned to v3.0.0 (https://github.com/google-github-actions/auth/releases/tag/v3.0.0)
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
           workload_identity_provider: projects/590888610376/locations/global/workloadIdentityPools/github-actions/providers/github
           service_account: pdd-public-heal-dispatcher@prompt-driven-development-stg.iam.gserviceaccount.com
 
       - name: Set up gcloud
-        uses: google-github-actions/setup-gcloud@v2
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        # SHA-pinned to v3.0.1 (https://github.com/google-github-actions/setup-gcloud/releases/tag/v3.0.1)
+        uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
 
-      - name: Submit Cloud Build (auto-heal)
-        id: gcb
+      - name: Submit Cloud Build (async)
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        id: gcb_submit
         env:
-          PR_NUMBER: ${{ steps.pr.outputs.pr_number }}
+          PR_NUMBER: ${{ steps.pf.outputs.pr_number }}
         run: |
           set -euo pipefail
-          gcloud builds submit \
+          build_id=$(gcloud builds submit \
             gs://pdd-stg-build-contexts/auto-heal-pr-latest.tgz \
             --project=prompt-driven-development-stg \
             --config=cloudbuild-pdd-cli-auto-heal-pr.yaml \
             --substitutions=_PUBLIC_PR_NUMBER="$PR_NUMBER" \
-            --format='value(id)'
+            --async \
+            --format='value(id)')
+          echo "build_id=$build_id" >> "$GITHUB_OUTPUT"
+          echo "Cloud Build $build_id submitted; polling for completion."
+
+      - name: Wait for Cloud Build to complete
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        env:
+          BUILD_ID: ${{ steps.gcb_submit.outputs.build_id }}
+        run: |
+          set -euo pipefail
+          while true; do
+            status=$(gcloud builds describe "$BUILD_ID" \
+              --project=prompt-driven-development-stg \
+              --format='value(status)')
+            case "$status" in
+              SUCCESS)
+                echo "Cloud Build $BUILD_ID succeeded"
+                exit 0
+                ;;
+              FAILURE|INTERNAL_ERROR|TIMEOUT|CANCELLED|EXPIRED)
+                echo "::error::Cloud Build $BUILD_ID conclusion: $status"
+                exit 1
+                ;;
+              QUEUED|WORKING|PENDING)
+                sleep 30
+                ;;
+              *)
+                echo "Unknown Cloud Build status '$status'; continuing to poll"
+                sleep 30
+                ;;
+            esac
+          done
 
       - name: Finalize check_run
-        if: always() && steps.check_start.outputs.check_id
+        if: always() && steps.check_start.outputs.check_id && steps.pf.outputs.fork == 'false'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
           CHECK_ID: ${{ steps.check_start.outputs.check_id }}
           STATUS: ${{ job.status }}
+          BUILD_ID: ${{ steps.gcb_submit.outputs.build_id }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
+          # Map every non-success outcome to "failure" so branch protection
+          # has unambiguous semantics. Cancelled / timed-out runs must not
+          # silently allow merge.
           case "$STATUS" in
-            success)   conclusion=success ;;
-            cancelled) conclusion=cancelled ;;
-            *)         conclusion=failure ;;
+            success) conclusion=success ;;
+            *)       conclusion=failure ;;
           esac
-          summary="auto-heal $conclusion. See [workflow run]($RUN_URL) for details."
+          # Summary is built from workflow-controlled values only. Never
+          # interpolate event-derived strings into rendered markdown.
+          if [ -n "${BUILD_ID:-}" ]; then
+            summary="auto-heal $conclusion. Cloud Build: $BUILD_ID. [Workflow run]($RUN_URL)."
+          else
+            summary="auto-heal $conclusion (build did not start). [Workflow run]($RUN_URL)."
+          fi
           gh api -X PATCH \
-            "repos/${{ github.repository }}/check-runs/$CHECK_ID" \
+            "repos/$REPO/check-runs/$CHECK_ID" \
             -f status='completed' \
             -f conclusion="$conclusion" \
             -f "output[title]=auto-heal $conclusion" \
