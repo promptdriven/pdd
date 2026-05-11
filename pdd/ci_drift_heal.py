@@ -351,6 +351,22 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
         if decision.operation in ("nothing", "all_synced", "error"):
             continue
 
+        # Filter phantom crash drift here (not at heal_module dispatch).
+        # sync_determine_operation flags any module whose fingerprint exists
+        # but whose ephemeral run_report does not as ``operation='crash'`` with
+        # reason ``All files exist but needs validation - no run_report``. Run
+        # reports are not committed to git, so every CI build hits this for
+        # every untouched module pulled in by reverse-dep detection. Skipping
+        # at detect_drift (rather than returning ``None`` from heal_module)
+        # keeps the phantom module off the drift list entirely — otherwise the
+        # main loop counts it as a "skipped module" and PR-mode auto-heal
+        # blocks the commit phase, leaving the real healed modules
+        # uncommitted.
+        if decision.operation == "crash" and getattr(
+            decision, "reason", ""
+        ).startswith("All files exist but needs validation - no run_report"):
+            continue
+
         # Resolve code file path for update operations
         code_path = None
         if decision.operation == "update":
