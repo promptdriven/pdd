@@ -1654,10 +1654,19 @@ def _is_gemini_3_model(model_name: Any) -> bool:
     every routing prefix (``gemini/``, ``vertex_ai/``, ``gmi/google/``,
     ``github_copilot/``, bare Vertex AI names like ``gemini-3.1-pro-preview``)
     by anchoring on the model family identifier itself rather than the prefix.
+
+    Defensive contract (PR #900 follow-up):
+      - Non-string ``model_name`` (None, list, dict, tuple, int, bool, bytes,
+        ...) returns False. Earlier revisions used ``str(model_name)``
+        coercion, which let ``['gemini-3-flash']`` falsely match via its
+        repr ``"['gemini-3-flash']"``.
+      - Empty string returns False via an explicit guard (rather than
+        relying on ``re.search`` returning None) so a future regex change
+        cannot accidentally make ``""`` truthy.
     """
-    if model_name is None:
+    if not isinstance(model_name, str) or not model_name:
         return False
-    return bool(_GEMINI_3_RE.search(str(model_name)))
+    return bool(_GEMINI_3_RE.search(model_name))
 
 
 def _maybe_clamp_gemini_3_temperature(
