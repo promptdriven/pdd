@@ -115,7 +115,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 23. After every reviewer or fixer step completes, write `dedup-state-round-{N}.json` containing the cumulative findings (one per dedup key) with their current `status`, `reviewer`, `round_number`, and full payload. Overwriting at each step is fine; we only need the latest cumulative snapshot per round.
 24. At end of loop write:
     - `final-report.md` — exact bytes returned to the caller.
-    - `final-state.json` — `{reviewer_status, active_reviewer, fresh_final_status, stop_reason, total_cost, last_model, max_rounds_reached, max_cost_reached, max_duration_reached, fix_attempts_by_key, dispute_notes_by_key, reviewer_feedback_by_key, findings: [...]}` — the canonical machine-readable verdict.
+    - `final-state.json` — `{reviewer_status, active_reviewer, reviewer_status_details, fresh_final_status, stop_reason, total_cost, last_model, max_rounds_reached, max_cost_reached, max_duration_reached, fix_attempts_by_key, dispute_notes_by_key, reviewer_feedback_by_key, findings: [...]}` — the canonical machine-readable verdict. `reviewer_status_details` is keyed by reviewer role and carries per-reviewer diagnostic detail (`status`, `classification`, `exit_code`, `reason`) for any reviewer that ended in failed/degraded/missing; when `--fallback-reviewer-on-failure` promotes a clean fallback, the primary's entry retains its original failure detail plus a `superseded_by_fallback="true"` marker and `fallback_reviewer` name.
 25. `_write_artifact(path, content)` MUST `mkdir(parents=True, exist_ok=True)` and write UTF-8.
 
 % Final report
