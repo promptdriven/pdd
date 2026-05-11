@@ -446,6 +446,37 @@ _pdd_pytest_output() {
     '*:filename:_files'
 }
 
+# checkup
+# Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS]
+_pdd_checkup() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--validate-arch-includes[Validate architecture includes]' \
+    '--project-root[Project root directory]:dir:_files -/' \
+    '--strict[Strict checks]' \
+    '--no-fix[Do not apply fixes]' \
+    '--timeout-adder[Add seconds to step timeouts]:seconds:' \
+    '--no-github-state[Skip GitHub state checks]' \
+    '--pr[Target PR number or URL]:pr:' \
+    '--issue[Target issue number or URL]:issue:' \
+    '--review-loop[Enable PR review loop]' \
+    '--review-only[Run reviewer only, no fixer]' \
+    '--reviewers[Comma-separated reviewer roles]:reviewers:' \
+    '--reviewer[Primary reviewer role]:reviewer:' \
+    '--fixer[Fixer role]:fixer:' \
+    '--reviewer-fallback[Fallback reviewer when primary fails]:reviewer:' \
+    '--max-review-rounds[Max review rounds]:rounds:' \
+    '--max-review-cost[Max review cost (USD)]:cost:' \
+    '--max-review-minutes[Max review wall-clock minutes]:minutes:' \
+    '--require-all-reviewers-clean[Require all reviewers clean]' \
+    '--no-require-all-reviewers-clean[Do not require all reviewers clean]' \
+    '--continue-on-reviewer-limit[Treat infra-limit failures as degraded]' \
+    '--require-final-fresh-review[Require a final fresh review]' \
+    '--no-require-final-fresh-review[Skip final fresh review]' \
+    '--blocking-severities[Comma-separated blocking severities]:severities:' \
+    '--clean-reviewer-states[Comma-separated reviewer states treated as clean]:states:'
+}
+
 ##
 # Main PDD completion dispatcher
 ##
@@ -472,6 +503,7 @@ _pdd() {
     'auto-deps:Analyze a prompt and include deps from a directory or glob'
     'verify:Verify functional correctness using LLM judgment and iteratively fix'
     'sync:Synchronize prompt, code, examples, tests with analysis'
+    'checkup:Run architecture/PR review loop with optional reviewer fallback'
     'setup:Interactive setup and completion install'
     'install_completion:Install shell completion for current shell'
     'pytest-output:Run pytest and capture structured output'
@@ -536,6 +568,9 @@ _pdd() {
       ;;
     sync)
       _pdd_sync
+      ;;
+    checkup)
+      _pdd_checkup
       ;;
     setup)
       _pdd_setup

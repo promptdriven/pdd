@@ -1616,6 +1616,40 @@ class TestParseHelpers:
             assert result.status == "clean"
             assert result.findings == []
 
+    def test_plain_text_clean_marker_with_infra_failure_is_not_clean(self) -> None:
+        """A clean-marker line accompanied by an auth/network/sandbox/exit-code
+        failure must not be classified as clean — the plain-text path must
+        block on the same transient markers `_failure_status` recognizes.
+
+        Regression for #923: previously `_plain_text_clean_review` only
+        rejected rate-limit/quota/timeout markers, so an auth or network
+        failure that appeared in the same output as a "No actionable
+        findings." line slipped past the fallback path."""
+        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
+
+        infra_failure_outputs = (
+            "No actionable findings.\nERROR: authentication failed: token expired",
+            "No actionable findings.\nnetwork error: connection refused",
+            "No actionable findings.\npermission denied while creating sandbox",
+            "No actionable findings.\nUnauthorized: missing API key",
+            "No actionable findings.\nfailed to create sandbox: out of disk",
+            "No actionable findings.\nCommand returned non-zero exit status 2",
+        )
+        for output in infra_failure_outputs:
+            result = _parse_review_output(output, "codex", 1)
+            assert result.status in HARD_NOT_CLEAN_STATES, (
+                f"Expected non-clean status for {output!r}, got {result.status!r}"
+            )
+
+        # Negative control: a clean marker without any infra failure stays clean.
+        result = _parse_review_output(
+            "No actionable findings.\n\nThe PR now matches the issue.",
+            "codex",
+            1,
+        )
+        assert result.status == "clean"
+        assert result.findings == []
+
     def test_markdown_severity_bullets_are_parsed_as_findings(self) -> None:
         """Codex CLI can return markdown bullets instead of the requested JSON."""
         from pdd.checkup_review_loop import _parse_review_output
