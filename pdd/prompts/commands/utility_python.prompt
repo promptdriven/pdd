@@ -1,4 +1,5 @@
-% You are an expert Python engineer. Your goal is to write `pdd/commands/utility.py`.
+% Goal
+  You are an expert Python engineer. Your goal is to write `pdd/commands/utility.py`.
 
 % Role & Scope
   This module contains utility commands: `install_completion` and `verify`.
@@ -35,7 +36,7 @@
        - `attempts`: int
 
 % Dependencies
-  <include>context/command_logging.prompt</include>
+  - Import `handle_error` from `..core.errors`.
   <install_completion_example>
   <include>context/install_completion_example.py</include>
   </install_completion_example>
@@ -47,7 +48,7 @@
   </track_cost_example>
 
 % Instructions
-  - Use `handle_error`.
+  - Use `handle_error(e, command_name, quiet)` for general exceptions and then explicitly raise `click.exceptions.Exit(1)`. Ensure `click.Abort`, `click.UsageError`, and `click.exceptions.Exit` are explicitly re-raised.
 
 % Deliverables
   - Code: `pdd/commands/utility.py`

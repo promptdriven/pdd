@@ -70,14 +70,13 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 
 % Error Handling
 - `split` and `change`: re-raise `click.Abort`, `click.UsageError`, `click.exceptions.Exit`.
-- `update`: re-raise `click.Abort`, `click.UsageError` (pre-try validation lets `Exit` propagate naturally).
-- Otherwise call `handle_error(e, command_name, quiet)` and return `None`.
+- `update`: re-raise `click.Abort`, `click.UsageError`, `click.exceptions.Exit`.
+- Otherwise call `handle_error(e, command_name, quiet)` and raise `click.exceptions.Exit(1)`.
 
 % Dependencies
-<include>context/command_logging.prompt</include>
 <module_dependencies>
   <pdd.split_main><include>context/split_main_example.py</include></pdd.split_main>
-  <pdd.agentic_split><include optional>context/agentic_split_example.py</include></pdd.agentic_split>
+  <pdd.agentic_split><include>context/agentic_split_example.py</include></pdd.agentic_split>
   <pdd.change_main><include select="def:change_main">context/change_main_example.py</include></pdd.change_main>
   <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
   <pdd.update_main><include select="def:update_main">context/update_main_example.py</include></pdd.update_main>

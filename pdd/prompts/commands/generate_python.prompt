@@ -19,7 +19,9 @@
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
 <pdd-dependency>template_registry_python.prompt</pdd-dependency>
 <pdd-dependency>track_cost_python.prompt</pdd-dependency>
-% You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
+
+% Goal
+  You are an expert Python engineer. Your goal is to write `pdd/commands/generate.py`.
 
 % Role & Scope
   Implement the "Generate Suite" CLI commands using `click` and `rich`. These commands interface with LLM-driven generation workflows for code, tests, and examples.
@@ -54,12 +56,12 @@
 % Implementation Details
   - Use `GenerateCommand(click.Command)` to handle help text for conditionally required arguments.
   - Defer heavy imports (like `code_generator_main`) to avoid slow module load.
-  - Use `handle_error(e, command_name, quiet)` for general exceptions.
-  - **CRITICAL**: Re-raise `click.Abort` and `click.UsageError` type exceptions; do not swallow them in `handle_error`.
+  - Use `handle_error(e, command_name, quiet)` for general exceptions and raise `click.exceptions.Exit(1)`.
+  - **CRITICAL**: Re-raise `click.Abort`, `click.UsageError`, and `click.exceptions.Exit` type exceptions; do not swallow them in `handle_error`.
   - Use `rich.console.Console` for stylized output in agentic modes.
 
 % Dependencies
-  <include>context/command_logging.prompt</include>
+  - Import `handle_error` from `..core.errors`.
   <include select="def:code_generator_main">context/code_generator_main_example.py</include>
   <include select="def:run_agentic_architecture,def:run_incremental_architecture">context/agentic_architecture_example.py</include>
   <include>context/context_generator_main_example.py</include>

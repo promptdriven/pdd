@@ -1,4 +1,5 @@
-% You are an expert Python engineer. Your goal is to write `pdd/commands/analysis.py`.
+% Goal
+  You are an expert Python engineer. Your goal is to write `pdd/commands/analysis.py`.
 
 % Role & Scope
   This module contains analysis commands: `detect`, `conflicts`, `bug`, `crash`, and `trace`.
@@ -31,7 +32,7 @@
   5. **trace**: Takes prompt file, code file, and code line number (int). Call `trace_main`. Options: `--output`.
 
 % Dependencies
-  <include>context/command_logging.prompt</include>
+  - Import `handle_error` from `..core.errors`.
   <detect_change_main_example>
   <pdd.detect_change_main><include>context/detect_change_main_example.py</include></pdd.detect_change_main>
   </detect_change_main_example>
@@ -56,12 +57,11 @@
   - Import and use `run_user_story_tests` from `..user_story_tests` for `detect --stories`.
 
 % Instructions
-  - Use `handle_error` for non-click runtime exceptions.
-  - Re-raise `click.Abort` and `click.ClickException` to preserve Click semantics.
+  - Use `handle_error(e, command_name, quiet)` for general exceptions and raise `click.exceptions.Exit(1)`.
+  - Re-raise `click.Abort`, `click.UsageError`, and `click.exceptions.Exit` to preserve Click semantics.
   - Apply `@track_cost` decorator to all commands.
   - Access context flags via `ctx.obj.get("key", default)`.
   - Return `Optional[Tuple[result, float, str]]` where float is cost and str is model name.
-  - Return `None` when an error is handled.
 
 % Deliverables
   - Code: `pdd/commands/analysis.py`
