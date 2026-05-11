@@ -1,4 +1,4 @@
-# To create a unit test for the `get_comment` function, we will use the `pytest` framework. The test will cover various scenarios, including when the environment variable is not set, when the CSV file is not found, when the language is not in the CSV, and when the language is found with valid and invalid comment characters.
+# To create a unit test for the `get_comment` function, we will use the `pytest` framework. The test will cover various scenarios, including when the environment variable is not set, when the CSV file is not found, when the language is not in the CSV, and when the language is found with valid and invalid comment characters. (auto-heal smoke marker)
 
 # Here's how you can structure the unit test:
 
