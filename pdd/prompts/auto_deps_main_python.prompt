@@ -80,6 +80,14 @@
     - Error handling:
         • On `click.Abort` exception: re-raise to allow the orchestrator to stop the sync loop.
         • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
+    - Fingerprint finalization (success path only): After the modified prompt has been successfully written to `output_path` (and any CSV output written), persist the prompt's updated include-dependency state so downstream `pdd sync` / drift detection does not see stale metadata. This mirrors the pattern in `pdd/update_main.py` (see the `save_fingerprint` block around lines 1180-1197):
+        • Lazy-import `save_fingerprint` and `infer_module_identity` from `pdd.operation_log` inside the function (do not add a module-level import).
+        • Derive `(basename, language)` by calling `infer_module_identity(prompt_file)` on the *input* prompt path.
+        • Guard: only finalize when both `basename` and `language` are truthy. If either is empty, skip finalization silently (the prompt is not part of a recognized PDD dev unit).
+        • Build a paths dict containing at minimum the prompt path of the *written* (modified) prompt: `paths = {"prompt": Path(output_path)}`. Using the written output path ensures `save_fingerprint` hashes the freshly modified prompt and re-resolves its `<include>` graph, so the persisted `include_deps` map reflects the auto-deps mutation.
+        • Call `save_fingerprint(basename, language, operation="auto-deps", paths=paths, cost=total_cost, model=model_name)`.
+        • Wrap the call in `try/except Exception: pass` — fingerprint persistence is best-effort and MUST NOT override the successful auto-deps return value.
+    - Dry-run / no-op carve-out: If no `output_path` is resolved (so the modified prompt is never written to disk), the fingerprint MUST NOT be finalized. In that case, print a yellow message (unless `quiet`): "Skipping fingerprint finalization: auto-deps did not write a modified prompt." so callers know downstream `pdd sync` / drift metadata is unchanged. The same carve-out applies to any future dry-run mode that skips the write.
 
 <examples>
    % Here are examples of how to use internal modules:

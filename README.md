@@ -2611,6 +2611,10 @@ The command maintains a CSV file with the following columns:
 
 **Note:** Existing CSV files using the old 3-column format (without `key_exports` and `dependencies`) are automatically re-summarized on the next run.
 
+**Fingerprint finalization on success:** After a successful `auto-deps` run writes the modified prompt to disk, the command persists a fingerprint for the prompt's dev unit (under `.pdd/meta/`) so downstream `pdd sync` / drift detection sees the updated `include_deps` map and a current prompt hash. This finalization is **best-effort** — a failure to write the fingerprint never overrides the successful auto-deps result.
+
+If `auto-deps` does **not** write a modified prompt (for example, no resolved output path, or a future dry-run mode), the command explicitly reports `Skipping fingerprint finalization: auto-deps did not write a modified prompt.` so callers know downstream sync metadata has not been refreshed. Fingerprint behavior is language-agnostic (hash-based on the prompt and its include graph).
+
 Examples:
 ```
 # Search code examples and documentation files
