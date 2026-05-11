@@ -297,13 +297,30 @@ def run_metadata_sync(
                     len(existing.get("dependencies") or []),
                 ]
             )
-            detail = f"existing tags preserved ({tag_count} tag(s))"
-            if dry_run:
-                result.stages["tags"] = StageStatus(status="dry_run", detail=detail)
-                _stage_log_exit("tags", "dry_run", detail)
+            if tag_count == 0 and not has_pdd_tags(prompt_content):
+                # Prompt has no PDD tags AND we have nothing to seed from
+                # (no architecture entry; LLM-first enrichment per #870 not
+                # yet wired). Mark `skipped` instead of `ok` so operators see
+                # honest status — claiming "ok with 0 tag(s)" misleads
+                # readers into thinking metadata is in sync when it is
+                # provably absent. Fingerprint still advances (preserves the
+                # unregistered-module workflow: tools/scripts intentionally
+                # outside architecture.json must still finalize their
+                # fingerprint so auto-heal does not revert them).
+                reason = (
+                    "prompt has no PDD tags and no architecture entry to "
+                    "seed from; LLM-first tag generation pending (#870)"
+                )
+                result.stages["tags"] = StageStatus(status="skipped", reason=reason)
+                _stage_log_exit("tags", "skipped", reason)
             else:
-                result.stages["tags"] = StageStatus(status="ok", detail=detail)
-                _stage_log_exit("tags", "ok", detail)
+                detail = f"existing tags preserved ({tag_count} tag(s))"
+                if dry_run:
+                    result.stages["tags"] = StageStatus(status="dry_run", detail=detail)
+                    _stage_log_exit("tags", "dry_run", detail)
+                else:
+                    result.stages["tags"] = StageStatus(status="ok", detail=detail)
+                    _stage_log_exit("tags", "ok", detail)
         else:
             detail = f"would prepend tag block ({len(new_content) - len(prompt_content)} chars)"
             if dry_run:

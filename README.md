@@ -3470,7 +3470,7 @@ PDD can be integrated into various development workflows. Here are the conceptua
 1. Scan modules for drift using `sync_determine_operation` (no LLM calls)
 2. For stale prompts: run `pdd update` to sync code changes back to prompts, then invoke the shared metadata-sync orchestrator to finalize prompt tags, architecture entries, run reports, and the fingerprint atomically before any follow-up example refresh
 3. For stale examples: run `pdd sync` with example+verify operations
-4. Stage and commit healed files with a descriptive message — partial metadata state (any stage other than fingerprint reporting non-`ok`) blocks the commit/checkpoint in PR mode
+4. Stage and commit healed files with a descriptive message — partial metadata state (any stage reporting `failed`) blocks the commit/checkpoint in PR mode. `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag generation pending #870) and does not block.
 5. Push changes to the current branch
 
 **Metadata Finalization**: The CI auto-heal `update` branch and the preflight drift-heal path both call the same `run_metadata_sync` orchestrator that `pdd update --sync-metadata` uses, so all three workflows share one finalization surface. The orchestrator runs in a fixed order — prompt → tags → architecture → run-report cleanup → fingerprint last — and the fingerprint is only written when every earlier stage succeeded. This guarantees auto-heal never commits a half-synced state and preflight never leaves stale fingerprints after a successful update.

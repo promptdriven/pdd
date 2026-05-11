@@ -1003,8 +1003,15 @@ def _find_prd_file(project_root: Path) -> Optional[Path]:
     return None
 
 
-def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> None:
-    """Run metadata sync for a single (prompt, code) pair; report failed stages, do not raise."""
+def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
+    """Run metadata sync for a single (prompt, code) pair.
+
+    Returns True when every stage reports `ok`/`dry_run`/`skipped`; False when
+    any stage `failed` or the orchestrator raised. Callers in single-file
+    update modes must propagate False as a non-success exit so preflight
+    auto-heal (which keys off the subprocess return code) does not treat a
+    half-finalized update as healed (#871 acceptance criterion).
+    """
     try:
         from .metadata_sync import run_metadata_sync
         sync_result = run_metadata_sync(
@@ -1014,11 +1021,13 @@ def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> None:
         )
     except Exception as exc:
         rprint(f"[error][metadata-sync] orchestrator: {exc}[/error]")
-        return
+        return False
     if not sync_result.ok:
         for stage_name, stage in sync_result.stages.items():
             if stage.status == "failed":
                 rprint(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
+        return False
+    return True
 
 
 def update_main(
@@ -1456,7 +1465,8 @@ def update_main(
                         rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
                     if sync_metadata:
-                        _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file))
+                        if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
+                            return None
 
                     return generated_prompt, agentic_cost, provider
 
@@ -1527,7 +1537,8 @@ def update_main(
                 rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
             if sync_metadata:
-                _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file))
+                if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
+                    return None
 
             return modified_prompt, total_cost, model_name
 
@@ -1572,7 +1583,8 @@ def update_main(
                         rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
 
                     if sync_metadata:
-                        _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file))
+                        if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
+                            return None
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1678,7 +1690,8 @@ def update_main(
                 rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
 
             if sync_metadata:
-                _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file))
+                if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
+                    return None
 
             return modified_prompt, total_cost, model_name
 

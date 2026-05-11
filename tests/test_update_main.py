@@ -2995,7 +2995,7 @@ def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_regeneration(
     assert mock_sync.call_count == 0
 
 
-def test_sync_metadata_helper_swallows_orchestrator_exception_and_logs(
+def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
@@ -3003,7 +3003,10 @@ def test_sync_metadata_helper_swallows_orchestrator_exception_and_logs(
     mock_open_file,
     capsys,
 ):
-    # Orchestrator raising must not propagate; helper must print [metadata-sync]
+    # Orchestrator raising must surface as update_main returning None so the
+    # CLI exit code is non-zero and preflight auto-heal does not mark a
+    # half-synced update as healed (#871 acceptance criterion). The helper
+    # still logs the orchestrator error before propagating.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")):
         result = update_main(
@@ -3016,7 +3019,7 @@ def test_sync_metadata_helper_swallows_orchestrator_exception_and_logs(
             sync_metadata=True,
         )
 
-    assert result is not None
+    assert result is None
     captured = capsys.readouterr()
     out = captured.out + captured.err
     # Rich strips [error] / [metadata-sync] style markup; assert on rendered content.
@@ -3024,7 +3027,7 @@ def test_sync_metadata_helper_swallows_orchestrator_exception_and_logs(
     assert "boom" in out
 
 
-def test_sync_metadata_failed_stage_prints_error_line(
+def test_sync_metadata_failed_stage_propagates_failure(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
@@ -3032,7 +3035,9 @@ def test_sync_metadata_failed_stage_prints_error_line(
     mock_open_file,
     capsys,
 ):
-    # When a stage is failed, the helper must print stage name + reason
+    # When a stage is failed, the helper must print stage name + reason AND
+    # cause update_main to return None so the CLI exit code is non-zero
+    # (#871 acceptance criterion — preflight subprocess keys off returncode).
     failed_stages = {
         "prompt": StageStatus(status="failed", reason="missing arch"),
     }
@@ -3057,7 +3062,7 @@ def test_sync_metadata_failed_stage_prints_error_line(
             sync_metadata=True,
         )
 
-    assert result is not None
+    assert result is None
     captured = capsys.readouterr()
     out = captured.out + captured.err
     # Rich strips style markup like [error] / [metadata-sync]; assert rendered text.

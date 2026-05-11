@@ -113,7 +113,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
     <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
 </pdd.agentic_langtest>
 <pdd.metadata_sync>
-    <include select="def:run_metadata_sync,class:MetadataSyncResult" optional>context/metadata_sync_example.py</include>
+    <include optional>context/metadata_sync_example.py</include>
 </pdd.metadata_sync>
 
 % Deliverables

@@ -82,7 +82,7 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
   <pdd.change_main><include select="def:change_main">context/change_main_example.py</include></pdd.change_main>
   <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
   <pdd.update_main><include select="def:update_main">context/update_main_example.py</include></pdd.update_main>
-  <pdd.metadata_sync><include select="def:run_metadata_sync,class:MetadataSyncResult" optional>context/metadata_sync_example.py</include></pdd.metadata_sync>
+  <pdd.metadata_sync><include optional>context/metadata_sync_example.py</include></pdd.metadata_sync>
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
   <pdd.core.errors><include select="def:handle_error">context/core/errors_example.py</include></pdd.core.errors>
   <pdd.operation_log><include select="def:log_operation">context/operation_log_example.py</include></pdd.operation_log>
