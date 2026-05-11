@@ -1,13 +1,12 @@
 from __future__ import annotations
 
+import logging as _logging
 import functools
 import os
 import signal
-import sys
 import json
 import shutil
 import subprocess
-import tempfile
 import time
 import uuid
 import re
@@ -18,6 +17,30 @@ from typing import List, Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
 
 from rich.console import Console
+
+__all__ = [
+    "TokenMatch",
+    "clear_agentic_progress",
+    "clear_workflow_state",
+    "classify_step_output",
+    "detect_control_token",
+    "get_agent_provider_preference",
+    "get_and_clear_agentic_interrupt_context",
+    "get_available_agents",
+    "get_job_deadline",
+    "github_clear_state",
+    "github_load_state",
+    "github_save_state",
+    "load_workflow_state",
+    "post_final_comment",
+    "post_pr_comment",
+    "post_step_comment",
+    "run_agentic_task",
+    "save_workflow_state",
+    "set_agentic_progress",
+    "substitute_template_variables",
+    "validate_cached_state",
+]
 
 def _load_model_data(*args, **kwargs):
     """Lazily load model data from ``pdd.llm_invoke``.
@@ -644,7 +667,7 @@ def _load_agentic_config() -> Dict[str, Any]:
 
     Returns empty dict if no config found.
     """
-    import yaml
+    import yaml  # type: ignore
 
     # Search for .pddrc in current dir and parent dirs
     search_path = Path.cwd()
@@ -775,7 +798,7 @@ def _get_cli_diagnostic_info(name: str) -> str:
         f"CLI '{name}' not found. Troubleshooting steps:",
         "",
         f"1. Check installation: which {name}",
-        f"2. Common installation paths searched:",
+        "2. Common installation paths searched:",
     ]
 
     for path in _iter_common_cli_paths(name):
@@ -784,7 +807,7 @@ def _get_cli_diagnostic_info(name: str) -> str:
     lines.extend([
         "",
         "3. Configure custom path in .pddrc:",
-        f"   agentic:",
+        "   agentic:",
         f"     {name}_path: /path/to/{name}",
         "",
         f"4. Current PATH: {os.environ.get('PATH', 'not set')[:MAX_PATH_DISPLAY_LENGTH]}...",
@@ -1319,7 +1342,7 @@ def _opencode_configured_providers(
         set; partial credentials must not flip a provider to "configured"
         because OpenCode cannot actually route to it.
     """
-    src = env if env is not None else os.environ
+    src = dict(env) if env is not None else dict(os.environ)
     providers: set = set()
 
     auth_path = Path.home() / ".local" / "share" / "opencode" / "auth.json"
@@ -1410,7 +1433,7 @@ def _resolve_opencode_csv_fallback(
     output has a provider prefix in the configured-provider set. Returns
     ``None`` when no row qualifies (caller surfaces an actionable error).
     """
-    src = env if env is not None else os.environ
+    src = dict(env) if env is not None else dict(os.environ)
     try:
         df = _load_model_data(None)
     except Exception:
@@ -1544,7 +1567,7 @@ def _resolve_opencode_model(env: Optional[Dict[str, str]] = None) -> Optional[st
     callers that only want the env-var view (tests, diagnostics) are not
     coupled to filesystem probes.
     """
-    src = env if env is not None else os.environ
+    src = dict(env) if env is not None else dict(os.environ)
     raw = (src.get("OPENCODE_MODEL") or "").strip()
     if raw:
         return raw
@@ -1561,7 +1584,7 @@ def _resolve_opencode_model_for_run(
     verbatim; (2) auth-filtered ``llm_model.csv`` row whose translated
     ``provider/model`` identifier maps to a configured OpenCode provider.
     """
-    src = env if env is not None else os.environ
+    src = dict(env) if env is not None else dict(os.environ)
     raw = (src.get("OPENCODE_MODEL") or "").strip()
     if raw:
         return raw
@@ -2128,7 +2151,7 @@ def run_agentic_task(
                 pass
 
 
-import logging as _logging
+
 _scope_guard_logger = _logging.getLogger(__name__ + ".scope_guard")
 
 
@@ -2491,9 +2514,10 @@ def _run_with_provider(
     # what the anthropic/gemini logging notices read.
     if reasoning_time is not None:
         from .reasoning import time_to_effort_level
-        reasoning_effort = time_to_effort_level(reasoning_time)
+        reasoning_effort: str = time_to_effort_level(reasoning_time)
     else:
-        reasoning_effort = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        reasoning_effort_str = (env.get("PDD_REASONING_EFFORT") or "").strip().lower()
+        reasoning_effort = reasoning_effort_str if reasoning_effort_str in {"low", "medium", "high"} else ""
         if reasoning_effort not in {"low", "medium", "high"}:
             reasoning_effort = ""
 
@@ -2531,7 +2555,7 @@ def _run_with_provider(
             console.print(
                 f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Claude Code CLI "
                 "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
+                "not this subprocess.[/dim]", highlight=False,
             )
     elif provider == "google":
         # Do NOT use -p flag for Gemini. The -p flag passes text literally,
@@ -2553,7 +2577,8 @@ def _run_with_provider(
             console.print(
                 f"[dim]PDD_REASONING_EFFORT={reasoning_effort} requested, but Gemini CLI "
                 "has no reasoning-effort flag; applies to llm_invoke steps only, "
-                "not this subprocess.[/dim]"
+                "not this subprocess.[/dim]",
+                highlight=False,
             )
     elif provider == "openai":
         # --full-auto sets --sandbox workspace-write (Landlock+seccomp), which
@@ -2774,7 +2799,7 @@ def _run_with_provider(
                 elif lines:
                     try:
                         data = json.loads(lines[-1])
-                    except:
+                    except Exception:
                         pass
         else:
             # Claude Code may emit non-JSON text to stdout (npm warnings,
@@ -3143,20 +3168,20 @@ def validate_cached_state(
         # Filter out non-numeric keys (e.g. "1b", "2b", "7b", "9b") that
         # are informational intermediate-step outputs — only numeric keys
         # (e.g. "1", "1.5", "2", "7.5") participate in validation ordering.
-        numeric_keys = []
+        numeric_keys: List[str] = []
         for k in step_outputs.keys():
             try:
                 float(k)
                 numeric_keys.append(k)
             except ValueError:
                 continue
-        step_order = sorted(numeric_keys, key=lambda k: float(k))
+        str_step_order: List[str] = sorted(numeric_keys, key=lambda k: float(k))
     else:
         # Convert to string keys for lookup
-        step_order = [str(s) if not isinstance(s, str) else s for s in step_order]
+        str_step_order = [str(s) if not isinstance(s, str) else s for s in step_order]
 
     actual_last_success: Union[int, float] = 0
-    for sn in step_order:
+    for sn in str_step_order:
         key = str(sn)
         output_val = step_outputs.get(key, "")
         if not output_val:
