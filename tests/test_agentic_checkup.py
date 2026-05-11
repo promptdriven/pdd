@@ -91,7 +91,7 @@ class TestPostCheckupComment:
         mock_run.return_value.returncode = 0
         report = {
             "success": True,
-            "message": "All checks passed",
+            "summary": "All checks passed",
             "tech_stack": ["Python", "TypeScript"],
             "issues": [],
             "changed_files": [],
@@ -191,7 +191,7 @@ class TestTruncate:
         text = "A" * 5000
         result = _truncate(text, 3000, label="custom")
         assert len(result) <= 3100
-        assert "... [truncated: 2000 chars of custom omitted] ..." in result
+        assert "... [truncated 2000 chars of custom]" in result
 
 
 class TestFetchPrContext:
@@ -369,7 +369,7 @@ class TestRunAgenticCheckup:
         )
 
         assert not success
-        assert "Agentic checkup orchestrator failed" in msg
+        assert "Checkup orchestrator failed" in msg
         mock_post_error.assert_called_once()
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
@@ -433,8 +433,12 @@ class TestRunAgenticCheckup:
         call_kwargs = mock_orchestrator.call_args[1]
         assert call_kwargs["no_fix"] is True
 
-    @patch("pdd.checkup_review_loop.run_checkup_review_loop")
+    @patch("pdd.agentic_checkup.run_checkup_review_loop")
     @patch("pdd.agentic_checkup._fetch_pr_context", return_value='PR context {"ok": true}')
+    @patch("pdd.agentic_checkup._fetch_pr_metadata_struct", return_value={"title": "PR Title", "body": "PR body {var}"})
+    @patch("pdd.agentic_checkup._fetch_pr_files_list", return_value=())
+    @patch("pdd.agentic_checkup._fetch_pr_comments_list", return_value=())
+    @patch("pdd.agentic_checkup._fetch_pr_reviews_list", return_value=())
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="setting: {raw}")
     @patch(
         "pdd.agentic_checkup._load_architecture_json",
@@ -450,6 +454,10 @@ class TestRunAgenticCheckup:
         mock_find_root,
         mock_load_arch,
         mock_load_pddrc,
+        mock_fetch_pr_reviews,
+        mock_fetch_pr_comments,
+        mock_fetch_pr_files,
+        mock_fetch_pr_metadata,
         mock_fetch_pr_context,
         mock_review_loop,
     ):
@@ -473,12 +481,10 @@ class TestRunAgenticCheckup:
         context = mock_review_loop.call_args.kwargs["context"]
         assert config.review_only is True
         assert context.issue_title == "Check {workflow}"
-        assert "check {value}" in context.issue_content
-        assert context.pr_content == 'PR context {"ok": true}'
-        assert context.pddrc_content == "setting: {raw}"
-        assert '"name": "{module}"' in context.architecture_json
-        assert "{{" not in context.issue_content
-        assert "{{" not in context.pr_content
+        assert "check {value}" in context.issue_body
+        assert context.pr_body == "PR body {var}"
+        assert "setting: {raw}" in context.extra_context
+        assert '"name": "{module}"' in context.architecture
 
     @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
     @patch("pdd.agentic_checkup._load_pddrc_content", return_value="")

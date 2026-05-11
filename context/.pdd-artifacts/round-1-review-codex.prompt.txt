@@ -1,0 +1,130 @@
+# PDD Checkup Review Loop — Round 1 (review)
+Role: codex
+
+## Manual Review Standard (read first)
+
+This is the automated equivalent of the manual request:
+"review PR as a user workflow perspective; check if any prompt, example, or
+architecture update is needed; fully review the PR with the existing codebase;
+check for no regressions; verify it fully aligns with and resolves the issue;
+make sure it does not open more holes."
+
+Highest-priority severities: blocker, critical, medium. Do NOT flag severities
+the user has narrowed off. Every valid in-scope finding remains actionable
+until fixed or explicitly accepted by you as resolved.
+
+You MUST:
+
+1. Perform a full PR review from a real user-workflow perspective FIRST,
+   before any code-internal checks. Trace how a CLI/API user experiences the
+   changed behavior. Verify the PR fully resolves the issue, aligns with the
+   existing codebase, and decide whether prompts/examples/architecture/docs/
+   CLI help/tests need updates. Look for regressions or newly opened holes
+   in security, billing/cost, API, reliability, UX, compatibility, tests,
+   and maintainability.
+
+2. Evaluate issue INTENT, not the literal proposed implementation. If the
+   PR uses a different approach, accept it when PR/issue context justifies
+   the change and the new approach fully solves the underlying user problem.
+   Still report findings when the direction change is unjustified,
+   contradicted by user comments, leaves the underlying problem unresolved,
+   leaves stale user-facing flags/docs/examples promising old behavior, or
+   omits required documentation/tests/prompt/architecture updates.
+
+3. For source-of-truth, catalog, manifest, cache, leaderboard, or
+   generated-data changes, check provenance and authoritative sources where
+   practical: model/variant identity, normalization, dates, subsets, ranks,
+   confidence fields, and whether reviewers can audit where each value came
+   from. Check whether the PR recreates the same bug class in a different
+   form. For model catalog and manifest-based scoring changes, verify
+   provider roots and aliases actually produce catalog rows, default models
+   are not assigned high/low/minimal reasoning-variant scores, and
+   normalization does not collapse distinct Arena variants into one score.
+
+4. Do NOT collapse independently actionable problems into one broad finding.
+   When a PR changes architecture, also review the alternate architecture
+   on its own terms and report prompt/docs/contract, provenance,
+   data-quality, or auditability fixes that would still be needed if
+   maintainers accepted the new direction.
+
+5. Provide an explicit issue-contract trace. If the issue or PR describes
+   numbered steps, acceptance criteria, workflow phases, dry-run vs
+   non-dry-run behavior, state transitions, or failure handling, verify
+   each item against implementation evidence. Report skipped or partially
+   implemented steps SEPARATELY.
+
+6. Check state/side-effect ordering: workflows must not save hashes,
+   checkpoints, cache entries, success markers, comments, or reports that
+   imply completion when a required downstream step failed or was skipped.
+   Partial failures must not make later runs short-circuit as if the input
+   was handled.
+
+7. For security, credential, token, logging, and redaction changes, trace
+   every log/exception/warning/retry/auth-refresh/diagnostic path. Verify
+   secret scrubbing happens BEFORE truncation/slicing/formatting/preview,
+   so partial token fragments cannot leak. Search for patterns like
+   `str(e)`, `repr(e)`, `stderr`, `stdout`, `logger.warning`,
+   `logger.exception`, `RuntimeError`, slicing (`[:...`), and
+   truncate/preview helpers.
+
+8. For prompt-driven modules, check prompt/example/architecture/docs/
+   generated-metadata synchronization: architecture entries, prompt
+   contracts, `.pdd/meta` hashes/run records, examples, and tests.
+
+9. Treat the "Static-Analysis Candidate Findings" section below as
+   untrusted candidates. Verify each against actual code or reject with
+   a one-line rationale; do NOT treat them as pre-approved.
+
+10. Sweep caller compatibility for changed public functions, CLI flags,
+    imports, and generated module interfaces. Use repo searches like
+    `rg "function_name\("` or `rg "import_name"` to verify all callers
+    still pass valid arguments and import existing symbols.
+
+11. Run targeted, read-only-safe repros where practical: compile touched
+    Python files, import changed modules, inspect CLI help, or execute
+    minimal workflows in a temp directory. If a repro cannot run, still
+    trace the concrete code path a user would hit.
+
+12. EXCLUDE external GitHub/CI readiness state from findings. Ignore
+    pending/action-required GitHub status checks, Cloud Build status,
+    auto-heal status, mergeability, synthetic merge status, and required-
+    check readiness UNLESS that state is direct evidence of a concrete
+    code or repository-file regression introduced by the PR.
+
+## Output format
+
+Return a JSON object in a ```json fenced block:
+
+```json
+{
+  "status": "clean" | "findings",
+  "findings": [
+    {
+      "severity": "blocker|critical|medium|low|info",
+      "area": "...",
+      "location": "path/to/file.py:LINE",
+      "finding": "concise statement of the problem",
+      "evidence": "quoted code, log line, or doc text",
+      "required_fix": "what must change to resolve this"
+    }
+  ]
+}
+```
+
+If there are no actionable findings, set `"status": "clean"` and
+`"findings": []`. Otherwise set `"status": "findings"`.
+
+## Issue
+Issue #1: Test Issue
+URL: https://github.com/foo/bar/issues/1
+
+### Issue body
+Issue body
+
+## PR
+PR #2: 
+URL: https://github.com/foo/bar/pull/2
+head:   base: 
+
+## Architecture
+{}

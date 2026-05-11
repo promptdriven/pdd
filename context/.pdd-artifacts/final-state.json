@@ -1,0 +1,21 @@
+{
+  "reviewer_status": "clean",
+  "fresh_final_status": "clean",
+  "stop_reason": "reviewer reported no actionable findings",
+  "total_cost": 0.01,
+  "last_model": "codex",
+  "max_rounds_reached": false,
+  "max_cost_reached": false,
+  "max_duration_reached": false,
+  "fix_attempts_by_key": {},
+  "dispute_notes_by_key": {},
+  "reviewer_feedback_by_key": {},
+  "primary_unavailable_note": "",
+  "diagnostics": {
+    "status_reason": "",
+    "exit_code": 0,
+    "stderr_tail": "",
+    "error_class": ""
+  },
+  "findings": []
+}

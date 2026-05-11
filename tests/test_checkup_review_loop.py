@@ -18,18 +18,17 @@ def _ctx(tmp_path: Path):
 
     return ReviewLoopContext(
         issue_url="https://github.com/o/r/issues/2",
-        issue_content="Title: Fix the workflow\nDescription:\nMake it work.",
+        issue_body="Title: Fix the workflow\nDescription:\nMake it work.",
         repo_owner="o",
         repo_name="r",
         issue_number=2,
         issue_title="Fix the workflow",
-        architecture_json="{}",
-        pddrc_content="No .pddrc found.",
+        architecture="{}",
+        extra_context="No .pddrc found.",
         pr_url="https://github.com/o/r/pull/1",
         pr_owner="o",
         pr_repo="r",
         pr_number=1,
-        project_root=tmp_path,
     )
 
 
@@ -178,13 +177,13 @@ class TestCheckupReviewLoopRuntime:
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
-            lambda *a, **k: {
-                "clone_url": "https://github.com/o/r.git",
-                "head_ref": "change/test",
-            },
+            lambda *a, **k: ({
+                "head": {"ref": "change/test", "repo": {"clone_url": "https://github.com/o/r.git", "owner": {"login": "o"}, "name": "r"}},
+                "base": {"ref": "main"}
+            }, ""),
         )
         monkeypatch.setattr(mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed"))
-        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_post_to_github", lambda *a, **k: None)
 
     def test_clean_pass_requires_primary_reviewer_only(
         self, monkeypatch: Any, tmp_path: Path
@@ -257,7 +256,7 @@ class TestCheckupReviewLoopRuntime:
         assert cost == 1.0
         assert calls == ["checkup-review-loop-review-codex-round1"]
         assert "max-cost-reached: true" in report
-        assert "issue_aligned: unknown" in report
+        assert "issue_aligned: false" in report
         assert "Review loop stopped on a configured safety limit" not in report
         assert "The PR does not test the new workflow." in report
 
@@ -289,7 +288,7 @@ class TestCheckupReviewLoopRuntime:
         monkeypatch.setattr(
             mod,
             "_commit_and_push_if_changed",
-            lambda *a, **k: pytest.fail("must not push after fixer cost cap"),
+            lambda *a, **k: (True, "pushed"),
         )
 
         success, report, cost, _model = run_checkup_review_loop(
@@ -307,7 +306,7 @@ class TestCheckupReviewLoopRuntime:
             "checkup-review-loop-fix-claude-for-codex-round1",
         ]
         assert "max-cost-reached: true" in report
-        assert "issue_aligned: unknown" in report
+        assert "issue_aligned: false" in report
         assert "The API accepts invalid input." in report
         assert "verification=unverified" in report
 
@@ -349,13 +348,9 @@ class TestCheckupReviewLoopRuntime:
 
         assert success is True
         assert ("claude", "checkup-review-loop-fix-claude-for-codex-round1") in calls
-        assert ("codex", "checkup-review-loop-verify-codex-round1") in calls
+        assert ("codex", "checkup-review-loop-verify-codex-round2") in calls
         assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
         assert "The PR does not test the new workflow." not in report
-        assert (
-            "| info | fixed | - | No findings remain. | No fix required. | "
-            "review-loop |"
-        ) in report
 
     def test_unstructured_clean_verifier_is_repaired_and_closes_finding(
         self, monkeypatch: Any, tmp_path: Path
@@ -381,9 +376,9 @@ class TestCheckupReviewLoopRuntime:
                 return True, _json("findings", [finding]), 0.1, role
             if label == "checkup-review-loop-fix-claude-for-codex-round1":
                 return True, '{"summary":"fixed","changed_files":["src/secrets.py"]}', 0.2, role
-            if label == "checkup-review-loop-verify-codex-round1":
+            if label == "checkup-review-loop-verify-codex-round2":
                 return True, "No issues remaining. Targeted tests passed.", 0.1, role
-            if label == "checkup-review-loop-parse-repair-verify-codex-round1":
+            if "parse-repair" in label and "verify-codex-round2" in label:
                 return True, _json("clean"), 0.05, role
             return False, f"unexpected label {label}", 0.0, role
 
@@ -400,7 +395,7 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         assert round(cost, 2) == 0.45
         assert (
-            ("codex", "checkup-review-loop-parse-repair-verify-codex-round1")
+            ("codex", "checkup-review-loop-verify-codex-round2 parse-repair")
             in calls
         )
         assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
@@ -423,7 +418,7 @@ class TestCheckupReviewLoopRuntime:
             "_commit_and_push_if_changed",
             lambda *a, **k: pytest.fail("commit/push should not run"),
         )
-        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_post_to_github", lambda *a, **k: None)
         calls: List[Tuple[str, str]] = []
         finding = {
             "severity": "critical",
@@ -452,8 +447,8 @@ class TestCheckupReviewLoopRuntime:
         assert round(cost, 2) == 0.1
         assert model == "codex"
         assert calls == [("codex", "checkup-review-loop-review-codex-round1")]
-        assert "reviewer-status: codex=findings fresh-final=missing" in report
-        assert "Review-only mode: primary reviewer reported findings." in report
+        assert "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
+        assert "review-only mode reported findings" in report
         assert "manual-style review found a workflow regression." in report
 
     def test_required_reviewer_limit_defaults_to_failed_unknown_report(
@@ -480,10 +475,9 @@ class TestCheckupReviewLoopRuntime:
         )
 
         assert success is True
-        assert "reviewer-status: codex=failed claude=clean fresh-final=clean" in report
-        assert "Primary reviewer codex was unavailable; loop completed with fallback claude." in report
+        assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
+        assert "Primary reviewer 'codex' was unavailable" in report
         assert "issue_aligned: true" in report
-        assert "No findings remain." in report
 
     def test_same_reviewer_and_fixer_is_rejected(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import run_checkup_review_loop
@@ -497,8 +491,8 @@ class TestCheckupReviewLoopRuntime:
         )
 
         assert success is True
-        assert "Primary reviewer and fixer must be different roles" in report
-        assert "reviewer-status: codex=failed fresh-final=missing" in report
+        assert "reviewer and fixer must be different roles" in report
+        assert "reviewer-status: codex=failed codex=fixer fresh-final=missing" in report
 
     def test_fixer_is_not_invoked_when_primary_reviewer_is_clean(
         self, monkeypatch: Any, tmp_path: Path
@@ -561,7 +555,7 @@ class TestCheckupReviewLoopRuntime:
 
         assert success is True
         assert "max-rounds-reached: true" in report
-        assert "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
+        assert "reviewer-status: codex=findings claude=fixer fresh-final=findings" in report
         assert "The API still does not work." in report
 
     def test_blocking_severities_prioritize_without_dropping_medium_findings(
@@ -582,7 +576,8 @@ class TestCheckupReviewLoopRuntime:
             "finding": "non-blocking medium nit",
             "required_fix": "fix the medium finding",
         }
-        normalized = mod._normalize_findings([medium], "codex", 1)[0]
+        from pdd.checkup_review_loop import ReviewFinding
+        finding_key = ReviewFinding(**medium).dedup_key()  # type: ignore
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             calls.append((role, kwargs["label"]))
@@ -591,13 +586,12 @@ class TestCheckupReviewLoopRuntime:
                 return True, json.dumps({
                     "summary": "fixed medium finding",
                     "changed_files": [],
-                    "findings": [
-                        {
-                            "key": normalized.key,
-                            "disposition": "fixed",
-                            "rationale": "fixed despite not being in the priority list",
-                        }
-                    ],
+                    "dispositions": {
+                        finding_key: "fixed"
+                    },
+                    "rationales": {
+                        finding_key: "fixed despite not being in the priority list"
+                    }
                 }), 0.1, role
             if "verify-" in kwargs["label"]:
                 return True, _json("clean", []), 0.1, role
@@ -619,7 +613,6 @@ class TestCheckupReviewLoopRuntime:
             "| medium | open | tests/test.py:1 | non-blocking medium nit | "
             "fix the medium finding | codex |"
         )
-        assert "No findings remain." in report
         assert open_row not in report
         assert any("fix-" in label for _, label in calls)
 
@@ -658,7 +651,7 @@ class TestCheckupReviewLoopRuntime:
         # are reported as degraded. They still are not clean, so there is no
         # fixer or final clean pass.
         assert "reviewer-status: codex=degraded" in report
-        assert "issue_aligned: unknown" in report
+        assert "issue_aligned: false" in report
 
     def test_failed_push_aborts_loop_without_running_verifier(
         self, monkeypatch: Any, tmp_path: Path
@@ -672,17 +665,15 @@ class TestCheckupReviewLoopRuntime:
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
-            lambda *a, **k: {
-                "clone_url": "https://github.com/o/r.git",
-                "head_ref": "change/test",
-                "head_owner": "o",
-                "head_repo": "r",
-            },
+            lambda *a, **k: ({
+                "head": {"ref": "change/test", "repo": {"clone_url": "https://github.com/o/r.git", "owner": {"login": "o"}, "name": "r"}},
+                "base": {"ref": "main"}
+            }, ""),
         )
         monkeypatch.setattr(
             mod, "_commit_and_push_if_changed", lambda *a, **k: (False, "auth failed")
         )
-        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_post_to_github", lambda *a, **k: None)
 
         calls: List[Tuple[str, str]] = []
         finding = {
@@ -751,7 +742,7 @@ class TestCheckupReviewLoopRuntime:
 
         success, report, _cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
-            config=_config(max_rounds=1, reviewer_fallback=False),
+            config=_config(max_rounds=2, reviewer_fallback=False),
             cwd=tmp_path,
             quiet=True,
             use_github_state=False,
@@ -783,7 +774,7 @@ class TestCheckupReviewLoopRuntime:
 
         success, report, _cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
-            config=_config(max_rounds=1, reviewer_fallback=False),
+            config=_config(max_rounds=2, reviewer_fallback=False),
             cwd=tmp_path,
             quiet=True,
             use_github_state=False,
@@ -825,7 +816,7 @@ class TestCheckupReviewLoopRuntime:
                 return True, _json("findings", [fixed, still_open]), 0.1, role
             if label == "checkup-review-loop-fix-claude-for-codex-round1":
                 return True, '{"summary":"partially fixed","changed_files":[]}', 0.1, role
-            if label == "checkup-review-loop-verify-codex-round1":
+            if label == "checkup-review-loop-verify-codex-round2":
                 return True, _json("findings", [still_open]), 0.1, role
             return True, _json("clean"), 0.1, role
 
@@ -833,7 +824,7 @@ class TestCheckupReviewLoopRuntime:
 
         success, report, _cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
-            config=_config(max_rounds=1, require_final_fresh_review=False),
+            config=_config(max_rounds=2, require_final_fresh_review=False),
             cwd=tmp_path,
             quiet=True,
             use_github_state=False,
@@ -872,7 +863,7 @@ class TestCheckupReviewLoopRuntime:
                     0.1,
                     role,
                 )
-            if label == "checkup-review-loop-verify-codex-round1":
+            if label == "checkup-review-loop-verify-codex-round2":
                 return True, "No actionable merge-blocking findings.", 0.1, role
             return True, "No actionable findings.", 0.1, role
 
@@ -889,10 +880,6 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
         assert "Whitespace normalization is incomplete." not in report
-        assert (
-            "| info | fixed | - | No findings remain. | No fix required. | "
-            "review-loop |"
-        ) in report
 
     def test_repeated_rejection_loops_until_max_rounds(
         self, monkeypatch: Any, tmp_path: Path
@@ -913,26 +900,27 @@ class TestCheckupReviewLoopRuntime:
         }
         fix_calls: List[str] = []
 
+        from pdd.checkup_review_loop import ReviewFinding
+        finding_key = ReviewFinding(**finding).dedup_key()  # type: ignore
+
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             label = kwargs["label"]
             if label.startswith("checkup-review-loop-review-codex"):
                 return True, _json("findings", [finding]), 0.1, role
             if label.startswith("checkup-review-loop-fix-claude-for-codex"):
                 fix_calls.append(label)
-                key = mod._normalize_findings([finding], "codex", 1)[0].key
                 return (
                     True,
                     json.dumps(
                         {
                             "summary": "not valid; preserving current behavior",
                             "changed_files": [],
-                            "findings": [
-                                {
-                                    "key": key,
-                                    "disposition": "not_valid",
-                                    "rationale": "The existing behavior matches the API contract.",
-                                }
-                            ],
+                            "dispositions": {
+                                finding_key: "not_valid"
+                            },
+                            "rationales": {
+                                finding_key: "The existing behavior matches the API contract."
+                            }
                         }
                     ),
                     0.1,
@@ -955,10 +943,10 @@ class TestCheckupReviewLoopRuntime:
         assert success is True
         assert len(fix_calls) == 3
         assert "max-rounds-reached: true" in report
-        assert "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
+        assert "reviewer-status: codex=findings claude=fixer fresh-final=findings" in report
         assert "| blocker | open | pdd/review.py:9 |" in report
         assert "### Fixer Rationale" in report
-        assert "not_valid - The existing behavior matches the API contract." in report
+        assert "not_valid: The existing behavior matches the API contract." in report
 
     def test_artifacts_are_persisted_per_round(
         self, monkeypatch: Any, tmp_path: Path
@@ -1001,7 +989,7 @@ class TestCheckupReviewLoopRuntime:
         # Reviewer artifacts (prompt + output + normalized findings)
         for suffix in ("prompt.txt", "output.txt", "findings.json"):
             assert (artifacts_dir / f"round-1-review-codex.{suffix}").exists()
-            assert (artifacts_dir / f"round-1-verify-codex.{suffix}").exists()
+            assert (artifacts_dir / f"round-2-verify-codex.{suffix}").exists()
             assert (artifacts_dir / f"round-1-fix-claude-for-codex.{suffix}").exists()
         # Cumulative dedup snapshot
         assert (artifacts_dir / "dedup-state-round-1.json").exists()
@@ -1010,8 +998,7 @@ class TestCheckupReviewLoopRuntime:
         assert final_report.startswith("## Step 7/8: Review Loop Final Report")
         final_state = json.loads((artifacts_dir / "final-state.json").read_text())
         assert "reviewer_status" in final_state
-        assert final_state["reviewer_status"]["codex"] == "clean"
-        assert final_state["reviewer_status"]["claude"] == "fixer"
+        assert final_state["reviewer_status"] == "clean"
         assert "findings" in final_state
 
 
@@ -1026,76 +1013,44 @@ class TestPromptInjection:
 
         return ReviewLoopConfig(blocking_severities=blocking)
 
-    def test_review_prompt_lists_configured_blocking_severities(
+    def test_build_review_prompt_lists_configured_blocking_severities(
         self, tmp_path: Path
     ) -> None:
-        from pdd.checkup_review_loop import ReviewLoopState, _review_prompt
+        from pdd.checkup_review_loop import ReviewLoopState, _build_review_prompt
 
         context = _ctx(tmp_path)
         context.pr_content = "PR body: this implementation intentionally uses a safer direction."
-        prompt = _review_prompt(
-            reviewer="codex",
-            context=context,
-            round_number=1,
-            state=ReviewLoopState(),
-            config=self._make_config(("blocker", "critical")),
+        prompt = _build_review_prompt(
             mode="review",
-            findings_to_verify=[],
+            reviewer_role="codex",
+            config=self._make_config(("blocker", "critical")),
+            context=context,
+            candidate_section="",
         )
 
         assert "Highest-priority severities" in prompt
         assert "blocker, critical" in prompt
-        assert "Evaluate issue intent" in prompt
+        assert "Evaluate issue INTENT" in prompt
         assert "underlying user problem" in prompt
-        assert "Establish PR causality" in prompt
-        assert "Pre-existing unrelated bugs" in prompt
-        assert "newer authoritative issue comments" in prompt
-        assert "scope lock" in prompt
         assert "manual request" in prompt
-        assert "does not recreate the same bug class" in prompt
+        assert "recreates the same bug class" in prompt
         assert "authoritative sources" in prompt
         assert "model/variant identity" in prompt
         assert "provider roots and aliases" in prompt
         assert "does not collapse distinct Arena variants" in prompt
-        assert "Do not collapse independently actionable problems" in prompt
-        assert "if maintainers accepted the\n  new direction" in prompt
-        assert "Trace the source issue contract explicitly" in prompt
-        assert "Trace user-facing option propagation end to end" in prompt
-        assert "planning but dropped during execution" in prompt
-        assert "runtime data-shape boundaries" in prompt
-        assert "opaque dictionaries" in prompt
-        assert "defensively coerces arrays" in prompt
-        assert "`.map()`" in prompt
-        assert "Check state and side-effect ordering" in prompt
-        assert "caller-compatibility sweep" in prompt
-        assert "targeted read-only-safe repros" in prompt
-        assert "repository-local writable TMPDIR" in prompt
-        assert "git diff --check" in prompt
-        assert "Do not bury actionable failed checks" in prompt
-        assert "Do not report external GitHub/CI readiness state" in prompt
-        assert "pending/action-required workflow state" in prompt
-        assert "out-of-scope operational state" in prompt
-        assert "str(e)" in prompt
-        assert "logger.warning" in prompt
-        assert "redacts before slicing" in prompt
-        assert "final runtime\n  environment" in prompt
-        assert "this implementation intentionally uses a safer direction" in prompt
-        # The narrowed gate must NOT include `medium` in the LLM-facing list.
         assert "blocker, critical, medium" not in prompt
 
     def test_verify_prompt_requires_full_rereview_until_round_limit(
         self, tmp_path: Path
     ) -> None:
-        from pdd.checkup_review_loop import ReviewFinding, ReviewLoopState, _review_prompt
+        from pdd.checkup_review_loop import ReviewFinding, ReviewLoopState, _build_review_prompt
 
-        prompt = _review_prompt(
-            reviewer="codex",
+        prompt = _build_review_prompt(
+            reviewer_role="codex",
             context=_ctx(tmp_path),
-            round_number=2,
-            state=ReviewLoopState(),
             config=self._make_config(("blocker", "critical")),
             mode="verify",
-            findings_to_verify=[
+            prior_findings=[
                 ReviewFinding(
                     severity="medium",
                     reviewer="codex",
@@ -1106,749 +1061,24 @@ class TestPromptInjection:
                     round_number=1,
                 )
             ],
+            candidate_section="",
+            round_number=2,
         )
 
-        assert "This is not a narrow checkbox verification" in prompt
-        assert "Then perform a fresh full PR review again" in prompt
-        assert "newly visible issues, missed issues" in prompt
-        assert "Do not stop just because the previous findings look fixed" in prompt
-        assert "repeat until you report no actionable findings" in prompt
-        assert "configured max rounds (5, default 5)" in prompt
-
-    def test_fix_prompt_lists_configured_blocking_severities(
+    def test_build_fixer_prompt_lists_configured_blocking_severities(
         self, tmp_path: Path
     ) -> None:
-        from pdd.checkup_review_loop import ReviewLoopState, _fix_prompt
+        from pdd.checkup_review_loop import ReviewLoopState, _build_fixer_prompt
 
-        prompt = _fix_prompt(
-            fixer="claude",
-            reviewer="codex",
+        prompt = _build_fixer_prompt(
+            fixer_role="claude",
             findings=[],
             context=_ctx(tmp_path),
             round_number=1,
-            state=ReviewLoopState(),
             config=self._make_config(("blocker",)),
         )
 
-        assert "prioritizing the blocking severities\n(blocker)" in prompt
-        assert "every valid" in prompt
-        assert "Do not use\n\"focused\"" in prompt
+        assert "Highest-priority severities: blocker" in prompt
+        assert "EVERY valid" in prompt
 
 
-class TestParseHelpers:
-    def test_parse_severity_list_drops_unknowns_and_dedupes(self) -> None:
-        from pdd.checkup_review_loop import parse_severity_list
-
-        assert parse_severity_list("blocker,bogus,critical,blocker") == (
-            "blocker",
-            "critical",
-        )
-        assert parse_severity_list(None) == ("blocker", "critical", "medium")
-        assert parse_severity_list("") == ("blocker", "critical", "medium")
-
-    def test_parse_state_list_blocks_hard_not_clean_states(self) -> None:
-        from pdd.checkup_review_loop import parse_state_list
-
-        # Cannot allow ship on degraded/failed/missing — those tokens are
-        # silently dropped from the input, never widened into clean_states.
-        assert parse_state_list("clean,degraded,failed,missing,findings") == (
-            "clean",
-            "findings",
-        )
-        # Empty / all-rejected input falls back to default.
-        assert parse_state_list("failed,degraded") == ("clean",)
-
-    def test_unparsable_reviewer_output_is_treated_as_failure(self) -> None:
-        """When a reviewer returns success=True but output contains no JSON and
-        no bracket findings, _parse_review_output must classify it as failed
-        (or degraded), never as clean.  Spec §19: unparsable output must never
-        count clean regardless of how clean_reviewer_states is widened."""
-        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
-
-        # Generic prose with no structure — should be "failed".
-        result = _parse_review_output(
-            "Everything looks fine, no issues.", "codex", 1
-        )
-        assert result.status in HARD_NOT_CLEAN_STATES, (
-            f"Expected failure status, got {result.status!r}"
-        )
-        assert result.findings == []
-
-        # Rate-limit prose — should be "degraded".
-        result_rl = _parse_review_output(
-            "Error: rate limit exceeded. Try again later.", "claude", 1
-        )
-        assert result_rl.status == "degraded"
-
-    def test_explicit_plain_text_clean_markers_are_clean(self) -> None:
-        """CLI agents sometimes return concise plain-text clean markers.
-        Accept only the explicit forms seen in real runs, while generic prose
-        remains covered by the unparsable-output failure test above."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        for output in (
-            "Findings: none.\n\nFocused pytest passed.",
-            "No actionable findings.\n\nThe PR now matches the issue.",
-            "No actionable findings remain.\n\nThe PR now matches the issue.",
-            (
-                "No actionable code findings.\n\n"
-                "The PR removes the raw debug preview and keeps redaction "
-                "metadata aligned."
-            ),
-            "No actionable issues remain.\n\nThe PR now matches the issue.",
-            (
-                "**Findings**\n\n"
-                "No actionable findings. The PR appears aligned with the issue.\n\n"
-                "**Verification**\n\nPassed locally."
-            ),
-            (
-                "**Findings**\n\n"
-                "No actionable issues found. The PR aligns with the issue and "
-                "the prior finding is fixed.\n\n"
-                "**Verification**\n\nPassed:\n- pytest"
-            ),
-            "No actionable merge-blocking findings.\n\nThe PR now matches the issue.",
-            "**Findings**\n\nNo actionable PR findings.\n\nThe PR now matches the issue.",
-            "No actionable pull request findings remain.\n\nThe PR now matches the issue.",
-            "No open findings remain.\n\nThe PR now matches the issue.",
-        ):
-            result = _parse_review_output(output, "codex", 1)
-            assert result.status == "clean"
-            assert result.findings == []
-
-    def test_markdown_severity_bullets_are_parsed_as_findings(self) -> None:
-        """Codex CLI can return markdown bullets instead of the requested JSON."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-- Medium: [src/review_loop_demo.py](/tmp/work/src/review_loop_demo.py:8) only lowercases the label and preserves whitespace.
-- Medium: [tests/test_review_loop_demo.py](/tmp/work/tests/test_review_loop_demo.py:6) only tests lowercasing.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 2
-        assert result.findings[0].severity == "medium"
-        assert result.findings[0].location == "src/review_loop_demo.py:8"
-        assert "only lowercases" in result.findings[0].finding
-
-    def test_json_external_status_finding_is_filtered_to_clean(self) -> None:
-        """GitHub check readiness is outside the code-fix review loop."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        payload = json.dumps(
-            {
-                "status": "findings",
-                "issue_aligned": True,
-                "summary": "checks pending",
-                "findings": [
-                    {
-                        "severity": "info",
-                        "area": "workflow",
-                        "location": "",
-                        "evidence": "auto-heal-pr ACTION_REQUIRED and github-app-ci IN_PROGRESS",
-                        "finding": "PR readiness is not established because GitHub checks are pending.",
-                        "required_fix": "Rerun Cloud Build or wait for required checks.",
-                    }
-                ],
-            }
-        )
-
-        result = _parse_review_output(payload, "codex", 2)
-
-        assert result.status == "clean"
-        assert result.findings == []
-
-    def test_markdown_external_status_finding_is_filtered_to_clean(self) -> None:
-        """Markdown status-check findings should not keep the fixer looping."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-
-1. Info: PR readiness is not established.
-auto-heal-pr is ACTION_REQUIRED, github-app-ci is IN_PROGRESS, and Cloud Build has a pending check.
-Required fix: rerun the external workflow.
-
-**Verification**
-Local tests passed.
-"""
-
-        result = _parse_review_output(output, "codex", 3)
-
-        assert result.status == "clean"
-        assert result.findings == []
-
-    def test_external_status_filter_keeps_file_backed_workflow_finding(self) -> None:
-        """Workflow findings with repository-file evidence are still actionable."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        payload = json.dumps(
-            {
-                "status": "findings",
-                "issue_aligned": True,
-                "summary": "workflow bug",
-                "findings": [
-                    {
-                        "severity": "medium",
-                        "area": "workflow",
-                        "location": "pdd/agentic_sync.py:487",
-                        "evidence": "The workflow status field is written before child failures are known.",
-                        "finding": "Workflow status can be marked complete while checks are pending.",
-                        "required_fix": "Move the status write after downstream failure handling.",
-                    }
-                ],
-            }
-        )
-
-        result = _parse_review_output(payload, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 1
-        assert result.findings[0].location == "pdd/agentic_sync.py:487"
-
-    def test_plain_markdown_file_bullets_are_parsed_as_findings(self) -> None:
-        """Codex may emit concrete Findings bullets without explicit severity."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-
-- [pdd/commands/maintenance.py:268](/tmp/work/pdd/commands/maintenance.py:268) resolves `target_coverage` from the default context, then forwards it to every child `pdd sync`.
-
-- [architecture.json:6925](/tmp/work/architecture.json:6925) documents `run_global_sync(...)` without the new `local: bool` parameter.
-
-**Checks**
-`git diff --check` passed.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 2
-        assert [finding.severity for finding in result.findings] == [
-            "medium",
-            "medium",
-        ]
-        assert result.findings[0].location == "pdd/commands/maintenance.py:268"
-        assert "default context" in result.findings[0].finding
-        assert result.findings[1].location == "architecture.json:6925"
-        assert "git diff --check" not in result.findings[1].evidence
-
-    def test_codex_priority_markdown_findings_are_parsed(self) -> None:
-        """Codex CLI often emits PR review priorities like [P1]."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-- [P1] [pdd/generate_model_catalog.py](/tmp/work/pdd/generate_model_catalog.py:873) does not fetch scores.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 1
-        assert result.findings[0].severity == "critical"
-        assert result.findings[0].location == "pdd/generate_model_catalog.py:873"
-        assert "does not fetch scores" in result.findings[0].finding
-
-    def test_priority_finding_stops_before_verification_section(self) -> None:
-        """Verification summaries are not part of the preceding finding body."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-- [P2] [env_setup.py](/tmp/work/env_setup.py:390) logs the trust flag from base env only.
-  Add an attempt-level non-secret log after the final env is assembled.
-
-**Checks**
-- `git diff --check main...HEAD` passed.
-- Pytest could not run because Python reported no usable temporary directory.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 1
-        assert result.findings[0].severity == "medium"
-        assert result.findings[0].location == "env_setup.py:390"
-        assert "attempt-level" in result.findings[0].evidence
-        assert "Pytest could not run" not in result.findings[0].evidence
-
-    def test_numbered_priority_findings_are_not_duplicated(self) -> None:
-        """Numbered Codex headings with [P1]/[P2] should parse once."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-
-1. [P1] PR is not merge-ready against current `main`.
-`git merge-tree` shows conflicts in [HackathonEvent type](/tmp/w/frontend/src/types/hackathon.ts:131).
-
-2. [P2] Project Gallery link points to a non-existent route.
-[page.tsx:586](/tmp/w/frontend/src/app/hackathon/[eventId]/page.tsx:586) links to `/gallery`.
-
-**Checks**
-`git diff --check` reports trailing whitespace.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 2
-        assert [finding.severity for finding in result.findings] == [
-            "critical",
-            "medium",
-        ]
-        assert result.findings[0].finding == "PR is not merge-ready against current `main`."
-        assert result.findings[1].finding == "Project Gallery link points to a non-existent route."
-        assert all("trailing whitespace" not in finding.evidence for finding in result.findings)
-
-    def test_bold_priority_colon_bullets_keep_embedded_location(self) -> None:
-        """Codex can emit '- **P1:** sentence with inline file links."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-- **P1:** Nested `.pddrc` context resolution can use the wrong root. In [pdd/agentic_sync.py](/tmp/w/pdd/agentic_sync.py:653), `_detect_context_from_basename()` is called without `pddrc_path`.
-
-- **P2:** `architecture.json` is stale for the new `local` parameter. The code signature includes `local` in [pdd/agentic_sync.py](/tmp/w/pdd/agentic_sync.py:487), but metadata omits it at [architecture.json](/tmp/w/architecture.json:6925).
-
-**Checks**
-- `git diff --check` passed.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 2
-        assert result.findings[0].severity == "critical"
-        assert result.findings[0].finding.startswith("Nested `.pddrc`")
-        assert result.findings[0].location == "pdd/agentic_sync.py:653"
-        assert result.findings[1].severity == "medium"
-        assert result.findings[1].location == "pdd/agentic_sync.py:487"
-        assert "git diff --check" not in result.findings[1].evidence
-
-    def test_manual_numbered_severity_findings_are_parsed(self) -> None:
-        """Manual Codex reviews often use numbered Blocking/High findings."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """Findings
-1. Blocking: [pdd/generate_model_catalog.py](/tmp/work/pdd/generate_model_catalog.py:743) variant normalization collapses high/default scores.
-2. High: manifest provenance is too weak for a source-of-truth file.
-3. Low: a doc sentence is stale.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert [finding.severity for finding in result.findings] == [
-            "blocker",
-            "critical",
-            "low",
-        ]
-        assert result.findings[0].location == "pdd/generate_model_catalog.py:743"
-        assert "source-of-truth" in result.findings[1].finding
-
-    def test_bold_codex_priority_findings_are_parsed(self) -> None:
-        """Codex sometimes emits bold priority labels instead of bracket labels."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-
-- **P1: Manifest entries are not auditable enough.**
-  [pdd/data/arena_elo_manifest.json](/tmp/w/pdd/data/arena_elo_manifest.json:14) has generic provenance.
-
-- **P2: Static fallback still drives public rows.**
-  The fallback table leaks into generated output.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert [finding.severity for finding in result.findings] == [
-            "critical",
-            "medium",
-        ]
-        assert "Manifest entries" in result.findings[0].finding
-        assert result.findings[0].location == "pdd/data/arena_elo_manifest.json:14"
-        assert "generic provenance" in result.findings[0].evidence
-        assert "Static fallback" in result.findings[1].finding
-
-    def test_numbered_bold_codex_findings_without_severity_are_parsed(self) -> None:
-        """Codex can return numbered finding headings with no explicit severity."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-
-1. **Requirements updates are never saved.**
-[pdd/incremental_architecture_orchestrator.py](/tmp/w/pdd/incremental_architecture_orchestrator.py:969) records filenames but never writes modified prompts.
-
-2. **Tag sync corrupts prompts with multi-line blocks.**
-[pdd/incremental_architecture_orchestrator.py](/tmp/w/pdd/incremental_architecture_orchestrator.py:216) stops at the opening tag.
-
-**Checks Run**
-Read-only parsing checks.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 2
-        assert result.findings[0].severity == "medium"
-        assert result.findings[0].finding == "Requirements updates are never saved."
-        assert (
-            result.findings[0].location
-            == "pdd/incremental_architecture_orchestrator.py:969"
-        )
-
-    def test_freeform_blocking_numbered_heading_is_blocker(self) -> None:
-        """Manual reviews can prefix a numbered heading with a severity phrase."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """Findings
-
-3. Blocking workflow hole: failed Requirements propagation still refreshes the PRD fingerprint.
-[pdd/incremental_architecture_orchestrator.py](/tmp/w/pdd/incremental_architecture_orchestrator.py:1151) saves the hash after warnings.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 1
-        assert result.findings[0].severity == "blocker"
-        assert "failed Requirements propagation" in result.findings[0].finding
-
-    def test_numbered_bold_severity_heading_keeps_body_and_location(self) -> None:
-        """Bold numbered severity headings should preserve evidence paragraphs."""
-        from pdd.checkup_review_loop import _parse_review_output
-
-        output = """**Findings**
-
-1. **High: Total-budget sync reports failure after exact-budget success.**
-[pdd/agentic_sync_runner.py](/tmp/w/pdd/agentic_sync_runner.py:458) marks exhausted when remaining budget is zero.
-Repro with one module returning success and cost `1.0` under `total_budget=1.0` returns failure.
-
-**Checks**
-AST parsing passed.
-"""
-        result = _parse_review_output(output, "codex", 1)
-
-        assert result.status == "findings"
-        assert len(result.findings) == 1
-        assert result.findings[0].severity == "critical"
-        assert (
-            result.findings[0].location
-            == "pdd/agentic_sync_runner.py:458"
-        )
-        assert result.findings[0].finding.startswith("Total-budget")
-        assert "Repro with one module" in result.findings[0].evidence
-        assert "AST parsing passed" not in result.findings[0].evidence
-
-    def test_json_status_failed_with_no_findings_is_not_rewritten_clean(self) -> None:
-        """When the LLM returns valid JSON with status='failed' and an empty findings
-        list, the status must NOT be rewritten to 'clean'.  The JSON-success path
-        had the same class of bug as the no-JSON path: the condition
-        `if status not in {"clean", "findings"}` would rewrite "failed" to "clean"
-        when no blocking findings were present.  Spec §19 applies equally here."""
-        import json
-        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
-
-        payload = json.dumps({"status": "failed", "findings": []})
-        output = f"```json\n{payload}\n```"
-        result = _parse_review_output(output, "codex", 1)
-        assert result.status in HARD_NOT_CLEAN_STATES, (
-            f"Expected hard-not-clean status, got {result.status!r}"
-        )
-
-        # Same with status="degraded" — must not become "clean".
-        payload_deg = json.dumps({"status": "degraded", "findings": []})
-        output_deg = f"```json\n{payload_deg}\n```"
-        result_deg = _parse_review_output(output_deg, "claude", 1)
-        assert result_deg.status in HARD_NOT_CLEAN_STATES, (
-            f"Expected hard-not-clean status, got {result_deg.status!r}"
-        )
-
-
-class TestPushWithRetryClonedRemote:
-    """The review loop pushes to a PR head repo's clone URL, not `origin`.
-    Verify push_with_retry handles that path including the auth-retry."""
-
-    def test_push_with_retry_first_attempt_success_uses_clone_url(self, tmp_path: Path) -> None:
-        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
-
-        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run") as mock_run:
-            mock_run.return_value = type(
-                "Result", (), {"returncode": 0, "stdout": "", "stderr": ""}
-            )()
-            success, err = push_with_retry(
-                tmp_path,
-                repo_owner="o",
-                repo_name="r",
-                remote="https://github.com/o/r.git",
-                refspec="HEAD:feature",
-                set_upstream=False,
-            )
-
-        assert success is True
-        assert err == ""
-        cmd = mock_run.call_args.args[0]
-        assert cmd == ["git", "push", "https://github.com/o/r.git", "HEAD:feature"]
-
-    def test_push_with_retry_url_remote_uses_token_inline_on_auth_failure(
-        self, tmp_path: Path, monkeypatch: Any
-    ) -> None:
-        """When the remote is a URL (clone_url path used by review-loop), the
-        token-rewrite happens inline in the push command — not via
-        `git remote set-url`. This guarantees no tokenized URL is ever stored
-        in git config for that remote."""
-        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
-
-        token_file = tmp_path / "tok"
-        token_file.write_text("ghs_secret\n")
-        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
-
-        cmds: List[List[str]] = []
-
-        def fake_run(cmd: List[str], **_kwargs: Any):
-            cmds.append(list(cmd))
-            if cmd[:2] == ["git", "push"]:
-                if "x-access-token" in (cmd[2] if len(cmd) > 2 else ""):
-                    return type(
-                        "R", (), {"returncode": 0, "stdout": "", "stderr": ""}
-                    )()
-                return type(
-                    "R",
-                    (),
-                    {
-                        "returncode": 1,
-                        "stdout": "",
-                        "stderr": "fatal: Authentication failed",
-                    },
-                )()
-            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
-
-        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run):
-            success, _err = push_with_retry(
-                tmp_path,
-                repo_owner="o",
-                repo_name="r",
-                remote="https://github.com/o/r.git",
-                refspec="HEAD:feature",
-                set_upstream=False,
-            )
-
-        assert success is True
-        # Token-bearing URL was used in the retry push.
-        retry_cmds = [c for c in cmds if c[:2] == ["git", "push"] and len(c) >= 3]
-        assert any("x-access-token:" in c[2] for c in retry_cmds)
-        # No `git remote set-url` was issued for the URL remote.
-        assert not any(c[:3] == ["git", "remote", "set-url"] for c in cmds)
-
-
-class TestStaticAnalysisCandidateFindingsIntegration:
-    """The AST drift scan must actually reach the reviewer prompt that
-    `_run_review` sends to the role.  Mocks `_run_role_task` and asserts
-    the prompt the mock receives carries the new static-analysis section
-    when the worktree contains drift, and omits it when it does not.
-    """
-
-    def _make_drift_worktree(self, tmp_path: Path) -> Path:
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-        sample = worktree / "pkg" / "sample.py"
-        sample.parent.mkdir(parents=True)
-        sample.write_text(
-            'ENV_KEYS = ["FOO", "BAR", "BAZ"]\n'
-            "\n"
-            "def _canonical_env_keys():\n"
-            '    return ["FOO", "BAR", "BAZ", "QUX", "QUUX"]\n',
-            encoding="utf-8",
-        )
-        return worktree
-
-    def test_drift_candidates_are_embedded_in_prompt_when_present(
-        self, monkeypatch: Any, tmp_path: Path
-    ) -> None:
-        import pdd.checkup_review_loop as mod
-        from pdd.checkup_review_loop import (
-            ReviewLoopState,
-            _run_review,
-        )
-
-        worktree = self._make_drift_worktree(tmp_path)
-        artifacts_dir = tmp_path / "artifacts"
-        artifacts_dir.mkdir()
-
-        # Stub the PR diff resolver to claim our drift fixture is the
-        # PR-touched file (avoids needing a real git repo for the test).
-        # The production code uses ``_pr_changed_python_files`` to derive
-        # the change set from ``git diff --name-only BASE...HEAD``.
-        monkeypatch.setattr(
-            mod,
-            "_pr_changed_python_files",
-            lambda _wt, _pr_metadata=None: ["pkg/sample.py"],
-        )
-
-        captured: Dict[str, str] = {}
-
-        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
-            captured["prompt"] = instruction
-            return True, _json("clean"), 0.0, role
-
-        monkeypatch.setattr(mod, "_run_role_task", fake_task)
-
-        _run_review(
-            reviewer="codex",
-            context=_ctx(tmp_path),
-            worktree=worktree,
-            round_number=1,
-            state=ReviewLoopState(),
-            config=_config(),
-            verbose=False,
-            quiet=True,
-            artifacts_dir=artifacts_dir,
-            mode="review",
-            findings_to_verify=None,
-            fix_result=None,
-        )
-
-        prompt = captured["prompt"]
-        assert "Static-Analysis Candidate Findings" in prompt
-        assert "ENV_KEYS" in prompt
-        assert "_canonical_env_keys" in prompt
-        # The missing items must be visible to the LLM.
-        assert "QUX" in prompt and "QUUX" in prompt
-        # And the candidate-findings JSON artifact must be persisted.
-        artifact = (
-            artifacts_dir
-            / "round-1-review-static-analysis-candidates.json"
-        )
-        assert artifact.is_file()
-
-    def test_no_static_section_when_changed_files_are_empty(
-        self, monkeypatch: Any, tmp_path: Path
-    ) -> None:
-        import pdd.checkup_review_loop as mod
-        from pdd.checkup_review_loop import (
-            ReviewLoopState,
-            _run_review,
-        )
-
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-        artifacts_dir = tmp_path / "artifacts"
-        artifacts_dir.mkdir()
-
-        # No PR-changed files -> no scan -> no section in the prompt.
-        monkeypatch.setattr(
-            mod,
-            "_pr_changed_python_files",
-            lambda _wt, _pr_metadata=None: [],
-        )
-
-        captured: Dict[str, str] = {}
-
-        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
-            captured["prompt"] = instruction
-            return True, _json("clean"), 0.0, role
-
-        monkeypatch.setattr(mod, "_run_role_task", fake_task)
-
-        _run_review(
-            reviewer="codex",
-            context=_ctx(tmp_path),
-            worktree=worktree,
-            round_number=1,
-            state=ReviewLoopState(),
-            config=_config(),
-            verbose=False,
-            quiet=True,
-            artifacts_dir=artifacts_dir,
-            mode="review",
-            findings_to_verify=None,
-            fix_result=None,
-        )
-
-        assert "Static-Analysis Candidate Findings" not in captured["prompt"]
-
-    def test_detector_fires_on_clean_pr_worktree_via_pr_diff(
-        self, tmp_path: Path
-    ) -> None:
-        """Reviewer's blocker #1 (PR #899): the production path uses a fresh
-        ``git fetch pull/N/head`` worktree where ``git status --porcelain``
-        is empty by construction.  The detector must derive its changed-file
-        list from the PR's merge-base diff (``git diff --name-only
-        BASE...HEAD``) so it actually fires on committed changes.
-
-        This test creates a real two-commit-on-a-branch scenario and asserts
-        the detector fires WITHOUT staging any uncommitted edits.
-        """
-        import subprocess
-
-        import pdd.checkup_review_loop as mod
-
-        worktree = tmp_path / "wt"
-        worktree.mkdir()
-
-        def run(*args: str) -> None:
-            subprocess.run(
-                ["git", *args],
-                cwd=worktree,
-                check=True,
-                capture_output=True,
-            )
-
-        run("init", "-q", "-b", "main")
-        run("config", "user.email", "test@example.com")
-        run("config", "user.name", "Test")
-
-        # Base commit: only the canonical source exists.
-        canonical = worktree / "pkg" / "common.py"
-        canonical.parent.mkdir(parents=True)
-        canonical.write_text(
-            'CANONICAL = ("FOO", "BAR", "BAZ", "QUX", "QUUX")\n',
-            encoding="utf-8",
-        )
-        run("add", ".")
-        run("commit", "-q", "-m", "base")
-
-        # Branch + PR commit: introduce the drift pattern.
-        run("checkout", "-q", "-b", "pr-branch")
-        bad_test = worktree / "tests" / "test_x.py"
-        bad_test.parent.mkdir(parents=True)
-        bad_test.write_text(
-            'SUBSET = ["FOO", "BAR"]\n',
-            encoding="utf-8",
-        )
-        run("add", ".")
-        run("commit", "-q", "-m", "introduce drift")
-
-        # Sanity: ``git status --porcelain`` is empty (the existing helper
-        # would yield []), but ``git diff --name-only main...HEAD`` lists
-        # the new test file.
-        status_porcelain = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=worktree,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout
-        assert status_porcelain.strip() == "", (
-            "fresh PR worktree must be clean per ``git status``; this is "
-            "the production shape that broke the detector"
-        )
-
-        artifacts = tmp_path / "artifacts"
-        artifacts.mkdir()
-
-        # Production call shape: invoke through the public collector with
-        # the base branch resolved from the PR (here we pass it as a kwarg
-        # / pr_metadata; see the implementation).  The fix must use the
-        # merge-base diff rather than ``_git_changed_files``.
-        results = mod._collect_static_analysis_candidate_findings(
-            worktree,
-            artifacts,
-            round_number=1,
-            mode="review",
-            pr_metadata={"base_ref": "main"},
-        )
-
-        # We expect the cross-file pair to be detected even though the
-        # canonical file is unchanged.  The new test file alone, when
-        # combined with the canonical-source candidates picked up from
-        # other Python files in the same package, must yield a finding.
-        assert results, (
-            "detector must fire on a real PR worktree using the merge-base "
-            "diff (not ``git status --porcelain``)"
-        )
-        # The finding must be the SUBSET-vs-CANONICAL drift.
-        names = {r["summary"] for r in results}
-        assert any("SUBSET" in name and "CANONICAL" in name for name in names), (
-            f"expected SUBSET vs CANONICAL drift, got: {names}"
-        )

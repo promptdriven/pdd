@@ -17,344 +17,418 @@ from .agentic_change import (
 from .agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 from .agentic_sync import _load_architecture_json
 from .architecture_registry import find_project_root
+from .checkup_review_loop import (
+    ReviewLoopConfig,
+    ReviewLoopContext,
+    run_checkup_review_loop,
+)
 
 console = Console()
 
-
-# Truncation budgets for review-loop context construction. Reviewer prompts
-# are large already; we don't want to bury the rubric under bot noise.
-_REVIEW_LOOP_ISSUE_LIMIT = 20_000
-_REVIEW_LOOP_COMMENTS_LIMIT = 20_000
-_REVIEW_LOOP_PR_LIMIT = 60_000
-_REVIEW_LOOP_PDDRC_LIMIT = 8_000
-_REVIEW_LOOP_ARCH_LIMIT = 40_000
-
-_PR_BODY_LIMIT = 8_000
-_PR_PATCH_PER_FILE_LIMIT = 4_000
-_PR_PATCH_TOTAL_LIMIT = 40_000
-_PR_COMMENT_LIMIT = 12_000
-_PR_REVIEWS_LIMIT = 12_000
+# Truncation budgets for review-loop context (characters).
+_MAX_ISSUE_CONTENT_CHARS = 20_000
+_MAX_PR_CONTEXT_CHARS = 40_000
+_MAX_PDDRC_CHARS = 8_000
+_MAX_ARCH_CHARS = 30_000
+_MAX_COMMENTS_CHARS = 20_000
+_MAX_PATCH_EXCERPT_CHARS = 1_500
+_MAX_PR_FILES = 50
+_MAX_PR_COMMENTS = 30
+_MAX_PR_REVIEWS = 30
 
 
-def _truncate(text: str, limit: int, *, label: str = "content") -> str:
-    """Truncate text to ``limit`` characters with a clear marker."""
-    if text is None:
-        return ""
+def _truncate(text: str, limit: int, label: str = "") -> str:
+    """Truncate ``text`` to ``limit`` characters with a marker."""
     if len(text) <= limit:
         return text
-    head = text[:limit]
-    omitted = len(text) - limit
-    return f"{head}\n\n... [truncated: {omitted} chars of {label} omitted] ..."
+    suffix = f"\n\n... [truncated {len(text) - limit} chars" + (
+        f" of {label}" if label else ""
+    ) + "]"
+    return text[:limit] + suffix
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """Extract a JSON object from raw text or a markdown ```json``` block."""
+    """Extract JSON object from text — try fenced code blocks then raw."""
     if not text:
         return None
 
-    # Try fenced code block first.
-    fence_re = re.compile(
-        r"```(?:json|JSON)?\s*(\{.*?\})\s*```", re.DOTALL
+    # Try fenced ```json ... ``` blocks first.
+    fence_pattern = re.compile(
+        r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL | re.IGNORECASE
     )
-    match = fence_re.search(text)
-    candidates: List[str] = []
-    if match:
-        candidates.append(match.group(1))
+    for match in fence_pattern.finditer(text):
+        candidate = match.group(1)
+        try:
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
+        except (json.JSONDecodeError, ValueError):
+            continue
 
-    # Fallback: find the first balanced top-level object.
-    stripped = text.strip()
-    if stripped.startswith("{"):
-        candidates.append(stripped)
-
-    # Last resort: greedy match from first { to last }.
+    # Try raw JSON object — find first { and last }.
     first = text.find("{")
     last = text.rfind("}")
     if first != -1 and last != -1 and last > first:
-        candidates.append(text[first : last + 1])
-
-    for candidate in candidates:
+        candidate = text[first : last + 1]
         try:
-            parsed = json.loads(candidate)
-            if isinstance(parsed, dict):
-                return parsed
+            obj = json.loads(candidate)
+            if isinstance(obj, dict):
+                return obj
         except (json.JSONDecodeError, ValueError):
-            continue
+            pass
+
     return None
 
 
 def _load_pddrc_content(project_root: Path) -> str:
-    """Return raw .pddrc content or a sentinel if missing/unreadable."""
+    """Load .pddrc content from project root, return placeholder if missing."""
     pddrc_path = project_root / ".pddrc"
     if not pddrc_path.exists():
         return "No .pddrc found."
     try:
         return pddrc_path.read_text(encoding="utf-8")
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
         return f"Failed to read .pddrc: {exc}"
 
 
 def _gh_api(args: List[str]) -> Tuple[bool, str, str]:
-    """Run ``gh api ARGS`` and return (success, stdout, stderr)."""
+    """Run a `gh api` command. Returns (success, stdout, stderr)."""
     try:
         result = subprocess.run(
-            ["gh", "api", *args],
+            ["gh", "api"] + args,
             capture_output=True,
             text=True,
             check=False,
+            timeout=120,
         )
-        return result.returncode == 0, result.stdout or "", result.stderr or ""
-    except FileNotFoundError:
-        return False, "", "gh CLI not found"
-    except OSError as exc:
+        return result.returncode == 0, result.stdout, result.stderr
+    except (subprocess.TimeoutExpired, OSError) as exc:
         return False, "", str(exc)
 
 
 def _fetch_comments(comments_url: str) -> str:
-    """Fetch and format issue comments for context."""
+    """Fetch and format issue comments from a comments URL."""
     if not comments_url:
-        return "No comments URL available."
+        return "No comments."
 
-    # gh api accepts either the path portion or the full URL.
-    success, stdout, stderr = _gh_api([comments_url])
-    if not success:
-        return f"Failed to fetch comments: {stderr.strip() or 'unknown error'}"
+    # Convert API URL to gh api path. comments_url usually looks like:
+    # https://api.github.com/repos/{owner}/{repo}/issues/{n}/comments
+    path = comments_url
+    prefix = "https://api.github.com/"
+    if path.startswith(prefix):
+        path = path[len(prefix):]
+
+    ok, stdout, stderr = _gh_api([path, "--paginate"])
+    if not ok:
+        return f"Failed to fetch comments: {stderr.strip()}"
 
     try:
-        comments = json.loads(stdout)
+        comments = json.loads(stdout) if stdout.strip() else []
     except (json.JSONDecodeError, ValueError):
-        return "Failed to parse issue comments JSON."
+        return "Failed to parse comments JSON."
 
     if not isinstance(comments, list) or not comments:
-        return "No comments on this issue."
+        return "No comments."
 
-    formatted: List[str] = []
-    for idx, comment in enumerate(comments, start=1):
-        if not isinstance(comment, dict):
+    parts: List[str] = []
+    for c in comments:
+        if not isinstance(c, dict):
             continue
-        author = (comment.get("user") or {}).get("login", "unknown")
-        created = comment.get("created_at", "")
-        body = comment.get("body", "") or ""
-        formatted.append(
-            f"--- Comment #{idx} by @{author} at {created} ---\n{body}"
-        )
-    return "\n\n".join(formatted) if formatted else "No comments on this issue."
+        user = (c.get("user") or {}).get("login", "unknown")
+        created = c.get("created_at", "")
+        body = c.get("body", "") or ""
+        parts.append(f"--- @{user} ({created}) ---\n{body}")
+
+    return "\n\n".join(parts) if parts else "No comments."
 
 
 def _fetch_pr_context(owner: str, repo: str, pr_number: int) -> str:
-    """Fetch and format PR metadata, files, comments, and reviews."""
+    """Fetch PR metadata, files, comments, reviews and format as text."""
     sections: List[str] = []
 
-    # 1) PR metadata.
-    pr_path = f"repos/{owner}/{repo}/pulls/{pr_number}"
-    success, stdout, stderr = _gh_api([pr_path])
-    if not success:
-        return f"Failed to fetch PR metadata: {stderr.strip() or 'unknown error'}"
+    # 1. PR metadata.
+    ok, stdout, stderr = _gh_api([f"repos/{owner}/{repo}/pulls/{pr_number}"])
+    if not ok:
+        return f"Failed to fetch PR #{pr_number}: {stderr.strip()}"
     try:
         pr = json.loads(stdout)
     except (json.JSONDecodeError, ValueError):
-        return "Failed to parse PR metadata JSON."
+        return f"Failed to parse PR #{pr_number} JSON."
 
-    title = pr.get("title", "") or ""
-    state = pr.get("state", "") or ""
+    title = pr.get("title", "")
+    body = pr.get("body", "") or ""
+    state = pr.get("state", "")
+    base_ref = (pr.get("base") or {}).get("ref", "")
+    head_ref = (pr.get("head") or {}).get("ref", "")
+    head_sha = (pr.get("head") or {}).get("sha", "")
+    author = (pr.get("user") or {}).get("login", "")
     draft = pr.get("draft", False)
-    base = ((pr.get("base") or {}).get("ref")) or "?"
-    head_obj = pr.get("head") or {}
-    head_ref = head_obj.get("ref") or "?"
-    head_repo = (head_obj.get("repo") or {}).get("full_name") or f"{owner}/{repo}"
-    body = _truncate(pr.get("body", "") or "", _PR_BODY_LIMIT, label="PR body")
-    author = (pr.get("user") or {}).get("login", "unknown")
+    merged = pr.get("merged", False)
 
     sections.append(
         "## PR Metadata\n"
-        f"- Title: {title}\n"
         f"- Number: #{pr_number}\n"
-        f"- State: {state}{' (draft)' if draft else ''}\n"
+        f"- Title: {title}\n"
         f"- Author: @{author}\n"
-        f"- Base: {base}\n"
-        f"- Head: {head_repo}:{head_ref}\n\n"
-        f"### PR Body\n{body or '(empty)'}"
+        f"- State: {state} (draft={draft}, merged={merged})\n"
+        f"- Base: {base_ref}\n"
+        f"- Head: {head_ref} @ {head_sha}\n\n"
+        "### Body\n"
+        f"{body}".rstrip()
     )
 
-    # 2) Changed files with bounded patch excerpts.
-    files_path = f"repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100"
-    success, stdout, stderr = _gh_api([files_path])
-    if not success:
-        sections.append(
-            "## Changed Files\n"
-            f"(Failed to fetch file list: {stderr.strip() or 'unknown error'})"
-        )
+    # 2. Changed files (with patch excerpts).
+    ok, stdout, stderr = _gh_api(
+        [f"repos/{owner}/{repo}/pulls/{pr_number}/files", "--paginate"]
+    )
+    files_section = "## Changed Files\n"
+    if not ok:
+        files_section += f"Failed to fetch files: {stderr.strip()}"
     else:
         try:
-            files = json.loads(stdout)
+            files = json.loads(stdout) if stdout.strip() else []
         except (json.JSONDecodeError, ValueError):
             files = []
         if not isinstance(files, list) or not files:
-            sections.append("## Changed Files\nNo file changes reported.")
+            files_section += "No changed files."
         else:
-            file_lines: List[str] = ["## Changed Files"]
-            patch_budget = _PR_PATCH_TOTAL_LIMIT
-            for entry in files:
-                if not isinstance(entry, dict):
+            file_parts: List[str] = []
+            total = len(files)
+            for f in files[:_MAX_PR_FILES]:
+                if not isinstance(f, dict):
                     continue
-                fname = entry.get("filename", "?")
-                status = entry.get("status", "?")
-                additions = entry.get("additions", 0)
-                deletions = entry.get("deletions", 0)
-                file_lines.append(
-                    f"\n### {fname} ({status}, +{additions}/-{deletions})"
+                fname = f.get("filename", "")
+                status = f.get("status", "")
+                additions = f.get("additions", 0)
+                deletions = f.get("deletions", 0)
+                patch = f.get("patch", "") or ""
+                patch_excerpt = _truncate(patch, _MAX_PATCH_EXCERPT_CHARS, "patch")
+                file_parts.append(
+                    f"### {fname} ({status}, +{additions}/-{deletions})\n"
+                    f"```diff\n{patch_excerpt}\n```"
                 )
-                patch = entry.get("patch") or ""
-                if not patch:
-                    file_lines.append("(no patch text — likely binary or too large)")
-                    continue
-                if patch_budget <= 0:
-                    file_lines.append("(patch omitted — total patch budget exhausted)")
-                    continue
-                excerpt_limit = min(_PR_PATCH_PER_FILE_LIMIT, patch_budget)
-                excerpt = _truncate(patch, excerpt_limit, label="patch")
-                patch_budget -= len(excerpt)
-                file_lines.append("```diff\n" + excerpt + "\n```")
-            sections.append("\n".join(file_lines))
+            if total > _MAX_PR_FILES:
+                file_parts.append(
+                    f"\n... [{total - _MAX_PR_FILES} more file(s) omitted]"
+                )
+            files_section += "\n\n".join(file_parts)
+    sections.append(files_section)
 
-    # 3) PR conversation comments (issue-style on the PR).
-    comments_path = f"repos/{owner}/{repo}/issues/{pr_number}/comments?per_page=100"
-    success, stdout, stderr = _gh_api([comments_path])
-    if success:
+    # 3. PR conversation comments.
+    ok, stdout, stderr = _gh_api(
+        [f"repos/{owner}/{repo}/issues/{pr_number}/comments", "--paginate"]
+    )
+    comments_section = "## PR Comments\n"
+    if not ok:
+        comments_section += f"Failed to fetch PR comments: {stderr.strip()}"
+    else:
         try:
-            comments = json.loads(stdout)
+            comments = json.loads(stdout) if stdout.strip() else []
         except (json.JSONDecodeError, ValueError):
             comments = []
-        if isinstance(comments, list) and comments:
-            chunks: List[str] = ["## PR Conversation Comments"]
-            for idx, comment in enumerate(comments, start=1):
-                if not isinstance(comment, dict):
-                    continue
-                a = (comment.get("user") or {}).get("login", "unknown")
-                created = comment.get("created_at", "")
-                body_text = comment.get("body", "") or ""
-                chunks.append(f"\n--- Comment #{idx} by @{a} at {created} ---\n{body_text}")
-            sections.append(_truncate("\n".join(chunks), _PR_COMMENT_LIMIT, label="PR comments"))
+        if not isinstance(comments, list) or not comments:
+            comments_section += "No PR comments."
         else:
-            sections.append("## PR Conversation Comments\n(none)")
-    else:
-        sections.append(
-            "## PR Conversation Comments\n"
-            f"(Failed to fetch: {stderr.strip() or 'unknown error'})"
-        )
+            cparts: List[str] = []
+            for c in comments[:_MAX_PR_COMMENTS]:
+                if not isinstance(c, dict):
+                    continue
+                user = (c.get("user") or {}).get("login", "unknown")
+                created = c.get("created_at", "")
+                cbody = c.get("body", "") or ""
+                cparts.append(f"--- @{user} ({created}) ---\n{cbody}")
+            if len(comments) > _MAX_PR_COMMENTS:
+                cparts.append(
+                    f"\n... [{len(comments) - _MAX_PR_COMMENTS} more comment(s) omitted]"
+                )
+            comments_section += "\n\n".join(cparts)
+    sections.append(comments_section)
 
-    # 4) Submitted PR reviews.
-    reviews_path = f"repos/{owner}/{repo}/pulls/{pr_number}/reviews?per_page=100"
-    success, stdout, stderr = _gh_api([reviews_path])
-    if success:
+    # 4. PR reviews.
+    ok, stdout, stderr = _gh_api(
+        [f"repos/{owner}/{repo}/pulls/{pr_number}/reviews", "--paginate"]
+    )
+    reviews_section = "## PR Reviews\n"
+    if not ok:
+        reviews_section += f"Failed to fetch PR reviews: {stderr.strip()}"
+    else:
         try:
-            reviews = json.loads(stdout)
+            reviews = json.loads(stdout) if stdout.strip() else []
         except (json.JSONDecodeError, ValueError):
             reviews = []
-        if isinstance(reviews, list) and reviews:
-            chunks = ["## Submitted PR Reviews"]
-            for idx, review in enumerate(reviews, start=1):
-                if not isinstance(review, dict):
-                    continue
-                a = (review.get("user") or {}).get("login", "unknown")
-                rstate = review.get("state", "")
-                submitted = review.get("submitted_at", "")
-                body_text = review.get("body", "") or ""
-                chunks.append(
-                    f"\n--- Review #{idx} by @{a} ({rstate}) at {submitted} ---\n"
-                    f"{body_text or '(no body)'}"
-                )
-            sections.append(_truncate("\n".join(chunks), _PR_REVIEWS_LIMIT, label="PR reviews"))
+        if not isinstance(reviews, list) or not reviews:
+            reviews_section += "No reviews submitted."
         else:
-            sections.append("## Submitted PR Reviews\n(none)")
-    else:
-        sections.append(
-            "## Submitted PR Reviews\n"
-            f"(Failed to fetch: {stderr.strip() or 'unknown error'})"
-        )
+            rparts: List[str] = []
+            for r in reviews[:_MAX_PR_REVIEWS]:
+                if not isinstance(r, dict):
+                    continue
+                user = (r.get("user") or {}).get("login", "unknown")
+                rstate = r.get("state", "")
+                submitted = r.get("submitted_at", "")
+                rbody = r.get("body", "") or ""
+                rparts.append(
+                    f"--- @{user} [{rstate}] ({submitted}) ---\n{rbody}"
+                )
+            if len(reviews) > _MAX_PR_REVIEWS:
+                rparts.append(
+                    f"\n... [{len(reviews) - _MAX_PR_REVIEWS} more review(s) omitted]"
+                )
+            reviews_section += "\n\n".join(rparts)
+    sections.append(reviews_section)
 
-    return "\n\n".join(sections)
+    full = "\n\n".join(sections)
+    return _truncate(full, _MAX_PR_CONTEXT_CHARS, "PR context")
+
+
+def _fetch_pr_metadata_struct(
+    owner: str, repo: str, pr_number: int
+) -> Optional[Dict[str, Any]]:
+    """Fetch raw PR JSON for ReviewLoopContext fields."""
+    ok, stdout, _stderr = _gh_api([f"repos/{owner}/{repo}/pulls/{pr_number}"])
+    if not ok:
+        return None
+    try:
+        data = json.loads(stdout)
+        if isinstance(data, dict):
+            return data
+    except (json.JSONDecodeError, ValueError):
+        pass
+    return None
+
+
+def _fetch_pr_files_list(
+    owner: str, repo: str, pr_number: int
+) -> Tuple[str, ...]:
+    """Fetch list of changed filenames."""
+    ok, stdout, _stderr = _gh_api(
+        [f"repos/{owner}/{repo}/pulls/{pr_number}/files", "--paginate"]
+    )
+    if not ok:
+        return ()
+    try:
+        files = json.loads(stdout) if stdout.strip() else []
+    except (json.JSONDecodeError, ValueError):
+        return ()
+    if not isinstance(files, list):
+        return ()
+    names: List[str] = []
+    for f in files:
+        if isinstance(f, dict) and f.get("filename"):
+            names.append(f["filename"])
+    return tuple(names)
+
+
+def _fetch_pr_comments_list(
+    owner: str, repo: str, pr_number: int
+) -> Tuple[Dict[str, Any], ...]:
+    ok, stdout, _stderr = _gh_api(
+        [f"repos/{owner}/{repo}/issues/{pr_number}/comments", "--paginate"]
+    )
+    if not ok:
+        return ()
+    try:
+        items = json.loads(stdout) if stdout.strip() else []
+    except (json.JSONDecodeError, ValueError):
+        return ()
+    if not isinstance(items, list):
+        return ()
+    return tuple(c for c in items if isinstance(c, dict))
+
+
+def _fetch_pr_reviews_list(
+    owner: str, repo: str, pr_number: int
+) -> Tuple[Dict[str, Any], ...]:
+    ok, stdout, _stderr = _gh_api(
+        [f"repos/{owner}/{repo}/pulls/{pr_number}/reviews", "--paginate"]
+    )
+    if not ok:
+        return ()
+    try:
+        items = json.loads(stdout) if stdout.strip() else []
+    except (json.JSONDecodeError, ValueError):
+        return ()
+    if not isinstance(items, list):
+        return ()
+    return tuple(r for r in items if isinstance(r, dict))
 
 
 def _post_checkup_comment(
-    owner: str,
-    repo: str,
-    issue_number: int,
-    report: Dict[str, Any],
+    owner: str, repo: str, issue_number: int, report: Dict[str, Any]
 ) -> None:
-    """Post a structured checkup result comment on the GitHub issue."""
-    lines: List[str] = ["## ⚕️ Agentic Checkup Report", ""]
-    summary = report.get("summary") or report.get("message") or ""
-    if summary:
-        lines.append(str(summary))
-        lines.append("")
-
-    issues = report.get("issues") or []
-    if isinstance(issues, list) and issues:
-        lines.append("### Findings")
-        lines.append("")
-        lines.append("| # | Severity | Area | Description |")
-        lines.append("|---|----------|------|-------------|")
-        for idx, issue in enumerate(issues, start=1):
-            if not isinstance(issue, dict):
-                continue
-            sev = str(issue.get("severity", "?")).replace("|", "\\|")
-            area = str(issue.get("area", "?")).replace("|", "\\|")
-            desc = str(issue.get("description", "")).replace("|", "\\|").replace("\n", " ")
-            lines.append(f"| {idx} | {sev} | {area} | {desc} |")
-        lines.append("")
-    else:
-        lines.append("_No issues reported._")
-        lines.append("")
-
-    body = "\n".join(lines)
+    """Post a structured checkup report as a GitHub issue comment."""
     try:
+        lines: List[str] = ["## ⚕ Checkup Report\n"]
+        summary = report.get("summary", "")
+        if summary:
+            lines.append(f"**Summary:** {summary}\n")
+
+        issues = report.get("issues") or []
+        if isinstance(issues, list) and issues:
+            lines.append("\n### Issues Found\n")
+            lines.append("| # | Severity | Area | Description |")
+            lines.append("|---|----------|------|-------------|")
+            for i, issue in enumerate(issues, 1):
+                if not isinstance(issue, dict):
+                    continue
+                sev = str(issue.get("severity", "")).replace("|", "\\|")
+                area = str(issue.get("area", "")).replace("|", "\\|")
+                desc = str(issue.get("description", "")).replace("|", "\\|").replace(
+                    "\n", " "
+                )
+                lines.append(f"| {i} | {sev} | {area} | {desc} |")
+        else:
+            lines.append("\n_No issues found._\n")
+
+        cost = report.get("total_cost")
+        if cost is not None:
+            try:
+                lines.append(f"\n**Total cost:** ${float(cost):.4f}")
+            except (TypeError, ValueError):
+                pass
+
+        body = "\n".join(lines)
         subprocess.run(
             [
-                "gh",
-                "api",
+                "gh", "api",
                 f"repos/{owner}/{repo}/issues/{issue_number}/comments",
-                "-f",
-                f"body={body}",
+                "-f", f"body={body}",
             ],
             capture_output=True,
             text=True,
             check=False,
+            timeout=60,
         )
-    except (FileNotFoundError, OSError) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         console.print(f"[yellow]Failed to post checkup comment: {exc}[/yellow]")
 
 
 def _post_error_comment(
-    owner: str,
-    repo: str,
-    issue_number: int,
-    message: str,
+    owner: str, repo: str, issue_number: int, message: str
 ) -> None:
     """Post an error message as a GitHub issue comment."""
-    body = f"## ❌ Agentic Checkup Failed\n\n{message}"
     try:
+        body = f"## ❌ Checkup Error\n\n{message}"
         subprocess.run(
             [
-                "gh",
-                "api",
+                "gh", "api",
                 f"repos/{owner}/{repo}/issues/{issue_number}/comments",
-                "-f",
-                f"body={body}",
+                "-f", f"body={body}",
             ],
             capture_output=True,
             text=True,
             check=False,
+            timeout=60,
         )
-    except (FileNotFoundError, OSError) as exc:
+    except (OSError, subprocess.TimeoutExpired) as exc:
         console.print(f"[yellow]Failed to post error comment: {exc}[/yellow]")
 
 
-def _split_csv(value: Optional[str]) -> Optional[Tuple[str, ...]]:
-    """Parse a comma-separated string into a tuple of trimmed tokens."""
-    if value is None:
-        return None
-    parts = [tok.strip() for tok in value.split(",") if tok.strip()]
-    return tuple(parts) if parts else None
+def _parse_csv(value: Optional[str]) -> Tuple[str, ...]:
+    """Parse a comma-separated string into a tuple of trimmed non-empty parts."""
+    if not value:
+        return ()
+    return tuple(p.strip() for p in value.split(",") if p.strip())
 
 
 def run_agentic_checkup(
@@ -382,138 +456,152 @@ def run_agentic_checkup(
     clean_reviewer_states: Optional[str] = None,
     reviewer_fallback: bool = True,
 ) -> Tuple[bool, str, float, str]:
-    """Entry point for the agentic checkup workflow.
+    """Entry point for the agentic checkup workflow."""
 
-    Fetches the issue (and optional PR) context, loads architecture/.pddrc,
-    then dispatches either to the multi-step orchestrator or — when
-    ``review_loop=True`` — to the primary-reviewer/fixer review loop.
-
-    Returns:
-        Tuple of (success, message, total_cost, model_used).
-    """
-    # 1) gh CLI availability.
+    # 1. gh CLI availability.
     if not _check_gh_cli():
-        msg = (
-            "GitHub CLI (gh) not found. Install it from https://cli.github.com/ "
-            "and authenticate with `gh auth login`."
+        return (
+            False,
+            "GitHub CLI (gh) not found. Please install gh and authenticate "
+            "with 'gh auth login'.",
+            0.0,
+            "",
         )
-        if not quiet:
-            console.print(f"[red]{msg}[/red]")
-        return False, msg, 0.0, ""
 
-    # 2) Parse issue URL.
+    # 2. Parse issue URL.
     parsed = _parse_issue_url(issue_url)
-    if not parsed:
-        msg = f"Invalid GitHub issue URL: {issue_url}"
-        if not quiet:
-            console.print(f"[red]{msg}[/red]")
-        return False, msg, 0.0, ""
+    if parsed is None:
+        return (False, f"Invalid GitHub issue URL: {issue_url}", 0.0, "")
     repo_owner, repo_name, issue_number = parsed
 
-    # 3) Optional PR URL parsing.
+    # 3. PR mode parsing.
     pr_owner: Optional[str] = None
     pr_repo: Optional[str] = None
     pr_number: Optional[int] = None
     if pr_url:
         pr_parsed = _parse_pr_url(pr_url)
-        if not pr_parsed:
-            msg = f"Invalid GitHub PR URL: {pr_url}"
-            if not quiet:
-                console.print(f"[red]{msg}[/red]")
-            return False, msg, 0.0, ""
+        if pr_parsed is None:
+            return (False, f"Invalid GitHub PR URL: {pr_url}", 0.0, "")
         pr_owner, pr_repo, pr_number = pr_parsed
 
-    # 4) Fetch issue.
-    issue_path = f"repos/{repo_owner}/{repo_name}/issues/{issue_number}"
-    success, stdout, stderr = _gh_api([issue_path])
-    if not success:
-        msg = f"Failed to fetch issue: {stderr.strip() or 'unknown error'}"
-        if not quiet:
-            console.print(f"[red]{msg}[/red]")
-        return False, msg, 0.0, ""
+    # 4. Review-loop precondition: requires PR mode.
+    if review_loop and pr_number is None:
+        return (
+            False,
+            "--review-loop requires --pr-url (PR-mode is mandatory for the "
+            "review loop).",
+            0.0,
+            "",
+        )
+
+    # 5. Fetch issue content.
+    if not quiet:
+        console.print(
+            f"[blue]Fetching issue #{issue_number} from {repo_owner}/{repo_name}...[/blue]"
+        )
+    ok, stdout, stderr = _gh_api(
+        [f"repos/{repo_owner}/{repo_name}/issues/{issue_number}"]
+    )
+    if not ok:
+        return (False, f"Failed to fetch issue: {stderr.strip()}", 0.0, "")
 
     try:
         issue_data = json.loads(stdout)
     except (json.JSONDecodeError, ValueError):
-        msg = "Failed to parse issue JSON"
-        if not quiet:
-            console.print(f"[red]{msg}[/red]")
-        return False, msg, 0.0, ""
+        return (False, "Failed to parse issue JSON", 0.0, "")
 
     issue_title = issue_data.get("title", "") or ""
     issue_body = issue_data.get("body", "") or ""
     comments_url = issue_data.get("comments_url", "") or ""
 
-    # 5) Fetch comments (best-effort).
+    # 6. Fetch comments.
     comments_text = _fetch_comments(comments_url)
 
-    # 6) Compose raw issue context (unescaped — used by review loop directly).
-    raw_issue_content = (
-        f"# Issue #{issue_number}: {issue_title}\n\n"
-        f"## Body\n{issue_body or '(no body)'}\n\n"
-        f"## Comments\n{comments_text}"
+    # 7. Build raw issue content (title + body + comments).
+    issue_content_raw = (
+        f"# {issue_title}\n\n"
+        f"{issue_body}\n\n"
+        f"## Comments\n\n{comments_text}"
     )
 
-    # 7) Project context.
+    # 8. Find project root and load architecture + .pddrc.
     project_root = find_project_root()
-    pddrc_content_raw = _load_pddrc_content(project_root)
-
-    arch_data, _arch_path = _load_architecture_json(project_root, issue_number=issue_number)
+    arch_data, _arch_path = _load_architecture_json(project_root, issue_number)
     if arch_data is None:
         architecture_json_raw = "[]"
     else:
         try:
-            architecture_json_raw = json.dumps(arch_data, indent=2, default=str)
+            architecture_json_raw = json.dumps(arch_data, indent=2)
         except (TypeError, ValueError):
             architecture_json_raw = "[]"
 
-    # 8) Review-loop dispatch.
+    pddrc_content_raw = _load_pddrc_content(project_root)
+
+    # ==================================================================
+    # Review-loop dispatch
+    # ==================================================================
     if review_loop:
-        if pr_owner is None or pr_repo is None or pr_number is None or not pr_url:
-            msg = "review_loop requires --pr-url to point at an existing pull request."
-            if not quiet:
-                console.print(f"[red]{msg}[/red]")
-            return False, msg, 0.0, ""
+        assert pr_owner is not None and pr_repo is not None and pr_number is not None
 
-        # Function-scope import to avoid hard dependency at module load time.
-        try:
-            from .checkup_review_loop import (
-                ReviewLoopConfig,
-                ReviewLoopContext,
-                run_checkup_review_loop,
+        if not quiet:
+            console.print(
+                f"[blue]Fetching PR context for #{pr_number}...[/blue]"
             )
-        except ImportError as exc:
-            msg = f"Review-loop dependencies unavailable: {exc}"
-            if not quiet:
-                console.print(f"[red]{msg}[/red]")
-            return False, msg, 0.0, ""
 
-        # Fetch PR context (bounded).
-        pr_context_raw = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+        pr_meta = _fetch_pr_metadata_struct(pr_owner, pr_repo, pr_number) or {}
+        pr_files = _fetch_pr_files_list(pr_owner, pr_repo, pr_number)
+        pr_comments_list = _fetch_pr_comments_list(pr_owner, pr_repo, pr_number)
+        pr_reviews_list = _fetch_pr_reviews_list(pr_owner, pr_repo, pr_number)
 
-        # Truncate everything before handing to the loop. The loop's prompt
-        # is an f-string, so we do NOT escape braces here.
-        issue_content_for_loop = _truncate(
-            raw_issue_content, _REVIEW_LOOP_ISSUE_LIMIT + _REVIEW_LOOP_COMMENTS_LIMIT,
-            label="issue+comments",
+        pr_context_text = _fetch_pr_context(pr_owner, pr_repo, pr_number)
+
+        # Truncate raw fields for prompt budget. The review-loop prompt is an
+        # f-string, not .format(), so we do NOT escape braces here.
+        truncated_issue = _truncate(
+            issue_content_raw, _MAX_ISSUE_CONTENT_CHARS, "issue content"
         )
-        pr_content_for_loop = _truncate(
-            pr_context_raw, _REVIEW_LOOP_PR_LIMIT, label="PR context",
+        truncated_pr_ctx = _truncate(
+            pr_context_text, _MAX_PR_CONTEXT_CHARS, "PR context"
         )
-        pddrc_for_loop = _truncate(
-            pddrc_content_raw, _REVIEW_LOOP_PDDRC_LIMIT, label=".pddrc",
+        truncated_pddrc = _truncate(
+            pddrc_content_raw, _MAX_PDDRC_CHARS, ".pddrc"
         )
-        arch_for_loop = _truncate(
-            architecture_json_raw, _REVIEW_LOOP_ARCH_LIMIT, label="architecture.json",
+        truncated_arch = _truncate(
+            architecture_json_raw, _MAX_ARCH_CHARS, "architecture.json"
         )
 
-        # Build config — pass None through where caller didn't customize so
-        # the dataclass defaults take effect.
-        reviewers_tuple = _split_csv(reviewers)
-        blocking_tuple = _split_csv(blocking_severities)
-        clean_states_tuple = _split_csv(clean_reviewer_states)
+        extra_context = (
+            f"## Issue #{issue_number}\n{truncated_issue}\n\n"
+            f"## PR Context\n{truncated_pr_ctx}\n\n"
+            f"## .pddrc\n{truncated_pddrc}"
+        )
 
-        config_kwargs: Dict[str, Any] = {
+        rl_context = ReviewLoopContext(
+            issue_number=issue_number,
+            issue_url=issue_url,
+            issue_title=issue_title,
+            issue_body=_truncate(issue_body, _MAX_ISSUE_CONTENT_CHARS, "issue body"),
+            pr_number=pr_number,
+            pr_url=pr_url or "",
+            pr_owner=pr_owner,
+            pr_repo=pr_repo,
+            pr_title=pr_meta.get("title", "") or "",
+            pr_body=_truncate(pr_meta.get("body", "") or "", _MAX_ISSUE_CONTENT_CHARS, "PR body"),
+            pr_head_ref=(pr_meta.get("head") or {}).get("ref", "") or "",
+            pr_base_ref=(pr_meta.get("base") or {}).get("ref", "") or "",
+            pr_changed_files=pr_files,
+            pr_comments=pr_comments_list,
+            pr_reviews=pr_reviews_list,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            architecture=truncated_arch,
+            extra_context=extra_context,
+        )
+
+        rl_kwargs: Dict[str, Any] = {
+            "reviewers": _parse_csv(reviewers),
+            "reviewer": reviewer,
+            "fixer": fixer,
             "review_only": review_only,
             "max_rounds": max_review_rounds,
             "max_cost": max_review_cost,
@@ -521,73 +609,53 @@ def run_agentic_checkup(
             "require_all_reviewers_clean": require_all_reviewers_clean,
             "continue_on_reviewer_limit": continue_on_reviewer_limit,
             "require_final_fresh_review": require_final_fresh_review,
+            "reviewer_fallback": reviewer_fallback,
             "timeout_adder": timeout_adder,
             "reasoning_time": reasoning_time,
-            "reviewer_fallback": reviewer_fallback,
         }
-        if reviewers_tuple is not None:
-            config_kwargs["reviewers"] = reviewers_tuple
-        if reviewer is not None:
-            config_kwargs["reviewer"] = reviewer
-        if fixer is not None:
-            config_kwargs["fixer"] = fixer
-        if blocking_tuple is not None:
-            config_kwargs["blocking_severities"] = blocking_tuple
-        if clean_states_tuple is not None:
-            config_kwargs["clean_reviewer_states"] = clean_states_tuple
+        blocking_tuple = _parse_csv(blocking_severities)
+        if blocking_tuple:
+            rl_kwargs["blocking_severities"] = blocking_tuple
+        clean_tuple = _parse_csv(clean_reviewer_states)
+        if clean_tuple:
+            rl_kwargs["clean_reviewer_states"] = clean_tuple
 
-        loop_config = ReviewLoopConfig(**config_kwargs)
-        loop_context = ReviewLoopContext(
-            issue_url=issue_url,
-            issue_content=issue_content_for_loop,
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            issue_number=issue_number,
-            issue_title=issue_title,
-            architecture_json=arch_for_loop,
-            pddrc_content=pddrc_for_loop,
-            pr_url=pr_url,
-            pr_owner=pr_owner,
-            pr_repo=pr_repo,
-            pr_number=pr_number,
-            project_root=project_root,
-            pr_content=pr_content_for_loop,
-        )
+        rl_config = ReviewLoopConfig(**rl_kwargs)
 
         try:
             return run_checkup_review_loop(
-                context=loop_context,
-                config=loop_config,
+                context=rl_context,
+                config=rl_config,
                 cwd=project_root,
                 verbose=verbose,
                 quiet=quiet,
                 use_github_state=use_github_state,
             )
-        except Exception as exc:  # pragma: no cover - defensive
-            err_msg = f"Review loop crashed: {exc}"
+        except Exception as exc:  # pylint: disable=broad-except
+            err_msg = f"Review-loop failed: {exc}"
             if not quiet:
                 console.print(f"[red]{err_msg}[/red]")
-            try:
+            if use_github_state:
                 _post_error_comment(repo_owner, repo_name, issue_number, err_msg)
-            except Exception:  # noqa: BLE001
-                pass
-            return False, err_msg, 0.0, ""
+            return (False, err_msg, 0.0, "")
 
-    # 9) Legacy orchestrator dispatch — escape braces for .format() safety.
-    issue_content_for_orchestrator = _escape_format_braces(raw_issue_content)
-    pddrc_for_orchestrator = _escape_format_braces(pddrc_content_raw)
-    architecture_for_orchestrator = _escape_format_braces(architecture_json_raw)
+    # ==================================================================
+    # Legacy orchestrator dispatch
+    # ==================================================================
+    issue_content = _escape_format_braces(issue_content_raw)
+    architecture_json = _escape_format_braces(architecture_json_raw)
+    pddrc_content = _escape_format_braces(pddrc_content_raw)
 
     try:
         return run_agentic_checkup_orchestrator(
             issue_url=issue_url,
-            issue_content=issue_content_for_orchestrator,
+            issue_content=issue_content,
             repo_owner=repo_owner,
             repo_name=repo_name,
             issue_number=issue_number,
             issue_title=issue_title,
-            architecture_json=architecture_for_orchestrator,
-            pddrc_content=pddrc_for_orchestrator,
+            architecture_json=architecture_json,
+            pddrc_content=pddrc_content,
             cwd=project_root,
             verbose=verbose,
             quiet=quiet,
@@ -600,12 +668,10 @@ def run_agentic_checkup(
             pr_repo=pr_repo,
             pr_number=pr_number,
         )
-    except Exception as exc:  # noqa: BLE001
-        err_msg = f"Agentic checkup orchestrator failed: {exc}"
+    except Exception as exc:  # pylint: disable=broad-except
+        err_msg = f"Checkup orchestrator failed: {exc}"
         if not quiet:
             console.print(f"[red]{err_msg}[/red]")
-        try:
+        if use_github_state:
             _post_error_comment(repo_owner, repo_name, issue_number, err_msg)
-        except Exception:  # noqa: BLE001
-            pass
-        return False, err_msg, 0.0, ""
+        return (False, err_msg, 0.0, "")
