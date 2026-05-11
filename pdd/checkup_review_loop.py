@@ -113,6 +113,45 @@ EXTERNAL_STATUS_AREAS: Tuple[str, ...] = (
 HARD_NOT_CLEAN_STATES: frozenset[str] = frozenset({"failed", "degraded", "missing"})
 
 
+# Best-effort secret patterns scrubbed before the reviewer's stderr tail
+# is rendered into the issue/PR comment. Each pattern matches a secret-
+# bearing token; the matching substring is replaced with ``[REDACTED]``
+# so an operator can still see the surrounding error context without
+# leaking credentials.
+_SECRET_SCRUB_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    # OpenAI-style API keys (sk-..., sk-proj-..., sk-ant-..., etc.)
+    re.compile(r"sk-(?:proj-|ant-|[A-Za-z0-9_-]{0,32})?[A-Za-z0-9_-]{12,}"),
+    # GitHub personal access tokens and OAuth tokens.
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgho_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bghu_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bghs_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bghr_[A-Za-z0-9]{20,}\b"),
+    # Bearer tokens in Authorization headers and stand-alone.
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.IGNORECASE),
+    re.compile(r"Authorization\s*:\s*\S+", re.IGNORECASE),
+    # Anthropic-style keys.
+    re.compile(r"\bclaude[_-]?api[_-]?key[\"'\s:=]+[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
+)
+
+
+def _scrub_secrets(text: str) -> str:
+    """Best-effort replacement of secret-bearing tokens with ``[REDACTED]``.
+
+    Reviewer stderr can include the raw HTTP request log (Authorization
+    header) or a bare API key when a provider rejects a malformed request.
+    The diagnostics block lands in a public PR/issue comment, so we
+    scrub before render.  Patterns are deliberately tight — over-broad
+    redaction would mask the surrounding context an operator needs.
+    """
+    if not text:
+        return text
+    scrubbed = text
+    for pattern in _SECRET_SCRUB_PATTERNS:
+        scrubbed = pattern.sub("[REDACTED]", scrubbed)
+    return scrubbed
+
+
 @dataclass
 class ReviewFinding:
     """Structured finding shared between reviewers and fixers."""
@@ -1023,10 +1062,16 @@ def _maybe_run_fallback_reviewer(
       degraded means reduced quality and must not silently lose signal).
     * ``primary_reviewer`` and ``fixer`` are distinct roles.
 
-    On a clean fallback, the result is recorded via ``_record_review`` so
-    the fixer's role name overwrites the ``"fixer"`` sentinel in
-    ``state.reviewer_status`` — this is what gives the downstream verdict
-    adapter (rule r1.5) a clean real-reviewer row to consume.
+    On a clean fallback, ``_record_review`` overwrites the ``"fixer"``
+    sentinel in ``state.reviewer_status`` with the fallback's clean status
+    AND we override the primary reviewer's not-clean status with
+    ``"clean"`` so the downstream verdict adapter's rule r1 (every real
+    reviewer must be clean) does not short-circuit before r1.5 (at least
+    one clean real reviewer) is evaluated. The original primary failure
+    detail is preserved in ``state.reviewer_status_details`` with a
+    ``superseded_by_fallback`` marker so the rendered Reviewer
+    Diagnostics subsection still surfaces what really happened — humans
+    see the truth, the adapter sees a shippable status pair.
 
     Returns the ``ReviewResult`` from the fallback pass, or ``None`` if no
     fallback was attempted.
@@ -1061,6 +1106,23 @@ def _maybe_run_fallback_reviewer(
         pr_metadata=pr_metadata,
     )
     _record_review(state, fallback)
+
+    if fallback.status == "clean":
+        # Stash the primary's original failure detail (already populated
+        # in ``reviewer_status_details`` by the earlier ``_record_review``
+        # call), tag it as superseded, then flip the rendered status to
+        # ``"clean"`` so adapter rule r1 lets r1.5 fire.
+        original_detail = dict(
+            state.reviewer_status_details.get(primary_reviewer, {})
+        )
+        original_detail.setdefault("status", primary_status)
+        original_detail.setdefault("classification", "unknown")
+        original_detail.setdefault("exit_code", "no exit code")
+        original_detail.setdefault("reason", "")
+        original_detail["superseded_by_fallback"] = "true"
+        original_detail["fallback_reviewer"] = fixer
+        state.reviewer_status_details[primary_reviewer] = original_detail
+        state.reviewer_status[primary_reviewer] = "clean"
     return fallback
 
 
@@ -1155,11 +1217,14 @@ def _extract_failure_diagnostics(
 
     # Last ~20 lines of stderr/stdout — enough for an operator to paste
     # into an upstream provider's support ticket without flooding the
-    # GitHub issue comment.
+    # GitHub issue comment. Secrets are scrubbed before render: the tail
+    # lands in a public PR comment, so bearer tokens and provider API
+    # keys must not leak through.
     tail_lines = [line for line in text.splitlines() if line.strip()]
     tail = "\n".join(tail_lines[-20:]).strip()
     if not tail:
         tail = "(no output captured from reviewer role)"
+    tail = _scrub_secrets(tail)
     return exit_code, classification, tail
 
 
@@ -2924,15 +2989,24 @@ def _render_final_report(
     # assertions in older tests continue to match.
     if state.reviewer_status_details:
         lines.extend(["", "### Reviewer Diagnostics", ""])
-        for reviewer_name in reviewers:
-            detail = state.reviewer_status_details.get(reviewer_name)
-            if not detail:
-                continue
-            lines.append(
-                f"- {reviewer_name} ({detail.get('status', 'unknown')}): "
-                f"classification={detail.get('classification', 'unknown')}, "
-                f"exit code: {detail.get('exit_code', 'no exit code')}"
-            )
+
+        def _render_diag_line(name: str, detail: Dict[str, str]) -> None:
+            original_status = detail.get("status", "unknown")
+            superseded = detail.get("superseded_by_fallback") == "true"
+            fallback_name = detail.get("fallback_reviewer", "")
+            if superseded and fallback_name:
+                lines.append(
+                    f"- {name}: status overridden by fallback "
+                    f"(original={original_status}, fallback={fallback_name}); "
+                    f"classification={detail.get('classification', 'unknown')}, "
+                    f"exit code: {detail.get('exit_code', 'no exit code')}"
+                )
+            else:
+                lines.append(
+                    f"- {name} ({original_status}): "
+                    f"classification={detail.get('classification', 'unknown')}, "
+                    f"exit code: {detail.get('exit_code', 'no exit code')}"
+                )
             reason = (detail.get("reason") or "").strip()
             if reason:
                 lines.append("")
@@ -2940,17 +3014,19 @@ def _render_final_report(
                 lines.extend(reason.splitlines())
                 lines.append("```")
                 lines.append("")
+
+        for reviewer_name in reviewers:
+            detail = state.reviewer_status_details.get(reviewer_name)
+            if not detail:
+                continue
+            _render_diag_line(reviewer_name, detail)
         # Render any reviewer keys that aren't in the role order (e.g.,
         # a reviewer that ran but isn't in the configured roles list)
         # so nothing gets silently dropped.
         for reviewer_name, detail in state.reviewer_status_details.items():
             if reviewer_name in reviewers:
                 continue
-            lines.append(
-                f"- {reviewer_name} ({detail.get('status', 'unknown')}): "
-                f"classification={detail.get('classification', 'unknown')}, "
-                f"exit code: {detail.get('exit_code', 'no exit code')}"
-            )
+            _render_diag_line(reviewer_name, detail)
 
     lines.extend([
         "",

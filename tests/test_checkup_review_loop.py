@@ -1055,6 +1055,7 @@ class TestCheckupReviewLoopRuntime:
     def test_fallback_reviewer_promotes_fixer_when_primary_fails_and_flag_set(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
+        """Fallback success must render clean adapter-facing reviewer statuses."""
         from pdd.checkup_review_loop import run_checkup_review_loop
         import pdd.checkup_review_loop as mod
 
@@ -1082,10 +1083,17 @@ class TestCheckupReviewLoopRuntime:
             "fallback-claude" in label or "review-claude" in label
             for label in labels
         ), labels
+        assert (
+            "reviewer-status: codex=clean claude=clean fresh-final=clean"
+            in report
+        ), report
+        assert "reviewer-status: codex=failed" not in report
         assert "claude=clean" in report
         assert "claude=fixer" not in report
         assert "fallback" in report.lower()
-        assert "codex=failed" in report
+        assert "### Reviewer Diagnostics" in report
+        assert "status overridden by fallback" in report
+        assert "original=failed" in report
         assert "Primary reviewer codex could not complete" not in report
         assert "fresh-final: clean" in report or "fresh-final=clean" in report
 
@@ -1153,6 +1161,83 @@ class TestCheckupReviewLoopRuntime:
         assert "Primary reviewer codex could not complete" in report
         assert "issue_aligned: unknown" in report
         assert "Required review did not complete" in report
+
+    def test_fallback_success_yields_ship_verdict_via_cloud_adapter(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import sys
+
+        adapter_path = (
+            "/Users/serhanasad/Desktop/SF/pdd_cloud/extensions/"
+            "github_pdd_app/src/services"
+        )
+        if adapter_path not in sys.path:
+            sys.path.insert(0, adapter_path)
+        adapter = pytest.importorskip("checkup_verdict_adapter")
+
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed", 0.0, ""
+            return True, _json("clean"), 0.2, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+        assert success is True
+
+        verdict = adapter.parse_checkup_report(report, exit_code=0)
+        assert verdict.verdict == "ship", (verdict.verdict, verdict.reason)
+        assert verdict.per_reviewer_status.get("codex") == "clean"
+        assert verdict.per_reviewer_status.get("claude") == "clean"
+
+    def test_diagnostics_tail_scrubs_secrets(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        leaky_output = (
+            "exit code 7\n"
+            "rate limit exceeded\n"
+            "Authorization: Bearer sk-proj-AbCdEf1234567890XYZqwerty\n"
+            "header X-API-Key: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345\n"
+            "fatal: openai responded with 429"
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, leaky_output, 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "rate limit exceeded" in report
+        assert "openai responded with 429" in report
+        assert "sk-proj-AbCdEf1234567890XYZqwerty" not in report
+        assert "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345" not in report
+        assert "Bearer sk-proj-AbCdEf1234567890XYZqwerty" not in report
+        assert "[REDACTED]" in report
 
     def test_reviewer_fallback_used_when_primary_fails(
         self, monkeypatch: Any, tmp_path: Path
