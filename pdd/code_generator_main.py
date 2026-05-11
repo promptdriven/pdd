@@ -529,6 +529,21 @@ def _extract_pdd_interface_signatures(
     elif iface_type == "cli":
         cli_spec = interface.get("cli") or {}
         candidates.extend(cli_spec.get("commands") or [])
+    elif iface_type == "command":
+        # The "command" interface type comes in two shapes used in the repo
+        # today: a single ``command: {name, ...}`` dict, or a multi-command
+        # ``command: {commands: [...]}`` list. Most current command prompts
+        # omit ``signature`` (description-only), so the loop below silently
+        # skips them via the ``params is None`` check — same fall-through
+        # behavior as a class-header signature. Prompts that do declare a
+        # signature get the same param-name conformance treatment as cli/
+        # module entries.
+        command_spec = interface.get("command") or {}
+        commands_list = command_spec.get("commands")
+        if isinstance(commands_list, list):
+            candidates.extend(commands_list)
+        elif command_spec.get("name"):
+            candidates.append(command_spec)
     # Other iface_types (page, component, api) don't carry callable signatures
     # we can check this way.
 
@@ -630,7 +645,11 @@ def _verify_pdd_interface_signatures(
         )
     missing_by_func: Dict[str, List[str]] = {}
     for dotted in missing_params:
-        func, _, param = dotted.partition(".")
+        # rsplit so dotted method names like "ContentSelector.select.mode"
+        # group as ("ContentSelector.select", "mode") rather than
+        # ("ContentSelector", "select.mode"). partition() at the first dot
+        # would misattribute the param to the class instead of the method.
+        func, _, param = dotted.rpartition(".")
         missing_by_func.setdefault(func, []).append(param)
     for func, params in missing_by_func.items():
         directive_lines.append(

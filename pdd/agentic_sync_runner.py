@@ -222,7 +222,15 @@ def _parse_conformance_failure(
     if _CONFORMANCE_PREFIX not in combined:
         return None
 
-    missing: List[str] = []
+    # Track which shape each symbol came from so we can build a directive
+    # that actually matches the failure mode: legacy export-missing vs. the
+    # new pdd-interface parameter/function-missing emitted by
+    # ``_verify_pdd_interface_signatures``. Mixing them under a single
+    # "Required missing exports" header tells the model to add an export
+    # named ``update_main.sync_metadata`` instead of a parameter — which
+    # is exactly the misdirection the previous directive caused.
+    export_missing: List[str] = []
+    iface_missing: List[str] = []
 
     def _split_symbols(blob: str) -> List[str]:
         out: List[str] = []
@@ -245,7 +253,7 @@ def _parse_conformance_failure(
         re.MULTILINE,
     )
     for m in inline_re.finditer(combined):
-        missing.extend(_split_symbols(m.group(1)))
+        export_missing.extend(_split_symbols(m.group(1)))
 
     # 2) Inline camelCase form:
     #    "... Python code uses camelCase names (foo, barBaz) but ..."
@@ -253,7 +261,7 @@ def _parse_conformance_failure(
         r"Python code uses camelCase names\s*\(([^)]*)\)"
     )
     for m in camel_re.finditer(combined):
-        missing.extend(_split_symbols(m.group(1)))
+        export_missing.extend(_split_symbols(m.group(1)))
 
     # 3) Inline <pdd-interface> signature-conformance form:
     #    "... <pdd-interface> declares parameter(s) missing from the
@@ -265,42 +273,84 @@ def _parse_conformance_failure(
         re.MULTILINE,
     )
     for m in pdd_iface_re.finditer(combined):
-        missing.extend(_split_symbols(m.group(1)))
+        iface_missing.extend(_split_symbols(m.group(1)))
 
-    # 4) Bullet form: capture bullet lines following the marker.
-    capture = False
+    # 4) Bullet form: capture bullet lines following the marker. The marker
+    # text we matched dictates which bucket the bullets belong to.
+    capture_bucket: Optional[List[str]] = None
     for line in combined.splitlines():
         stripped = line.strip()
+        if _MISSING_PDD_INTERFACE_PARAMS_MARKER in stripped:
+            capture_bucket = iface_missing
+            continue
         if (
             _MISSING_DECLARED_MARKER in stripped
             or _MISSING_CAMELCASE_MARKER in stripped
-            or _MISSING_PDD_INTERFACE_PARAMS_MARKER in stripped
         ):
-            capture = True
+            capture_bucket = export_missing
             continue
-        if capture:
+        if capture_bucket is not None:
             m = re.match(r"^[-*]\s+(\S+)", stripped)
             if m:
-                missing.append(m.group(1).rstrip(".,"))
+                capture_bucket.append(m.group(1).rstrip(".,"))
                 continue
             if stripped == "":
                 continue
-            capture = False
+            capture_bucket = None
 
-    missing_sorted = tuple(sorted(set(missing)))
+    missing_sorted = tuple(sorted(set(export_missing) | set(iface_missing)))
     if not missing_sorted:
         return None
 
-    directive_lines = [
-        "Architecture conformance repair required.",
-        "Required missing exports:",
-    ]
-    for sym in missing_sorted:
-        directive_lines.append(f"- {sym}")
-    directive_lines.append(
-        "Add these exact exports. Do not modify architecture.json. "
-        "Do not remove existing valid exports."
-    )
+    directive_lines: List[str] = ["Architecture conformance repair required."]
+
+    if export_missing:
+        directive_lines.append("Required missing exports:")
+        for sym in sorted(set(export_missing)):
+            directive_lines.append(f"- {sym}")
+        directive_lines.append(
+            "Add these exact exports. Do not modify architecture.json. "
+            "Do not remove existing valid exports."
+        )
+
+    if iface_missing:
+        # The pdd-interface check emits two kinds of dotted entries:
+        # bare ``func_name`` for a missing function/method, and
+        # ``func[.qual].param`` for a missing parameter. rsplit so dotted
+        # method names like ``ContentSelector.select.mode`` group as
+        # ("ContentSelector.select", "mode") rather than misattributing the
+        # parameter to the class.
+        if export_missing:
+            directive_lines.append("")
+        directive_lines.append(
+            "The prompt's <pdd-interface> declares function(s)/parameter(s) "
+            "missing from the generated code:"
+        )
+        params_by_func: Dict[str, List[str]] = {}
+        missing_funcs: List[str] = []
+        for sym in sorted(set(iface_missing)):
+            if "." in sym:
+                func, _, param = sym.rpartition(".")
+                params_by_func.setdefault(func, []).append(param)
+            else:
+                missing_funcs.append(sym)
+        if missing_funcs:
+            directive_lines.append(
+                "- Add the following missing function(s)/method(s) declared "
+                f"in the prompt: `{', '.join(missing_funcs)}`."
+            )
+        for func, params in params_by_func.items():
+            directive_lines.append(
+                f"- On `{func}`, add the following missing parameter(s) to "
+                f"the signature and corresponding code paths: "
+                f"`{', '.join(params)}`."
+            )
+        directive_lines.append(
+            "Do not remove the declared parameters from the prompt's "
+            "<pdd-interface>. The prompt is the source of truth — update "
+            "the generated code to match it."
+        )
+
     repair_directive = "\n".join(directive_lines)
     return repair_directive, missing_sorted
 

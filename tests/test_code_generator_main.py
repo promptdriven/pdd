@@ -5453,6 +5453,141 @@ class TestPddInterfaceSignatureConformance:
             )
         assert "ContentSelector.select" in excinfo.value.missing_symbols
 
+    def test_command_interface_type_signature_is_checked(self, tmp_path):
+        """``type: "command"`` interfaces (used by ``pdd/prompts/commands/*``)
+        must participate in the signature check when entries carry a
+        ``signature`` field. Both the multi-command (``commands: [...]``) and
+        single-command (``name`` at top) shapes are supported.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "modify_python.prompt"
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "pdd/commands/modify.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "split", "signature": "def split(...)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"command","command":{"commands":'
+            '[{"name":"split","signature":"(target_file, mode=\'agentic\')"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "def split(target_file):\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert excinfo.value.missing_symbols == ["split.mode"]
+
+    def test_command_interface_single_shape_skipped_without_signature(self, tmp_path):
+        """``type: "command"`` entries without a ``signature`` (the common
+        case today — name+description only) must be silent no-ops, same as
+        class-header signatures: they have nothing to check.
+        """
+        prompt_filename = "modify_python.prompt"
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "pdd/commands/modify.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "split", "signature": "def split(...)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"command","command":{"commands":'
+            '[{"name":"split","description":"do a thing"}]}}'
+            '</pdd-interface>\n'
+        )
+        # No signature → no check → code doesn't need to match anything.
+        generated_code = "def split():\n    pass\n"
+
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=str(arch_path),
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_dotted_method_repair_directive_groups_via_rsplit(self, tmp_path):
+        """The repair directive must group ``ContentSelector.select.mode``
+        as ("ContentSelector.select", "mode"), not ("ContentSelector",
+        "select.mode"). The previous ``partition('.')`` implementation
+        misattributed the parameter to the class.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "content_selector_python.prompt"
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "src/content_selector.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "ContentSelector", "signature": "class ContentSelector"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"ContentSelector.select",'
+            '"signature":"(content, selectors, file_path=None, mode=\\"full\\")"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "class ContentSelector:\n"
+            "    def select(self, content, selectors, file_path=None):\n"
+            "        return content\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        directive = excinfo.value.repair_directive
+        assert "On `ContentSelector.select`" in directive
+        assert "`mode`" in directive
+        # Must not misattribute "select.mode" to ContentSelector.
+        assert "select.mode" not in directive
+        assert "On `ContentSelector`," not in directive
+
     def test_prompt_only_missing_function_without_architecture_entry(self, tmp_path):
         """A function declared in <pdd-interface> that is entirely absent from
         the generated code must be reported, even when architecture.json has
