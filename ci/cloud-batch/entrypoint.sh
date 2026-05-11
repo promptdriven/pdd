@@ -128,7 +128,11 @@ if [ -n "${PDD_REFRESH_TOKEN:-}" ] && [ -n "${FIREBASE_API_KEY:-}" ]; then
             # Parse the JSON body. Capture python's stderr separately so a
             # heredoc bug, missing python3, or import failure produces a
             # distinct error string from a malformed Firebase response.
-            JWT_PARSE_STDERR=$(mktemp)
+            # The `|| JWT_PARSE_RC=$?` pattern is critical: under `set -e`,
+            # a bare `X=$(failing_cmd)` aborts the script before $? can be
+            # read, so the parser_script_crashed branch would be unreachable.
+            JWT_PARSE_STDERR=$(mktemp 2>/dev/null || echo "/tmp/jwt_parse_stderr.$$")
+            JWT_PARSE_RC=0
             JWT_ERROR=$(echo "${JWT_RESPONSE}" | python3 -c "
 import sys, json
 try:
@@ -146,19 +150,18 @@ elif err:
     print(err)
 else:
     print('')
-" 2>"${JWT_PARSE_STDERR}")
-            JWT_PARSE_RC=$?
+" 2>"${JWT_PARSE_STDERR}") || JWT_PARSE_RC=$?
             if [ "${JWT_PARSE_RC}" -ne 0 ]; then
-                JWT_ERROR="parser_script_crashed(rc=${JWT_PARSE_RC}): $(tr '\n' ' ' < "${JWT_PARSE_STDERR}" | cut -c1-200)"
+                JWT_ERROR="parser_script_crashed(rc=${JWT_PARSE_RC}): $(tr '\n' ' ' < "${JWT_PARSE_STDERR}" 2>/dev/null | cut -c1-200)"
             fi
             rm -f "${JWT_PARSE_STDERR}"
 
             if [ -z "${JWT_ERROR}" ]; then
-                JWT_TOKEN_STDERR=$(mktemp)
-                PDD_JWT_TOKEN_CANDIDATE=$(echo "${JWT_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id_token','') or '')" 2>"${JWT_TOKEN_STDERR}")
-                JWT_TOKEN_RC=$?
+                JWT_TOKEN_STDERR=$(mktemp 2>/dev/null || echo "/tmp/jwt_token_stderr.$$")
+                JWT_TOKEN_RC=0
+                PDD_JWT_TOKEN_CANDIDATE=$(echo "${JWT_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin).get('id_token','') or '')" 2>"${JWT_TOKEN_STDERR}") || JWT_TOKEN_RC=$?
                 if [ "${JWT_TOKEN_RC}" -ne 0 ]; then
-                    JWT_ERROR="token_extract_crashed(rc=${JWT_TOKEN_RC}): $(tr '\n' ' ' < "${JWT_TOKEN_STDERR}" | cut -c1-200)"
+                    JWT_ERROR="token_extract_crashed(rc=${JWT_TOKEN_RC}): $(tr '\n' ' ' < "${JWT_TOKEN_STDERR}" 2>/dev/null | cut -c1-200)"
                     PDD_JWT_TOKEN_CANDIDATE=""
                 fi
                 rm -f "${JWT_TOKEN_STDERR}"
@@ -196,8 +199,12 @@ else:
         if [ "${TASK_INDEX}" -ge "${CLOUD_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le "${CLOUD_REGRESSION_END}" ]; then
             JWT_FAIL_CASE_NUM=$((TASK_INDEX - CLOUD_REGRESSION_START + 1))
             # Strip characters that would break the result JSON (write_result
-            # uses heredoc substitution without escaping).
-            JWT_LAST_ERROR_SAFE=$(printf '%s' "${JWT_LAST_ERROR}" | tr -d '"\\' | tr '\n' ' ' | cut -c1-160)
+            # uses heredoc substitution without escaping). Drop quotes,
+            # backslashes, and ALL ASCII control chars (U+0000–U+001F) —
+            # JSON forbids unescaped controls, so leaving \r or similar in
+            # would produce malformed task_N.json that the aggregator can't
+            # parse.
+            JWT_LAST_ERROR_SAFE=$(printf '%s' "${JWT_LAST_ERROR}" | tr -d '"\\' | tr -d '\000-\037' | cut -c1-160)
             write_result "error" "${SETUP_SECONDS:-0}" "cloud_regression" "jwt_exchange_failed_case_${JWT_FAIL_CASE_NUM}: ${JWT_LAST_ERROR_SAFE}"
             exit 1
         fi
