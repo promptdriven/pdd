@@ -1,4 +1,4 @@
-<pdd-reason>Registers maintenance CLI commands: sync, auto-deps, and setup with all options.</pdd-reason>
+<pdd-reason>Registers maintenance CLI commands: sync, auto-deps, setup, and metadata with all options.</pdd-reason>
 
 <pdd-interface>
 {
@@ -7,24 +7,26 @@
     "commands": [
       {"name": "sync", "description": "Synchronize a prompt with its code, tests, and examples"},
       {"name": "auto-deps", "description": "Analyze and insert dependencies into a prompt file"},
-      {"name": "setup", "description": "Install shell completion and run setup utility"}
+      {"name": "setup", "description": "Install shell completion and run setup utility"},
+      {"name": "metadata", "description": "Generate or refresh PDD metadata tags in prompt files"}
     ]
   }
 }
 </pdd-interface>
 
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
+<pdd-dependency>metadata_tags_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
 
 % Role & Scope
-  This module contains maintenance and setup commands: `sync`, `auto-deps`, and `setup`.
+  This module contains maintenance and setup commands: `sync`, `auto-deps`, `setup`, and the `metadata` group.
 
 <include>context/python_preamble.prompt</include>
 
 % Program Specification (README.md):
     <README.md>
-    <include select="section:sync,section:auto-deps,section:setup">./README.md</include>
+    <include select="section:sync,section:auto-deps,section:setup,section:metadata tags">./README.md</include>
     </README.md>
 
 % Requirements
@@ -49,6 +51,18 @@
      - Interface: Match the `setup` command specification in `README.md`.
      - Logic: Install shell completion, then run setup utility.
      - No `@track_cost` (no LLM calls).
+  4. **metadata** (click.Group) with one subcommand:
+     - **`metadata tags PROMPT_FILE`**:
+       - Interface: Match the `metadata tags` command specification in `README.md`.
+       - Options:
+         - `--from {prompt-code|architecture}` (default `prompt-code`): source for tag synthesis. `from` is a Python reserved keyword, so this option MUST be declared as `@click.option('--from', 'source', type=click.Choice(['prompt-code', 'architecture']), default='prompt-code')` so it maps to the function parameter `source`.
+         - `--force` (flag, default `False`): refresh existing tags instead of preserving them.
+         - `--dry-run` (flag, default `False`): print a unified diff without writing.
+         - `--output PATH`: write merged prompt to PATH instead of in-place.
+       - Logic: Call `generate_metadata_tags()` from `pdd.metadata_tags` with `@track_cost`, passing the `source` argument (bound from `--from`).
+       - Forward the global `strength`, `temperature`, and `verbose` from `ctx.obj`.
+       - On `success=False`, print the `errors` list and raise `click.ClickException("metadata tags generation failed")`.
+       - Import as `from ..metadata_tags import generate_metadata_tags`.
 
 % Dependencies
   <sync_main_example>

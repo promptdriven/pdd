@@ -963,9 +963,10 @@ The `<pdd-interface>` tag supports four interface types, matching the architectu
 ### Sync Workflow
 
 1. **Add/edit tags** in your prompt files using the format above
-2. **Click "Sync from Prompt"** in the PDD Connect Architecture page (or call the API endpoint)
-3. **Tags automatically update** `architecture.json` with your changes
-4. **Architecture visualization** reflects the updated dependencies and interfaces
+2. **Backfill missing tags** (optional): run `pdd metadata tags <prompt>` to synthesize `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` from the prompt and its code when an older prompt has no tags or incomplete tags. Use `--from architecture` to source from `architecture.json` instead, and `--dry-run` to preview the change.
+3. **Click "Sync from Prompt"** in the PDD Connect Architecture page (or call the API endpoint)
+4. **Tags automatically update** `architecture.json` with your changes
+5. **Architecture visualization** reflects the updated dependencies and interfaces
 
 Prompts are the **source of truth** - tags in prompt files override what's in `architecture.json`. This aligns with PDD's core philosophy that prompts, not code or documentation, are authoritative.
 

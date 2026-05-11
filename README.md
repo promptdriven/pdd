@@ -618,6 +618,7 @@ graph TB
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
+- **[`metadata tags`](#23-metadata-tags)**: Generates or refreshes `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` tags in a prompt file
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
@@ -2947,6 +2948,42 @@ pdd firecrawl-cache check <url>        # Check if a URL is cached
 ```
 
 **When to use**: Caching is automatic. Use `stats` to check cache status, `info` to view configuration, `check` to verify if a URL is cached, or `clear` to force re-scraping all URLs.
+
+### 23. metadata tags
+
+Generates or refreshes the three PDD metadata tags (`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`) in a prompt file. This is the missing `prompt+code → tags` path that complements `pdd sync-architecture` (which reads tags to update `architecture.json`) and `pdd preprocess --pdd-tags` (which injects tags from architecture into a freshly generated prompt). Use it to backfill tags on older prompts so that `sync-architecture` has something meaningful to read.
+
+```bash
+pdd [GLOBAL OPTIONS] metadata tags [OPTIONS] PROMPT_FILE
+```
+
+Arguments:
+- `PROMPT_FILE`: Path to the prompt file whose tags should be generated or refreshed.
+
+Options:
+- `--from {prompt-code|architecture}`: Source for tag synthesis. `prompt-code` (default) uses an LLM to derive tags from the prompt body and the corresponding code file. `architecture` reads the matching entry from `architecture.json`.
+- `--force`: Refresh every tag even if it already validates. Without this flag, existing valid tags are preserved and only missing or invalid tags are synthesized.
+- `--dry-run`: Print a unified diff of the proposed change without writing the file.
+- `--output PATH`: Write the merged prompt to `PATH` instead of editing `PROMPT_FILE` in place.
+
+Behavior:
+- Tags are validated deterministically: XML well-formedness is checked with `xml.etree.ElementTree`, and the `<pdd-interface>` JSON body is round-tripped against the same `validate_interface_structure` rules used by `sync-architecture`.
+- Prompt prose, `<include>` directives, and non-PDD tags are never modified — only `<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>` blocks are added or replaced.
+- After a successful run, `pdd sync-architecture <PROMPT_FILE>` can update `architecture.json` reliably from the newly populated tags.
+
+Examples:
+```bash
+# Backfill tags on an older prompt that has none
+pdd metadata tags prompts/legacy_module_python.prompt
+
+# Preview the diff without writing
+pdd metadata tags --dry-run prompts/legacy_module_python.prompt
+
+# Refresh all tags from architecture.json
+pdd metadata tags --from architecture --force prompts/legacy_module_python.prompt
+```
+
+**When to use**: Run before `pdd sync-architecture` whenever a prompt is missing tags or has incomplete tags (for example, dependency-only prompts). After tags are populated, the normal architecture-sync workflow takes over.
 
 ## Example Review Process
 
