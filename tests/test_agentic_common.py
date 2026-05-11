@@ -6442,3 +6442,44 @@ class TestIssue814BillingErrorsPermanent:
         # Random use of "billing" without the documented phrase must not flag
         # a transient error as permanent.
         assert _is_permanent_error("billing pipeline timed out") is False
+
+    def test_credit_balance_error_skips_retries_and_falls_back(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """User workflow: exhausted Anthropic credits should not burn retries."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, msg, cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+
+        assert success is True
+        assert provider == "google"
+        assert "Google success" in msg
+        assert mock_subprocess_run.call_count == 2
+        sleep_mock.assert_not_called()
