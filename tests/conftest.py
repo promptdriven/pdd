@@ -111,6 +111,55 @@ def isolate_cloud_only_overrides(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _isolate_provider_env(monkeypatch):
+    """Clear every provider credential env var the OpenCode code path consults.
+
+    Fix C of ``promptdriven/pdd_cloud#1405``: the autonomous-solve PR
+    ``promptdriven/pdd#858`` shipped tests that passed in the verifier's
+    minimal worker container but failed on any developer machine that had
+    real provider keys exported (``XAI_API_KEY``,
+    ``GOOGLE_APPLICATION_CREDENTIALS``, ``VERTEXAI_PROJECT``, ...). The
+    tests silently assumed "this env var happens to be unset"; this
+    fixture makes that assumption explicit by always clearing the
+    canonical key set before each test runs.
+
+    Canonical source
+    ----------------
+    The key set is sourced from
+    ``pdd.agentic_common._opencode_provider_env_keys()`` — the same helper
+    the production code path uses to decide whether to trust an OpenCode
+    credential signal. Using the runtime helper (not the smaller 26-key
+    ``_OPENCODE_PROVIDER_ENV_KEYS_FALLBACK`` constant) means every provider
+    row added to ``pdd/data/llm_model.csv`` is automatically covered, and
+    the Fix B static-analysis detector
+    (``promptdriven/pdd#899``) does not flag this fixture as drift.
+
+    Opt-back-in
+    -----------
+    Tests that need a credential set (most ``test_agentic_common.py``
+    "has credentials" cases, every Issue #813 ``_isolated_env`` test)
+    populate it explicitly via ``monkeypatch.setenv`` or
+    ``patch.dict(os.environ, {...})``. Because pytest tears down fixtures
+    in reverse order, an inner ``patch.dict`` undoes before this fixture's
+    teardown, so neither path sees the developer's real env leak in.
+
+    Why this fixture also imports lazily
+    -------------------------------------
+    Importing ``pdd.agentic_common`` at conftest import time would pull
+    in litellm and other heavy modules even for trivial test sessions.
+    The import is deferred to first-fixture-use, which keeps test
+    collection fast and matches the lazy-import pattern already used by
+    ``_isolate_claude_oauth_probe``.
+    """
+    # Lazy import: avoid pulling litellm into conftest's import graph.
+    # See module docstring for the rationale.
+    from pdd.agentic_common import _opencode_provider_env_keys
+
+    for key in _opencode_provider_env_keys():
+        monkeypatch.delenv(key, raising=False)
+
+
+@pytest.fixture(autouse=True)
 def _isolate_claude_oauth_probe(monkeypatch):
     """Default the Issue #813 OAuth probe to False so tests are CI-portable.
 
