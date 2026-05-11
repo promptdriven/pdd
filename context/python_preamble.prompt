@@ -18,3 +18,13 @@
 
 % Error Handling
 - Ensure the function handles edge cases, such as missing inputs or model errors, and provide clear error messages.
+
+% Preservation Rules (on regeneration)
+- When regenerating an existing file, you MUST preserve every pre-existing line that is not directly required to change by the current prompt edit. These rules apply equally whether the prompt edit is large or small.
+- Docstrings: MUST preserve every existing function, class, and module docstring verbatim — including multi-paragraph "why" prose, incident references (e.g., issue/PR numbers, dated incidents), and root-cause notes. MUST NOT rewrite, summarize, condense, reflow, or delete a docstring. MAY only modify a specific docstring when the current prompt change explicitly alters that function's contract; in that case, edit the smallest possible span and keep all unrelated paragraphs intact.
+- Inline and block comments: MUST preserve every existing `#` comment verbatim, both standalone (`# …` on its own line) and trailing (`code  # …`). These comments frequently encode the only available explanation for non-obvious code (e.g., why a regex uses a negative lookahead). MUST NOT strip, collapse, or "tidy" comments. MAY only edit a comment when the line of code it annotates is itself being changed for a prompt-driven reason.
+- Type annotations: MUST preserve the exact specificity of existing type annotations. MUST NOT downgrade parameterized generics to their bare form (e.g., `set[str]` MUST NOT become `set`; `dict[str, int]` MUST NOT become `dict`; `list[Foo]` MUST NOT become `list`). MAY only change an annotation when the prompt explicitly requires a new signature.
+- Exception specificity: MUST preserve the exact exception type in existing `except` clauses. MUST NOT narrow `except Exception:` to a bare `except:` or vice-versa, and MUST NOT replace a specific exception type (e.g., `except KeyError:`) with a broader one without a prompt-driven reason.
+- Import structure: MUST preserve existing import structure verbatim, including any `try/except ImportError` wrappers around optional dependencies. MUST NOT unwrap an existing `try/except ImportError` block into a bare import, and MUST NOT wrap an existing bare import in `try/except ImportError`, unless the prompt explicitly requires changing how that dependency is imported.
+- Blank lines and ordering: MUST preserve existing blank-line spacing between functions/classes and the existing order of top-level definitions, unless the prompt explicitly requires reordering.
+- Scope discipline: When the prompt edit names a specific function, requirement, or region, your code changes MUST be confined to that scope. MUST NOT make incidental "cleanup" edits to unrelated functions in the same file.
