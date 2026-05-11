@@ -2,13 +2,13 @@
 <pdd-dependency>agentic_bug_orchestrator_python.prompt</pdd-dependency>
 
 <pdd.agentic_e2e_fix_orchestrator>
-<!-- Invalid selector for context/agentic_e2e_fix_orchestrator_example.py: Function '_check_e2e_environment' not found in source -->
+<include select="def:_check_e2e_environment,def:_verify_tests_independently,def:_extract_test_files,def:_get_modified_and_untracked,def:_detect_meaningful_changes,def:_is_noise_path,def:push_with_retry,def:_run_step11_code_cleanup,def:_classify_verification_failure,def:_is_intermediate_file,def:_commit_and_push,def:_revert_out_of_scope_changes,def:_check_staleness,pattern:/VERIFY_TIMEOUT_SECONDS/,pattern:/_fallback_scan_was_capped/,pattern:/MAX_FALLBACK_TEST_FILES/,pattern:/E2E_FIX_STEP_TIMEOUTS/">context/agentic_e2e_fix_orchestrator_example.py</include>
 </pdd.agentic_e2e_fix_orchestrator>
 <pdd.ci_validation>
 <include>context/ci_validation_example.py</include>
 </pdd.ci_validation>
 <pdd.agentic_common>
-    <!-- Invalid selector for context/agentic_common_example.py: Function 'example_post_final_comment' not found in source -->
+    <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment,def:example_post_pr_comment,def:example_post_final_comment,def:example_github_state_helpers,def:example_provider_preference,pattern:/consecutive_provider_failures/">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>

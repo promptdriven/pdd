@@ -19,10 +19,10 @@
     <include select="def:get_cached_jwt,def:get_refresh_token,def:verify_auth,def:get_auth_status">context/auth_service_example.py</include>
 </pdd.core.auth>
 <pdd.utils.languages>
-    <!-- Invalid selector for context/agentic_langtest_example.py: Path selector requires a .json/.yaml/.yml file, got '/workspace/public-pdd/context/agentic_langtest_example.py' -->
+    <include select="def:default_verify_cmd_for,path:missing_tool_hints">context/agentic_langtest_example.py</include>
 </pdd.utils.languages>
 <pdd.cli>
-    <!-- Invalid selector for context/change/15/initial_cli.py: Class 'cli' not found in source -->
+    <include select="def:get_paths_for_shell,class:cli,def:log_cost">context/change/15/initial_cli.py</include>
 </pdd.cli>
 
 % Inputs

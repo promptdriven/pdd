@@ -188,7 +188,7 @@
 
 <examples>
    <sync_main_example>
-   <!-- Invalid selector for context/sync_main_example.py: Function 'sync_main' not found in source -->
+   <include select="def:sync_main">context/sync_main_example.py</include>
    </sync_main_example>
 
    <construct_paths_example>
@@ -202,7 +202,7 @@
 
 % Dependencies
 <pdd.auth_service>
-    <!-- Invalid selector for context/auth_service_example.py: Function 'get_jwt_token' not found in source -->
+    <include select="def:get_jwt_token,def:get_cached_jwt">context/auth_service_example.py</include>
 </pdd.auth_service>
 <pdd.code_generator_main>
     <include select="class:ArchitectureConformanceError,def:code_generator_main">pdd/code_generator_main.py</include>
@@ -210,13 +210,10 @@
 <pdd.agentic_sync_runner>
     <include select="def:build_conformance_hard_failure_from_error">pdd/agentic_sync_runner.py</include>
 </pdd.agentic_sync_runner>
-<pdd.commands.__init__>
-    <include>context/__init__example.py</include>
-</pdd.commands.__init__>
 
 % CLI command documentation:
 <cli_command_readme>
-   <!-- Invalid selector for README.md: Markdown section 'sync' not found -->
+   <include select="section:sync">README.md</include>
 </cli_command_readme>
 
 % Implementation Pattern:

@@ -104,5 +104,5 @@
 
 % Here is the README for the cli command that has details of how the 'auto-deps' command works:
    <cli_command_readme>
-   <include query="Details on how the 'auto-deps' command works">./README.md</include>
+   <include>./README.md</include>
    </cli_command_readme>

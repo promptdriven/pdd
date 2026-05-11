@@ -68,7 +68,7 @@
 
 % Here is the README for the cli command that has details of how the 'split' command works:
    <cli_command_readme>
-   <include query="split command details and usage">./README.md</include>
+   <include>./README.md</include>
    </cli_command_readme>
 
 % Implementation Steps:

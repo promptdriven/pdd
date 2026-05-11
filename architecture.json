@@ -6488,7 +6488,7 @@
   {
     "reason": "Generates tests using agentic single-pass execution with file change detection.",
     "description": "Runs an agentic CLI to generate test files. Records file mtimes before/after agent execution, detects changed files, reads generated test content. Supports JSON metadata extraction from agent output.",
-    "dependencies": ["agentic_langtest_python.prompt"],
+    "dependencies": [],
     "priority": 195,
     "filename": "agentic_test_generate_python.prompt",
     "filepath": "pdd/agentic_test_generate.py",

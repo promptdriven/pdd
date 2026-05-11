@@ -88,7 +88,7 @@
 
 % Dependencies
   <get_test_command>
-    <!-- Invalid selector for context/get_test_command_example.py: Function 'default_verify_cmd_for' not found in source -->
+    <include select="def:default_verify_cmd_for">context/get_test_command_example.py</include>
   </get_test_command>
 
   <get_lint_commands>

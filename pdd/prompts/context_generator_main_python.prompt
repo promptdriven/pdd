@@ -44,13 +44,13 @@
 
       - Here is an example of a similar main wrapper function:
       <code_generator_main_example>
-      <context.generate.7.code_generator_main><!-- Missing: context/generate/7/code_generator_main.py --></context.generate.7.code_generator_main>
+      <context.generate.7.code_generator_main><include>context/generate/7/code_generator_main.py</include></context.generate.7.code_generator_main>
       </code_generator_main_example>
    </internal_example_modules>
 
    % Here is how to call the cloud version of the example generator when not using the `--local` flag.
    <cloud_example_generator_example>
-      <docs.api_documentation><!-- Missing: ../docs/api-documentation.md --></docs.api_documentation>
+      <docs.api_documentation><include>../docs/api-documentation.md</include></docs.api_documentation>
    </cloud_example_generator_example>
 </examples>
 

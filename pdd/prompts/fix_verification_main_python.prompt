@@ -43,11 +43,11 @@ Success Semantics:
 </construct_paths_dependency>
 
 <fix_verification_errors_dependency>
-<!-- Invalid selector for context/fix_verification_errors_example.py: Function 'fix_verification_errors' not found in source -->
+<include>context/fix_verification_errors_example.py</include>
 </fix_verification_errors_dependency>
 
 <fix_verification_errors_loop_dependency>
-<!-- Invalid selector for context/fix_verification_errors_loop_example.py: Function 'fix_verification_errors_loop' not found in source -->
+<include>context/fix_verification_errors_loop_example.py</include>
 </fix_verification_errors_loop_dependency>
 
 % Inputs/Outputs

@@ -35,7 +35,7 @@
        - `attempts`: int
 
 % Dependencies
-  <!-- Missing: context/command_logging.prompt -->
+  <include>context/command_logging.prompt</include>
   <install_completion_example>
   <include>context/install_completion_example.py</include>
   </install_completion_example>

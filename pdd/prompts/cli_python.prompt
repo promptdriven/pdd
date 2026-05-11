@@ -9,14 +9,6 @@
 
 <include>context/python_preamble.prompt</include>
 
-% Dependencies
-<pdd.cli>
-    <include>context/__init__example.py</include>
-</pdd.cli>
-<change.15.initial_cli>
-    <include select="def:cli">context/change/15/initial_cli.py</include>
-</change.15.initial_cli>
-
 % Instructions
   - Import `cli` from `.core.cli`.
   - Import `register_commands` from `.commands`.

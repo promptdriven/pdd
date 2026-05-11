@@ -97,7 +97,6 @@
 
 <pdd.commands.misc><include>context/commands/misc_example.py</include></pdd.commands.misc>
 <pdd.commands><include>context/commands/__init___example.py</include></pdd.commands>
-<pdd.auth_service><include select="def:get_cached_jwt,def:get_auth_status">context/auth_service_example.py</include></pdd.auth_service>
 
 % Instructions
   - Use @click.command("connect")

@@ -2,11 +2,6 @@
 
 <include>context/python_preamble.prompt</include>
 
-% Dependencies
-<change.12.initial_postprocess>
-    <include>context/change/12/initial_postprocess.py</include>
-</change.12.initial_postprocess>
-
 % Here are the inputs and outputs of the function:
     Inputs:
         'llm_output' - A string containing a mix of text and code sections.

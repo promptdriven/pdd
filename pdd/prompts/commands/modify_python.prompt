@@ -74,16 +74,16 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 - Otherwise call `handle_error(e, command_name, quiet)` and return `None`.
 
 % Dependencies
-<!-- Missing: context/command_logging.prompt -->
+<include>context/command_logging.prompt</include>
 <module_dependencies>
   <pdd.split_main><include>context/split_main_example.py</include></pdd.split_main>
   <pdd.agentic_split><include optional>context/agentic_split_example.py</include></pdd.agentic_split>
-  <pdd.change_main><!-- Invalid selector for context/change_main_example.py: Function 'change_main' not found in source --></pdd.change_main>
+  <pdd.change_main><include select="def:change_main">context/change_main_example.py</include></pdd.change_main>
   <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
-  <pdd.update_main><!-- Invalid selector for context/update_main_example.py: Function 'update_main' not found in source --></pdd.update_main>
+  <pdd.update_main><include select="def:update_main">context/update_main_example.py</include></pdd.update_main>
   <pdd.track_cost><include>context/track_cost_example.py</include></pdd.track_cost>
-  <pdd.core.errors><!-- Invalid selector for context/core/errors_example.py: Function 'handle_error' not found in source --></pdd.core.errors>
-  <pdd.operation_log><!-- Invalid selector for context/operation_log_example.py: Function 'log_operation' not found in source --></pdd.operation_log>
+  <pdd.core.errors><include select="def:handle_error">context/core/errors_example.py</include></pdd.core.errors>
+  <pdd.operation_log><include select="def:log_operation">context/operation_log_example.py</include></pdd.operation_log>
 </module_dependencies>
 
 % Deliverables

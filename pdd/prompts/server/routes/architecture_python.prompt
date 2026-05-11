@@ -139,7 +139,7 @@
 
 % Dependencies
   <architecture_sync>
-    <include select="def:example_parse_tags,def:example_update_single_prompt,def:example_sync_all,def:example_validate_dependencies,def:example_validate_interface,def:example_generate_tags">context/architecture_sync_example.py</include>
+    <include>context/architecture_sync_example.py</include>
   </architecture_sync>
   <fastapi_example>
     <include>context/fastapi_example.py</include>

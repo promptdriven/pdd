@@ -21,11 +21,11 @@
   3. Define `__version__` = "0.1.0"
 
 % Here are the internal modules to export:
-<pdd.server.app><!-- Invalid selector for context/server/app_example.py: Function 'create_app' not found in source --></pdd.server.app>
-<pdd.server.models><!-- Invalid selector for context/server/models_example.py: Class 'ServerConfig' not found in source --></pdd.server.models>
-<pdd.server.jobs><!-- Invalid selector for context/server/jobs_example.py: Class 'JobManager' not found in source --></pdd.server.jobs>
-<pdd.server.security><!-- Invalid selector for context/server/security_example.py: Class 'PathValidator' not found in source --></pdd.server.security>
-<pdd.server.executor><include select="def:execute_pdd_command">context/server/executor_example.py</include></pdd.server.executor>
+<pdd.server.app><include>context/server/app_example.py</include></pdd.server.app>
+<pdd.server.models><include>context/server/models_example.py</include></pdd.server.models>
+<pdd.server.jobs><include>context/server/jobs_example.py</include></pdd.server.jobs>
+<pdd.server.security><include>context/server/security_example.py</include></pdd.server.security>
+<pdd.server.executor><include>context/server/executor_example.py</include></pdd.server.executor>
 
 % Instructions
   - Keep imports minimal at package level
