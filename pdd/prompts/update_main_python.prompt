@@ -1,6 +1,25 @@
 <include>context/python_preamble.prompt</include>
 <include>context/ctx_obj_params.prompt</include>
+
+<pdd-reason>CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, and optional metadata sync.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "update_main",
+        "signature": "(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git, repo, extensions, directory, strength, temperature, simple=False, base_branch='main', budget=None, dry_run=False, sync_metadata=False)",
+        "returns": "Optional[Tuple[str, float, str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
+<pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
 
 % Goal
 Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on modified code, featuring repository-wide scanning, agentic routing, and post-update synchronization.
@@ -9,7 +28,7 @@ Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on mod
 Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability. In repo mode, detects changed files via fingerprint comparison (with git fallback) and performs post-update architecture/PRD sync.
 
 % Requirements
-1. Function: `update_main(ctx, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git, repo, extensions, directory, strength: Optional[float], temperature: Optional[float], simple: bool = False, base_branch: str = "main") -> Optional[Tuple[str, float, str]]`
+1. Function: `update_main(ctx, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git, repo, extensions, directory, strength: Optional[float], temperature: Optional[float], simple: bool = False, base_branch: str = "main", budget: Optional[float] = None, dry_run: bool = False, sync_metadata: bool = False) -> Optional[Tuple[str, float, str]]`
 2. Return (prompt, cost, model) on success, None on error.
 3. Agentic routing (when `simple=False` and agents available): try agentic first, fall back to legacy on failure — applies to all three modes.
 4. Read updated prompt file content after successful agentic update (agentic writes directly to file).
@@ -19,6 +38,12 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 8. Without --output, overwrite input_prompt_file in place.
 9. use_git and input_code_file are mutually exclusive (raise ValueError).
 10. Before any legacy path writes generated/updated `.prompt` content, call `sanitize_prompt_output(content, destination_path)` so invalid `<include>` tags or selected includes are cleaned before a later `pdd sync` preprocess pass.
+11. **Metadata sync orchestration** (opt-in via `sync_metadata=True`):
+    - **Single-file & regeneration modes**: After the prompt has been written successfully, call `run_metadata_sync(prompt_path=<written prompt path>, code_path=<modified_code_file>, dry_run=False)` from `pdd.metadata_sync`. Aggregate per-stage status into a returned summary and surface any unresolved gaps in the Rich console (one line per failed stage, naming the stage). Do not run when the update itself failed or returned None.
+    - **Repo mode**: Replace the existing post-update fingerprint + architecture + PRD sequence with a single call to `run_metadata_sync` per successfully updated pair. The orchestrator handles fingerprint finalization (last), architecture sync, and run-report cleanup; PRD sync (if present) continues as before but is called by the orchestrator rather than `update_main`. One pair's failure must not abort the batch — accumulate per-pair `MetadataSyncResult` and render them in the summary table.
+    - **Summary table**: Add a `metadata` column showing one of `synced`, `partial:<stage>`, `failed:<stage>`, `skipped`, or `dry-run`. When `sync_metadata=False`, render `skipped` so the column is present but informative.
+    - **Failure reporting**: When any stage in `MetadataSyncResult` is not `ok`, print a Rich error line per failed stage with the stage name and reason. The `metadata` column makes it obvious which layer is incomplete.
+    - **Backward compatibility**: When `sync_metadata=False` (default), behavior is unchanged — repo mode keeps its current post-update fingerprint and architecture-sync calls; single-file/regeneration modes do nothing extra.
 
 % Modes
 1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
@@ -87,6 +112,9 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 <pdd.auto_include>
     <include select="def:main">context/auto_include_example.py</include>
 </pdd.auto_include>
+<pdd.metadata_sync>
+    <include select="def:run_metadata_sync,class:MetadataSyncResult" optional>context/metadata_sync_example.py</include>
+</pdd.metadata_sync>
 </module_dependencies>
 
 % Deliverables

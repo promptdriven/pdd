@@ -25,6 +25,7 @@
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write a standalone CI script that detects prompt/example drift across all PDD modules and auto-heals drifted modules.
 
@@ -51,7 +52,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 5. **Scope control:** `--modules` limits detection to specific basenames. Without it, scan all discovered modules. Accept both space-separated and comma-separated module lists.
 
 6. **Three-way heal dispatch:** Dispatch by `drift.operation`:
-   - `update`: run `pdd --force --strength 0.5 update <code_path>` then `pdd --force --strength 0.5 example <prompt_path> <code_path>`. If code_path is unresolved, fail closed (no repo-wide fallback). After update, run churn gate and structural invariants gate before the follow-up example step. If example fails, revert prompt and fail.
+   - `update`: run `pdd --force --strength 0.5 update <code_path>` then invoke the shared `run_metadata_sync` orchestrator (from `pdd.metadata_sync`) for the (prompt, code) pair before the follow-up `pdd --force --strength 0.5 example <prompt_path> <code_path>` step. The orchestrator finalizes prompt tags, architecture entries, run-report cleanup, and fingerprint state in fixed order so the auto-heal commit never lands partial metadata. If code_path is unresolved, fail closed (no repo-wide fallback). After update, run churn gate and structural invariants gate before the orchestrator call; if either gate or any orchestrator stage fails, revert prompt and fail. If example fails, revert prompt and fail. **Preflight drift-heal uses the same orchestrator call** so CLI auto-heal and preflight share one metadata-finalization path.
    - `example`: run `pdd --force --strength 0.5 example <prompt_path> <code_path>` directly. Require both paths resolved; fail closed otherwise. In CI, when `PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT=1`, the drift reason is git-reclassified as already-covered PR review work (`Code and prompt changed together...` or `Prompt changed without code changes...`), and the resolved example file already exists, skip the example rewrite and leave that reviewed artifact to the PR author; missing examples still run the heal. When `PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT=1` and any resolved example file already exists, skip the example rewrite as a broader fallback.
    - `auto-deps`: run `pdd --force --strength 0.5 auto-deps <prompt_path> <dependency_dir> --output <prompt_path> --csv project_dependencies.csv` directly. Do not route this through full `pdd sync`, because sync can continue into generate/crash flows after dependency insertion.
    - `verify`/`generate`/`test`/`crash`: run `pdd --force --strength 0.5 sync <basename>` to let sync_determine_operation dispatch correctly. Do NOT use `pdd example` for these — it would overwrite user edits (verify), skip code regeneration (generate), or save a stale fingerprint. The only exceptions are the git-based clean-CI reclassifications above, where a reported `auto-deps`/`generate` operation is converted to `example` or skipped based on actual code/prompt changes in the PR.
@@ -77,7 +78,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 14. **Commit phase:** `git add -A`, commit with `chore: auto-heal prompt/example drift for {modules}`. If `--skip-ci`, prepend `[skip ci]`. When `checkpoint=True` (successful PR heal with no failures or skips), append a second `-m` with `_AUTO_HEAL_SUCCESS_TRAILER` for incremental PR detection. Push to current branch.
 
-15. **PR vs push-to-main semantics:** In PR mode (no `--skip-ci`): any heal failure returns exit 1, and partial success (some healed, some failed or skipped) skips commit to avoid creating a bad checkpoint. In push-to-main mode (`--skip-ci`): heal failures are advisory (exit 0), partial success or skipped modules can commit without checkpoint.
+15. **PR vs push-to-main semantics:** In PR mode (no `--skip-ci`): any heal failure returns exit 1, and partial success (some healed, some failed or skipped) skips commit to avoid creating a bad checkpoint. A partial `MetadataSyncResult` (any stage other than fingerprint not `ok`) is treated as a heal failure for the module so the workflow cannot commit a half-synced metadata state. In push-to-main mode (`--skip-ci`): heal failures are advisory (exit 0), partial success or skipped modules can commit without checkpoint.
 
 16. **Operational bypass:** `PDD_HEAL_SYNC_SKIP_MODULES` env var (comma-separated) skips `pdd sync`/`pdd example` steps for listed modules. For `update` drifts, the update itself still runs but the follow-up example is skipped; `main` records that module as both healed and skipped so PR mode cannot create a success checkpoint. For fully skipped non-update operations, `heal_module` returns `None` (distinct from True/False).
 
@@ -111,6 +112,9 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
 </pdd.agentic_langtest>
+<pdd.metadata_sync>
+    <include select="def:run_metadata_sync,class:MetadataSyncResult" optional>context/metadata_sync_example.py</include>
+</pdd.metadata_sync>
 
 % Deliverables
 - Code: `pdd/ci_drift_heal.py` — standalone CI script with `if __name__ == '__main__'` entry point
