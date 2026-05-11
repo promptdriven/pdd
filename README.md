@@ -618,6 +618,7 @@ graph TB
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
+- **[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from prompt metadata tags
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
@@ -1052,6 +1053,30 @@ Options (agentic mode):
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
+
+### 1a. sync-architecture
+
+Sync `architecture.json` from prompt metadata tags (`<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`). This is useful after editing prompt metadata directly, or after backfilling prompt tags, so the architecture graph and command metadata stay aligned with the prompts.
+
+```bash
+# Preview architecture updates for all prompts
+pdd sync-architecture --dry-run
+
+# Update architecture.json from all prompt metadata tags
+pdd sync-architecture
+
+# Update architecture.json from specific prompt entries
+pdd sync-architecture commands/maintenance_python.prompt
+```
+
+Arguments:
+- No argument: Scan all prompt files known to the current project.
+- `FILENAMES`: Optional prompt filenames as they appear in `architecture.json` or under the configured prompts directory.
+
+Options:
+- `--dry-run`: Report which architecture entries would change without writing `architecture.json`.
+
+The command prints updated prompt entries and validation errors or warnings. It exits non-zero when validation fails, even if it was able to write requested metadata updates before validation.
 
 ### 2. generate
 

@@ -26,7 +26,7 @@
 
 % Program Specification (README.md):
     <README.md>
-    <include select="section:sync,section:auto-deps,section:setup">./README.md</include>
+    <include select="section:1. sync,section:1a. sync-architecture,section:15. auto-deps,section:Post-Installation Setup (Required first step after installation)">./README.md</include>
     </README.md>
 
 % Requirements
@@ -76,19 +76,19 @@
 
 % Dependencies
   <sync_main_example>
-  <include select="def:sync_main,def:_run_agentic_sync_dispatch">context/sync_main_example.py</include>
+  <include>context/sync_main_example.py</include>
   </sync_main_example>
   <auto_deps_main_example>
-  <include select="def:auto_deps_main">context/auto_deps_main_example.py</include>
+  <include>context/auto_deps_main_example.py</include>
   </auto_deps_main_example>
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
   <agentic_sync_example>
-  <include select="def:run_agentic_sync,def:run_global_sync,def:_is_github_issue_url">context/agentic_sync_example.py</include>
+  <include>context/agentic_sync_example.py</include>
   </agentic_sync_example>
   <pdd.architecture_sync>
-  <include select="def:sync_prompts_to_architecture">context/architecture_sync_example.py</include>
+  <include select="def:example_sync_prompts_to_architecture">context/architecture_sync_example.py</include>
   </pdd.architecture_sync>
   <pdd.cli>
   <include select="def:install_completion">context/change/15/initial_cli.py</include>
