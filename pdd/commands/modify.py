@@ -325,6 +325,12 @@ def change(
     default=False,
     help="Repository-wide only: show which prompts would be updated without calling the LLM or writing outputs.",
 )
+@click.option(
+    "--sync-metadata",
+    is_flag=True,
+    default=False,
+    help="Run prompt metadata sync (tags, architecture, fingerprint) after update so all metadata layers land consistently.",
+)
 @click.pass_context
 @log_operation(operation="update", clears_run_report=True)
 @track_cost
@@ -340,6 +346,7 @@ def update(
     base_branch: str,
     budget: Optional[float],
     dry_run: bool,
+    sync_metadata: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Update the original prompt file based on code changes.
@@ -443,6 +450,7 @@ def update(
             base_branch=base_branch,
             budget=budget,
             dry_run=dry_run,
+            sync_metadata=sync_metadata,
         )
 
         if ret is None:

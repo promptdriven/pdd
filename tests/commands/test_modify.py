@@ -273,7 +273,347 @@ def test_update_single_file_mode(runner, mock_update_main):
 def test_update_simple_flag(runner, mock_update_main):
     """Test update command passes simple flag."""
     mock_update_main.return_value = ("Updated", 0.1, "gpt-4")
-    
+
     result = runner.invoke(update, ['--simple'])
-    
+
     assert mock_update_main.call_args[1]['simple'] is True
+
+
+# -----------------------------------------------------------------------------
+# Additional spec-coverage tests
+# -----------------------------------------------------------------------------
+# Test plan (spec requirements that need coverage):
+#  - split agentic success: displays Status/Message/Cost/Model/changed files
+#  - split agentic failure: exit(1)
+#  - split agentic forwards intent, no_phase_extraction, strangler, max_cost,
+#    use_github_state, timeout_adder
+#  - split legacy with wrong arg count: UsageError
+#  - change agentic forwards no_github_state -> use_github_state=False
+#  - change manual CSV mode rejects directory-only when input_code is a file
+#  - change agentic exit(1) on failure
+#  - update 3-arg manual mode
+#  - update validation: 2 args without --git -> UsageError
+#  - update validation: 3 args with --git -> UsageError
+#  - update validation: --all + path -> UsageError
+#  - update validation: --budget <= 0 -> UsageError
+#  - update repo mode + --git -> UsageError
+#  - update repo mode + --output -> UsageError
+#  - update file mode + --extensions -> UsageError
+#  - update file mode + --directory -> UsageError
+#  - update file mode + non-default --base-branch -> UsageError
+#  - update file mode + --dry-run -> UsageError
+#  - update file mode + --budget -> UsageError
+#  - update --sync-metadata flag forwarded
+#  - update --all mode behaves like repo mode
+#  - update base-branch default value forwarded
+
+
+# --- split agentic mode tests ---
+
+@pytest.fixture
+def mock_run_agentic_split():
+    with patch('pdd.commands.modify.run_agentic_split') as m:
+        yield m
+
+
+def test_split_agentic_success(runner, mock_run_agentic_split):
+    """Agentic split (default) displays status/cost/model and exits 0."""
+    mock_run_agentic_split.return_value = (
+        True, "Split complete", 0.1234, "mock-model", ["a.py", "b.py"]
+    )
+    result = runner.invoke(split, ['target.py'])
+    assert result.exit_code == 0, result.output
+    mock_run_agentic_split.assert_called_once()
+    kwargs = mock_run_agentic_split.call_args.kwargs
+    assert kwargs['target_file'] == 'target.py'
+    assert "Status: Success" in result.output
+    assert "Message: Split complete" in result.output
+    assert "Cost: $0.1234" in result.output
+    assert "Model: mock-model" in result.output
+    assert "- a.py" in result.output
+    assert "- b.py" in result.output
+
+
+def test_split_agentic_failure_exits_with_1(runner, mock_run_agentic_split):
+    """Agentic split returning success=False causes exit(1)."""
+    mock_run_agentic_split.return_value = (
+        False, "Failed", 0.0, "mock-model", []
+    )
+    result = runner.invoke(split, ['target.py'])
+    assert result.exit_code == 1
+
+
+def test_split_agentic_option_forwarding(runner, mock_run_agentic_split):
+    """Spec options must propagate to run_agentic_split as kwargs."""
+    mock_run_agentic_split.return_value = (
+        True, "ok", 0.01, "mock-model", []
+    )
+    result = runner.invoke(split, [
+        'target.py',
+        '--intent', 'reduce',
+        '--no-phase-extraction',
+        '--strangler',
+        '--max-cost', '5.0',
+        '--no-github-state',
+        '--timeout-adder', '1.5',
+        '--diagnose',
+        '--propose-only',
+        '--delete-dead',
+        '--force-split',
+        '--no-verify',
+        '--skip-regen-gate',
+        '--experimental-language',
+    ])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_run_agentic_split.call_args.kwargs
+    assert kwargs['intent'] == 'reduce'
+    assert kwargs['no_phase_extraction'] is True
+    assert kwargs['strangler'] is True
+    assert kwargs['max_cost'] == 5.0
+    assert kwargs['use_github_state'] is False
+    assert kwargs['timeout_adder'] == 1.5
+    assert kwargs['diagnose_only'] is True
+    assert kwargs['propose_only'] is True
+    assert kwargs['delete_dead'] is True
+    assert kwargs['force_split'] is True
+    assert kwargs['no_verify'] is True
+    assert kwargs['skip_regen_gate'] is True
+    assert kwargs['experimental_language'] is True
+
+
+def test_split_max_cost_rejects_zero(runner):
+    """--max-cost FloatRange(min=0.01) rejects 0."""
+    result = runner.invoke(split, ['target.py', '--max-cost', '0'])
+    assert result.exit_code == 2
+
+
+def test_split_agentic_default_use_github_state_true(runner, mock_run_agentic_split):
+    """Without --no-github-state, use_github_state should default to True."""
+    mock_run_agentic_split.return_value = (True, "ok", 0.0, "m", [])
+    result = runner.invoke(split, ['target.py'])
+    assert result.exit_code == 0, result.output
+    assert mock_run_agentic_split.call_args.kwargs['use_github_state'] is True
+
+
+# --- change agentic tests ---
+
+def test_change_agentic_forwards_no_github_state(runner, mock_run_agentic_change):
+    """--no-github-state flips use_github_state to False."""
+    mock_run_agentic_change.return_value = (True, "Done", 0.1, "m", [])
+    result = runner.invoke(change, ['https://github.com/x/y/issues/1', '--no-github-state'])
+    assert result.exit_code == 0
+    assert mock_run_agentic_change.call_args.kwargs['use_github_state'] is False
+
+
+def test_change_agentic_default_use_github_state_true(runner, mock_run_agentic_change):
+    mock_run_agentic_change.return_value = (True, "Done", 0.1, "m", [])
+    result = runner.invoke(change, ['https://github.com/x/y/issues/1'])
+    assert result.exit_code == 0
+    assert mock_run_agentic_change.call_args.kwargs['use_github_state'] is True
+
+
+def test_change_agentic_failure_exits_with_1(runner, mock_run_agentic_change):
+    """Agentic change returning success=False causes exit(1)."""
+    mock_run_agentic_change.return_value = (False, "Failed", 0.0, "m", [])
+    result = runner.invoke(change, ['https://github.com/x/y/issues/1'])
+    assert result.exit_code == 1
+
+
+def test_change_manual_csv_requires_directory(runner, mock_change_main):
+    """--csv requires input_code to be a directory; file should fail."""
+    with patch('pdd.commands.modify.Path.exists', return_value=True), \
+         patch('pdd.commands.modify.Path.is_dir', return_value=False):
+        result = runner.invoke(change, ['--manual', '--csv', 'batch.csv', 'not_a_dir'])
+    assert result.exit_code == 2
+    mock_change_main.assert_not_called()
+
+
+def test_change_manual_standard_rejects_directory_as_code(runner, mock_change_main):
+    """Standard manual mode requires input_code to be a file, not a directory."""
+    def fake_exists(self):
+        return True
+    def fake_is_dir(self):
+        return True  # always say it's a directory
+    with patch('pdd.commands.modify.Path.exists', fake_exists), \
+         patch('pdd.commands.modify.Path.is_dir', fake_is_dir):
+        result = runner.invoke(change, ['--manual', 'change.prompt', 'code_dir', 'input.prompt'])
+    assert result.exit_code == 2
+    mock_change_main.assert_not_called()
+
+
+def test_change_manual_budget_forwarded(runner, mock_change_main):
+    """--budget forwards to change_main."""
+    mock_change_main.return_value = ("ok", 0.1, "m")
+    with patch('pdd.commands.modify.Path.exists', return_value=True), \
+         patch('pdd.commands.modify.Path.is_dir', return_value=False):
+        result = runner.invoke(change, [
+            '--manual', '--budget', '7.5',
+            'change.prompt', 'code.py', 'input.prompt'
+        ])
+    assert result.exit_code == 0, result.output
+    assert mock_change_main.call_args.kwargs['budget'] == 7.5
+
+
+# --- update validation tests ---
+
+def test_update_2_args_without_git_rejects(runner, mock_update_main):
+    """2 args require --git."""
+    result = runner.invoke(update, ['prompt.prompt', 'code.py'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_3_args_with_git_rejects(runner, mock_update_main):
+    """3 args + --git is invalid."""
+    result = runner.invoke(update, ['--git', 'p', 'm', 'o'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_all_with_path_rejects(runner, mock_update_main):
+    """--all with file paths is invalid."""
+    result = runner.invoke(update, ['--all', 'code.py'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_budget_zero_rejects(runner, mock_update_main):
+    """--budget must be > 0."""
+    result = runner.invoke(update, ['--budget', '0'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_budget_negative_rejects(runner, mock_update_main):
+    result = runner.invoke(update, ['--budget', '-1'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_repo_mode_rejects_git(runner, mock_update_main):
+    """Repo mode forbids --git."""
+    result = runner.invoke(update, ['--git'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_repo_mode_rejects_output(runner, mock_update_main):
+    """Repo mode forbids --output."""
+    result = runner.invoke(update, ['--output', 'foo.txt'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_file_mode_rejects_extensions(runner, mock_update_main):
+    """File mode forbids --extensions."""
+    result = runner.invoke(update, ['code.py', '--extensions', '.py'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_file_mode_rejects_directory_opt(runner, mock_update_main):
+    """File mode forbids --directory."""
+    result = runner.invoke(update, ['code.py', '--directory', 'src'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_file_mode_rejects_non_default_base_branch(runner, mock_update_main):
+    """File mode forbids non-default --base-branch."""
+    result = runner.invoke(update, ['code.py', '--base-branch', 'develop'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_file_mode_rejects_dry_run(runner, mock_update_main):
+    """File mode forbids --dry-run."""
+    result = runner.invoke(update, ['code.py', '--dry-run'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+def test_update_file_mode_rejects_budget(runner, mock_update_main):
+    """File mode forbids --budget."""
+    result = runner.invoke(update, ['code.py', '--budget', '5'])
+    assert result.exit_code == 2
+    mock_update_main.assert_not_called()
+
+
+# --- update mode tests ---
+
+def test_update_3_args_manual_mode(runner, mock_update_main):
+    """3 args (without --git) -> input_prompt, modified_code, input_code."""
+    mock_update_main.return_value = ("ok", 0.1, "m")
+    result = runner.invoke(update, ['p.prompt', 'mod.py', 'orig.py'])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_update_main.call_args.kwargs
+    assert kwargs['input_prompt_file'] == 'p.prompt'
+    assert kwargs['modified_code_file'] == 'mod.py'
+    assert kwargs['input_code_file'] == 'orig.py'
+    assert kwargs['use_git'] is False
+    assert kwargs['repo'] is False
+
+
+def test_update_all_flag_repo_mode(runner, mock_update_main):
+    """--all triggers repo mode with no file paths."""
+    mock_update_main.return_value = ("ok", 0.1, "m")
+    result = runner.invoke(update, ['--all'])
+    assert result.exit_code == 0, result.output
+    kwargs = mock_update_main.call_args.kwargs
+    assert kwargs['repo'] is True
+    assert kwargs['input_prompt_file'] is None
+    assert kwargs['modified_code_file'] is None
+    assert kwargs['input_code_file'] is None
+
+
+def test_update_sync_metadata_flag_forwarded(runner, mock_update_main):
+    """--sync-metadata flag flows to update_main."""
+    mock_update_main.return_value = ("ok", 0.1, "m")
+    result = runner.invoke(update, ['code.py', '--sync-metadata'])
+    assert result.exit_code == 0, result.output
+    assert mock_update_main.call_args.kwargs['sync_metadata'] is True
+
+
+def test_update_sync_metadata_default_false(runner, mock_update_main):
+    mock_update_main.return_value = ("ok", 0.1, "m")
+    result = runner.invoke(update, ['code.py'])
+    assert result.exit_code == 0, result.output
+    assert mock_update_main.call_args.kwargs['sync_metadata'] is False
+
+
+def test_update_base_branch_default(runner, mock_update_main):
+    """Default --base-branch is 'main' (repo mode)."""
+    mock_update_main.return_value = ("ok", 0.1, "m")
+    result = runner.invoke(update, [])
+    assert result.exit_code == 0, result.output
+    assert mock_update_main.call_args.kwargs['base_branch'] == 'main'
+
+
+def test_update_base_branch_repo_mode_custom(runner, mock_update_main):
+    """Custom --base-branch allowed in repo mode."""
+    mock_update_main.return_value = ("ok", 0.1, "m")
+    result = runner.invoke(update, ['--base-branch', 'develop'])
+    assert result.exit_code == 0, result.output
+    assert mock_update_main.call_args.kwargs['base_branch'] == 'develop'
+
+
+def test_update_returns_none_when_update_main_returns_none(runner, mock_update_main):
+    """If update_main returns None, command returns None gracefully."""
+    mock_update_main.return_value = None
+    result = runner.invoke(update, [])
+    # No exception; @track_cost handles None return.
+    assert result.exit_code == 0
+
+
+def test_split_legacy_wrong_arg_count(runner, mock_split_main):
+    """Legacy mode with not exactly 3 args raises UsageError."""
+    result = runner.invoke(split, ['--legacy', 'only_one.txt'])
+    assert result.exit_code == 2
+    mock_split_main.assert_not_called()
+
+
+def test_split_agentic_wrong_arg_count(runner, mock_run_agentic_split):
+    """Agentic mode with 0 args raises UsageError."""
+    result = runner.invoke(split, [])
+    assert result.exit_code == 2
+    mock_run_agentic_split.assert_not_called()
