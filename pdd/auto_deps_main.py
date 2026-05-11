@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import sys
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
@@ -26,16 +26,22 @@ def auto_deps_main(
     concurrency: int = 1,
 ) -> Tuple[str, float, str]:
     """
-    Analyze a prompt file and search for potential dependencies, then insert them
-    into the prompt as <include> directives.
-    """
-    import filelock
+    Analyze a prompt and inject dependencies discovered in ``directory_path``.
 
+    Returns a tuple of ``(modified_prompt, total_cost, model_name)``.
+    """
     console = Console()
-    quiet = bool(ctx.obj.get("quiet", False)) if ctx.obj else False
-    force = bool(ctx.obj.get("force", False)) if ctx.obj else False
+    quiet: bool = bool(ctx.obj.get("quiet", False)) if ctx.obj else False
+    force: bool = bool(ctx.obj.get("force", False)) if ctx.obj else False
 
     try:
+        # Lazy import: filelock is third-party
+        try:
+            from filelock import FileLock, Timeout  # type: ignore
+        except ImportError:
+            FileLock = None  # type: ignore
+            Timeout = Exception  # type: ignore
+
         # Construct paths
         input_file_paths = {"prompt_file": prompt_file}
         command_options = {"output": output, "csv": auto_deps_csv_path}
@@ -53,19 +59,18 @@ def auto_deps_main(
         csv_path = output_file_paths.get("csv", "project_dependencies.csv")
         output_path = output_file_paths.get("output")
 
-        # Acquire exclusive file lock for the entire operation
+        # Acquire lock for the entire operation
         lock_path = f"{csv_path}.lock"
-        # Ensure parent directory exists for lock file
-        lock_parent = Path(lock_path).parent
-        if str(lock_parent) and str(lock_parent) != ".":
-            try:
-                lock_parent.mkdir(parents=True, exist_ok=True)
-            except OSError:
-                pass
-        lock = filelock.FileLock(lock_path)
+        lock_dir = Path(lock_path).parent
+        try:
+            lock_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
 
-        with lock:
-            # Handle force-scan: delete existing CSV if requested
+        lock_ctx = FileLock(lock_path) if FileLock is not None else None
+
+        def _run() -> Tuple[str, float, str]:
+            # Force scan: remove existing CSV
             if force_scan and Path(csv_path).exists():
                 if not quiet:
                     console.print(
@@ -73,23 +78,18 @@ def auto_deps_main(
                     )
                 try:
                     Path(csv_path).unlink()
-                except OSError as e:
+                except Exception as e:
                     if not quiet:
-                        console.print(
-                            f"[yellow]Warning: Could not delete CSV file: {e}[/yellow]"
-                        )
+                        console.print(f"[yellow]Warning: could not delete CSV file: {e}[/yellow]")
 
-            # Read LLM parameters from context
+            # Resolve LLM params
             strength = ctx.obj.get("strength", DEFAULT_STRENGTH) if ctx.obj else DEFAULT_STRENGTH
             temperature = ctx.obj.get("temperature", 0) if ctx.obj else 0
             time_budget = ctx.obj.get("time", DEFAULT_TIME) if ctx.obj else DEFAULT_TIME
             verbose = not quiet
 
-            prompt_content = input_strings["prompt_file"]
-
-            # Call insert_includes
             modified_prompt, csv_output, total_cost, model_name = insert_includes(
-                input_prompt=prompt_content,
+                input_prompt=input_strings["prompt_file"],
                 directory_path=directory_path,
                 csv_filename=csv_path,
                 prompt_filename=prompt_file,
@@ -106,46 +106,37 @@ def auto_deps_main(
             # Save outputs
             if output_path:
                 # Sanitize prompt output before writing
-                cleaned_prompt, invalid_includes = sanitize_prompt_output(
-                    modified_prompt, output_path
-                )
-                if invalid_includes and not quiet:
-                    console.print(
-                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
-                        f"before saving {output_path}.[/yellow]"
-                    )
-                output_path_obj = Path(output_path)
-                if str(output_path_obj.parent) and str(output_path_obj.parent) != ".":
-                    output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                output_path_obj.write_text(cleaned_prompt, encoding="utf-8")
-                modified_prompt = cleaned_prompt
-
-                # Merge new module includes into architecture.json (best-effort)
+                cleaned_prompt, _removed = sanitize_prompt_output(modified_prompt, output_path)
+                out_path_obj = Path(output_path)
                 try:
-                    from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
-
-                    arch_report = merge_auto_deps_includes_from_cwd(
-                        Path(output_path).resolve(),
-                        prompt_content,
-                        modified_prompt,
+                    out_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
+                out_path_obj.write_text(cleaned_prompt, encoding="utf-8")
+                # Merge any newly inserted module includes into architecture.json
+                # (best-effort; failures must not override successful auto-deps return).
+                try:
+                    from .auto_deps_architecture import (  # type: ignore
+                        merge_auto_deps_includes_from_cwd,
                     )
-                    if arch_report.get("messages") and not quiet:
-                        for line in arch_report["messages"]:
-                            console.print(f"[dim]{line}[/dim]")
-                except (OSError, json.JSONDecodeError, ValueError) as arch_exc:
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Warning: Could not update architecture.json after auto-deps: "
-                            f"{arch_exc}[/yellow]"
-                        )
+
+                    merge_auto_deps_includes_from_cwd(
+                        out_path_obj.resolve(),
+                        input_strings.get("prompt_file", ""),
+                        cleaned_prompt,
+                    )
+                except Exception:
+                    pass
+                modified_prompt = cleaned_prompt
 
             if csv_output:
                 csv_path_obj = Path(csv_path)
-                if str(csv_path_obj.parent) and str(csv_path_obj.parent) != ".":
+                try:
                     csv_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                except Exception:
+                    pass
                 csv_path_obj.write_text(csv_output, encoding="utf-8")
 
-            # Console output
             if not quiet:
                 console.print(
                     "[bold green]Successfully analyzed and inserted dependencies![/bold green]"
@@ -159,7 +150,7 @@ def auto_deps_main(
             # Fingerprint finalization (success path only)
             if output_path:
                 try:
-                    from pdd.operation_log import save_fingerprint, infer_module_identity
+                    from .operation_log import save_fingerprint, infer_module_identity  # type: ignore
 
                     basename, language = infer_module_identity(prompt_file)
                     if basename and language:
@@ -180,7 +171,13 @@ def auto_deps_main(
                         "[yellow]Skipping fingerprint finalization: auto-deps did not write a modified prompt.[/yellow]"
                     )
 
-        return modified_prompt, total_cost, model_name
+            return modified_prompt, total_cost, model_name
+
+        if lock_ctx is not None:
+            with lock_ctx:
+                return _run()
+        else:
+            return _run()
 
     except click.Abort:
         raise
