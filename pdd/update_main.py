@@ -1003,6 +1003,24 @@ def _find_prd_file(project_root: Path) -> Optional[Path]:
     return None
 
 
+def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> None:
+    """Run metadata sync for a single (prompt, code) pair; report failed stages, do not raise."""
+    try:
+        from .metadata_sync import run_metadata_sync
+        sync_result = run_metadata_sync(
+            prompt_path=prompt_path,
+            code_path=code_path,
+            dry_run=False,
+        )
+    except Exception as exc:
+        rprint(f"[error][metadata-sync] orchestrator: {exc}[/error]")
+        return
+    if not sync_result.ok:
+        for stage_name, stage in sync_result.stages.items():
+            if stage.status == "failed":
+                rprint(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
+
+
 def update_main(
     ctx: click.Context,
     input_prompt_file: Optional[str],
@@ -1019,6 +1037,7 @@ def update_main(
     base_branch: str = "main",
     budget: Optional[float] = None,
     dry_run: bool = False,
+    sync_metadata: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -1038,6 +1057,9 @@ def update_main(
     :param base_branch: Git branch to compare against for change detection in repo mode.
     :param budget: Optional repository-wide cap; stop processing once cumulative update cost reaches this amount.
     :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
+    :param sync_metadata: If True, orchestrate prompt metadata finalization via run_metadata_sync
+        after the update writes the prompt. In repo mode, replaces the legacy per-pair fingerprint
+        and post-loop architecture/PRD sync with a per-pair run_metadata_sync call.
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -1130,6 +1152,7 @@ def update_main(
         results = []
         total_repo_cost = 0.0
         budget_reached = False
+        metadata_results: Dict[str, Any] = {}
 
         progress = Progress(
             SpinnerColumn(),
@@ -1176,25 +1199,44 @@ def update_main(
 
                 total_repo_cost += result.get("cost", 0.0)
 
-                # Save fingerprint so the file isn't detected as changed next run
-                if "Success" in result.get("status", ""):
-                    from .operation_log import save_fingerprint, infer_module_identity
-                    basename, language = infer_module_identity(prompt_path)
-                    if basename and language:
+                if not sync_metadata:
+                    # Save fingerprint so the file isn't detected as changed next run
+                    if "Success" in result.get("status", ""):
+                        from .operation_log import save_fingerprint, infer_module_identity
+                        basename, language = infer_module_identity(prompt_path)
+                        if basename and language:
+                            try:
+                                paths = {
+                                    "prompt": Path(prompt_path),
+                                    "code": Path(code_path),
+                                }
+                                save_fingerprint(
+                                    basename, language,
+                                    operation="update",
+                                    paths=paths,
+                                    cost=result.get("cost", 0.0),
+                                    model=result.get("model", "unknown"),
+                                )
+                            except Exception:
+                                pass  # Best-effort; don't fail the update
+                else:
+                    if "Success" in result.get("status", ""):
                         try:
-                            paths = {
-                                "prompt": Path(prompt_path),
-                                "code": Path(code_path),
-                            }
-                            save_fingerprint(
-                                basename, language,
-                                operation="update",
-                                paths=paths,
-                                cost=result.get("cost", 0.0),
-                                model=result.get("model", "unknown"),
+                            from .metadata_sync import run_metadata_sync
+                            sync_res = run_metadata_sync(
+                                prompt_path=Path(prompt_path),
+                                code_path=Path(code_path),
+                                dry_run=False,
                             )
-                        except Exception:
-                            pass  # Best-effort; don't fail the update
+                            metadata_results[prompt_path] = sync_res
+                        except Exception as exc:
+                            from .metadata_sync import MetadataSyncResult, StageStatus
+                            metadata_results[prompt_path] = MetadataSyncResult(
+                                prompt_path=Path(prompt_path),
+                                code_path=Path(code_path),
+                                dry_run=False,
+                                stages={"prompt": StageStatus(status="failed", reason=str(exc))},
+                            )
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
@@ -1202,82 +1244,101 @@ def update_main(
         arch_entries_updated = 0
         prd_status = "skipped"
 
-        # Determine prompts directory and architecture path
-        prompts_dir = Path(repo_root) / "prompts"
-        from .architecture_registry import find_architecture_for_project
-        arch_files = find_architecture_for_project(Path(repo_root))
-        architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
+        if not sync_metadata:
+            # Determine prompts directory and architecture path
+            prompts_dir = Path(repo_root) / "prompts"
+            from .architecture_registry import find_architecture_for_project
+            arch_files = find_architecture_for_project(Path(repo_root))
+            architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
 
-        successful_prompts = [
-            res["prompt_file"] for res in results
-            if "Success" in res.get("status", "")
-        ]
+            successful_prompts = [
+                res["prompt_file"] for res in results
+                if "Success" in res.get("status", "")
+            ]
 
-        if successful_prompts and architecture_path.exists():
-            from .architecture_sync import update_architecture_from_prompt
-            for prompt_file in successful_prompts:
-                prompt_filename = os.path.basename(prompt_file)
-                try:
-                    arch_result = update_architecture_from_prompt(
-                        prompt_filename,
-                        prompts_dir=prompts_dir,
-                        architecture_path=architecture_path,
-                    )
-                    if arch_result.get("success") and arch_result.get("updated"):
-                        arch_entries_updated += 1
-                except Exception:
-                    # Architecture sync is best-effort; don't fail the update
-                    pass
-
-        # --- Post-update: PRD sync (only if architecture changed) ---
-        if arch_entries_updated > 0:
-            prd_file = _find_prd_file(Path(repo_root))
-            if prd_file is None:
-                prd_status = "not found"
-            else:
-                try:
-                    from .agentic_common import run_agentic_task
-
-                    prd_content = prd_file.read_text(encoding="utf-8")
-                    arch_json = architecture_path.read_text(encoding="utf-8")
-
-                    instruction = (
-                        "You are reviewing whether a PRD (Product Requirements Document) needs updating "
-                        "after architecture changes.\n\n"
-                        f"Current PRD:\n{prd_content}\n\n"
-                        f"Updated architecture.json:\n{arch_json}\n\n"
-                        f"Architecture entries updated: {arch_entries_updated}\n\n"
-                        "If the PRD needs updating to reflect these architecture changes, output the "
-                        "complete updated PRD between <updated-prd> and </updated-prd> tags.\n"
-                        "If no update is needed, output: NO_UPDATE_NEEDED"
-                    )
-
-                    llm_output = run_agentic_task(
-                        instruction=instruction,
-                        cwd=Path(repo_root),
-                        verbose=ctx.obj.get("verbose", False),
-                        quiet=True,
-                        label="prd-sync",
-                    )
-
-                    if llm_output and "<updated-prd>" in llm_output:
-                        import re
-                        match = re.search(
-                            r"<updated-prd>(.*?)</updated-prd>",
-                            llm_output,
-                            re.DOTALL,
+            if successful_prompts and architecture_path.exists():
+                from .architecture_sync import update_architecture_from_prompt
+                for prompt_file in successful_prompts:
+                    prompt_filename = os.path.basename(prompt_file)
+                    try:
+                        arch_result = update_architecture_from_prompt(
+                            prompt_filename,
+                            prompts_dir=prompts_dir,
+                            architecture_path=architecture_path,
                         )
-                        if match:
-                            prd_file.write_text(match.group(1).strip() + "\n", encoding="utf-8")
-                            prd_status = "updated"
+                        if arch_result.get("success") and arch_result.get("updated"):
+                            arch_entries_updated += 1
+                    except Exception:
+                        # Architecture sync is best-effort; don't fail the update
+                        pass
+
+            # --- Post-update: PRD sync (only if architecture changed) ---
+            if arch_entries_updated > 0:
+                prd_file = _find_prd_file(Path(repo_root))
+                if prd_file is None:
+                    prd_status = "not found"
+                else:
+                    try:
+                        from .agentic_common import run_agentic_task
+
+                        prd_content = prd_file.read_text(encoding="utf-8")
+                        arch_json = architecture_path.read_text(encoding="utf-8")
+
+                        instruction = (
+                            "You are reviewing whether a PRD (Product Requirements Document) needs updating "
+                            "after architecture changes.\n\n"
+                            f"Current PRD:\n{prd_content}\n\n"
+                            f"Updated architecture.json:\n{arch_json}\n\n"
+                            f"Architecture entries updated: {arch_entries_updated}\n\n"
+                            "If the PRD needs updating to reflect these architecture changes, output the "
+                            "complete updated PRD between <updated-prd> and </updated-prd> tags.\n"
+                            "If no update is needed, output: NO_UPDATE_NEEDED"
+                        )
+
+                        llm_output = run_agentic_task(
+                            instruction=instruction,
+                            cwd=Path(repo_root),
+                            verbose=ctx.obj.get("verbose", False),
+                            quiet=True,
+                            label="prd-sync",
+                        )
+
+                        if llm_output and "<updated-prd>" in llm_output:
+                            import re
+                            match = re.search(
+                                r"<updated-prd>(.*?)</updated-prd>",
+                                llm_output,
+                                re.DOTALL,
+                            )
+                            if match:
+                                prd_file.write_text(match.group(1).strip() + "\n", encoding="utf-8")
+                                prd_status = "updated"
+                            else:
+                                prd_status = "unchanged"
                         else:
                             prd_status = "unchanged"
-                    else:
-                        prd_status = "unchanged"
-                except Exception:
-                    prd_status = "error"
-        else:
-            prd_status = "skipped (no arch changes)"
+                    except Exception:
+                        prd_status = "error"
+            else:
+                prd_status = "skipped (no arch changes)"
+
+        def _metadata_column_value(prompt_file_key: str) -> str:
+            res = metadata_results.get(prompt_file_key)
+            if res is None:
+                return "skipped"
+            stages = res.stages
+            failing = res.failing_stage
+            if failing:
+                return f"failed:{failing}"
+            if any(s.status == "dry_run" for s in stages.values()):
+                return "dry-run"
+            if res.ok:
+                return "synced"
+            non_ok = next(
+                (n for n, s in stages.items() if s.status not in ("ok", "skipped", "dry_run")),
+                None,
+            )
+            return f"partial:{non_ok}" if non_ok else "skipped"
 
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Prompt File", style="dim", width=50)
@@ -1285,6 +1346,7 @@ def update_main(
         table.add_column("Cost", justify="right")
         table.add_column("Model")
         table.add_column("Error", style="error")
+        table.add_column("Metadata")
 
         models_used = set()
         for res in sorted(results, key=lambda x: x["prompt_file"]):
@@ -1294,6 +1356,7 @@ def update_main(
                 f"${res['cost']:.6f}",
                 res["model"],
                 res["error"],
+                _metadata_column_value(res["prompt_file"]),
             )
             if res["model"]:
                 models_used.add(res["model"])
@@ -1302,7 +1365,7 @@ def update_main(
         console.print(table)
         if budget_reached:
             console.print(f"[info]Budget cap reached: ${budget:.2f}[/info]")
-        if arch_entries_updated > 0 or prd_status != "skipped (no arch changes)":
+        if not sync_metadata and (arch_entries_updated > 0 or prd_status != "skipped (no arch changes)"):
             console.print(f"\n[info]Architecture entries updated: {arch_entries_updated}[/info]")
             console.print(f"[info]PRD status: {prd_status}[/info]")
         console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")
@@ -1363,6 +1426,9 @@ def update_main(
                         rprint(f"[bold]Provider:[/bold] {provider}")
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
+
+                    if sync_metadata:
+                        _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file))
 
                     return generated_prompt, agentic_cost, provider
 
@@ -1432,6 +1498,9 @@ def update_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
+            if sync_metadata:
+                _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file))
+
             return modified_prompt, total_cost, model_name
 
         # Case 2: True Update Mode.
@@ -1473,6 +1542,9 @@ def update_main(
                         rprint(f"[bold]Provider:[/bold] {provider}")
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
+
+                    if sync_metadata:
+                        _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file))
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1576,6 +1648,9 @@ def update_main(
                 rprint(f"[bold]Model used:[/bold] {model_name}")
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
+
+            if sync_metadata:
+                _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file))
 
             return modified_prompt, total_cost, model_name
 
