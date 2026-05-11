@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-11T17:41:12.057236+00:00",
+  "command": "fix",
+  "prompt_hash": "43066cfd274391f55904cceccac250c42204b3bfdf1d8d946f009bcc6d9d8088",
+  "code_hash": "4fd4813e5d91bc0eac7e5b556e99256357a5f80b5ca7a04336600abb975f68d5",
+  "example_hash": "9b9c36c18d39494b6e31b46f6e4758c25135b6fa3d1672fbb7365844f7d2de04",
+  "test_hash": "5bd4ceb61f6dc40b64c422c03c0e108667259f6be289bdf64c90d49f20813dcc",
+  "test_files": {
+    "test_auto_deps_main.py": "5bd4ceb61f6dc40b64c422c03c0e108667259f6be289bdf64c90d49f20813dcc"
+  },
+  "include_deps": {
+    "README.md": "96928af9a7954fb9219a417348385b7db9230c0cd2168bb5ef7a34f57e8a4081",
+    "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
+    "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
+    "context/insert_includes_example.py": "c304bf4656f75fa26192c92b3eb0422a903d8a1bc82dda3158dc9f184b337873",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+  }
+}
