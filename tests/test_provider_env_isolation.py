@@ -151,11 +151,14 @@ def test_canonical_source_includes_developer_leak_vectors():
     tests.
     """
     canonical = set(_opencode_provider_env_keys())
-    must_cover = {
-        "XAI_API_KEY",
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "ANTHROPIC_API_KEY",
-    }
+    # Derive from _LEAK_PROBE_KEYS rather than re-declaring a hardcoded
+    # subset: a second literal tuple here would be flagged by Fix B's
+    # detector (promptdriven/pdd#899) as drifting from _LEAK_PROBE_KEYS,
+    # and that finding would be a false positive a reviewer has to dismiss.
+    # Filter to the ANTHROPIC/OPENAI/XAI/GOOGLE keys that are the canonical
+    # set's documented contract; VERTEXAI_PROJECT is exercised in the
+    # parametrized cleared-by-fixture test above instead.
+    must_cover = {k for k in _LEAK_PROBE_KEYS if k != "VERTEXAI_PROJECT"}
     missing = must_cover - canonical
     assert not missing, (
         f"Canonical env-key source no longer covers {missing!r}; Fix C "
