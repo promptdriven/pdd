@@ -1,0 +1,11 @@
+{
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-11T17:30:45.170368+00:00",
+  "command": "auto-deps",
+  "prompt_hash": "bc29b675f73707a1d479c045b93a38afa1917e9bb2a7280c187c5f80a1d3fb8c",
+  "code_hash": null,
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
+  "include_deps": {}
+}
