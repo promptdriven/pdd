@@ -152,6 +152,51 @@ def _scrub_secrets(text: str) -> str:
     return scrubbed
 
 
+# Severity tokens the downstream cloud verdict adapter
+# (``checkup_verdict_adapter._BRACKET_TAG_RE``) recognizes as ``[SEV]``
+# finding markers when scanning the full report text. The first six are
+# the load-bearing set the adapter actually consumes — leaking any of
+# those into the rendered reviewer-stderr tail would turn log output
+# into synthetic findings and flip the verdict (a ``[CRITICAL]`` log
+# line would block ship). ``HIGH``/``ERROR``/``WARNING``/``DEBUG`` are
+# defense-in-depth: common Python logging-formatter labels that the
+# adapter ignores today but may grow to recognize.
+_ADAPTER_SEVERITY_TOKENS: Tuple[str, ...] = (
+    "BLOCKER",
+    "CRITICAL",
+    "MEDIUM",
+    "LOW",
+    "NIT",
+    "INFO",
+    "HIGH",
+    "ERROR",
+    "WARNING",
+    "DEBUG",
+)
+_DEFANG_SEVERITY_RE: re.Pattern[str] = re.compile(
+    r"\[(" + "|".join(_ADAPTER_SEVERITY_TOKENS) + r")\]",
+    re.IGNORECASE,
+)
+
+
+def _defang_severity_tags(text: str) -> str:
+    """Rewrite ``[SEV]`` tokens to ``[SEV*]`` for safe rendering.
+
+    Reviewer stderr (notably from log formatters configured with
+    ``[%(levelname)s]``) routinely contains tokens like ``[CRITICAL]``
+    or ``[ERROR]``. The downstream cloud verdict adapter scans the
+    entire report with a multiline regex and converts those tokens
+    into synthetic findings — a ``[CRITICAL]`` log line would flip
+    ``verdict`` away from ``ship``. We rewrite at the render boundary
+    only (the on-disk ``final-state.json`` reason field stays truthful)
+    so humans can still see what the reviewer said while the adapter
+    sees nothing it would misinterpret.
+    """
+    if not text:
+        return text
+    return _DEFANG_SEVERITY_RE.sub(r"[\1*]", text)
+
+
 @dataclass
 class ReviewFinding:
     """Structured finding shared between reviewers and fixers."""
@@ -475,6 +520,7 @@ def run_checkup_review_loop(
                             quiet=quiet,
                             artifacts_dir=artifacts_dir,
                             pr_metadata=pr_metadata,
+                            deadline=deadline,
                         )
                     if fallback_result is not None:
                         fallback_used = True
@@ -504,10 +550,11 @@ def run_checkup_review_loop(
                             f"{fallback_result.status}."
                         )
                         break
-                    state.stop_reason = (
-                        f"Primary reviewer {reviewer} could not complete: "
-                        f"{review.status}."
-                    )
+                    if not state.stop_reason:
+                        state.stop_reason = (
+                            f"Primary reviewer {reviewer} could not complete: "
+                            f"{review.status}."
+                        )
                     break
 
             fix_findings = _actionable_findings(state, review.findings)
@@ -599,6 +646,17 @@ def run_checkup_review_loop(
         if verify.status in HARD_NOT_CLEAN_STATES:
             # A failed/degraded verifier cannot confirm that fixes landed.
             # Keep the findings open and stop with an unknown/not-ready report.
+            #
+            # NOTE: ``_maybe_run_fallback_reviewer`` is intentionally NOT
+            # invoked on the verify path. On the verify pass the fixer's
+            # role has just authored the changes being verified —
+            # promoting the fixer to act as verifier of its own work
+            # collapses the reviewer/fixer independence the loop exists
+            # to enforce. The round-start fallback does not have this
+            # problem because no fix has been applied yet. If a
+            # verifier-side outage becomes a recurring operational pain
+            # point, the right answer is a third independent role, not
+            # self-verification.
             state.reviewer_status[reviewer] = verify.status
             state.stop_reason = (
                 f"Primary reviewer {reviewer} could not verify fixes: "
@@ -1052,6 +1110,7 @@ def _maybe_run_fallback_reviewer(
     quiet: bool,
     artifacts_dir: Path,
     pr_metadata: Optional[Dict[str, Any]],
+    deadline: float,
 ) -> Optional[ReviewResult]:
     """Run the fixer's role as a fallback reviewer when the primary fails.
 
@@ -1085,6 +1144,19 @@ def _maybe_run_fallback_reviewer(
         # "degraded cannot ship" semantics.
         return None
     if not fixer or fixer == primary_reviewer:
+        return None
+
+    # Budget guard. The primary reviewer's failed invocation may have
+    # already consumed the cost/duration budget; ``_run_review`` would
+    # otherwise push us past it. Surface a precise stop reason so the
+    # final report explains why the fallback didn't run instead of
+    # claiming the primary "could not complete".
+    if _budget_exhausted(config, state, deadline):
+        _mark_budget_exhausted(config, state, deadline)
+        state.stop_reason = (
+            f"Primary reviewer {primary_reviewer} {primary_status}; "
+            f"budget exhausted before fallback reviewer {fixer} could run."
+        )
         return None
 
     if not quiet:
@@ -2840,6 +2912,20 @@ def _write_final_state(
     payload = {
         "reviewer_status": dict(state.reviewer_status),
         "active_reviewer": state.active_reviewer,
+        "reviewer_status_details": {
+            # Per-reviewer diagnostic detail captured for any reviewer
+            # that ended in failed/degraded/missing. When a fallback
+            # promotes the primary's rendered status to ``clean``, the
+            # entry here keeps the original failure (status,
+            # classification, exit_code, reason) plus a
+            # ``superseded_by_fallback`` marker so downstream tooling
+            # can audit what really happened. The ``reason`` field is
+            # the unscrubbed-of-defang-tags stderr tail (secrets are
+            # still scrubbed); the markdown report defangs ``[SEV]``
+            # tokens at render time only.
+            name: dict(detail)
+            for name, detail in state.reviewer_status_details.items()
+        },
         "fresh_final_status": state.fresh_final_status,
         "issue_aligned": issue_aligned,
         "stop_reason": state.stop_reason,
@@ -3009,9 +3095,15 @@ def _render_final_report(
                 )
             reason = (detail.get("reason") or "").strip()
             if reason:
+                # Defang ``[SEV]`` tokens at render only — leaving state
+                # truthful for ``final-state.json``. The adapter would
+                # otherwise pick ``[CRITICAL] rate limit reached`` out
+                # of the reviewer's log output as a synthetic finding
+                # and flip the verdict away from ``ship``.
+                safe_reason = _defang_severity_tags(reason)
                 lines.append("")
                 lines.append("```")
-                lines.extend(reason.splitlines())
+                lines.extend(safe_reason.splitlines())
                 lines.append("```")
                 lines.append("")
 
