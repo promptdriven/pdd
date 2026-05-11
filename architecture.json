@@ -8715,5 +8715,67 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Finalize and audit `.pdd/meta/` fingerprint and run-report state for a single dev unit.",
+    "description": "Library-layer primitive that resolves a dev unit, computes current file hashes, reports complete/stale/missing state, optionally writes a fresh fingerprint, and clears stale `_run.json` reports under the per-unit SyncLock. Language-agnostic; composes existing fingerprint, run-report, and lock helpers from sync_determine_operation and operation_log.",
+    "dependencies": [
+      "sync_determine_operation_python.prompt",
+      "operation_log_python.prompt"
+    ],
+    "priority": 236,
+    "filename": "metadata_finalize_python.prompt",
+    "filepath": "pdd/metadata_finalize.py",
+    "tags": [
+      "module",
+      "python",
+      "sync"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "finalize_metadata",
+            "signature": "(target: str, language: Optional[str] = None, prompts_dir: str = 'prompts', context_override: Optional[str] = None, dry_run: bool = False) -> MetadataReport",
+            "returns": "MetadataReport"
+          },
+          {
+            "name": "MetadataReport",
+            "signature": "(basename: str, language: str, paths: Dict[str, Any], files_present: Dict[str, bool], fingerprint_state: str, run_report_state: str, stale_components: List[str], wrote_fingerprint: bool, cleared_run_report: bool, warnings: List[str], dry_run: bool)",
+            "returns": "MetadataReport"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Registers the `metadata` CLI group and its `finalize` subcommand for auditing/finalizing dev-unit metadata.",
+    "description": "Thin Click CLI wrapper exposing `pdd metadata finalize` over the `finalize_metadata` library primitive. Supports `--dry-run`, `--json`, `--language`, `--context`, and `--quiet`; uses git-plumbing exit codes (0/1/2). Does not apply `@track_cost` or `@log_operation`.",
+    "dependencies": [
+      "metadata_finalize_python.prompt"
+    ],
+    "priority": 237,
+    "filename": "commands/metadata_python.prompt",
+    "filepath": "pdd/commands/metadata.py",
+    "tags": [
+      "command",
+      "python"
+    ],
+    "interface": {
+      "type": "command",
+      "command": {
+        "commands": [
+          {
+            "name": "metadata",
+            "description": "Inspect and finalize PDD dev-unit metadata (.pdd/meta/) state"
+          },
+          {
+            "name": "metadata finalize",
+            "description": "Finalize or audit metadata for a single dev unit"
+          }
+        ]
+      }
+    }
   }
 ]

@@ -625,6 +625,7 @@ graph TB
 ### Utility Commands
 - **[`auth`](#19-auth)**: Manages authentication with PDD Cloud
 - **[`sessions`](#20-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
+- **[`metadata`](#23-metadata)**: Inspect and finalize PDD dev-unit metadata under `.pdd/meta/`
 
 ### User Story Prompt Tests
 PDD can validate prompt changes against user stories stored as Markdown files. This uses `detect` under the hood: a story **passes** when `detect` returns no required prompt changes.
@@ -2947,6 +2948,51 @@ pdd firecrawl-cache check <url>        # Check if a URL is cached
 ```
 
 **When to use**: Caching is automatic. Use `stats` to check cache status, `info` to view configuration, `check` to verify if a URL is cached, or `clear` to force re-scraping all URLs.
+
+### 23. metadata
+
+The `metadata` command group inspects and finalizes the per-dev-unit metadata that PDD stores under `.pdd/meta/`. Each dev unit has a fingerprint (`{basename}_{language}.json`) describing the last-known-good prompt/code/example/test hashes, and an optional run report (`{basename}_{language}_run.json`) capturing the most recent test results. `pdd metadata finalize` is the language-agnostic primitive for auditing or refreshing that state after a user or automation has intentionally edited files.
+
+```bash
+pdd metadata finalize [OPTIONS] TARGET
+```
+
+Arguments:
+- `TARGET`: a basename (`foo`), a prompt path (`prompts/foo_python.prompt`), or a code/example/test path that resolves unambiguously to one dev unit.
+
+Options:
+- `--dry-run`: print the current metadata state without writing. No fingerprint is saved and no stale run report is cleared. Useful for CI drift detection.
+- `--json`: emit the report as a single JSON object to stdout. Suitable for `pdd auto-heal` and scripted consumers.
+- `--language TEXT`: override language detection (e.g., `python`, `typescript`). Defaults to the language inferred from the target or the project's `.pddrc` `default_language`.
+- `--context TEXT`: override `.pddrc` context selection when the target is ambiguous across contexts.
+- `--quiet`: suppress non-error output in human-readable mode. Ignored when `--json` is set.
+
+Behavior:
+- Resolves prompt/code/example/test paths using the same path resolution as `pdd sync` (architecture.json filepath, then `.pddrc` outputs, then defaults).
+- Computes current SHA256 hashes for all resolved files via the existing fingerprint logic.
+- Reports `fingerprint_state` as `missing`, `current`, or `stale`, with the list of changed components.
+- Reports `run_report_state` as `missing`, `current`, `stale`, or `skipped` (when the last fingerprint command was a `skip:*` operation).
+- In normal mode, atomically writes a fresh fingerprint under the per-dev-unit `SyncLock` and clears any stale `_run.json` that no longer matches the current sources.
+- In `--dry-run` mode, never writes; bypasses locking via `SyncLock(log_mode=True)`.
+
+Exit codes (git-plumbing style):
+- `0`: report produced. In normal mode the fingerprint was written and any stale run report was cleared.
+- `1`: `--dry-run` only — a report was produced and drift was detected (fingerprint not current, or run report stale).
+- `2`: error — target could not be resolved, language could not be detected, lock acquisition failed, or another unexpected error occurred.
+
+Examples:
+```bash
+# Audit a dev unit without touching disk
+pdd metadata finalize foo --dry-run
+
+# Finalize after an intentional manual edit
+pdd metadata finalize prompts/foo_python.prompt
+
+# Machine-readable audit for CI
+pdd metadata finalize foo --dry-run --json
+```
+
+**When to use**: After making intentional manual edits to a prompt, code, example, or test file that you want PDD to treat as the new known-good baseline, run `pdd metadata finalize TARGET` instead of deleting `.pdd/meta/` files by hand. Use `--dry-run` in CI or before risky operations to confirm what state PDD currently sees.
 
 ## Example Review Process
 

@@ -24,6 +24,7 @@
     - `install_completion_cmd` (as name="install_completion"), `verify` (from `.utility`)
     - `which` (from `.which`)
     - `firecrawl_cache` (from `.firecrawl`)
+    - `metadata_group` (from `.metadata`)
 
 % Deliverables
   - Code: `pdd/commands/__init__.py`

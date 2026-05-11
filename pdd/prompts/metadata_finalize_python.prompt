@@ -1,0 +1,92 @@
+<pdd-reason>Finalize and audit `.pdd/meta/` fingerprint and run-report state for a single dev unit.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "finalize_metadata", "signature": "(target: str, language: Optional[str] = None, prompts_dir: str = 'prompts', context_override: Optional[str] = None, dry_run: bool = False) -> MetadataReport", "returns": "MetadataReport"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write `pdd/metadata_finalize.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Role & Scope
+  This module is the library-layer primitive that finalizes and audits PDD dev-unit metadata. Given a basename/file/prompt path (and optional language), it resolves the dev unit using existing PDD path resolution, computes current file hashes, reports whether the unit is complete/stale/missing, optionally writes a fresh fingerprint, and clears stale `_run.json` reports. It is the common finalization primitive that `update`, `auto-heal`, and future metadata-sync workflows will call.
+
+% Non-Responsibilities
+  - Does NOT regenerate code, examples, or tests.
+  - Does NOT execute LLM calls, run tests, or compute coverage.
+  - Does NOT decide the next sync operation (that is `sync_determine_operation`'s job).
+  - Does NOT parse source code in a language-specific way; it only hashes files and compares against stored fingerprints.
+
+% Requirements
+  1. **Public API**:
+     - Define a `@dataclass` `MetadataReport` with fields:
+       - `basename: str`, `language: str`
+       - `paths: Dict[str, Any]` (the resolved PDD file paths, same shape as `get_pdd_file_paths` returns)
+       - `files_present: Dict[str, bool]` (one entry per file type: `prompt`, `code`, `example`, `test`/`test_files`)
+       - `fingerprint_state: str` — one of `"missing"`, `"current"`, `"stale"`
+       - `run_report_state: str` — one of `"missing"`, `"current"`, `"stale"`, `"skipped"`
+       - `stale_components: List[str]` (e.g., `["prompt", "code"]` — file types whose current hash differs from the fingerprint)
+       - `wrote_fingerprint: bool`
+       - `cleared_run_report: bool`
+       - `warnings: List[str]` (human-readable warnings, e.g., missing files, malformed JSON)
+       - `dry_run: bool`
+     - Export `finalize_metadata(target, language=None, prompts_dir="prompts", context_override=None, dry_run=False) -> MetadataReport`.
+     - `target` may be a basename (e.g., `"foo"`), a prompt file path (e.g., `"prompts/foo_python.prompt"`), or a code/example/test path that maps unambiguously to a basename. Resolve via existing PDD path resolution.
+  2. **Path & language resolution**:
+     - If `language` is `None`, infer it from the target (prompt filename suffix `_python.prompt`, code extension, or `.pddrc` `default_language` fallback). Reuse existing helpers from `sync_determine_operation` and `construct_paths`; do NOT add a new language registry.
+     - Call `get_pdd_file_paths(basename, language, prompts_dir, context_override=context_override)` to resolve paths.
+  3. **Hash & state computation**:
+     - Read the stored fingerprint via `read_fingerprint(basename, language)`.
+     - Compute current hashes via `calculate_current_hashes(paths, stored_include_deps=fingerprint.include_deps if fingerprint else None)`.
+     - Read the stored run report via `read_run_report(basename, language)`.
+     - Populate `files_present` by checking `Path.exists()` for each path; for `test_files`, check that the list is non-empty AND every entry exists.
+     - Compute `stale_components` by comparing current hashes vs stored fingerprint hashes (`prompt_hash`, `code_hash`, `example_hash`, `test_hash`, and `test_files` dict). Missing files do NOT count as stale; they are reported via `files_present`.
+     - `fingerprint_state`:
+       - `"missing"` if no fingerprint file or it is unreadable (record a warning).
+       - `"current"` if a fingerprint exists and `stale_components` is empty.
+       - `"stale"` otherwise.
+     - `run_report_state`:
+       - `"missing"` if no run report.
+       - `"skipped"` if the fingerprint's `command` starts with `"skip:"` (per `sync_determine_operation` Bug #23).
+       - `"stale"` if the run report's `test_hash`/`test_files` does not match the current test hash(es), OR if `prompt`/`code`/`example` are in `stale_components` (run results no longer reflect current sources).
+       - `"current"` otherwise.
+  4. **Write semantics**:
+     - When `dry_run=True`: never touch disk. Set `wrote_fingerprint=False`, `cleared_run_report=False`. Use `SyncLock` in `log_mode=True` to bypass locking (read-only audit).
+     - When `dry_run=False`: acquire `SyncLock(basename, language)` (write mode). Always write a fresh fingerprint via `operation_log.save_fingerprint(basename, language, operation="metadata-finalize", paths=paths)` and set `wrote_fingerprint=True`. If `run_report_state == "stale"`, call `operation_log.clear_run_report(basename, language)` and set `cleared_run_report=True`. Never write when files are entirely missing for the prompt (record a warning and skip the fingerprint write in that case).
+  5. **Error handling**:
+     - Wrap top-level resolution failures (basename unresolvable, language undetectable) in a clear `ValueError` so the CLI can render exit code 2.
+     - Per-file IO errors (e.g., unreadable hash) are captured in `warnings` and do not abort the report.
+     - Lock acquisition timeouts re-raise so the CLI surfaces them as exit code 2.
+  6. **Language agnosticism**:
+     - All hashing goes through `calculate_sha256` / `calculate_current_hashes`. No language-specific AST parsing.
+     - Works for any language supported by `get_extension` / `.pddrc` `default_language`.
+  7. **Determinism**:
+     - The function is pure given the filesystem state, modulo writes performed in non-dry-run mode.
+     - Repeated dry-run calls return identical reports.
+
+% Dependencies
+  <sync_determine_operation>
+    <include select="def:get_pdd_file_paths,def:read_fingerprint,def:read_run_report,def:calculate_current_hashes,def:validate_expected_files,def:get_extension,class:Fingerprint,class:RunReport,class:SyncLock,def:_safe_basename,def:get_meta_dir" mode="interface">pdd/sync_determine_operation.py</include>
+  </sync_determine_operation>
+  <operation_log>
+    <include select="def:save_fingerprint,def:clear_run_report,def:save_run_report,def:get_fingerprint_path,def:get_run_report_path" mode="interface">pdd/operation_log.py</include>
+  </operation_log>
+
+% Instructions
+  - Place this module at `pdd/metadata_finalize.py` (top-level `pdd/` package, not under `pdd/commands/`).
+  - Import the helpers above lazily inside the function body to avoid circular imports between `sync_determine_operation` and the new module.
+  - Do not introduce a new lock file or a new fingerprint format. Reuse `SyncLock` and `Fingerprint`/`RunReport` as-is.
+  - Keep the module under ~250 lines; this is a thin composition layer.
+
+% Deliverables
+  - Code: `pdd/metadata_finalize.py`
