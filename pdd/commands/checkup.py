@@ -189,11 +189,16 @@ from ..core.errors import handle_error
     is_flag=True,
     default=False,
     help=(
-        "Opt-in. When the primary reviewer ends in 'failed' or 'missing' "
-        "(NOT 'degraded'), run a second review pass using the configured "
-        "fixer's identity as a fallback reviewer. A clean fallback is "
-        "promoted to a real reviewer row so downstream verdict adapters "
-        "see a clean real-reviewer entry."
+        "Opt-in. When the primary reviewer ends in 'failed' or 'missing', "
+        "run a second review pass using the configured fixer's identity "
+        "as a fallback reviewer. On a clean fallback the rendered "
+        "reviewer-status line shows the primary as clean so downstream "
+        "verdict adapters do not short-circuit on the primary's outage; "
+        "the original failure detail is preserved in the Reviewer "
+        "Diagnostics block of the final report. NOTE: 'degraded' is "
+        "intentionally NOT promoted — degraded means reduced quality "
+        "(rate limit, context window, etc.) and must not silently lose "
+        "signal."
     ),
 )
 @click.pass_context
