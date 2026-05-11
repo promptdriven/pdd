@@ -420,34 +420,61 @@ def _find_target_function(
 ) -> Optional[ast.AST]:
     """Locate a declared function in the generated code.
 
-    Tries (in order):
-    1. A module-level ``def name`` / ``async def name``.
-    2. A module-level ``class name`` — returns its ``__init__`` method if any
-       (covers the "class methods: only check ``__init__``" rule).
+    Resolution rules:
+    * Bare name ``foo``:
+        1. module-level ``def foo`` / ``async def foo``;
+        2. module-level ``class foo`` — returns its ``__init__`` method if any
+           (covers the "class methods: only check ``__init__``" rule).
+    * Dotted name ``Outer.method`` / ``Outer.Inner.method``: descend through
+      nested ``ClassDef`` nodes by name, then match the final segment as a
+      method ``def`` / ``async def`` inside the resolved class body. This
+      covers prompts whose ``pdd-interface`` declares class methods directly
+      (e.g. ``ContentSelector.select``).
 
-    Returns ``None`` if neither is present (existing symbol-existence check
-    owns this failure mode).
+    Returns ``None`` if no matching definition exists.
     """
     if not isinstance(tree, ast.Module):
         return None
-    # Direct function match.
-    for node in tree.body:
+
+    parts = name.split(".") if name else []
+    if not parts or any(not p for p in parts):
+        return None
+
+    # Walk through class containers for every segment except the last.
+    body: List[ast.stmt] = list(tree.body)
+    for part in parts[:-1]:
+        cls: Optional[ast.ClassDef] = None
+        for node in body:
+            if isinstance(node, ast.ClassDef) and node.name == part:
+                cls = node
+                break
+        if cls is None:
+            return None
+        body = list(cls.body)
+
+    last = parts[-1]
+
+    # Look for a direct function/method match first.
+    for node in body:
         if (
             isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
-            and node.name == name
+            and node.name == last
         ):
             return node
-    # Class match — return __init__ (if present) for signature check.
-    for node in tree.body:
-        if isinstance(node, ast.ClassDef) and node.name == name:
-            for child in node.body:
-                if (
-                    isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
-                    and child.name == "__init__"
-                ):
-                    return child
-            # Class exists but has no __init__ — nothing to compare against.
-            return None
+
+    # Bare-name fallback: a module-level class — return its ``__init__``.
+    if len(parts) == 1:
+        for node in body:
+            if isinstance(node, ast.ClassDef) and node.name == last:
+                for child in node.body:
+                    if (
+                        isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                        and child.name == "__init__"
+                    ):
+                        return child
+                # Class exists but has no __init__ — nothing to compare against.
+                return None
+
     return None
 
 
@@ -553,28 +580,36 @@ def _verify_pdd_interface_signatures(
     except SyntaxError:
         return  # Can't parse — defer to existing checks/recovery paths.
 
-    missing: List[str] = []
-    declared_param_dotted: List[str] = []
-    found_param_dotted: List[str] = []
+    missing_params: List[str] = []
+    missing_funcs: List[str] = []
+    declared_expected: List[str] = []
+    found_in_code: List[str] = []
 
     for func_name, declared_params in declarations:
         target = _find_target_function(tree, func_name)
         if target is None:
-            # Declared function not found in code — that's the existing
-            # symbol-existence check's responsibility. Do not double-fire.
+            # Function/method declared by the prompt but absent from the
+            # generated code. The prompt is the source of truth even when
+            # architecture.json has no matching entry, so surface this here.
+            # When architecture.json *does* declare the same symbol, its
+            # check runs first and raises before this point, so no
+            # double-fire occurs.
+            missing_funcs.append(func_name)
+            declared_expected.append(func_name)
             continue
         actual_params = _collect_actual_param_names(target)
         for param in declared_params:
             dotted = f"{func_name}.{param}"
-            declared_param_dotted.append(dotted)
+            declared_expected.append(dotted)
             if param in actual_params:
-                found_param_dotted.append(dotted)
+                found_in_code.append(dotted)
             else:
-                missing.append(dotted)
+                missing_params.append(dotted)
 
-    if not missing:
+    if not missing_params and not missing_funcs:
         return
 
+    missing: List[str] = missing_funcs + missing_params
     output_display = output_path or "<unknown>"
     message = (
         f"Architecture conformance error for {prompt_name}: "
@@ -583,16 +618,20 @@ def _verify_pdd_interface_signatures(
         f"Output: {output_display}."
     )
 
-    # Group missing parameters by function for a readable repair directive.
-    missing_by_func: Dict[str, List[str]] = {}
-    for dotted in missing:
-        func, _, param = dotted.partition(".")
-        missing_by_func.setdefault(func, []).append(param)
     directive_lines: List[str] = [
         f"Architecture conformance error for {prompt_name}: "
-        "the prompt's <pdd-interface> declares parameter(s) that are missing "
-        "from the generated code's function signature.",
+        "the prompt's <pdd-interface> declares function(s)/parameter(s) "
+        "that are missing from the generated code.",
     ]
+    if missing_funcs:
+        directive_lines.append(
+            "- Add the following missing function(s)/method(s) declared in "
+            f"the prompt: `{', '.join(missing_funcs)}`."
+        )
+    missing_by_func: Dict[str, List[str]] = {}
+    for dotted in missing_params:
+        func, _, param = dotted.partition(".")
+        missing_by_func.setdefault(func, []).append(param)
     for func, params in missing_by_func.items():
         directive_lines.append(
             f"- On `{func}`, add the following missing parameter(s) to the "
@@ -609,8 +648,8 @@ def _verify_pdd_interface_signatures(
         prompt_name=prompt_name,
         output_path=output_path or "",
         architecture_entry=architecture_entry or {},
-        expected_symbols=declared_param_dotted,
-        found_symbols=found_param_dotted,
+        expected_symbols=declared_expected,
+        found_symbols=found_in_code,
         missing_symbols=missing,
         message=message,
         repair_directive="\n".join(directive_lines),
