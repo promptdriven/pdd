@@ -5354,3 +5354,134 @@ class TestPddInterfaceSignatureConformance:
         # is the function name itself, not a dotted ``update_main.sync_metadata``.
         assert "update_main" in excinfo.value.missing_symbols
         assert "update_main.sync_metadata" not in excinfo.value.missing_symbols
+
+    def test_dotted_class_method_signature_is_checked(self, tmp_path):
+        """``Outer.method`` signatures declared in <pdd-interface> are resolved
+        through the class body, and missing params on the method are reported
+        as dotted ``Outer.method.param`` entries. Issue #928 follow-up: prior
+        to this fix, ``_find_target_function`` only handled bare names so
+        any prompt declaring a method on a class (e.g. ``ContentSelector.select``)
+        was silently skipped.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "content_selector_python.prompt"
+        # Architecture entry declares only the class; the method's signature
+        # contract is owned by the prompt's <pdd-interface>.
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "src/content_selector.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "ContentSelector", "signature": "class ContentSelector"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"ContentSelector.select",'
+            '"signature":"(content, selectors, file_path=None, mode=\\"full\\")"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "class ContentSelector:\n"
+            "    def select(self, content, selectors, file_path=None):\n"
+            "        return content\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert excinfo.value.missing_symbols == ["ContentSelector.select.mode"]
+
+    def test_dotted_method_absent_from_class_is_reported(self, tmp_path):
+        """When the class exists but the declared method is absent, surface
+        the missing method name (``ContentSelector.select``) so the repair
+        loop has something concrete to fix. Without this, prompts whose
+        architecture.json entry does not also enumerate the method would
+        leave the gap uncaught.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "content_selector_python.prompt"
+        # Arch declares only the class (no method) so its symbol check passes.
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "src/content_selector.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "ContentSelector", "signature": "class ContentSelector"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"ContentSelector.select",'
+            '"signature":"(content, selectors)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "class ContentSelector:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "ContentSelector.select" in excinfo.value.missing_symbols
+
+    def test_prompt_only_missing_function_without_architecture_entry(self, tmp_path):
+        """A function declared in <pdd-interface> that is entirely absent from
+        the generated code must be reported, even when architecture.json has
+        no matching entry. Without this, prompt-only declarations slip through
+        because the architecture.json symbol-existence check is a no-op.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "no_arch_module_python.prompt"
+        # No architecture.json at all: arch_path points at a non-existent file
+        # so the existing symbol-existence check returns early (silent).
+        arch_path = tmp_path / "architecture.json"
+        # Intentionally NOT writing the file.
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "def something_else():\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        # Missing entry is the bare function name, not a dotted param.
+        assert "update_main" in excinfo.value.missing_symbols
+        assert all("." not in s for s in excinfo.value.missing_symbols if s == "update_main")
