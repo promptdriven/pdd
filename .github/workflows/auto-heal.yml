@@ -195,7 +195,7 @@ jobs:
             exit 1
           fi
           
-          if [ "$REQUESTER" = "prompt-driven-github[bot]" ]; then
+          if [[ "$REQUESTER" == *"[bot]" ]]; then
             echo "authorized: $REQUESTER is a trusted GitHub App identity (bot)"
             exit 0
           fi
