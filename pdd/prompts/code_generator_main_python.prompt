@@ -65,7 +65,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     <include>pdd/core/cloud.py</include>
 </cloud_config>
 <architecture_sync>
-    <include select="def:_verify_architecture_conformance,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
+    <include select="def:_verify_architecture_conformance,def:_verify_architecture_json_conformance,def:_verify_pdd_interface_signatures,def:_extract_pdd_interface_signatures,def:_parse_declared_param_names,def:_collect_actual_param_names,def:_find_target_function,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
 </architecture_sync>
 <env_detector>
     <include>pdd/python_env_detector.py</include>
@@ -105,7 +105,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 A single Python file containing:
 1. The primary `code_generator_main` function returning `(generated_code, was_incremental, total_cost, model_name)`.
 2. Private helper functions for Git operations (`_run_git_command`, `is_git_repository`).
-3. Private helpers for architecture and wiring (`_verify_architecture_conformance`, `_should_wire_generated_exports`, `_wire_to_parent_init`).
+3. Private helpers for architecture and wiring (`_verify_architecture_conformance`, the `_verify_architecture_json_conformance` symbol-existence helper it delegates to, the `<pdd-interface>` signature helpers `_verify_pdd_interface_signatures` / `_extract_pdd_interface_signatures` / `_parse_declared_param_names` / `_collect_actual_param_names` / `_find_target_function`, `_should_wire_generated_exports`, `_wire_to_parent_init`).
 4. Logic for handling Cloud API requests, including JWT authentication and error code handling.
-5. Public exception class `ArchitectureConformanceError(click.UsageError)` colocated with `_verify_architecture_conformance`, exposing the structured attributes listed in Requirement 5 plus failed-attempt `total_cost` and `model_name`, and a `repair_directive` property suitable for injection into a regeneration prompt. The class MUST be importable as `from pdd.code_generator_main import ArchitectureConformanceError` so `agentic_sync_runner` can catch it without a string-match.
+5. Public exception class `ArchitectureConformanceError(click.UsageError)` colocated with `_verify_architecture_conformance`, exposing the structured attributes listed in Requirement 5 plus failed-attempt `total_cost` and `model_name`, and a `repair_directive` property suitable for injection into a regeneration prompt. The constructor MUST accept an optional `repair_directive: Optional[str] = None` keyword argument: when provided, the property returns that explicit directive (used by the `<pdd-interface>` signature check where the prompt — not `architecture.json` — is the source of truth); when omitted, the property returns the default `architecture.json`-oriented directive enumerating missing exports. The class MUST be importable as `from pdd.code_generator_main import ArchitectureConformanceError` so `agentic_sync_runner` can catch it without a string-match.
 6. `PDD_REPAIR_DIRECTIVE` prompt-content injection, wrapped in `<architecture_repair_directive>` tags, so retrying sync callers can force regeneration toward missing architecture exports without changing `architecture.json`.
