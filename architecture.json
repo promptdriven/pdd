@@ -7545,6 +7545,7 @@
           "max_minutes",
           "require_all_reviewers_clean",
           "continue_on_reviewer_limit",
+          "fallback_reviewer_on_failure",
           "require_final_fresh_review",
           "blocking_severities",
           "clean_reviewer_states",
