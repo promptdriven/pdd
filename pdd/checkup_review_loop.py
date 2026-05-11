@@ -197,6 +197,60 @@ def _defang_severity_tags(text: str) -> str:
     return _DEFANG_SEVERITY_RE.sub(r"[\1*]", text)
 
 
+# Line-leading ``Error:`` (any case) is the second adapter trip-wire
+# from the same family. The adapter's ``_TOP_LEVEL_ERROR_RE`` is
+# ``re.compile(r"^\s*error:", re.IGNORECASE | re.MULTILINE)`` and a
+# single match anywhere in the rendered report downgrades the verdict
+# to ``unknown`` ("Checkup report indicates timeout or error."). Both
+# the codex CLI (``Error: codex authentication failed (401)``) and the
+# claude CLI (``Error: failed to load credentials...``) emit this exact
+# shape on routine outages, so without this defang the round-3 fallback
+# promise — "if codex goes down, claude ships the PR" — does not hold
+# for the most common real-world failure modes (3/20 e2e cases pre-fix).
+#
+# NOTE TO FUTURE MAINTAINERS: This defang family mirrors the cloud
+# adapter's full-report-scan regexes. If a new global regex is added
+# to ``checkup_verdict_adapter`` (anything that scans the entire report
+# without fence/section awareness), a matching defang MUST be added
+# here. The current trip-wires are:
+#   - ``_BRACKET_TAG_RE`` (``[SEV]`` tokens) → ``_defang_severity_tags``
+#   - ``_TOP_LEVEL_ERROR_RE`` (line-leading ``error:``) → ``_defang_top_level_errors``
+# Defang at the RENDER boundary only — ``state.reviewer_status_details``
+# and ``final-state.json`` keep the original text so on-disk audit and
+# diagnostic forwarding stay truthful.
+_DEFANG_TOP_LEVEL_ERROR_RE: re.Pattern[str] = re.compile(
+    r"^(\s*)(error):",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _defang_top_level_errors(text: str) -> str:
+    """Neutralize line-leading ``Error:``/``error:``/``ERROR:`` tokens.
+
+    The cloud verdict adapter's ``_TOP_LEVEL_ERROR_RE`` searches the
+    entire report for ``^\\s*error:`` (case-insensitive, multiline)
+    and downgrades any match to ``verdict=unknown``. We rewrite the
+    colon to ``*:`` so the line still reads naturally to a human
+    (e.g., ``Error*: codex authentication failed (401)``) while the
+    adapter's regex no longer matches.
+    """
+    if not text:
+        return text
+    return _DEFANG_TOP_LEVEL_ERROR_RE.sub(r"\1\2*:", text)
+
+
+def _defang_adapter_trip_wires(text: str) -> str:
+    """Apply every render-boundary defang in one place.
+
+    Single entry point so any code path that emits subprocess stderr
+    into the rendered report stays consistent. Keep this routine the
+    only caller of the individual ``_defang_*`` helpers from inside
+    ``_render_final_report`` so adding a future defang only touches
+    one site.
+    """
+    return _defang_top_level_errors(_defang_severity_tags(text))
+
+
 @dataclass
 class ReviewFinding:
     """Structured finding shared between reviewers and fixers."""
@@ -3095,12 +3149,14 @@ def _render_final_report(
                 )
             reason = (detail.get("reason") or "").strip()
             if reason:
-                # Defang ``[SEV]`` tokens at render only — leaving state
-                # truthful for ``final-state.json``. The adapter would
-                # otherwise pick ``[CRITICAL] rate limit reached`` out
-                # of the reviewer's log output as a synthetic finding
-                # and flip the verdict away from ``ship``.
-                safe_reason = _defang_severity_tags(reason)
+                # Defang adapter trip-wires at render only — state is
+                # truthful for ``final-state.json``. Two known trip-
+                # wires today: ``[SEV]`` finding tokens (would inject
+                # synthetic findings and flip the verdict away from
+                # ``ship``) and line-leading ``Error:`` (would
+                # downgrade the verdict to ``unknown`` regardless of
+                # reviewer-status). See ``_defang_adapter_trip_wires``.
+                safe_reason = _defang_adapter_trip_wires(reason)
                 lines.append("")
                 lines.append("```")
                 lines.extend(safe_reason.splitlines())
