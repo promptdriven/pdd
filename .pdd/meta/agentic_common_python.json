@@ -1,20 +1,19 @@
 {
-  "pdd_version": "0.0.233",
-  "timestamp": "2026-05-11T22:26:49.577987+00:00",
-  "command": "fix",
-  "prompt_hash": "3e4e3c6e36519b3779bfbc53d7ae313c12e2a39257d92ca1fac1b40136c8da11",
-  "code_hash": "8058970d097b1b5e8d0b6187a7ca871c07d097e68507a721fca5891f72ab5fb2",
-  "example_hash": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
-  "test_hash": "f1b15bf3b511a7ed4e394bf4197578e982d679a11767f5f4b7d3daff5b361df8",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-07T18:17:21+00:00",
+  "command": "test",
+  "prompt_hash": "54f705f217e6047f8e6aa37fe1ce619d86f0be697ea8c11affd303835418f3c3",
+  "code_hash": "12c79e227d2a0c18f0f70d1b753b6e6ef8cae4611edcbe20e2053201087e12a5",
+  "example_hash": "a39a73a510075ed5bc62b0ade0cc33d891f9d69d138413265daf328a727282a2",
+  "test_hash": "299bb002196777c2967cda9699ce245a2bb332e81512df80afd38ab9b7340cf1",
   "test_files": {
-    "test_agentic_common.py": "f1b15bf3b511a7ed4e394bf4197578e982d679a11767f5f4b7d3daff5b361df8",
-    "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "1988f9b022bd4071f95aef13ba6a6a6681279711ad6f718744195b8e0b9dac9e",
-    "test_agentic_common_worktree.py": "b726b24513865a7e3c23700b192bac001ab09190d7371b6d6714f0cf076c58e2"
+    "test_agentic_common.py": "299bb002196777c2967cda9699ce245a2bb332e81512df80afd38ab9b7340cf1",
+    "test_agentic_common_worktree.py": "b726b24513865a7e3c23700b192bac001ab09190d7371b6d6714f0cf076c58e2",
+    "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "4c0a4831c99109f8fa9baac8d7f383999762191c70c3a3c7e31cf8b7dea0e90f"
   },
   "include_deps": {
     "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
-    "pdd/agentic_common.py": "8058970d097b1b5e8d0b6187a7ca871c07d097e68507a721fca5891f72ab5fb2"
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
   }
 }
