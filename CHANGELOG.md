@@ -2,15 +2,24 @@
 
 ### Feat
 
-- **tests**: CLI-binary isolation fixture (#1405 Fix A-prime) (#903)
-- **tests**: universal provider-env isolation fixture (#1405 Fix C) (#902)
-- **checkup**: detect hardcoded list drift from canonical source (#1405 fix B) (#899)
-- integrate OpenCode as an agentic provider with credential detection, subprocess execution, and comprehensive test suite updates.
+- **checkup list-drift detector (#899, #1405 Fix B)**: new `pdd/list_drift_detection.py` AST scanner pairs hardcoded string-literal lists against same-package canonical sources (list/tuple/set/`frozenset({…})`/`set([…])`) and injects strict-subset drifts into the reviewer prompt under `## Static-Analysis Candidate Findings`. Walks function/class bodies (catches the #858 inline `for k in (…)` shape), derives PR-changed files from `git diff BASE...HEAD` so it fires on fresh `pull/N/head` worktrees, and includes same-top-level-dir companions (capped at 400) so test-only PRs pair against canonicals. Skips post-dedup singletons; fails open.
+- **tests: provider-env isolation fixture (#902, #1405 Fix C)**: autouse fixture in `tests/conftest.py` clears every key from `_opencode_provider_env_keys()` (45 keys from `llm_model.csv`, not the 26-key fallback) before each test, so developer env (`XAI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, …) can't leak into OpenCode credential detection. Tests opt back in via `monkeypatch.setenv` / `patch.dict`.
+- **tests: CLI-binary isolation fixture (#903, #1405 Fix A-prime)**: autouse `_isolate_cli_binary_presence` defaults `claude`/`codex`/`gemini`/`opencode` to "not installed" and OpenCode filesystem credential signals to "absent", sourcing CLI names from `pdd.cli_detector.CLI_PREFERENCE`. Opt-out via `@pytest.mark.uses_real_cli_detector`.
+- **ci: public PR auto-heal gate (#904)**: new `.github/workflows/auto-heal.yml` required check that dispatches the auto-heal Cloud Build in `prompt-driven-development-stg` via WIF — no LLM/App secrets on the public runner. Collaborator auth verified server-side through a read-only GitHub App; external PRs need a standalone `/heal` first-line token; fork PRs short-circuit with `neutral` before token mint. SHA-pinned actions, env-routed event strings, CRLF-tolerant `/heal` parsing, async `gcloud builds submit` + poll.
 
 ### Fix
 
-- **llm**: polish Gemini 3 clamp helper — prompt alignment + type guards (PR #900 follow-up) (#901)
-- **llm**: clamp temperature to 1.0 for Gemini 3 models (litellm warning) (#900)
+- **llm: clamp temperature to 1.0 for Gemini 3 models (#900)**: move the inline `litellm.completion` override into `_maybe_clamp_gemini_3_temperature` applied before the batch/single split (so `batch_completion` no longer bypasses it) and tighten the regex with a boundary check that covers `gemini-3` / `gemini-3.x` across provider prefixes while excluding `gemini-2.x` / `1.5` / `gemini-30-*`. Gated on `temperature` being present so `_model_disallows_temperature` models are unaffected.
+- **llm: polish Gemini 3 clamp helper (#901)**: `_is_gemini_3_model` adds an `isinstance(model_name, str)` guard (a list like `['gemini-3-flash']` no longer false-matches via `str()`) and an explicit empty-string guard. Prompt clause reworded to "clamp when `temperature < 1.0`" to match actual behavior so a regen doesn't over-clamp.
+- **ci: retry Firebase JWT exchange in cloud-batch entrypoint (#905)**: wrap `securetoken.googleapis.com` in 4 attempts × 2/4/8s backoff + 0–2s jitter with a 15s curl timeout. Capture curl's rc separately (transport errors no longer swallowed by `|| JWT_RESPONSE=""`), apply the same `|| RC=$?` pattern to the parser under `set -e`, validate id_token shape (two-dot JWS) before export, strip ASCII control chars from error strings, and emit a structured `jwt_exchange_failed_case_N` detail in result JSON.
+
+### Build
+
+- Bump 0.0.233 → 0.0.234 in `pyproject.toml`, `pdd/setup.py`, `README.md`, `pypi_description.rst`, and `pdd/pdd_completion.sh`.
+
+### Chore
+
+- Refresh `ci/cloud-batch/test-durations.json` with current per-test timings.
 
 ## v0.0.233 (2026-05-10)
 
