@@ -578,15 +578,6 @@ class ReviewLoopConfig:
     # are reported as "degraded" instead of "failed". They still stop mutation
     # unless a distinct fallback reviewer completes and takes over.
     continue_on_reviewer_limit: bool = False
-    # When enabled, and the primary reviewer ends in ``failed`` or
-    # ``missing`` status (NOT ``degraded`` — degraded means reduced
-    # quality and must not silently lose signal), run a second review
-    # pass using the configured fixer's identity as a fallback reviewer.
-    # The fallback's result is recorded as a real reviewer row so the
-    # downstream verdict adapter sees a clean real-reviewer entry rather
-    # than the legacy ``fixer`` sentinel. Off by default to preserve
-    # existing CI expectations.
-    fallback_reviewer_on_failure: bool = False
     # Kept for report compatibility. A clean verifier pass by the primary
     # reviewer satisfies this; no separate fresh reviewer is spawned.
     require_final_fresh_review: bool = True
@@ -594,6 +585,18 @@ class ReviewLoopConfig:
     reasoning_time: Optional[float] = None
     blocking_severities: Tuple[str, ...] = DEFAULT_BLOCKING_SEVERITIES
     clean_reviewer_states: Tuple[str, ...] = DEFAULT_CLEAN_REVIEWER_STATES
+    # APPENDED — when enabled, and the primary reviewer ends in
+    # ``failed`` or ``missing`` status (NOT ``degraded`` — degraded
+    # means reduced quality and must not silently lose signal), run a
+    # second review pass using the configured fixer's identity as a
+    # fallback reviewer. The fallback's result is recorded as a real
+    # reviewer row so the downstream verdict adapter sees a clean
+    # real-reviewer entry rather than the legacy ``fixer`` sentinel.
+    # MUST stay at the end of the field list so positional callers
+    # ``ReviewLoopConfig(reviewers, reviewer, fixer, …, clean_reviewer_states)``
+    # keep working unchanged. Off by default to preserve existing CI
+    # expectations.
+    fallback_reviewer_on_failure: bool = False
 
 
 @dataclass
@@ -1690,6 +1693,51 @@ def _run_review(
                 mode=mode,
             )
             if repaired is not None:
+                # Parse-repair returns a fresh ``ReviewResult`` derived
+                # purely from the JSON the repair role produced; it has
+                # no diagnostic fields. When repair lands on
+                # failed/degraded/missing (e.g., the repair role
+                # honestly reported ``{"status":"failed"}`` because the
+                # original output was a crash dump), we still need the
+                # ``classification`` / ``exit_code`` / ``reason``
+                # captured from the original raw output so the
+                # ``### Reviewer Diagnostics`` subsection actually
+                # renders. Carry those fields forward from the
+                # pre-repair result so swapping in ``repaired`` does
+                # not silently drop the traceback tail.
+                if repaired.status in HARD_NOT_CLEAN_STATES:
+                    repaired.status_classification = (
+                        repaired.status_classification
+                        or result.status_classification
+                    )
+                    repaired.status_exit_code = (
+                        repaired.status_exit_code or result.status_exit_code
+                    )
+                    repaired.status_reason = (
+                        repaired.status_reason or result.status_reason
+                    )
+                    # If the original was not previously classified
+                    # (e.g., success=True path where the raw output
+                    # looked parseable enough to skip the diagnostics
+                    # branch above), re-extract from the raw output now
+                    # that we know the verdict is hard-not-clean.
+                    if not (
+                        repaired.status_classification
+                        and repaired.status_exit_code
+                        and repaired.status_reason
+                    ):
+                        exit_code, classification, reason = (
+                            _extract_failure_diagnostics(output, success=True)
+                        )
+                        repaired.status_classification = (
+                            repaired.status_classification or classification
+                        )
+                        repaired.status_exit_code = (
+                            repaired.status_exit_code or exit_code
+                        )
+                        repaired.status_reason = (
+                            repaired.status_reason or reason
+                        )
                 result = repaired
     _write_artifact(
         artifacts_dir / f"{base}.findings.json",
