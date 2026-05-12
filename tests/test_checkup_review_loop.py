@@ -1165,14 +1165,47 @@ class TestCheckupReviewLoopRuntime:
     def test_fallback_success_yields_ship_verdict_via_cloud_adapter(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
+        import os
         import sys
 
-        adapter_path = (
-            "/Users/serhanasad/Desktop/SF/pdd_cloud/extensions/"
-            "github_pdd_app/src/services"
+        # Discover the pdd_cloud `checkup_verdict_adapter` portably so this
+        # contract test runs on any developer checkout and on CI:
+        #   1. `PDD_CLOUD_ROOT` env var (CI sets this explicitly when the
+        #      sibling repo is checked out under a non-default name/path).
+        #   2. Sibling repo: `<parent-of-pdd>/pdd_cloud/...` — the layout we
+        #      use in both `~/Desktop/SF/{pdd,pdd_cloud}` and
+        #      `~/Documents/{pdd,pdd_cloud}` checkouts.
+        #   3. `~/pdd_cloud/...` as a final fallback for flat home layouts.
+        # Each candidate is added to `sys.path` so `importorskip` resolves
+        # against the first directory that actually contains the module.
+        # When no candidate is present, `importorskip` skips cleanly.
+        candidates: list[Path] = []
+        env_root = os.environ.get("PDD_CLOUD_ROOT")
+        if env_root:
+            candidates.append(
+                Path(env_root) / "extensions" / "github_pdd_app" / "src" / "services"
+            )
+        repo_root = Path(__file__).resolve().parents[1]
+        candidates.append(
+            repo_root.parent
+            / "pdd_cloud"
+            / "extensions"
+            / "github_pdd_app"
+            / "src"
+            / "services"
         )
-        if adapter_path not in sys.path:
-            sys.path.insert(0, adapter_path)
+        candidates.append(
+            Path.home()
+            / "pdd_cloud"
+            / "extensions"
+            / "github_pdd_app"
+            / "src"
+            / "services"
+        )
+        for candidate in candidates:
+            candidate_str = str(candidate)
+            if candidate.is_dir() and candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
         adapter = pytest.importorskip("checkup_verdict_adapter")
 
         from pdd.checkup_review_loop import run_checkup_review_loop
@@ -2004,6 +2037,23 @@ Local tests passed.
         assert result.findings[0].severity == "critical"
         assert result.findings[0].location == "pdd/generate_model_catalog.py:873"
         assert "does not fetch scores" in result.findings[0].finding
+
+    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+        """Codex exec can emit `Finding: [P2] ...` instead of JSON."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """Finding: [P2] The prompt/architecture contract was not updated for the new step-comment API. `post_step_comment` now accepts `body`, but [agentic_common_python.prompt](/tmp/w/pdd/prompts/agentic_common_python.prompt:18) and [architecture.json](/tmp/w/architecture.json:73) still publish the old signature.
+
+Checks: targeted tests passed.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        assert result.findings[0].severity == "medium"
+        assert result.findings[0].location == "agentic_common_python.prompt:18"
+        assert "step-comment API" in result.findings[0].finding
+        assert "targeted tests" not in result.findings[0].evidence
 
     def test_priority_finding_stops_before_verification_section(self) -> None:
         """Verification summaries are not part of the preceding finding body."""
