@@ -35,21 +35,27 @@ def run_ci_auto_heal_example():
     cost_csv = output_dir / "example_costs.csv"
 
     print("--- Scenario 1: Using the high-level main entry point ---")
-    # This is how you would typically call it from a CI script (e.g., GitHub Action)
-    # modules: List of basenames to check (None = all)
-    # budget_cap: Max dollars to spend on LLM calls (float)
-    # skip_ci: Adds [skip ci] to commit messages (bool)
-    # diff_base: Git ref to compare against for drift direction (string).
-    #     Required in CI: without it, the phantom "no run_report" crash
-    #     filter cannot run in detect_drift and falls back to the
-    #     heal_module guard whose None return is counted as a "skipped
-    #     module", which in PR mode suppresses commits of real heals.
-    #     Use "origin/<base>...HEAD" on PR builds and "HEAD~1" on push
-    #     builds.
+    # This is how you would typically call it from a CI script (e.g., GitHub Action).
+    #
+    # modules: List of basenames to check (None = all).
+    # budget_cap: Max dollars to spend on LLM calls (float).
+    # skip_ci: Pair with diff_base — `skip_ci=False` + `diff_base="origin/<base>...HEAD"`
+    #     is PR mode (heal commits run CI; the main loop also enforces the
+    #     "skipped module suppresses commit" guard). `skip_ci=True` +
+    #     `diff_base="HEAD~1"` is push-to-main mode (commits carry `[skip ci]`;
+    #     partial failures are non-blocking). Do NOT mix them — PR diff_base with
+    #     skip_ci=True silently relaxes the PR safety guard.
+    # diff_base: Git ref to compare against for drift direction. Required in CI:
+    #     without it, the phantom "no run_report" crash filter cannot run in
+    #     detect_drift and falls back to the heal_module guard whose None return
+    #     is counted as a "skipped module", which in PR mode suppresses commits
+    #     of real heals.
+
+    # PR-trigger shape:
     exit_code = main(
         modules=["auth_logic", "data_parser"],
         budget_cap=2.50,
-        skip_ci=True,
+        skip_ci=False,
         diff_base="origin/main...HEAD",
     )
     print(f"Main execution returned exit code: {exit_code}")
