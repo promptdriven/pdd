@@ -4027,7 +4027,7 @@
     "dependencies": [],
     "priority": 116,
     "filename": "pdd_completion_bash.prompt",
-    "filepath": "pdd_completion.sh",
+    "filepath": "pdd/pdd_completion.sh",
     "tags": [
       "cli",
       "shell"
@@ -7433,7 +7433,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str]) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7481,7 +7481,7 @@
   },
   {
     "reason": "Implements the PR-mode primary-reviewer/fixer review loop for pdd checkup.",
-    "description": "Runs one primary reviewer such as Codex against an existing PR, sends the reviewer's actionable findings to a separate fixer such as Claude, then has the same reviewer evaluate the fixer's changes and rationales in the same loop-owned worktree until clean or max rounds. Review-only mode runs just the primary reviewer first pass without fixer, commit, or push. The parser filters findings that only describe external GitHub/CI readiness state with no repository-file evidence, so status-only auto-heal, Cloud Build, mergeability, and pending/action-required required-check findings do not keep the fixer loop running. The fixer may return fixed, not_valid, partially_fixed, or blocked, but only the reviewer can close a finding. The loop persists prompt+output+normalized-findings+dedup-state artifacts per round (and a final-state.json), pushes fixes back to the PR head ref via the shared token-refresh helper from agentic_e2e_fix_orchestrator, and emits a Step-7-compatible final report whose findings table contains only remaining/unfixed findings.",
+    "description": "Runs one primary reviewer such as Codex against an existing PR, sends the reviewer's actionable findings to a separate fixer such as Claude, then has the active reviewer evaluate the fixer's changes and rationales in the same loop-owned worktree until clean or max rounds. An optional reviewer_fallback can take over once when the primary reviewer cannot complete, while preserving the original primary status as non-active diagnostic state; on a successful takeover the superseded primary's Per-Reviewer Status row is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters resolve the report to ship_degraded rather than unknown. Review-only mode runs just the primary reviewer first pass without fixer, commit, or push. The parser filters findings that only describe external GitHub/CI readiness state with no repository-file evidence, so status-only auto-heal, Cloud Build, mergeability, and pending/action-required required-check findings do not keep the fixer loop running. The fixer may return fixed, not_valid, partially_fixed, or blocked, but only the active reviewer can close a finding. The loop persists prompt+output+normalized-findings+dedup-state artifacts per round (and a final-state.json), pushes fixes back to the PR head ref via the shared token-refresh helper from agentic_e2e_fix_orchestrator, and emits a Step-7-compatible final report whose findings table contains only remaining/unfixed findings.",
     "dependencies": [
       "agentic_common_python.prompt",
       "agentic_change_python.prompt",
@@ -7508,6 +7508,7 @@
             "sideEffects": [
               "Creates one PR worktree for the entire loop session via _setup_pr_worktree",
               "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
+              "Can invoke one normalized reviewer_fallback if the primary reviewer cannot complete; the fallback becomes active for subsequent review/fix/verify gating",
               "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
               "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper (refuses to leave tokenized URL in git config)",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
@@ -7536,6 +7537,7 @@
           "reviewers",
           "reviewer",
           "fixer",
+          "reviewer_fallback",
           "review_only",
           "max_rounds",
           "max_cost",

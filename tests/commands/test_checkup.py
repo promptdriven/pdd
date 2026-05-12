@@ -25,6 +25,8 @@ def test_checkup_review_loop_cli_forwards_reviewer_and_fixer_options() -> None:
                 "codex",
                 "--fixer",
                 "claude",
+                "--reviewer-fallback",
+                "gemini",
                 "--max-review-rounds",
                 "3",
                 "--blocking-severities",
@@ -38,6 +40,7 @@ def test_checkup_review_loop_cli_forwards_reviewer_and_fixer_options() -> None:
     assert kwargs["review_loop"] is True
     assert kwargs["reviewer"] == "codex"
     assert kwargs["fixer"] == "claude"
+    assert kwargs["reviewer_fallback"] == "gemini"
     assert kwargs["max_review_rounds"] == 3
     assert kwargs["blocking_severities"] == "blocker,critical,medium"
 
