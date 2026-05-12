@@ -172,8 +172,49 @@ jobs:
             -f "output[title]=auto-heal skipped (fork PR)" \
             -f "output[summary]=Fork PRs are not auto-healed because the heal pushes commits to the PR branch (not possible across forks). [Workflow run]($RUN_URL)."
 
+      # Short-circuit release branches (gltanaka or github-actions[bot], on
+      # `release/vX.Y.Z` branches opened by the release workflow). These PRs
+      # only touch version files (pyproject.toml etc.) — there is nothing for
+      # auto-heal to heal, and running Cloud Build on every release PR would
+      # add 10+ minutes to release latency. We PATCH the check_run to success
+      # so branch protection sees a passing required check.
+      #
+      # Falls through to the normal heal pipeline if the branch name doesn't
+      # match the strict regex (e.g. someone manually names a PR branch
+      # `release/foo` and expects it to be auto-merged).
+      - name: Short-circuit release branches (success conclusion)
+        id: release_short_circuit
+        if: |
+          steps.pf.outputs.skip != 'true'
+          && steps.pf.outputs.fork == 'false'
+          && github.event_name == 'pull_request_target'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && (github.event.pull_request.user.login == 'gltanaka' || github.event.pull_request.user.login == 'github-actions[bot]')
+          && startsWith(github.head_ref, 'release/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CHECK_ID: ${{ steps.check_start.outputs.check_id }}
+          HEAD_REF: ${{ github.head_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Tight regex match — protects against malformed release branches
+          # (e.g. `release/v1.2`, `release/vfoo`) by falling through to the
+          # normal heal pipeline.
+          if ! printf '%s' "$HEAD_REF" | grep -Eq '^release/v[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "head_ref '$HEAD_REF' does not match release/vX.Y.Z; falling through to normal heal"
+            exit 0
+          fi
+          gh api -X PATCH "repos/$REPO/check-runs/$CHECK_ID" \
+            -f status='completed' \
+            -f conclusion='success' \
+            -f "output[title]=auto-heal skipped (release branch)" \
+            -f "output[summary]=Release branch \`$HEAD_REF\` short-circuits auto-heal. Touches version files only; nothing to heal. [Workflow run]($RUN_URL)."
+          echo "skipped=true" >> "$GITHUB_OUTPUT"
+
       - name: Mint pdd_cloud App token
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.release_short_circuit.outputs.skipped != 'true'
         id: app_token
         # SHA-pinned to v3.1.1 (https://github.com/actions/create-github-app-token/releases/tag/v3.1.1)
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
@@ -184,7 +225,7 @@ jobs:
           repositories: pdd_cloud
 
       - name: Authorize requester (must be pdd_cloud collaborator)
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.release_short_circuit.outputs.skipped != 'true'
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           REQUESTER: ${{ steps.pf.outputs.requester }}
@@ -220,7 +261,7 @@ jobs:
           esac
 
       - name: Authenticate to GCP via Workload Identity Federation
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.release_short_circuit.outputs.skipped != 'true'
         # SHA-pinned to v3.0.0 (https://github.com/google-github-actions/auth/releases/tag/v3.0.0)
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
@@ -228,12 +269,12 @@ jobs:
           service_account: pdd-public-heal-dispatcher@prompt-driven-development-stg.iam.gserviceaccount.com
 
       - name: Set up gcloud
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.release_short_circuit.outputs.skipped != 'true'
         # SHA-pinned to v3.0.1 (https://github.com/google-github-actions/setup-gcloud/releases/tag/v3.0.1)
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
 
       - name: Submit Cloud Build (async)
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.release_short_circuit.outputs.skipped != 'true'
         id: gcb_submit
         env:
           PR_NUMBER: ${{ steps.pf.outputs.pr_number }}
@@ -267,7 +308,7 @@ jobs:
           echo "Cloud Build $build_id submitted; polling for completion."
 
       - name: Wait for Cloud Build to complete
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.release_short_circuit.outputs.skipped != 'true'
         env:
           BUILD_ID: ${{ steps.gcb_submit.outputs.build_id }}
         run: |
@@ -296,7 +337,7 @@ jobs:
           done
 
       - name: Finalize check_run
-        if: always() && steps.check_start.outputs.check_id && steps.pf.outputs.fork == 'false'
+        if: always() && steps.check_start.outputs.check_id && steps.pf.outputs.fork == 'false' && steps.release_short_circuit.outputs.skipped != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
