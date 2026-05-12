@@ -1,3 +1,30 @@
+## v0.0.235 (2026-05-12)
+
+### Feat
+
+- **checkup**: reviewer fallback + broader transient-failure classification (#923)
+
+### Fix
+
+- emit metadata_sync skip reason on single line so substring checks work (#951)
+- **#926**: preserve comments and docstrings during regen
+- strip trailing blank line at EOF on completion examples (#923)
+- **prompts**: reconcile stale <pdd-interface> declarations with code (#928)
+- **code-gen**: include ParamSpec alias in regen prompt + dedup drift symbols (#928)
+- **code-gen**: strict default-drift + sync prompts/architecture/README docs (#928)
+- **code-gen**: type/default drift + missing-method directive + docs (#928)
+- **sync**: targeted repair directives + type:command + dotted method grouping (#928)
+- **code-gen**: pdd-interface check resolves dotted methods + missing funcs (#928)
+- **sync**: document new conformance parser shape + drop raw tags from prose (#928)
+- **sync**: teach _parse_conformance_failure new <pdd-interface> shape (#928)
+- **code-gen**: enforce <pdd-interface> signature in architecture conformance (#928)
+- correct bash completion architecture path
+- **checkup**: add checkup to fish help-subcommand completion list
+- **checkup**: share transient-failure markers + add checkup completion to fish/zsh
+- **checkup**: annotate superseded primary as `optional` for verdict adapter
+- complete reviewer fallback verdict flow
+- **checkup**: normalize reviewer_fallback against role aliases
+
 ## v0.0.234 (2026-05-11)
 
 ### Feat
