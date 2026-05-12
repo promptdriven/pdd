@@ -11,6 +11,8 @@ from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 from .validate_prompt_includes import sanitize_prompt_output
 
+__all__ = ["auto_deps_main"]
+
 
 def auto_deps_main(
     ctx: click.Context,
@@ -40,6 +42,11 @@ def auto_deps_main(
     :return: A tuple containing the modified prompt, total cost, and model name used.
     """
     from filelock import FileLock
+
+    # Track whether the prompt was actually mutated and persisted to disk so we
+    # can decide whether metadata finalization needs to run.
+    prompt_was_mutated = False
+    output_path = None
 
     try:
         # Construct file paths
@@ -119,6 +126,9 @@ def auto_deps_main(
                     )
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(modified_prompt)
+                # Mark mutation only after the write succeeded; this is the
+                # signal the metadata-sync block uses to decide whether to run.
+                prompt_was_mutated = True
                 try:
                     from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 
@@ -141,6 +151,50 @@ def auto_deps_main(
             if csv_output:
                 with open(csv_path, 'w', encoding='utf-8') as f:
                     f.write(csv_output)
+
+        # Metadata finalization (best-effort): keep .pdd/meta in sync with the
+        # mutated prompt so a follow-up `pdd sync` can trust its starting state.
+        # Failures here MUST NOT change the return value of auto_deps_main; the
+        # explicit `[metadata-sync] not finalized: ...` line is the only signal
+        # that downstream sync may need attention.
+        quiet = ctx.obj.get('quiet', False)
+        try:
+            if prompt_was_mutated and output_path:
+                from .metadata_sync import run_metadata_sync
+
+                result = run_metadata_sync(
+                    prompt_path=Path(output_path),
+                    code_path=None,
+                    dry_run=False,
+                )
+                if not result.ok:
+                    # Build a "<stage>: <reason>" message from the failing stage.
+                    stage_name = result.failing_stage or "unknown"
+                    stage_status = result.stages.get(stage_name) if stage_name else None
+                    reason_detail = (
+                        stage_status.reason
+                        if stage_status is not None and stage_status.reason
+                        else "unknown reason"
+                    )
+                    if not quiet:
+                        rprint(
+                            f"[yellow][metadata-sync] not finalized: "
+                            f"{stage_name}: {reason_detail}[/yellow]"
+                        )
+            else:
+                # No-op path: explicitly document that nothing was finalized so
+                # stale .pdd/meta state is not left silently behind.
+                if not quiet:
+                    rprint(
+                        "[yellow][metadata-sync] not finalized: "
+                        "no prompt mutation to persist[/yellow]"
+                    )
+        except Exception as meta_exc:
+            # Failure isolation: the auto-deps run is still considered successful.
+            if not quiet:
+                rprint(
+                    f"[yellow][metadata-sync] not finalized: {meta_exc}[/yellow]"
+                )
 
         # Provide user feedback
         if not ctx.obj.get('quiet', False):
