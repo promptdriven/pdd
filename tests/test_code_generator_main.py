@@ -5453,6 +5453,75 @@ class TestPddInterfaceSignatureConformance:
             )
         assert "ContentSelector.select" in excinfo.value.missing_symbols
 
+    def test_annotation_drift_raises_conformance_error(self, tmp_path):
+        """When the prompt declares ``sync_metadata: bool = False`` and the
+        generated code has ``sync_metadata: str = True``, the new drift check
+        must raise. Issue #928 named this 'type drift' as one of its
+        acceptance cases.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "def update_main(ctx, sync_metadata: str = True):\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        exc = excinfo.value
+        # Drift entries are reported as dotted ``func.param`` in missing_symbols.
+        assert "update_main.sync_metadata" in exc.missing_symbols
+        # Directive must surface the actual drift kind + declared/actual values.
+        assert "annotation" in exc.repair_directive
+        assert "`bool`" in exc.repair_directive
+        assert "`str`" in exc.repair_directive
+        # And default drift in the same parameter on the same call.
+        assert "default" in exc.repair_directive
+        assert "`False`" in exc.repair_directive
+        assert "`True`" in exc.repair_directive
+
+    def test_drift_skipped_when_one_side_omits_annotation(self, tmp_path):
+        """Conservative behavior: when only one side declares an annotation,
+        the drift check does not fire. This keeps the gate from churning
+        on gradually-typed code that hasn't caught up to the prompt yet.
+        """
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Same default; actual omits annotation. Must not raise.
+        generated_code = (
+            "def update_main(ctx, sync_metadata=False):\n"
+            "    pass\n"
+        )
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
     def test_command_interface_type_signature_is_checked(self, tmp_path):
         """``type: "command"`` interfaces (used by ``pdd/prompts/commands/*``)
         must participate in the signature check when entries carry a

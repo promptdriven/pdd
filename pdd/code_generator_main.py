@@ -415,6 +415,68 @@ def _collect_actual_param_names(func_node: ast.AST) -> List[str]:
     return names
 
 
+# ``ParamSpec`` carries the three pieces of a parameter the signature
+# conformance check compares: parameter name, annotation source (or
+# ``None``), and default source (or ``None``). Sources are kept as
+# whitespace-stripped strings (via ``ast.unparse``) so equality compares
+# the canonical form and not the original quoting.
+ParamSpec = Tuple[str, Optional[str], Optional[str]]
+
+
+def _ast_args_to_specs(args: ast.arguments) -> List[ParamSpec]:
+    """Return ``(name, annotation, default)`` tuples for positional+keyword args.
+
+    Defaults align to the END of ``posonlyargs + args``. Variadic
+    ``*args``/``**kwargs`` are intentionally omitted (a catch-all does not
+    satisfy a contract that declares a specific named parameter).
+    """
+    out: List[ParamSpec] = []
+    positional = list(args.posonlyargs) + list(args.args)
+    defaults = list(args.defaults)
+    default_offset = len(positional) - len(defaults)
+    for i, arg in enumerate(positional):
+        annotation = ast.unparse(arg.annotation).strip() if arg.annotation else None
+        idx = i - default_offset
+        default = (
+            ast.unparse(defaults[idx]).strip() if 0 <= idx < len(defaults) else None
+        )
+        out.append((arg.arg, annotation, default))
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        annotation = ast.unparse(arg.annotation).strip() if arg.annotation else None
+        default_src = ast.unparse(default).strip() if default is not None else None
+        out.append((arg.arg, annotation, default_src))
+    return out
+
+
+def _parse_declared_param_specs(signature: str) -> Optional[List[ParamSpec]]:
+    """Parse a ``(arg: T, arg2=default, ...)`` signature into ``ParamSpec`` tuples.
+
+    Returns ``None`` for non-paren-list signatures (e.g. class headers) so
+    the caller can skip the signature check, mirroring
+    :func:`_parse_declared_param_names`.
+    """
+    if not signature or not isinstance(signature, str):
+        return None
+    sig = signature.strip()
+    if not sig.startswith("("):
+        return None
+    try:
+        tree = ast.parse(f"def _f{sig}: pass")
+    except SyntaxError:
+        return None
+    fn = tree.body[0]
+    if not isinstance(fn, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    return _ast_args_to_specs(fn.args)
+
+
+def _collect_actual_param_specs(func_node: ast.AST) -> List[ParamSpec]:
+    """Return ``(name, annotation, default)`` tuples from an AST function node."""
+    if not isinstance(func_node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return []
+    return _ast_args_to_specs(func_node.args)
+
+
 def _find_target_function(
     tree: ast.Module, name: str
 ) -> Optional[ast.AST]:
@@ -481,11 +543,16 @@ def _find_target_function(
 def _extract_pdd_interface_signatures(
     prompt_content: Optional[str],
     prompt_name: str,
-) -> Tuple[List[Tuple[str, List[str]]], bool]:
-    """Extract ``(name, [param_names])`` tuples from a prompt's ``<pdd-interface>``.
+) -> Tuple[List[Tuple[str, List[ParamSpec]]], bool]:
+    """Extract ``(name, [ParamSpec])`` tuples from a prompt's ``<pdd-interface>``.
+
+    Each ``ParamSpec`` is ``(param_name, annotation_source, default_source)``
+    where the source strings are ``ast.unparse``-normalized or ``None``. This
+    lets the verifier check name presence (the original Issue #928 case) plus
+    annotation/default drift in a single pass.
 
     Returns ``(declarations, parse_error_logged)``:
-      - ``declarations``: list of ``(function_name, declared_param_names)``.
+      - ``declarations``: list of ``(function_name, declared_param_specs)``.
         Functions whose signature is not a parseable paren-list (class headers,
         TypeScript signatures, etc.) are skipped — they're outside the scope
         of this check.
@@ -495,7 +562,7 @@ def _extract_pdd_interface_signatures(
     Returns ``([], False)`` when no ``<pdd-interface>`` block is present (the
     new check is silent in that case to preserve existing behavior).
     """
-    declarations: List[Tuple[str, List[str]]] = []
+    declarations: List[Tuple[str, List[ParamSpec]]] = []
     if not prompt_content:
         return declarations, False
 
@@ -554,7 +621,7 @@ def _extract_pdd_interface_signatures(
         sig = item.get("signature")
         if not name or not isinstance(name, str):
             continue
-        params = _parse_declared_param_names(sig) if isinstance(sig, str) else None
+        params = _parse_declared_param_specs(sig) if isinstance(sig, str) else None
         if params is None:
             # Non-paren signature (e.g. "class Foo(BaseModel)") — skip.
             continue
@@ -597,10 +664,16 @@ def _verify_pdd_interface_signatures(
 
     missing_params: List[str] = []
     missing_funcs: List[str] = []
+    # Annotation/default drift: declared signature explicitly specifies a type
+    # or default value AND the generated code's matching parameter explicitly
+    # specifies a different one. Conservative: we only raise when BOTH sides
+    # specify the value so that gradually-typed code (adding annotations later
+    # without changing the prompt) does not generate spurious failures.
+    drifted: List[Tuple[str, str, str, str, str]] = []  # (func, param, kind, declared, actual)
     declared_expected: List[str] = []
     found_in_code: List[str] = []
 
-    for func_name, declared_params in declarations:
+    for func_name, declared_specs in declarations:
         target = _find_target_function(tree, func_name)
         if target is None:
             # Function/method declared by the prompt but absent from the
@@ -612,31 +685,74 @@ def _verify_pdd_interface_signatures(
             missing_funcs.append(func_name)
             declared_expected.append(func_name)
             continue
-        actual_params = _collect_actual_param_names(target)
-        for param in declared_params:
-            dotted = f"{func_name}.{param}"
+        actual_specs = _collect_actual_param_specs(target)
+        actual_by_name = {spec[0]: spec for spec in actual_specs}
+        for declared_name, declared_ann, declared_default in declared_specs:
+            dotted = f"{func_name}.{declared_name}"
             declared_expected.append(dotted)
-            if param in actual_params:
-                found_in_code.append(dotted)
-            else:
+            if declared_name not in actual_by_name:
                 missing_params.append(dotted)
+                continue
+            found_in_code.append(dotted)
+            _, actual_ann, actual_default = actual_by_name[declared_name]
+            if (
+                declared_ann
+                and actual_ann
+                and declared_ann != actual_ann
+            ):
+                drifted.append(
+                    (func_name, declared_name, "annotation", declared_ann, actual_ann)
+                )
+            if (
+                declared_default
+                and actual_default
+                and declared_default != actual_default
+            ):
+                drifted.append(
+                    (func_name, declared_name, "default", declared_default, actual_default)
+                )
 
-    if not missing_params and not missing_funcs:
+    if not missing_params and not missing_funcs and not drifted:
         return
 
-    missing: List[str] = missing_funcs + missing_params
+    drifted_dotted = [f"{func}.{param}" for func, param, *_ in drifted]
+    missing: List[str] = missing_funcs + missing_params + drifted_dotted
     output_display = output_path or "<unknown>"
-    message = (
-        f"Architecture conformance error for {prompt_name}: "
-        f"the prompt's <pdd-interface> declares parameter(s) missing from "
-        f"the generated code: {', '.join(missing)}. "
-        f"Output: {output_display}."
-    )
+    # Emit each failure category in a distinct sentence so the subprocess
+    # parser can route each to the correct repair directive. A bare dotted
+    # name like ``ContentSelector.select`` under the parameter shape would
+    # otherwise be misread as ``func.param`` (= "On ContentSelector, add
+    # parameter select").
+    message_parts: List[str] = [
+        f"Architecture conformance error for {prompt_name}:"
+    ]
+    if missing_funcs:
+        message_parts.append(
+            "the prompt's <pdd-interface> declares function(s)/method(s) "
+            f"missing from the generated code: {', '.join(missing_funcs)}."
+        )
+    if missing_params:
+        message_parts.append(
+            "the prompt's <pdd-interface> declares parameter(s) missing "
+            f"from the generated code: {', '.join(missing_params)}."
+        )
+    if drifted:
+        drift_summary = ", ".join(
+            f"{func}.{param} ({kind}: declared `{decl}`, found `{actual}`)"
+            for func, param, kind, decl, actual in drifted
+        )
+        message_parts.append(
+            "the prompt's <pdd-interface> declares parameter(s) whose "
+            "signature drifted in the generated code: "
+            f"{drift_summary}."
+        )
+    message_parts.append(f"Output: {output_display}.")
+    message = " ".join(message_parts)
 
     directive_lines: List[str] = [
         f"Architecture conformance error for {prompt_name}: "
         "the prompt's <pdd-interface> declares function(s)/parameter(s) "
-        "that are missing from the generated code.",
+        "that are missing from or differ from the generated code.",
     ]
     if missing_funcs:
         directive_lines.append(
@@ -645,7 +761,7 @@ def _verify_pdd_interface_signatures(
         )
     missing_by_func: Dict[str, List[str]] = {}
     for dotted in missing_params:
-        # rsplit so dotted method names like "ContentSelector.select.mode"
+        # rpartition so dotted method names like "ContentSelector.select.mode"
         # group as ("ContentSelector.select", "mode") rather than
         # ("ContentSelector", "select.mode"). partition() at the first dot
         # would misattribute the param to the class instead of the method.
@@ -655,6 +771,12 @@ def _verify_pdd_interface_signatures(
         directive_lines.append(
             f"- On `{func}`, add the following missing parameter(s) to the "
             f"signature and corresponding code paths: `{', '.join(params)}`."
+        )
+    for func, param, kind, declared_src, actual_src in drifted:
+        directive_lines.append(
+            f"- On `{func}`, update parameter `{param}` so its {kind} "
+            f"matches the prompt: declared `{declared_src}`, "
+            f"found `{actual_src}`."
         )
     directive_lines.append("")
     directive_lines.append(
