@@ -158,6 +158,52 @@ def test_reverse_dep_detects_include_many(monkeypatch):
     assert "core/cli" in result
 
 
+def test_extract_include_refs_splits_on_newlines():
+    """<include-many> bodies often list one entry per line — both commas and
+    newlines must be honored. The preprocessor and sync-order code both accept
+    newline-delimited entries (see frontend/components/...GenerationProgressModal
+    for a real example), so the reverse-dep scan needs to as well."""
+    module = _load_module()
+
+    body = "<include-many>\na.py\nb.py\n</include-many>"
+    refs = module._extract_include_refs(body)
+    assert refs == [("a.py", None), ("b.py", None)]
+
+    indented = (
+        "<include-many>\n"
+        "    ./Icon/CheckIcon.tsx\n"
+        "    ./Icon/SpinnerIcon.tsx\n"
+        "</include-many>"
+    )
+    refs = module._extract_include_refs(indented)
+    assert refs == [
+        ("Icon/CheckIcon.tsx", None),
+        ("Icon/SpinnerIcon.tsx", None),
+    ]
+
+
+def test_reverse_dep_detects_newline_delimited_include_many(tmp_path, monkeypatch):
+    """A real prompt with newline-only include-many entries must still pull its
+    consumer into auto-heal when one of those entries changes."""
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "pdd" / "prompts" / "frontend" / "components"
+    prompt_dir.mkdir(parents=True)
+    (prompt_dir / "Modal_typescriptreact.prompt").write_text(
+        "<include-many>\n"
+        "    ./Icon/CheckIcon.tsx\n"
+        "    ./Icon/SpinnerIcon.tsx\n"
+        "</include-many>\n"
+    )
+
+    result = module._reverse_dep_basenames(
+        ["pdd/prompts/frontend/components/Icon/CheckIcon.tsx"]
+    )
+
+    assert "frontend/components/Modal" in result
+
+
 def test_detect_combines_nested_direct_and_reverse_dependencies(monkeypatch):
     module = _load_module()
     monkeypatch.chdir(_repo_root())
