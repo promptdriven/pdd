@@ -129,6 +129,63 @@ def test_get_context_limit_missing_key_returns_none():
         assert get_context_limit("some-model") is None
 
 
+def test_get_context_limit_hang_returns_none(monkeypatch):
+    """
+    Regression test for the github_copilot device-code OAuth hang.
+
+    litellm's provider-detection heuristic can misroute a bare model name
+    (e.g. `claude-opus-4-7`) into a provider that performs a blocking
+    OAuth poll for up to ~60s. ``get_context_limit`` must time out and
+    return None instead of wedging the caller.
+    """
+    import time as _time
+
+    def _slow_get_model_info(model):
+        # Sleep longer than the wrapper's timeout to simulate the hang.
+        _time.sleep(2.0)
+        return {"max_input_tokens": 99999}
+
+    # Shrink the timeout so the test is fast.
+    monkeypatch.setattr(
+        "pdd.server.token_counter._LITELLM_CALL_TIMEOUT_SEC", 0.25
+    )
+    monkeypatch.setattr(
+        "pdd.server.token_counter.litellm.get_model_info", _slow_get_model_info
+    )
+
+    start = _time.monotonic()
+    result = get_context_limit("claude-opus-4-7")
+    elapsed = _time.monotonic() - start
+
+    assert result is None
+    # Should return well before _slow_get_model_info would finish.
+    assert elapsed < 1.5, f"get_context_limit took {elapsed:.2f}s (timeout not honoured)"
+
+
+def test_count_tokens_hang_falls_back_to_tiktoken(monkeypatch):
+    """count_tokens must time out on a hanging litellm.token_counter."""
+    import time as _time
+
+    def _slow_token_counter(*args, **kwargs):
+        _time.sleep(2.0)
+        return 9999
+
+    monkeypatch.setattr(
+        "pdd.server.token_counter._LITELLM_CALL_TIMEOUT_SEC", 0.25
+    )
+    monkeypatch.setattr(
+        "pdd.server.token_counter.litellm.token_counter", _slow_token_counter
+    )
+
+    start = _time.monotonic()
+    result = count_tokens("hello world", model="claude-opus-4-7")
+    elapsed = _time.monotonic() - start
+
+    # tiktoken fallback should return 2 for "hello world"
+    assert result == 2
+    assert elapsed < 1.5, f"count_tokens took {elapsed:.2f}s (timeout not honoured)"
+
+
 # ---------------------------------------------------------------------------
 # estimate_cost
 # ---------------------------------------------------------------------------

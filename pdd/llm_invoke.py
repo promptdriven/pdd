@@ -154,7 +154,11 @@ import openai  # Import openai for exception handling as LiteLLM maps to its typ
 import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 from pdd.path_resolution import get_default_resolver
-from pdd.server.token_counter import get_context_limit
+from pdd.server.token_counter import (
+    count_tokens,
+    count_tokens_for_messages,
+    get_context_limit,
+)
 
 # Opt-in to future pandas behavior regarding downcasting
 try:
@@ -3681,7 +3685,10 @@ def llm_invoke(
                 context_limit_for_attribution = None
                 try:
                     messages_for_count = litellm_kwargs.get("messages", [])
-                    token_count = litellm.token_counter(model=model_name_litellm, messages=messages_for_count)
+                    # Use the hang-safe wrapper so a misrouted provider-detection
+                    # call (e.g. github_copilot device-code OAuth) can't wedge
+                    # the entire LLM invocation. See pdd/server/token_counter.py.
+                    token_count = count_tokens_for_messages(messages_for_count, model=model_name_litellm)
                     context_limit = get_context_limit(model_name_litellm)
                     token_count_for_attribution = token_count
                     context_limit_for_attribution = context_limit
