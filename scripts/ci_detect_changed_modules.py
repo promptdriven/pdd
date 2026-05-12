@@ -27,6 +27,12 @@ PDD_PATH_PREFIXES = ("pdd/", "prompts/", "context/", "tests/")
 EXCLUDED_MODULE_BASENAMES = {
     "__main__",
     "ci_detect_changed_modules",
+    # The prompt for this script lives at pdd/prompts/scripts/..., so its
+    # _prompt_basename_from_path output is path-qualified as
+    # "scripts/ci_detect_changed_modules". Exclude that form too so a change
+    # to the prompt itself does not trigger auto-heal against a bogus
+    # pdd/scripts/ci_detect_changed_modules.py path.
+    "scripts/ci_detect_changed_modules",
     # Public release sync is an operational packaging helper, not a
     # prompt-managed PDD module.
     "copy_package_data_to_public",
