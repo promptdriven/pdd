@@ -17,4 +17,3 @@ source "$completion_file"
 
 # After loading, bash should know the completion function for `pdd`.
 complete -p pdd >/dev/null
-

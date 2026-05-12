@@ -14,4 +14,3 @@ source "$completion_file"
 
 # After loading, fish should list completions for the `pdd` command.
 complete --command pdd >/dev/null
-
