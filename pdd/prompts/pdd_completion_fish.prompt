@@ -17,6 +17,6 @@
 % The generated pdd_completion.fish script must provide comprehensive auto-completion support for:
 %   - All commands of the PDD CLI (as per the README).
 %   - All command-specific options (as per the README).
-%   - The `checkup` command and its PR/review-loop options: `--pr`, `--issue`, `--review-loop`, `--review-only`, `--reviewers`, `--reviewer`, `--fixer`, review round/cost/minute limits, reviewer-status compatibility flags, `--blocking-severities`, and `--clean-reviewer-states`.
+%   - The `checkup` command and its PR/review-loop options: `--pr`, `--issue`, `--review-loop`, `--review-only`, `--reviewers`, `--reviewer`, `--fixer`, `--reviewer-fallback`, review round/cost/minute limits, reviewer-status compatibility flags, `--blocking-severities`, and `--clean-reviewer-states`.
 %   - All global options, including those found in the README and the newly specified `--time` option.
 %   - Filenames, where appropriate for command arguments.

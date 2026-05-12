@@ -320,6 +320,7 @@ def run_agentic_checkup(
     reviewers: str = "codex,claude",
     reviewer: Optional[str] = None,
     fixer: Optional[str] = None,
+    reviewer_fallback: Optional[str] = None,
     max_review_rounds: int = 5,
     max_review_cost: float = 10.0,
     max_review_minutes: float = 90.0,
@@ -345,6 +346,8 @@ def run_agentic_checkup(
             loop instead of the legacy single-pass checkup path.
         review_only: When true with ``review_loop``, run only the primary
             reviewer first pass and do not invoke the fixer or push changes.
+        reviewer_fallback: Optional secondary reviewer role to try once when
+            the primary reviewer cannot complete.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -447,6 +450,7 @@ def run_agentic_checkup(
             reviewers=parse_reviewers(reviewers),
             reviewer=reviewer,
             fixer=fixer,
+            reviewer_fallback=reviewer_fallback,
             review_only=review_only,
             max_rounds=max_review_rounds,
             max_cost=max_review_cost,
