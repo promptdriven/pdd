@@ -4027,7 +4027,7 @@
     "dependencies": [],
     "priority": 116,
     "filename": "pdd_completion_bash.prompt",
-    "filepath": "pdd_completion.sh",
+    "filepath": "pdd/pdd_completion.sh",
     "tags": [
       "cli",
       "shell"
