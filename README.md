@@ -3504,7 +3504,7 @@ python -m pdd.ci_drift_heal \
 
 **Key Options:**
 - `--modules`: Limit detection to specific modules (for PR-scoped checks)
-- `--diff-base`: Git diff base (e.g. `origin/main...HEAD` on PR builds, `HEAD~1` on push-to-main). **Required in CI.** Without it, the phantom "no run_report" crash filter cannot run in `detect_drift` and falls back to the `heal_module` guard, which returns `None` — counted as a skipped module — which in PR mode suppresses commits of otherwise-healed modules.
+- `--diff-base`: Git diff base (e.g. `origin/main...HEAD` on PR builds, `HEAD~1` on push-to-main). **Required in CI.** Without it (or if the git lookup returns `None`, e.g. shallow checkout / missing ref), the phantom "no run_report" crash filter cannot determine whether a touched module is genuinely untouched, and the `heal_module` guard fails closed — the affected module is recorded as **failed** and the heal exits non-zero. Always provide a resolvable `--diff-base` so the touched/untouched split can run inside `detect_drift`.
 - `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
 - `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
 

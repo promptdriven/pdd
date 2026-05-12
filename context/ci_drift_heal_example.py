@@ -46,10 +46,13 @@ def run_ci_auto_heal_example():
     #     partial failures are non-blocking). Do NOT mix them — PR diff_base with
     #     skip_ci=True silently relaxes the PR safety guard.
     # diff_base: Git ref to compare against for drift direction. Required in CI:
-    #     without it, the phantom "no run_report" crash filter cannot run in
-    #     detect_drift and falls back to the heal_module guard whose None return
-    #     is counted as a "skipped module", which in PR mode suppresses commits
-    #     of real heals.
+    #     without it (or if the git diff lookup fails — shallow checkout,
+    #     missing ref), the phantom "no run_report" crash filter cannot run in
+    #     detect_drift and falls back to the heal_module guard. That guard now
+    #     fails closed (returns False) when touched-state is unknown, so the
+    #     module is recorded as failed and the heal exits non-zero — surfacing
+    #     the configuration error loudly instead of silently dropping real
+    #     drift.
 
     # PR-trigger shape:
     exit_code = main(
