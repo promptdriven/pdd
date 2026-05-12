@@ -718,7 +718,8 @@ def update_architecture_from_prompt(
     prompt_filename: str,
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
-    dry_run: bool = False
+    dry_run: bool = False,
+    prompt_content_override: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Update a single architecture.json entry from its prompt file tags.
@@ -735,6 +736,9 @@ def update_architecture_from_prompt(
         prompts_dir: Directory containing prompt files (default: ./prompts/)
         architecture_path: Path to architecture.json (default: ./architecture.json)
         dry_run: If True, return changes without writing to file
+        prompt_content_override: Optional in-memory prompt content. When provided,
+            parse PDD metadata tags from this string instead of reading the file
+            from disk. All other parameters retain their existing semantics.
 
     Returns:
         Dict with keys:
@@ -753,7 +757,7 @@ def update_architecture_from_prompt(
         # 1. Read prompt file
         prompt_path = prompts_dir / prompt_filename
         preloaded_arch_data = None  # Set when arch_data is loaded during rename
-        if not prompt_path.exists():
+        if prompt_content_override is None and not prompt_path.exists():
             renamed_path = _find_renamed_prompt_file(prompt_filename, prompts_dir)
             if renamed_path is None:
                 return {
@@ -802,7 +806,10 @@ def update_architecture_from_prompt(
                     'error': f'Prompt file not found: {prompt_filename}'
                 }
 
-        prompt_content = prompt_path.read_text(encoding='utf-8')
+        if prompt_content_override is not None:
+            prompt_content = prompt_content_override
+        else:
+            prompt_content = prompt_path.read_text(encoding='utf-8')
 
         # 2. Extract tags
         tags = parse_prompt_tags(prompt_content)
