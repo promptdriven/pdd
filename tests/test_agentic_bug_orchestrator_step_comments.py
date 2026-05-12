@@ -17,6 +17,7 @@ These tests cover:
 """
 from __future__ import annotations
 
+import copy
 import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -359,7 +360,7 @@ def bug_orchestrator_mocks(tmp_path):
          patch("pdd.agentic_bug_orchestrator.console"), \
          patch("pdd.agentic_bug_orchestrator._setup_worktree") as mock_worktree, \
          patch("pdd.agentic_bug_orchestrator.preprocess", side_effect=lambda t, **kw: t), \
-         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None), \
+         patch("pdd.agentic_bug_orchestrator.save_workflow_state", return_value=None) as mock_save_state, \
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)) as mock_load_state, \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path), \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
@@ -375,6 +376,7 @@ def bug_orchestrator_mocks(tmp_path):
             "run_agentic_task": mock_run,
             "load_prompt_template": mock_load,
             "load_state": mock_load_state,
+            "save_state": mock_save_state,
             "post_step_comment": mock_post_comment,
             "worktree_path": mock_worktree_path,
         }
@@ -664,3 +666,68 @@ def test_bug_orchestrator_backfills_missing_comments_on_resume(
     assert "R2" in body
     # And step 1's previously-posted state must be respected.
     assert 1 not in posted_steps, "Step 1 was already posted; sweep must not repost it."
+
+
+def test_bug_orchestrator_fast_track_persists_step3_output(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """FAST_TRACK must persist step 3's output (codex review of PR #966 #3).
+
+    Without this the resume state validator walks ordered_steps, finds the
+    gap at "3" (because the previous FAST_TRACK only wrote 4/5), and
+    downgrades last_completed_step to 0 — forcing a re-run of triage even
+    though step 3's comment was already posted.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    captured_states: list = []
+
+    def save_side_effect(cwd, issue_number, workflow_type, state, *args, **kwargs):
+        # State is mutated in-place across the orchestrator. Snapshot via
+        # deepcopy so we observe the value at the moment of each save call.
+        captured_states.append(copy.deepcopy(state))
+        return None
+
+    bug_orchestrator_mocks["save_state"].side_effect = save_side_effect
+
+    fast_track_output = (
+        "FAST_TRACK: pre-diagnosed by author\n"
+        "<step_report>## Step 3: Triage\n\nFast-tracked.</step_report>"
+    )
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (True, fast_track_output, 0.1, "claude")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: t.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    run_agentic_bug_orchestrator(**bug_default_args)
+
+    # Find the snapshot taken right after FAST_TRACK populated steps 4/5.
+    fast_tracked = [
+        s for s in captured_states
+        if s.get("step_outputs", {}).get("4", "").startswith("Step 4 skipped (fast-track)")
+    ]
+    assert fast_tracked, "Expected at least one save_workflow_state call after FAST_TRACK"
+    snapshot = fast_tracked[0]
+    assert "3" in snapshot["step_outputs"], (
+        "FAST_TRACK must persist step 3 output so resume validator doesn't "
+        "downgrade last_completed_step. Outputs: "
+        f"{list(snapshot['step_outputs'].keys())}"
+    )
+    assert "Triage" in snapshot["step_outputs"]["3"]
+    assert "FAST_TRACK:" in snapshot["step_outputs"]["3"]
+    # Synthetic 4/5 entries still present.
+    assert "4" in snapshot["step_outputs"]
+    assert "5" in snapshot["step_outputs"]
+    # last_completed_step rolls forward to 5 as before.
+    assert snapshot["last_completed_step"] == 5

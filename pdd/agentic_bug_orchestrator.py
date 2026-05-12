@@ -1795,6 +1795,12 @@ def run_agentic_bug_orchestrator(
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
             context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            # Persist step 3's actual output BEFORE the synthetic 4/5 entries
+            # (codex review of PR #966 #3). Without this, the resume validator
+            # at lines 1495-1507 walks ordered_steps, finds the gap at "3", and
+            # downgrades last_completed_step to 0 — forcing a re-run of triage
+            # even though step 3's comment was already posted.
+            state["step_outputs"]["3"] = step_output
             state["step_outputs"]["4"] = context["step4_output"]
             state["step_outputs"]["5"] = context["step5_output"]
             state["last_completed_step"] = 5
