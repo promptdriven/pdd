@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-11T18:24:40.682652+00:00",
+  "command": "fix",
+  "prompt_hash": "06ebb3036a482cdc907fa3900ec118e2f0f886657fe3de2ec7a49d522f69a548",
+  "code_hash": "57238a597af15069e9ac0aa780d71eff5610b6c1f87725a58725ee2b2f981694",
+  "example_hash": "84edd899e3202fe13dc2e9437505a85552ec870b325e5628727d7202371d8134",
+  "test_hash": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0",
+  "test_files": {
+    "test_modify.py": "1f36af1e161dc34c91a2c855b0e0c6470a0f8a3ac932197bc55469f8f418d6c0"
+  },
+  "include_deps": {
+    "context/agentic_change_example.py": "46743f7ad91c5949e25e8a5c7532b3f8ada733e16f85a41d3e72ae9507ee559b",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/split_main_example.py": "ced192fcbfbfda15b35bd2dad5bbf4b4888acb091084cf58326832d224a77661",
+    "context/track_cost_example.py": "30c33d5c1c945e0e8f0c0f9861f8b952d1eb4f22e6cbc8c05089b160b1a4c8eb"
+  }
+}
