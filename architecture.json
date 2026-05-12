@@ -71,8 +71,18 @@
           },
           {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool",
+            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd, body=None) -> bool",
             "returns": "bool"
+          },
+          {
+            "name": "_extract_step_report",
+            "signature": "(text: Optional[str]) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_sanitize_comment_body",
+            "signature": "(body: Optional[str], max_chars: int = 25000) -> str",
+            "returns": "str"
           },
           {
             "name": "post_pr_comment",

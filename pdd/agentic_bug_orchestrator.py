@@ -952,8 +952,15 @@ def _maybe_post_step_comment(
     """
     if not step_success:
         return github_comment_id
-    state.setdefault("step_comments", {})
-    if state["step_comments"].get(str(step_num), {}).get("posted"):
+    # Defensive normalization: stale/corrupted persisted state (e.g. a list, or
+    # a per-step entry that isn't a dict) would otherwise crash on `.get()`.
+    # Only a literal `True` for `posted` counts — truthy strings/ints don't.
+    raw_sc = state.get("step_comments")
+    if not isinstance(raw_sc, dict):
+        raw_sc = {}
+    state["step_comments"] = raw_sc
+    entry = raw_sc.get(str(step_num))
+    if isinstance(entry, dict) and entry.get("posted") is True:
         return github_comment_id
     extracted = _extract_step_report(step_output)
     if extracted is None:
@@ -1418,6 +1425,11 @@ def run_agentic_bug_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+        # Normalize the persisted `step_comments` shape early so any code path
+        # touching it (backfill sweep, `_maybe_post_step_comment`) sees a dict
+        # rather than crashing on a corrupted/legacy value (e.g. a list).
+        if not isinstance(state.get("step_comments"), dict):
+            state["step_comments"] = {}
     else:
         state = {"step_outputs": {}}
         last_completed_step = 0
@@ -1544,12 +1556,27 @@ def run_agentic_bug_orchestrator(
     # or transient `gh issue comment` failure. Only retries steps whose
     # outputs we already trust (not "FAILED:" sentinels). The helper is
     # idempotent — successful resumes are gated by step_comments[n].posted.
+    #
+    # Gating (codex review #4 of PR #966):
+    # - Require the saved output to contain a `<step_report>` block.
+    #   Legacy pre-PR states (where models posted comments themselves) and the
+    #   synthetic skipped-step outputs from FAST_TRACK (lines 1796-1797 below)
+    #   both lack this marker, so they're skipped — preventing duplicate or
+    #   bogus comments on resume.
+    # - Normalize `step_comments` shape: a stale list / non-dict entry / non-
+    #   boolean `posted` would otherwise crash with AttributeError here.
     if state.get("step_outputs"):
-        state.setdefault("step_comments", {})
+        raw_sc = state.get("step_comments")
+        if not isinstance(raw_sc, dict):
+            raw_sc = {}
+        state["step_comments"] = raw_sc
         for s_key, s_out in list(state["step_outputs"].items()):
             if not isinstance(s_out, str) or s_out.startswith("FAILED:"):
                 continue
-            if state["step_comments"].get(s_key, {}).get("posted"):
+            entry = raw_sc.get(s_key)
+            if isinstance(entry, dict) and entry.get("posted") is True:
+                continue
+            if _extract_step_report(s_out) is None:
                 continue
             try:
                 s_num = int(float(s_key))

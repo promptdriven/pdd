@@ -731,3 +731,197 @@ def test_bug_orchestrator_fast_track_persists_step3_output(
     assert "5" in snapshot["step_outputs"]
     # last_completed_step rolls forward to 5 as before.
     assert snapshot["last_completed_step"] == 5
+
+
+# ---------------------------------------------------------------------------
+# codex review #4 of PR #966: malformed persisted state + backfill gating
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "malformed_state",
+    [
+        # The whole field is a list (legacy/corrupted payload).
+        {"step_comments": []},
+        # Per-step entry isn't a dict.
+        {"step_comments": {"1": "posted"}},
+        # Per-step entry's `posted` is truthy but not `True` — only the literal
+        # boolean True should suppress reposts.
+        {"step_comments": {"1": {"posted": "yes"}}},
+    ],
+)
+def test_bug_orchestrator_normalizes_malformed_step_comments(
+    bug_orchestrator_mocks, bug_default_args, malformed_state
+):
+    """Corrupted/stale persisted state must not crash `pdd bug` on entry.
+
+    Regression for codex review #4 of PR #966 — `state.setdefault("step_comments", {})`
+    leaves a malformed value (list, non-dict entry, non-bool `posted`) in place
+    and the subsequent `.get()` call raises AttributeError. The fix normalizes
+    the shape after load AND inside the backfill sweep, and treats only
+    `posted is True` as truly posted.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>## Step 1: previously completed.</step_report>",
+            },
+            "last_completed_step": 1,
+            "total_cost": 0.1,
+            "model_used": "claude",
+            **malformed_state,
+        },
+        None,
+    )
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: t.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    # Must complete without raising AttributeError on the malformed state.
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(**bug_default_args)
+    assert success is True
+
+    # The non-`True` `posted` cases must NOT suppress backfill — step 1's saved
+    # output contains a `<step_report>` block, so it should be reposted.
+    posted_step_nums = [
+        c.kwargs.get("step_num")
+        for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+    ]
+    assert 1 in posted_step_nums
+
+
+def test_bug_orchestrator_backfill_skips_legacy_outputs_without_step_report(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """Legacy pre-PR step outputs (no `<step_report>` tag) must not be reposted.
+
+    Codex review #4 of PR #966: before the fix, the resume sweep would happily
+    repost any non-FAILED `step_outputs` entry whose `step_comments[n].posted`
+    flag was missing. That includes legacy state from runs predating this PR
+    (where models posted their own comments), causing duplicate visible
+    comments on the issue.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                # Legacy run: model posted its own comment back when the
+                # orchestrator did not own posting. No `<step_report>` block,
+                # no `step_comments` flag.
+                "1": "No duplicates found. Proceeding.",
+                "2": "Not user error. Continuing.",
+            },
+            "last_completed_step": 2,
+            "total_cost": 0.1,
+            "model_used": "claude",
+        },
+        None,
+    )
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: t.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(**bug_default_args)
+    assert success is True
+
+    posted_step_nums = [
+        c.kwargs.get("step_num")
+        for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+    ]
+    # Steps 1 and 2 are legacy outputs lacking `<step_report>` — the sweep
+    # must skip them to avoid duplicate visible comments.
+    assert 1 not in posted_step_nums
+    assert 2 not in posted_step_nums
+
+
+def test_bug_orchestrator_backfill_skips_fast_track_skipped_outputs(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """FAST_TRACK persists synthetic skipped-step outputs for steps 4 and 5.
+
+    Those synthetic strings ("Step 4 skipped (fast-track)...") lack the
+    `<step_report>` tag because no agent ever ran for them. Codex review #4
+    of PR #966 — the backfill sweep must NOT post them as visible comments;
+    they're internal state used to bridge the gap so the resume validator
+    rolls last_completed_step forward to 5.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                # Steps 1-2 ran normally in the prior session and were posted.
+                "1": "<step_report>## Step 1: no duplicates.</step_report>",
+                "2": "<step_report>## Step 2: not a docs issue.</step_report>",
+                "3": (
+                    "<step_report>## Step 3: Triage</step_report>\n"
+                    "FAST_TRACK: pre-diagnosed by author"
+                ),
+                # Synthetic skipped-step outputs persisted by FAST_TRACK at
+                # `pdd/agentic_bug_orchestrator.py:1796-1797`. These lack the
+                # `<step_report>` tag because no agent ever ran for them.
+                "4": "Step 4 skipped (fast-track): pre-diagnosed.",
+                "5": "Step 5 skipped (fast-track): pre-diagnosed.",
+            },
+            "last_completed_step": 5,
+            "total_cost": 0.1,
+            "model_used": "claude",
+            # Steps 1-3 were already posted in the prior run.
+            "step_comments": {
+                "1": {"posted": True},
+                "2": {"posted": True},
+                "3": {"posted": True},
+            },
+        },
+        None,
+    )
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: t.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(**bug_default_args)
+    assert success is True
+
+    posted_step_nums = [
+        c.kwargs.get("step_num")
+        for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+    ]
+    # Steps 4 and 5 were never run; their synthetic outputs lack `<step_report>`
+    # and must not be reposted as visible comments.
+    assert 4 not in posted_step_nums
+    assert 5 not in posted_step_nums
+    # Step 3 already posted previously.
+    assert 3 not in posted_step_nums
