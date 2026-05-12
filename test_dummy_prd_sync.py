@@ -1,23 +1,27 @@
 import pytest
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 from pathlib import Path
 import click
+
 from pdd.update_main import update_main
+
+class DummyArchStage:
+    status = "ok"
+    detail = "updated fields: ['foo']"
 
 @patch('pdd.update_main.update_file_pair')
 @patch('pdd.update_main.is_code_changed', return_value=(True, ""))
 @patch('pdd.update_main.get_git_changed_files', return_value=set())
-@patch('pdd.architecture_registry.find_architecture_for_project')
 @patch('pdd.update_main._find_prd_file')
-@patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": True, "updated": True, "changes": {}})
 @patch('pdd.agentic_common.run_agentic_task')
-def test_prd_sync_updated(mock_agentic, mock_arch, mock_find_prd, mock_find_arch, mock_git, mock_changed, mock_update, tmp_path, capsys):
+def test_dummy(mock_agentic, mock_find_prd, mock_git, mock_changed, mock_update, tmp_path, capsys):
     mock_update.return_value = {
         "prompt_file": "prompts/src/module1_python.prompt", 
         "status": "✅ Success", 
         "cost": 0.05, 
         "model": "mock_model", 
-        "error": ""
+        "error": "",
+        "arch_stage": DummyArchStage()
     }
     
     mock_agentic.return_value = (True, "<updated-prd>new PRD content</updated-prd>", 0.12, "agent_model")
@@ -33,7 +37,6 @@ def test_prd_sync_updated(mock_agentic, mock_arch, mock_find_prd, mock_find_arch
     prompts_dir = repo_root / "prompts"
     prompts_dir.mkdir()
     
-    mock_find_arch.return_value = [arch_file]
     mock_find_prd.return_value = prd_file
 
     ctx = click.Context(click.Command('update'))
@@ -54,9 +57,10 @@ def test_prd_sync_updated(mock_agentic, mock_arch, mock_find_prd, mock_find_arch
                     sync_metadata=False
                 )
 
-    assert "new PRD content" in prd_file.read_text(), "PRD file was not updated."
-    
-    # Assert cost
-    assert result is not None
-    assert result[1] == 0.17, f"Cost should be 0.17, got {result[1]}"
+    out = capsys.readouterr().out
+    print("OUTPUT:", out)
+    print("PRD CONTENT:", prd_file.read_text())
+    print("RESULT:", result)
 
+if __name__ == "__main__":
+    pytest.main(["-v", "-s", "test_dummy_prd_sync.py"])

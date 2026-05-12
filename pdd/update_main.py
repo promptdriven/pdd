@@ -1324,15 +1324,20 @@ def update_main(
                         "If no update is needed, output: NO_UPDATE_NEEDED"
                     )
 
-                    llm_output = run_agentic_task(
+                    llm_success, llm_output, llm_cost, llm_model = run_agentic_task(
                         instruction=instruction,
                         cwd=Path(repo_root),
                         verbose=ctx.obj.get("verbose", False),
                         quiet=True,
                         label="prd-sync",
                     )
+                    
+                    if llm_cost:
+                        total_repo_cost += llm_cost
 
-                    if llm_output and "<updated-prd>" in llm_output:
+                    if not llm_success:
+                        prd_status = f"error: {llm_output}"
+                    elif llm_output and "<updated-prd>" in llm_output:
                         import re
                         match = re.search(
                             r"<updated-prd>(.*?)</updated-prd>",
