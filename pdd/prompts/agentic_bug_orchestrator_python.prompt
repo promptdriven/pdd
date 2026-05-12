@@ -108,15 +108,28 @@ The orchestrator must parse step output to detect stop conditions:
 | 8 | Test doesn't fail correctly | Output contains "FAIL: Test does not work as expected" |
 | 9 | E2E test doesn't catch bug | Output contains "E2E_FAIL: Test does not catch bug correctly" |
 
-**Hard stop behavior:**
-- Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
-- The step has already posted its findings to GitHub before returning
+**Hard stop behavior (issue #964 — orchestrator-owned posting):**
+- Steps do NOT shell out to `gh issue comment` themselves. Instead, each step's
+  prompt instructs the model to wrap its visible findings in a
+  `<step_report>...</step_report>` block. The orchestrator extracts that block
+  via `_extract_step_report`, sanitizes it via `_sanitize_comment_body`, and
+  posts via `post_step_comment(..., body=...)` using the cloud worker's trusted
+  GitHub credentials. This avoids the Gemini sandbox failure mode where
+  `GH_TOKEN` is not visible to the agent subprocess.
+- Persist a per-step `state["step_comments"][str(step_num)] = {"posted": True}`
+  entry on every successful post so resumes never duplicate comments. On entry,
+  the orchestrator backfills any completed step whose output contains a
+  `<step_report>` block but lacks a matching `posted: True` flag — that gate
+  skips legacy pre-PR outputs and FAST_TRACK synthetic skipped-step entries,
+  both of which lack the tag.
+- After posting (or skipping if already posted), return
+  `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
 - Do NOT continue to subsequent steps
 
 **Soft failures (continue):**
 - If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
 - This applies to all steps - only the specific hard stop patterns above terminate the workflow
-- Steps should post their findings to GitHub even on partial failure
+- The orchestrator still attempts to post the model's `<step_report>` block on success; the legacy FAILED template path (`body=None`) is retained for hard-stop callers in `agentic_change_orchestrator` only.
 
 % Git Worktree Isolation
 
