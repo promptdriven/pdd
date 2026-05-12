@@ -166,6 +166,13 @@ def run_checkup_review_loop(
 # and three for fixers. The mode field is one of:
 #   review | verify | fix
 #
+# When the opt-in ``--fallback-reviewer-on-failure`` flag promotes the fixer
+# role to a fallback reviewer (because the primary ended in ``failed`` or
+# ``missing``), the fallback pass writes artifacts using ``mode=review`` and
+# the fixer's role name. The mode set itself stays {``review``, ``verify``,
+# ``fix``}; the new behavior is which role appears next to ``mode=review``
+# and the diagnostic detail that lands in ``reviewer_status_details``.
+#
 # Reviewer/verifier files:
 #   round-{N}-{mode}-{role}.prompt.txt    -- exact prompt sent to the role
 #   round-{N}-{mode}-{role}.output.txt    -- raw LLM stdout
@@ -180,7 +187,11 @@ def run_checkup_review_loop(
 #   dedup-state-round-{N}.json -- list of normalized findings, one per dedup key
 #
 # Final outputs at end of loop:
-#   final-report.md  -- exact bytes returned by run_checkup_review_loop
+#   final-report.md  -- exact bytes returned by run_checkup_review_loop;
+#                       includes the optional ``### Reviewer Diagnostics``
+#                       subsection (rendered only when
+#                       ``reviewer_status_details`` is non-empty) with
+#                       adapter-safe defanging applied to the reason tail
 #   final-state.json -- canonical machine-readable verdict (see schema below)
 
 

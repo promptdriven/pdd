@@ -224,11 +224,72 @@ def _defang_severity_tags(text: str) -> str:
 # here. The current trip-wires are:
 #   - ``_BRACKET_TAG_RE`` (``[SEV]`` tokens) → ``_defang_severity_tags``
 #   - ``_TOP_LEVEL_ERROR_RE`` (line-leading ``error:``) → ``_defang_top_level_errors``
+#   - ``_ERROR_MARKERS`` substrings (``checkup failed``, ``checkup timed
+#     out``, ``error running checkup``) → ``_defang_error_markers``
+#   - ``_ISSUE_ALIGNED_RE`` (``issue_aligned: true|false``) → ``_defang_issue_aligned``
+#   - ``_REVIEWER_STATUS_INLINE_RE`` (``reviewer-status:``) → ``_defang_reviewer_status_inline``
+#   - ``_FRESH_FINAL_INLINE_RE`` (``fresh-final-review:``) → ``_defang_fresh_final_inline``
+#   - ``_BUDGET_EXHAUSTED_RE`` (``max-*-reached: true``) → ``_defang_budget_reached``
+#   - ``_REVIEWER_SECTION_RE`` / ``_FRESH_FINAL_SECTION_RE`` (markdown
+#     heading scanners) → ``_defang_section_headings``
 # Defang at the RENDER boundary only — ``state.reviewer_status_details``
 # and ``final-state.json`` keep the original text so on-disk audit and
-# diagnostic forwarding stay truthful.
+# diagnostic forwarding stay truthful. The adapter's regexes scan the
+# raw report bytes regardless of fenced code blocks, so wrapping reason
+# text in ``` is NOT sufficient protection on its own.
 _DEFANG_TOP_LEVEL_ERROR_RE: re.Pattern[str] = re.compile(
     r"^(\s*)(error):",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# ``checkup failed`` / ``checkup timed out`` / ``error running checkup``
+# are the adapter's ``_ERROR_MARKERS`` substring set. They are matched
+# against the LOWERCASED full report text, so the defang has to break
+# the literal substring in a case-insensitive way. Inserting ``*``
+# between the load-bearing token pair is enough.
+_DEFANG_ERROR_MARKER_CHECKUP_RE: re.Pattern[str] = re.compile(
+    r"\b(checkup)(\s+)(failed|timed\s+out)\b",
+    re.IGNORECASE,
+)
+_DEFANG_ERROR_RUNNING_CHECKUP_RE: re.Pattern[str] = re.compile(
+    r"\b(error)(\s+running\s+checkup)\b",
+    re.IGNORECASE,
+)
+
+# ``issue_aligned`` / ``"issue_aligned"`` / ``'issue_aligned'`` followed
+# by ``:`` or ``=``. The adapter takes the LAST match, so a single
+# stray ``"issue_aligned": false`` in reviewer stderr flips the verdict
+# even when the real header says ``issue_aligned: true``.
+_DEFANG_ISSUE_ALIGNED_RE: re.Pattern[str] = re.compile(
+    r"(?P<lead>[\"']?)(?P<key>issue_aligned)(?P<close>[\"']?)(?P<sep>\s*[:=])",
+    re.IGNORECASE,
+)
+
+# Inline ``reviewer-status:`` and ``fresh-final-review:`` markers.
+_DEFANG_REVIEWER_STATUS_INLINE_RE: re.Pattern[str] = re.compile(
+    r"\b(reviewer-status)(\s*:)",
+    re.IGNORECASE,
+)
+_DEFANG_FRESH_FINAL_INLINE_RE: re.Pattern[str] = re.compile(
+    r"\b(fresh[-_ ]?final(?:[-_ ]?review)?)(\s*[:=])",
+    re.IGNORECASE,
+)
+
+# ``max-rounds-reached: true`` / ``max-cost-reached: true`` /
+# ``max-duration-reached: true`` / ``max-minutes-reached: true`` —
+# any of these in reviewer stderr makes the adapter think the loop
+# exhausted its budget.
+_DEFANG_BUDGET_REACHED_RE: re.Pattern[str] = re.compile(
+    r"\b(max-(?:review-)?(?:rounds|cost|duration|minutes)-reached)(\s*:)",
+    re.IGNORECASE,
+)
+
+# Markdown section headings the adapter consumes as authoritative
+# reviewer-status / fresh-final-review tables. A line that starts with
+# ``### Per-Reviewer Status`` (or the fresh-final variant) inside
+# reviewer stderr would inject a synthetic table.
+_DEFANG_SECTION_HEADING_RE: re.Pattern[str] = re.compile(
+    r"^(?P<lead>\s*#{2,6}\s*)(?P<title>per[- ]reviewer status|reviewer status|fresh final review)(?P<trail>\s*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -248,6 +309,76 @@ def _defang_top_level_errors(text: str) -> str:
     return _DEFANG_TOP_LEVEL_ERROR_RE.sub(r"\1\2*:", text)
 
 
+def _defang_error_markers(text: str) -> str:
+    """Neutralize ``_ERROR_MARKERS`` substrings the adapter would treat
+    as a checkup-level error verdict.
+
+    Replaces ``checkup failed`` → ``checkup* failed``, ``checkup timed
+    out`` → ``checkup* timed out``, ``error running checkup`` → ``error*
+    running checkup``. The starred form still reads naturally to a
+    human but breaks the adapter's literal substring match.
+    """
+    if not text:
+        return text
+    text = _DEFANG_ERROR_MARKER_CHECKUP_RE.sub(r"\1*\2\3", text)
+    text = _DEFANG_ERROR_RUNNING_CHECKUP_RE.sub(r"\1*\2", text)
+    return text
+
+
+def _defang_issue_aligned(text: str) -> str:
+    """Neutralize ``issue_aligned: true|false`` so a stray value in
+    reviewer stderr cannot override the real header.
+
+    ``issue_aligned:`` → ``issue_aligned*:`` (and ``=`` variant). The
+    adapter takes the LAST regex match in the whole report, so even
+    one occurrence inside a code fence is enough to flip the verdict.
+    """
+    if not text:
+        return text
+    return _DEFANG_ISSUE_ALIGNED_RE.sub(
+        lambda m: f"{m.group('lead')}{m.group('key')}*{m.group('close')}{m.group('sep')}",
+        text,
+    )
+
+
+def _defang_reviewer_status_inline(text: str) -> str:
+    """Neutralize inline ``reviewer-status:`` markers."""
+    if not text:
+        return text
+    return _DEFANG_REVIEWER_STATUS_INLINE_RE.sub(r"\1*\2", text)
+
+
+def _defang_fresh_final_inline(text: str) -> str:
+    """Neutralize inline ``fresh-final-review:`` markers."""
+    if not text:
+        return text
+    return _DEFANG_FRESH_FINAL_INLINE_RE.sub(r"\1*\2", text)
+
+
+def _defang_budget_reached(text: str) -> str:
+    """Neutralize ``max-*-reached: true`` budget markers."""
+    if not text:
+        return text
+    return _DEFANG_BUDGET_REACHED_RE.sub(r"\1*\2", text)
+
+
+def _defang_section_headings(text: str) -> str:
+    """Neutralize markdown headings the adapter parses as authoritative
+    reviewer-status / fresh-final tables.
+
+    Suffixes the heading title with ``*`` so the line still reads as
+    a heading to a human reader but no longer matches the adapter's
+    anchored regex (``^\\s*#{2,6}\\s*per[- ]reviewer status\\s*$`` and
+    siblings).
+    """
+    if not text:
+        return text
+    return _DEFANG_SECTION_HEADING_RE.sub(
+        lambda m: f"{m.group('lead')}{m.group('title')}*{m.group('trail')}",
+        text,
+    )
+
+
 def _defang_adapter_trip_wires(text: str) -> str:
     """Apply every render-boundary defang in one place.
 
@@ -257,7 +388,15 @@ def _defang_adapter_trip_wires(text: str) -> str:
     ``_render_final_report`` so adding a future defang only touches
     one site.
     """
-    return _defang_top_level_errors(_defang_severity_tags(text))
+    text = _defang_severity_tags(text)
+    text = _defang_top_level_errors(text)
+    text = _defang_error_markers(text)
+    text = _defang_issue_aligned(text)
+    text = _defang_reviewer_status_inline(text)
+    text = _defang_fresh_final_inline(text)
+    text = _defang_budget_reached(text)
+    text = _defang_section_headings(text)
+    return text
 
 
 @dataclass
