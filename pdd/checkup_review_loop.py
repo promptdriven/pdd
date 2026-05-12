@@ -232,6 +232,8 @@ def _defang_severity_tags(text: str) -> str:
 #   - ``_BUDGET_EXHAUSTED_RE`` (``max-*-reached: true``) → ``_defang_budget_reached``
 #   - ``_REVIEWER_SECTION_RE`` / ``_FRESH_FINAL_SECTION_RE`` (markdown
 #     heading scanners) → ``_defang_section_headings``
+#   - ``_extract_findings`` pipe-table parser (lines starting with
+#     ``|<severity>|…``) → ``_defang_pipe_finding_rows``
 # Defang at the RENDER boundary only — ``state.reviewer_status_details``
 # and ``final-state.json`` keep the original text so on-disk audit and
 # diagnostic forwarding stay truthful. The adapter's regexes scan the
@@ -290,6 +292,19 @@ _DEFANG_BUDGET_REACHED_RE: re.Pattern[str] = re.compile(
 # reviewer stderr would inject a synthetic table.
 _DEFANG_SECTION_HEADING_RE: re.Pattern[str] = re.compile(
     r"^(?P<lead>\s*#{2,6}\s*)(?P<title>per[- ]reviewer status|reviewer status|fresh final review)(?P<trail>\s*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Markdown pipe-table rows whose first cell is a known severity token
+# are parsed by the adapter's ``_extract_findings`` as real findings,
+# even inside fenced code blocks. A reviewer that echoes a prior
+# report's ``### Findings`` table (or a malicious ``| critical | … |``
+# line in stderr) would inject a synthetic critical finding and flip
+# the verdict to ``fail``. The adapter requires the line to start with
+# ``|`` after ``.strip()``; prefixing ``*`` breaks that anchor while
+# the line still reads as text to a human.
+_DEFANG_PIPE_FINDING_ROW_RE: re.Pattern[str] = re.compile(
+    r"^(?P<indent>\s*)\|(?P<rest>\s*(?:blocker|critical|medium|low|nit|info)\b[^\r\n]*)$",
     re.IGNORECASE | re.MULTILINE,
 )
 
@@ -379,6 +394,22 @@ def _defang_section_headings(text: str) -> str:
     )
 
 
+def _defang_pipe_finding_rows(text: str) -> str:
+    """Neutralize markdown pipe-table rows whose first cell is a known
+    severity token. The adapter's ``_extract_findings`` parses any
+    line starting with ``|<severity>|...`` as a real finding (even
+    inside fenced code blocks), so leaking such a row through reviewer
+    stderr would inject a synthetic finding and flip the verdict.
+
+    Prefix the leading pipe with ``*`` so the line no longer starts
+    with ``|`` after ``.strip()`` — the adapter's table walker skips
+    any line that fails that anchor check.
+    """
+    if not text:
+        return text
+    return _DEFANG_PIPE_FINDING_ROW_RE.sub(r"\g<indent>*|\g<rest>", text)
+
+
 def _defang_adapter_trip_wires(text: str) -> str:
     """Apply every render-boundary defang in one place.
 
@@ -396,6 +427,7 @@ def _defang_adapter_trip_wires(text: str) -> str:
     text = _defang_fresh_final_inline(text)
     text = _defang_budget_reached(text)
     text = _defang_section_headings(text)
+    text = _defang_pipe_finding_rows(text)
     return text
 
 

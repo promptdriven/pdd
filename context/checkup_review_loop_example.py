@@ -164,14 +164,16 @@ def run_checkup_review_loop(
 
 # Per role/round invocation, three files are written for reviewers/verifiers
 # and three for fixers. The mode field is one of:
-#   review | verify | fix
+#   review | verify | fix | fallback
 #
 # When the opt-in ``--fallback-reviewer-on-failure`` flag promotes the fixer
 # role to a fallback reviewer (because the primary ended in ``failed`` or
-# ``missing``), the fallback pass writes artifacts using ``mode=review`` and
-# the fixer's role name. The mode set itself stays {``review``, ``verify``,
-# ``fix``}; the new behavior is which role appears next to ``mode=review``
-# and the diagnostic detail that lands in ``reviewer_status_details``.
+# ``missing``), the fallback pass writes artifacts using ``mode=fallback``
+# and the fixer's role name (e.g., ``round-1-fallback-claude.prompt.txt``).
+# A distinct ``fallback`` mode keeps the on-disk record auditable: the
+# original primary attempt at ``round-N-review-<primary>.*`` is preserved
+# unchanged, and the secondary pass is filed under its own mode rather
+# than overwriting or aliasing the primary's slot.
 #
 # Reviewer/verifier files:
 #   round-{N}-{mode}-{role}.prompt.txt    -- exact prompt sent to the role
