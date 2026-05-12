@@ -457,7 +457,11 @@ def update(
             return None
         return ret
 
-    except (click.Abort, click.UsageError):
+    except (click.Abort, click.UsageError, click.exceptions.Exit):
+        # click.exceptions.Exit carries an intentional non-zero exit code
+        # (raised e.g. when sync_metadata finalization fails — see
+        # update_main). Letting `except Exception` swallow it would silently
+        # convert it to exit 0 and re-introduce the bug fixed for #871.
         raise
     except Exception as e:
         handle_error(e, "update", ctx.obj.get("quiet", False))

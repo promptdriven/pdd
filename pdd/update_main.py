@@ -1466,7 +1466,12 @@ def update_main(
 
                     if sync_metadata:
                         if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
-                            return None
+                            # Surface as a non-zero CLI exit, not a soft None
+                            # return. modify.py re-raises click.exceptions.Exit,
+                            # so this bubbles to Click's command boundary and
+                            # the preflight subprocess sees returncode != 0
+                            # (#871 acceptance criterion).
+                            raise click.exceptions.Exit(1)
 
                     return generated_prompt, agentic_cost, provider
 
@@ -1538,7 +1543,7 @@ def update_main(
 
             if sync_metadata:
                 if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
-                    return None
+                    raise click.exceptions.Exit(1)
 
             return modified_prompt, total_cost, model_name
 
@@ -1584,7 +1589,7 @@ def update_main(
 
                     if sync_metadata:
                         if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
-                            return None
+                            raise click.exceptions.Exit(1)
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1691,7 +1696,7 @@ def update_main(
 
             if sync_metadata:
                 if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
-                    return None
+                    raise click.exceptions.Exit(1)
 
             return modified_prompt, total_cost, model_name
 
@@ -1702,6 +1707,13 @@ def update_main(
         return None
     except click.Abort:
         # User cancelled - re-raise to stop the sync loop
+        raise
+    except click.exceptions.Exit:
+        # Intentional non-zero exit (e.g. sync_metadata finalization failure).
+        # Must propagate so the CLI surfaces returncode != 0 and the preflight
+        # auto-heal subprocess does not mark a half-synced update as healed
+        # (#871). Letting the bare `except Exception` below swallow this would
+        # silently convert it to exit 0.
         raise
     except Exception as e:
         if not quiet:

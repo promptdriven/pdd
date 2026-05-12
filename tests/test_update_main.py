@@ -3003,23 +3003,25 @@ def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     mock_open_file,
     capsys,
 ):
-    # Orchestrator raising must surface as update_main returning None so the
-    # CLI exit code is non-zero and preflight auto-heal does not mark a
-    # half-synced update as healed (#871 acceptance criterion). The helper
-    # still logs the orchestrator error before propagating.
+    # Orchestrator raising must surface as click.exceptions.Exit(1) so the
+    # CLI exit code is non-zero and preflight auto-heal (which keys off
+    # the subprocess returncode) does not mark a half-synced update as
+    # healed (#871 acceptance criterion). The helper still logs the
+    # orchestrator error before propagating.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")):
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
-            use_git=False,
-            sync_metadata=True,
-        )
+        with pytest.raises(click.exceptions.Exit) as excinfo:
+            update_main(
+                ctx=mock_ctx,
+                input_prompt_file=minimal_input_files["input_prompt_file"],
+                modified_code_file=minimal_input_files["modified_code_file"],
+                input_code_file=minimal_input_files["input_code_file"],
+                output="custom_output.prompt",
+                use_git=False,
+                sync_metadata=True,
+            )
 
-    assert result is None
+    assert excinfo.value.exit_code == 1
     captured = capsys.readouterr()
     out = captured.out + captured.err
     # Rich strips [error] / [metadata-sync] style markup; assert on rendered content.
@@ -3036,8 +3038,9 @@ def test_sync_metadata_failed_stage_propagates_failure(
     capsys,
 ):
     # When a stage is failed, the helper must print stage name + reason AND
-    # cause update_main to return None so the CLI exit code is non-zero
-    # (#871 acceptance criterion — preflight subprocess keys off returncode).
+    # cause update_main to raise click.exceptions.Exit(1) so the CLI exit
+    # code is non-zero (#871 acceptance criterion — preflight subprocess
+    # keys off returncode).
     failed_stages = {
         "prompt": StageStatus(status="failed", reason="missing arch"),
     }
@@ -3052,22 +3055,70 @@ def test_sync_metadata_failed_stage_propagates_failure(
 
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync):
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
-            use_git=False,
-            sync_metadata=True,
-        )
+        with pytest.raises(click.exceptions.Exit) as excinfo:
+            update_main(
+                ctx=mock_ctx,
+                input_prompt_file=minimal_input_files["input_prompt_file"],
+                modified_code_file=minimal_input_files["modified_code_file"],
+                input_code_file=minimal_input_files["input_code_file"],
+                output="custom_output.prompt",
+                use_git=False,
+                sync_metadata=True,
+            )
 
-    assert result is None
+    assert excinfo.value.exit_code == 1
     captured = capsys.readouterr()
     out = captured.out + captured.err
     # Rich strips style markup like [error] / [metadata-sync]; assert rendered text.
     assert "prompt" in out
     assert "missing arch" in out
+
+
+def test_cli_update_sync_metadata_failure_exits_non_zero(tmp_path):
+    # Belt-and-suspenders: drive the actual Click command via CliRunner and
+    # assert exit_code != 0 when sync_metadata fails. This is the contract
+    # the preflight subprocess (agentic_change_orchestrator) relies on; a
+    # plain `return None` from update_main would surface as exit_code 0 and
+    # silently mark a half-finalized update as healed (#871).
+    from click.testing import CliRunner
+    from pdd.commands.modify import update
+
+    code_file = tmp_path / "mod.py"
+    code_file.write_text("def foo(): return 1\n", encoding="utf-8")
+
+    failed_stages = {"prompt": StageStatus(status="failed", reason="missing arch")}
+
+    def _sync(prompt_path, code_path, dry_run):
+        return MetadataSyncResult(
+            prompt_path=Path(prompt_path),
+            code_path=Path(code_path),
+            dry_run=False,
+            stages=failed_stages,
+        )
+
+    runner = CliRunner()
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync), \
+         patch("pdd.update_main.update_prompt", return_value=("updated", 0.0, "m")), \
+         patch("pdd.update_main.construct_paths") as m_cp:
+        m_cp.return_value = (
+            {},
+            {"input_prompt_file": "p", "modified_code_file": "c"},
+            {"output": str(tmp_path / "out.prompt")},
+            None,
+        )
+        result = runner.invoke(
+            update,
+            ["--sync-metadata", str(code_file)],
+            obj={"quiet": True, "force": True, "verbose": False, "time": 1.0,
+                 "strength": 0.5, "temperature": 0.0, "context": None},
+            standalone_mode=True,
+        )
+
+    assert result.exit_code != 0, (
+        f"sync_metadata failure must yield non-zero exit; got {result.exit_code}. "
+        f"stdout={result.stdout!r}"
+    )
 
 
 # --- Repo-mode sync_metadata integration ----------------------------------

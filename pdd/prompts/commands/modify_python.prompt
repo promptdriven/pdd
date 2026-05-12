@@ -71,7 +71,7 @@ This module provides Click commands (`split`, `change`, `update`) for prompt man
 
 % Error Handling
 - `split` and `change`: re-raise `click.Abort`, `click.UsageError`, `click.exceptions.Exit`.
-- `update`: re-raise `click.Abort`, `click.UsageError` (pre-try validation lets `Exit` propagate naturally).
+- `update`: re-raise `click.Abort`, `click.UsageError`, and `click.exceptions.Exit`. The `Exit` re-raise is required because `update_main` raises `click.exceptions.Exit(1)` when `sync_metadata=True` finalization fails (the preflight auto-heal subprocess keys off `returncode != 0` — without the re-raise, the bare `except Exception` would swallow it back to `exit_code 0`, reintroducing the #871 silent-success bug).
 - Otherwise call `handle_error(e, command_name, quiet)` and return `None`.
 
 % Dependencies
