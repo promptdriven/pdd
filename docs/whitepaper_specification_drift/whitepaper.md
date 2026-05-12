@@ -61,6 +61,8 @@ The quantitative evidence comes from three artifact classes: the git history for
 
 **Table 1.** Outcomes of the two attempts.
 
+> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. The released [evidence bundle](evidence/README.md) reconstructs the developer-typed subset from `~/.claude/history.jsonl` (3,048 vibe / 1,237 PDD prompts); this is a strict lower bound on the figures above.*
+
 ### 3.1 What I Held Constant
 
 The value of comparing the two attempts depends on what was kept the same between them. The same person did both attempts, on the same core feature, with the same AI model, repository, and cloud test environment. What changed most visibly between them was the workflow — but because the attempts were sequential and the second began from a reset, the comparison supports mechanism-building rather than a clean causal estimate.
@@ -148,7 +150,7 @@ The simplest explanation for a non-converging project is that I did not try hard
 Across the 15 days I asked Claude to do test-driven development 38 times. Vibe day 1 alone had three TDD instructions:
 
 ```
-Vibe day 1  "also always work in test driven development, create the test first..."
+Vibe day 1  "also always work in test driven devlopment, create the test first..."
 Vibe day 1  "also always work in tdd format test driven development"
 Vibe day 1  "i want you to do in tdd style, first write test then code"
 ```
@@ -403,6 +405,8 @@ These rules are not a substitute for a controlled experiment, but they make the 
 ---
 
 ## Appendix C — Selected Session-Log Evidence
+
+The complete set of feature-relevant typed prompts (3,048 vibe + 1,237 PDD) is published alongside this paper in [`evidence/`](evidence/README.md). Each quote below maps to a specific timestamped entry; the line-by-line mapping is in [`evidence/quote_map.md`](evidence/quote_map.md).
 
 Direct quotes from the Claude Code session logs during the vibe coding phase (selected from 38 TDD instructions in total, and other explicit process signals). Spelling and grammar are preserved from the original logs:
 
