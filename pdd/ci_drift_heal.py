@@ -838,7 +838,7 @@ def detect_drift(
                             f"{reason} | git-reclassified to example: "
                             "Prompt changed without code changes; refresh or skip example."
                         )
-                    elif op == "generate" and not code_changed and not prompt_changed:
+                    elif not code_changed and not prompt_changed:
                         continue
 
         if drift.operation == "update":
