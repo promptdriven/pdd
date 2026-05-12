@@ -493,18 +493,14 @@ class TestDetectDriftWithDiffBase:
         assert all_drifts[0].basename == "checkup"
         assert all_drifts[0].operation == "crash"
 
-    def test_phantom_crash_on_touched_module_is_reclassified_to_example(self):
-        """Phantom 'no run_report' crash on a module whose code or prompt
-        WAS touched by the PR must NOT be dropped — the touched module
-        likely needs an example refresh. The over-broad early filter (a
-        prior implementation) silently lost real drift here; this test
-        pins the corrected behavior (Codex review pass 3 on PR #930)."""
+    def test_phantom_crash_on_touched_module_with_both_files_changed_is_example(self):
+        """Phantom 'no run_report' crash with code AND prompt changed → example
+        drift (refresh the reviewed example without re-running full sync)."""
         phantom = MagicMock(
             operation="crash",
             reason="All files exist but needs validation - no run_report",
         )
         files, infer, sync = self._setup_mocks({"checkup": phantom})
-        # Both code and prompt changed in this PR — module is touched.
         changed_files = {"pdd/checkup.py", "prompts/checkup_python.prompt"}
         mock_paths = {"code": Path("pdd/checkup.py"), "prompt": Path("prompts/checkup_python.prompt")}
 
@@ -519,6 +515,34 @@ class TestDetectDriftWithDiffBase:
         assert len(example_drifts) == 1
         assert example_drifts[0].basename == "checkup"
         assert example_drifts[0].operation == "example"
+
+    def test_phantom_crash_on_code_only_change_is_reclassified_to_update(self):
+        """Phantom 'no run_report' crash with ONLY code changed must become
+        an `update` drift, not `example`. Forcing example here (with the
+        default ``PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT=1``) would skip the
+        existing example and exit successfully without running ``pdd update``,
+        leaving the prompt stale for the code change (Codex round 2 [P2] on
+        PR #930)."""
+        phantom = MagicMock(
+            operation="crash",
+            reason="All files exist but needs validation - no run_report",
+        )
+        files, infer, sync = self._setup_mocks({"checkup": phantom})
+        changed_files = {"pdd/checkup.py"}  # only code changed
+        mock_paths = {"code": Path("pdd/checkup.py"), "prompt": Path("prompts/checkup_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(diff_base="origin/main...HEAD")
+
+        assert len(example_drifts) == 0
+        assert len(prompt_drifts) == 1
+        assert prompt_drifts[0].basename == "checkup"
+        assert prompt_drifts[0].operation == "update"
+        assert prompt_drifts[0].code_path == "pdd/checkup.py"
 
     def test_only_prompt_changed_stays_as_example(self):
         """Prompt-only clean-CI auto-deps drift should not rewrite the prompt."""
