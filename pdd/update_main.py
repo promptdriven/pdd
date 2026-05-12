@@ -1324,7 +1324,7 @@ def update_main(
                         "If no update is needed, output: NO_UPDATE_NEEDED"
                     )
 
-                    llm_success, llm_output, llm_cost, llm_model = run_agentic_task(
+                    llm_success, llm_output, llm_cost, _llm_model = run_agentic_task(
                         instruction=instruction,
                         cwd=Path(repo_root),
                         verbose=ctx.obj.get("verbose", False),
