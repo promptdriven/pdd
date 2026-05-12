@@ -195,6 +195,20 @@ def test_sanitize_truncates_respects_custom_max_chars():
     assert out.endswith("…[truncated]")
 
 
+def test_sanitize_cap_smaller_than_marker_still_bounded():
+    """When max_chars is tinier than the marker itself, the cap still holds.
+
+    Regression for codex re-review of PR #966 — the previous fix reserved
+    room for the marker but didn't final-slice, so a 3-char cap with a
+    15-char marker returned 15 chars.
+    """
+    from pdd.agentic_common import _sanitize_comment_body
+
+    body = "x" * 1000
+    out = _sanitize_comment_body(body, max_chars=3)
+    assert len(out) <= 3
+
+
 def test_sanitize_short_body_passes_through():
     from pdd.agentic_common import _sanitize_comment_body
 
@@ -579,3 +593,74 @@ def test_bug_orchestrator_posts_step_comment_on_hard_stop(bug_orchestrator_mocks
     body = step1_calls[0].kwargs.get("body")
     assert body is not None
     assert "Duplicate of #999" in body
+
+
+def test_bug_orchestrator_backfills_missing_comments_on_resume(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """Resume with a step that was completed but never posted: retry on entry.
+
+    Regression for codex re-review of PR #966 — if `post_step_comment`
+    returns False on the success path, the orchestrator advances
+    `last_completed_step` anyway, so the next run's `step_num < start_step`
+    skip would silently swallow the missed comment. The resume-time sweep
+    retries every completed step whose `step_comments[n].posted` is falsy.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    # Steps 1 and 2 completed previously; step 1 already had its comment
+    # posted, step 2 did NOT (e.g. transient gh failure). The state validator
+    # walks step_outputs and stops at the first missing/FAILED entry, so we
+    # only need entries for 1 and 2 — last_completed_step will be corrected
+    # down to 2, start_step will become 3, and the main loop will continue
+    # from there. We set step 9 to emit FILES_CREATED so the loop completes.
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>R1</step_report>",
+                "2": "<step_report>R2</step_report>",
+            },
+            "last_completed_step": 2,
+            "total_cost": 0.1,
+            "model_used": "claude",
+            "step_comments": {"1": {"posted": True}},
+        },
+        None,
+    )
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: t.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(**bug_default_args)
+    assert success is True
+
+    posted_steps = [
+        c.kwargs.get("step_num")
+        for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+    ]
+    # The backfill sweep at orchestrator entry must retry step 2 (skipped
+    # by the main loop because step_num < start_step). Step 1 was already
+    # posted previously and must NOT be re-posted by the sweep.
+    assert 2 in posted_steps, f"Step 2 should be backfilled on resume. Posted: {posted_steps}"
+    # Find the FIRST step-2 call — that's the sweep's retry, not anything
+    # else from the main loop (which starts at step 3).
+    step2_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 2
+    ]
+    assert step2_calls
+    body = step2_calls[0].kwargs.get("body")
+    assert body is not None
+    assert "R2" in body
+    # And step 1's previously-posted state must be respected.
+    assert 1 not in posted_steps, "Step 1 was already posted; sweep must not repost it."
