@@ -39,22 +39,30 @@ def run_ci_auto_heal_example():
     # modules: List of basenames to check (None = all)
     # budget_cap: Max dollars to spend on LLM calls (float)
     # skip_ci: Adds [skip ci] to commit messages (bool)
-    # diff_base: Git ref to compare against for drift direction (string)
-    
-    # Note: We pass dummy args. In a real CI, diff_base might be 'origin/main...HEAD'
+    # diff_base: Git ref to compare against for drift direction (string).
+    #     Required in CI: without it, the phantom "no run_report" crash
+    #     filter cannot run in detect_drift and falls back to the
+    #     heal_module guard whose None return is counted as a "skipped
+    #     module", which in PR mode suppresses commits of real heals.
+    #     Use "origin/<base>...HEAD" on PR builds and "HEAD~1" on push
+    #     builds.
     exit_code = main(
-        modules=["auth_logic", "data_parser"], 
-        budget_cap=2.50, 
+        modules=["auth_logic", "data_parser"],
+        budget_cap=2.50,
         skip_ci=True,
-        diff_base=None
+        diff_base="origin/main...HEAD",
     )
     print(f"Main execution returned exit code: {exit_code}")
 
     print("\n--- Scenario 2: Granular control using detect_drift and heal_module ---")
-    
+
     # 1. Detection Phase
-    # returns (prompt_drifts, example_drifts)
-    prompt_drifts, example_drifts = detect_drift(modules=None, diff_base=None)
+    # returns (prompt_drifts, example_drifts). Always pass diff_base when
+    # available — the clean-CI reclassification and phantom-crash filter
+    # both require it.
+    prompt_drifts, example_drifts = detect_drift(
+        modules=None, diff_base="origin/main...HEAD"
+    )
     
     print(f"Detected {len(prompt_drifts)} prompt drifts and {len(example_drifts)} example drifts.")
 

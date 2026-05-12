@@ -3525,19 +3525,19 @@ For detailed command examples for each workflow, see the respective command docu
 
 ### CI Auto-Heal
 
-**Workflow File**: `.github/workflows/auto-heal.yml` (dispatches to Cloud Build; the legacy in-runner script `.github/workflows/auto-heal-drift.yml` is kept as a disabled rollback path)
+**Workflow File**: `.github/workflows/auto-heal.yml`. It only dispatches the heal — the heal itself runs in pdd_cloud's Google Cloud Build pipeline, which checks out the PR branch and invokes `python -m pdd.ci_drift_heal` from an installed pdd-cli wheel.
 
-**Purpose**: Automatically detect and fix prompt-code drift in CI.
+**Purpose**: Automatically detect and fix prompt-code drift on pull requests.
 
 **Triggers**:
-- **Pull requests**: Heals only modules changed by the PR, commits fixes to the PR branch
-- **Push to main**: Heals all modules, commits fixes directly to main
+- `pull_request_target` (opened / synchronize / reopened / ready_for_review): heals only modules changed by the PR and pushes a `chore: auto-heal …` commit back to the PR branch.
+- `issue_comment` with a `/heal` command on a PR by an authorized collaborator: same as above, on demand.
 
-**Loop prevention**: Commits from auto-heal use `chore: auto-heal [skip ci]` message; the workflow skips runs triggered by this pattern.
+There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
 
-**Configuration**: Set `PDD_BUDGET_CAP` repository variable to control LLM spend per run (default: `5.00`).
+**Loop prevention**: Auto-heal commits start with `chore: auto-heal …`; the Cloud Build step short-circuits when the triggering commit subject matches that prefix, so the heal cannot retrigger itself.
 
-For full details, see [docs/ci-auto-heal.md](docs/ci-auto-heal.md).
+**Configuration**: Heal budget is controlled by the `_PDD_BUDGET_CAP` substitution on the pdd_cloud auto-heal Cloud Build trigger (see `cloudbuild-pdd-cli-auto-heal-pr.yaml` in the `pdd_cloud` repo); the GHA workflow does not read a repo variable.
 
 ## Integrations
 
