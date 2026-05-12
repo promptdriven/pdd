@@ -7,7 +7,7 @@
 
 % Program Specification (README.md):
     <README.md>
-    <include query="install_completion and verify command specifications">./README.md</include>
+    <include>./README.md</include>
     </README.md>
 
 % Requirements
@@ -35,7 +35,7 @@
        - `attempts`: int
 
 % Dependencies
-  <!-- Missing: context/command_logging.prompt -->
+  <include>context/command_logging.prompt</include>
   <install_completion_example>
   <include>context/install_completion_example.py</include>
   </install_completion_example>

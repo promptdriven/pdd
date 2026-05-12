@@ -64,11 +64,11 @@
 
 % Dependencies
   Models are defined in pdd/server/models.py - use ServerConfig, ServerStatus
-  <!-- Invalid selector for context/server/models_example.py: Class 'ServerConfig' not found in source -->
+  <include>context/server/models_example.py</include>
   Security utilities in pdd/server/security.py - use PathValidator, SecurityError, configure_cors, SecurityLoggingMiddleware
-  <!-- Invalid selector for context/server/security_example.py: Class 'PathValidator' not found in source -->
+  <include>context/server/security_example.py</include>
   Job manager in pdd/server/jobs.py
-  <!-- Invalid selector for context/server/jobs_example.py: Class 'JobManager' not found in source -->
+  <include>context/server/jobs_example.py</include>
   Routes: routes.files, routes.commands, routes.prompts, routes.websocket
   
 

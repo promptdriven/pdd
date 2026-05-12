@@ -58,9 +58,9 @@
   - Use `rich.console.Console` for status messages
 
 <pdd.core.utils><include>context/core/utils_example.py</include></pdd.core.utils>
-<pdd.core.errors><include>context/core/errors_example.py</include></pdd.core.errors>
+<pdd.core.errors><include select="class:AuthError,class:NetworkError,class:TokenError,class:UserCancelledError,class:RateLimitError">context/core/errors_example.py</include></pdd.core.errors>
 <utils.auth_service>
-    <include>context/auth_service_example.py</include>
+    <include select="def:get_cached_jwt,def:get_jwt_token,def:verify_auth,JWT_CACHE_FILE">context/auth_service_example.py</include>
 </utils.auth_service>
 <utils.keyring_timeout>
     <include>context/_keyring_timeout_example.py</include>

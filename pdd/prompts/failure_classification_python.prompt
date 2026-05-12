@@ -1,10 +1,5 @@
 <include>context/python_preamble.prompt</include>
 
-% Dependencies
-<change.16.fix_error_loop>
-    <include>context/change/16/fix_error_loop.py</include>
-</change.16.fix_error_loop>
-
 <pdd-reason>Classify pytest / verification output so `fix_error_loop` can adapt retries by failure type (syntax/import, assertion/logic, timeout/flaky).</pdd-reason>
 
 % Goal

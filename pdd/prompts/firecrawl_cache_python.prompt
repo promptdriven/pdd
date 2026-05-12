@@ -15,11 +15,6 @@
 
 <include>context/python_preamble.prompt</include>
 
-% Dependencies
-<pdd.architecture_registry>
-    <include>context/architecture_registry_example.py</include>
-</pdd.architecture_registry>
-
 % Role & Scope
   Implement `pdd/firecrawl_cache.py` as a transparent, persistent Firecrawl scrape cache.
   Expose `FirecrawlCache` plus module-level singleton helpers.

@@ -7,7 +7,7 @@
 
 % Program Specification (README.md):
     <README.md>
-    <include query="preprocess command specification">./README.md</include>
+    <include>./README.md</include>
     </README.md>
 
 % Requirements

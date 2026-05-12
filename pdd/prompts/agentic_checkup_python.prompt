@@ -35,11 +35,11 @@ Entry point for the agentic checkup workflow. Accepts a GitHub issue URL, fetche
 
 % Dependencies
 <pdd.agentic_change><include>context/agentic_change_example.py</include></pdd.agentic_change>
-<pdd.agentic_checkup_orchestrator><!-- Invalid selector for context/agentic_checkup_orchestrator_example.py: Function 'run_agentic_checkup_orchestrator' not found in source --></pdd.agentic_checkup_orchestrator>
+<pdd.agentic_checkup_orchestrator><include select="def:run_agentic_checkup_orchestrator">context/agentic_checkup_orchestrator_example.py</include></pdd.agentic_checkup_orchestrator>
 <pdd.checkup_review_loop><include select="def:run_checkup_review_loop">context/checkup_review_loop_example.py</include></pdd.checkup_review_loop>
-<pdd.agentic_sync><!-- Invalid selector for context/agentic_sync_example.py: Function '_find_project_root' not found in source --></pdd.agentic_sync>
+<pdd.agentic_sync><include select="def:_find_project_root,def:_load_architecture_json">context/agentic_sync_example.py</include></pdd.agentic_sync>
 <pdd.agentic_common>
-    <!-- Invalid selector for context/agentic_common_example.py: Function '_fetch_comments' not found in source -->
+    <include select="def:_fetch_comments,def:_escape_format_braces,def:_extract_json_from_text">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 
 % Error Handling

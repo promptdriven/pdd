@@ -84,8 +84,8 @@
       - `get_active_session_manager()` and `set_active_session_manager()` accessors
 
 % Dependencies
-  <pdd.core.cloud><!-- Invalid selector for context/cloud_example.py: Class 'CloudConfig' not found in source --></pdd.core.cloud>
-  <pdd.get_jwt_token><!-- Invalid selector for context/get_jwt_token_example.py: Function 'get_jwt_token' not found in source --></pdd.get_jwt_token>
+  <pdd.core.cloud><include select="class:CloudConfig">context/cloud_example.py</include></pdd.core.cloud>
+  <pdd.get_jwt_token><include select="def:get_jwt_token">context/get_jwt_token_example.py</include></pdd.get_jwt_token>
   <pdd.auth_service><include select="def:get_refresh_token,def:verify_auth,def:get_cached_jwt">context/auth_service_example.py</include></pdd.auth_service>
 
 % Technical Constraints

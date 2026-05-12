@@ -16,7 +16,7 @@
    <internal_example_modules>
       - Here is an example of how to use the `get_local_pdd_path` function:
       <get_local_pdd_path_example>
-      <!-- Missing: context/get_local_pdd_path_example.py -->
+      <include>context/get_local_pdd_path_example.py</include>
       </get_local_pdd_path_example>
    </internal_example_modules>
 </examples>

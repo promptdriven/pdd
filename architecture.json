@@ -5223,7 +5223,7 @@
   {
     "reason": "CLI entry point for the split command.",
     "description": "Command-line interface for split. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": ["auto_deps_main_python.prompt"],
+    "dependencies": [],
     "priority": 147,
     "filename": "split_main_python.prompt",
     "filepath": "pdd/split_main.py",
@@ -6488,7 +6488,7 @@
   {
     "reason": "Generates tests using agentic single-pass execution with file change detection.",
     "description": "Runs an agentic CLI to generate test files. Records file mtimes before/after agent execution, detects changed files, reads generated test content. Supports JSON metadata extraction from agent output.",
-    "dependencies": ["agentic_langtest_python.prompt"],
+    "dependencies": [],
     "priority": 195,
     "filename": "agentic_test_generate_python.prompt",
     "filepath": "pdd/agentic_test_generate.py",
@@ -7256,8 +7256,7 @@
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "durable_sync_runner_python.prompt",
-      "architecture_registry_python.prompt"
+      "durable_sync_runner_python.prompt"
     ],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",

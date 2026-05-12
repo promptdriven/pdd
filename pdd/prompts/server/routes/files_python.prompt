@@ -117,11 +117,11 @@
   </fastapi_example>
    Use models from pdd/server/models.py: FileMetadata, FileTreeNode, FileContent, WriteFileRequest, WriteResult
   <models_note>
-  <server.models><!-- Invalid selector for context/server/models_example.py: Class 'FileMetadata' not found in source --></server.models>
+  <server.models><include>context/server/models_example.py</include></server.models>
   </models_note>
   <security_note>
   Use PathValidator from pdd/server/security.py via dependency injection
-   <server.security><!-- Invalid selector for context/server/security_example.py: Class 'PathValidator' not found in source --></server.security>
+   <server.security><include>context/server/security_example.py</include></server.security>
   </security_note>
 
 % Instructions

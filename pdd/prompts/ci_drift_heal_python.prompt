@@ -91,10 +91,10 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 % Dependencies
 <pdd.sync_determine_operation>
-    <include select="def:main">context/sync_determine_operation_example.py</include>
+    <include>context/sync_determine_operation_example.py</include>
 </pdd.sync_determine_operation>
 <pdd.operation_log>
-    <!-- Invalid selector for context/operation_log_example.py: Function 'main' not found in source -->
+    <include>context/operation_log_example.py</include>
 </pdd.operation_log>
 <pdd.agentic_sync_runner>
     <include select="def:main">context/agentic_sync_runner_example.py</include>

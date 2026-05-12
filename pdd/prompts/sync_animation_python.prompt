@@ -25,7 +25,7 @@
 
 % The branding document has the Prompt Driven logo you will use for animation and specifies the colors to use:
 <branding>
-    <!-- Missing: ../docs/branding.md -->
+    <include>../docs/branding.md</include>
 </branding>
 
 % Here is how to use the internal modules:

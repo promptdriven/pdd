@@ -33,8 +33,8 @@
      - Cleanup by creating RemoteSessionManager instance with session_id set, then call deregister()
 
 % Dependencies
-  <pdd.core.cloud><!-- Invalid selector for context/core/cloud_example.py: Class 'CloudConfig' not found in source --></pdd.core.cloud>
-  <pdd.remote_session><!-- Invalid selector for context/remote_session_example.py: Class 'RemoteSessionManager' not found in source --></pdd.remote_session>
+  <pdd.core.cloud><include>context/core/cloud_example.py</include></pdd.core.cloud>
+  <pdd.remote_session><include>context/remote_session_example.py</include></pdd.remote_session>
 
 % Technical Constraints
   - Use asyncio.run() to call async methods from sync CLI commands

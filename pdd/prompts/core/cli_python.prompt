@@ -70,10 +70,10 @@
   <pdd.core.track_cost>
     <include>context/track_cost_example.py</include>
   </pdd.core.track_cost>
-  <pdd.core.cli><!-- Invalid selector for context/core/cli_example.py: Class 'PDDCLI' not found in source --></pdd.core.cli>
-  <pdd.core.dump><!-- Invalid selector for context/core/dump_example.py: Function '_write_core_dump' not found in source --></pdd.core.dump>
-  <pdd.core.errors><!-- Invalid selector for context/core/errors_example.py: Function 'handle_error' not found in source --></pdd.core.errors>
-  <pdd.core.utils><!-- Invalid selector for context/core/utils_example.py: Function 'get_local_pdd_path' not found in source --></pdd.core.utils>
+  <pdd.core.cli><include select="class:PDDCLI,def:cli,def:process_commands">context/core/cli_example.py</include></pdd.core.cli>
+  <pdd.core.dump><include select="def:_write_core_dump,def:garbage_collect_core_dumps,def:clear_core_dump_errors">context/core/dump_example.py</include></pdd.core.dump>
+  <pdd.core.errors><include select="def:handle_error">context/core/errors_example.py</include></pdd.core.errors>
+  <pdd.core.utils><include select="def:get_local_pdd_path,def:_should_show_onboarding_reminder,def:list_available_contexts">context/core/utils_example.py</include></pdd.core.utils>
   <pdd.agentic_common>
     <include query="logic for _run_with_provider and PDD_REASONING_EFFORT or reasoning time to effort level mapping">context/agentic_common_example.py</include>
   </pdd.agentic_common>

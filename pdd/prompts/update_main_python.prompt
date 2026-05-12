@@ -75,10 +75,10 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
   <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
   <git_update_example><include>context/git_update_example.py</include></git_update_example>
   <agentic_common_example><include select="def:example_run_agentic_task,def:example_provider_preference">context/agentic_common_example.py</include></agentic_common_example>
-  <sync_determine_operation_example><!-- Invalid selector for context/sync_determine_operation_example.py: Function 'example_determine_operation' not found in source --></sync_determine_operation_example>
-  <architecture_sync_example><!-- Invalid selector for context/architecture_sync_example.py: Function 'example_find_architecture_for_project' not found in source --></architecture_sync_example>
-  <operation_log_example><!-- Invalid selector for context/operation_log_example.py: Function 'example_save_fingerprint' not found in source --></operation_log_example>
-  <template_expander_example><!-- Missing: context/template_expander_example.py --></template_expander_example>
+  <sync_determine_operation_example><include select="def:example_determine_operation">context/sync_determine_operation_example.py</include></sync_determine_operation_example>
+  <architecture_sync_example><include select="def:example_update_single_prompt,def:example_get_entry,def:example_sync_all,def:example_find_architecture_for_project,def:example_update_architecture_from_prompt">context/architecture_sync_example.py</include></architecture_sync_example>
+  <operation_log_example><include select="def:example_save_fingerprint,def:example_infer_module_identity">context/operation_log_example.py</include></operation_log_example>
+  <template_expander_example><include>context/template_expander_example.py</include></template_expander_example>
   <validate_prompt_includes><include select="def:sanitize_prompt_output">pdd/validate_prompt_includes.py</include></validate_prompt_includes>
   <pdd.agentic_update><include select="def:example_no_agents_available,def:example_successful_update,def:example_agent_runs_but_no_change,def:example_missing_input_files">context/agentic_update_example.py</include></pdd.agentic_update>
 <pdd.api_key_scanner>

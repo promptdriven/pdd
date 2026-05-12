@@ -26,7 +26,7 @@ Durable execution engine for `pdd sync <github issue url> --durable`. It must pr
 % Dependencies
 <pdd.agentic_sync_runner>
     Use `AsyncSyncRunner`, `ModuleState`, `_find_pdd_executable`, and shared progress-comment behavior from `pdd/agentic_sync_runner.py` where appropriate.
-    <!-- Invalid selector for context/agentic_sync_runner_example.py: Class 'AsyncSyncRunner' not found in source -->
+    <include select="class:AsyncSyncRunner,class:ModuleState,def:_find_pdd_executable">context/agentic_sync_runner_example.py</include>
 </pdd.agentic_sync_runner>
 <pdd.sync_order><include select="def:topological_sort">context/sync_order_example.py</include></pdd.sync_order>
 <pdd.agentic_sync>

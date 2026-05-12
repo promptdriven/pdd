@@ -2,11 +2,6 @@
 
 <include>context/python_preamble.prompt</include>
 
-% Dependencies
-<change.14.initial_change>
-    <include>context/change/14/initial_change.py</include>
-</change.14.initial_change>
-
 % Here are the inputs and outputs of the function:
     Inputs: 
         'csv_file' - A string containing the path to the csv file.

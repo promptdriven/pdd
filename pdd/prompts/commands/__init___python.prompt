@@ -5,11 +5,6 @@
 
 <include>context/python_preamble.prompt</include>
 
-% Dependencies
-<pdd.commands.__init__>
-    <include>context/__init__example.py</include>
-</pdd.commands.__init__>
-
 % Requirements
   - Import all command functions and groups from the sibling modules in `pdd/commands/`.
   - Define a `register_commands(cli: click.Group) -> None` function.

@@ -84,7 +84,7 @@
   </auth_service_note>
   <get_jwt_token_note>
   Use DeviceFlow, FirebaseAuthenticator, and exceptions from pdd/get_jwt_token.py:
-   <!-- Invalid selector for context/get_jwt_token_example.py: Class 'DeviceFlow' not found in source -->
+   <include select="class:DeviceFlow,class:FirebaseAuthenticator,class:AuthError,class:NetworkError,class:TokenError,class:UserCancelledError">context/get_jwt_token_example.py</include>
   </get_jwt_token_note>
 
 % Instructions
