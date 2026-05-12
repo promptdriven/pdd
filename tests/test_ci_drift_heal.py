@@ -437,6 +437,27 @@ class TestDetectDriftWithDiffBase:
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 0
 
+    def test_auto_deps_with_only_review_artifacts_changed_is_not_drift(self):
+        """Example/test-only changes should not trigger clean-CI auto-deps."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"api": decision})
+        changed_files = {"context/api_example.py", "tests/test_api.py"}
+        mock_paths = {
+            "code": Path("pdd/api.py"),
+            "prompt": Path("prompts/api_python.prompt"),
+            "example": Path("context/api_example.py"),
+        }
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["api"], diff_base="origin/main...HEAD")
+
+        assert len(prompt_drifts) == 0
+        assert len(example_drifts) == 0
+
     def test_phantom_crash_on_untouched_module_is_filtered(self):
         """Phantom 'no run_report' crash on a module whose code/prompt did
         NOT change in the PR is silently dropped — the fingerprint already
