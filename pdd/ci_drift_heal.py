@@ -351,22 +351,6 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
         if decision.operation in ("nothing", "all_synced", "error"):
             continue
 
-        # Filter phantom crash drift here (not at heal_module dispatch).
-        # sync_determine_operation flags any module whose fingerprint exists
-        # but whose ephemeral run_report does not as ``operation='crash'`` with
-        # reason ``All files exist but needs validation - no run_report``. Run
-        # reports are not committed to git, so every CI build hits this for
-        # every untouched module pulled in by reverse-dep detection. Skipping
-        # at detect_drift (rather than returning ``None`` from heal_module)
-        # keeps the phantom module off the drift list entirely — otherwise the
-        # main loop counts it as a "skipped module" and PR-mode auto-heal
-        # blocks the commit phase, leaving the real healed modules
-        # uncommitted.
-        if decision.operation == "crash" and getattr(
-            decision, "reason", ""
-        ).startswith("All files exist but needs validation - no run_report"):
-            continue
-
         # Resolve code file path for update operations
         code_path = None
         if decision.operation == "update":
@@ -398,7 +382,49 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 code_changed = bool(code_file_paths & git_changed)
                 prompt_changed = bool(prompt_file_paths & git_changed)
 
-                if code_changed and prompt_changed and decision.operation in {"auto-deps", "generate"}:
+                # Phantom-crash filter: sync_determine_operation flags any
+                # module whose fingerprint exists but whose ephemeral
+                # run_report does not as ``operation='crash'`` with reason
+                # ``All files exist but needs validation - no run_report``.
+                # Run reports are not committed to git, so every CI build
+                # hits this for every module pulled in by reverse-dep
+                # detection. We can only safely drop the drift when the
+                # module itself is genuinely untouched by the PR — otherwise
+                # we would silently drop real drift on a module whose code
+                # or prompt was edited (the PR may have committed an updated
+                # fingerprint without a fresh run_report). When touched,
+                # downgrade the phantom crash to an example refresh instead
+                # of running a full ``pdd sync`` that would time out.
+                phantom_crash = (
+                    decision.operation == "crash"
+                    and getattr(decision, "reason", "").startswith(
+                        "All files exist but needs validation - no run_report"
+                    )
+                )
+                if phantom_crash:
+                    if not code_changed and not prompt_changed:
+                        console.print(
+                            f"[blue]✓ Skipping {basename}: phantom 'no run_report' "
+                            "crash on untouched module (fingerprint attests "
+                            "workflow completion)[/blue]"
+                        )
+                        continue
+                    console.print(
+                        f"[blue]↔ Reclassifying {basename}: phantom 'no "
+                        "run_report' crash on a touched module → example "
+                        "drift[/blue]"
+                    )
+                    decision = type(decision)(
+                        operation="example",
+                        reason=(
+                            "Phantom crash drift on touched module; refresh "
+                            "example instead of full sync"
+                        ),
+                        confidence=getattr(decision, "confidence", 0.85),
+                        estimated_cost=getattr(decision, "estimated_cost", 0.25),
+                        details=getattr(decision, "details", {}),
+                    )
+                elif code_changed and prompt_changed and decision.operation in {"auto-deps", "generate"}:
                     console.print(
                         f"[blue]↔ Reclassifying {basename}: code and prompt "
                         "changed together → example drift[/blue]"
