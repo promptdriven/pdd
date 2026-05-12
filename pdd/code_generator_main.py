@@ -735,7 +735,18 @@ def _verify_pdd_interface_signatures(
     if not missing_params and not missing_funcs and not drifted:
         return
 
-    drifted_dotted = [f"{func}.{param}" for func, param, *_ in drifted]
+    # Dedup drift-dotted entries: one parameter can hit both annotation and
+    # default drift in the same call, but ``missing_symbols`` should list the
+    # canonical dotted symbol once (the per-kind detail lives in the message
+    # and directive, not in the symbol set).
+    seen: set = set()
+    drifted_dotted: List[str] = []
+    for func, param, *_ in drifted:
+        dotted = f"{func}.{param}"
+        if dotted in seen:
+            continue
+        seen.add(dotted)
+        drifted_dotted.append(dotted)
     missing: List[str] = missing_funcs + missing_params + drifted_dotted
     output_display = output_path or "<unknown>"
     # Emit each failure category in a distinct sentence so the subprocess
