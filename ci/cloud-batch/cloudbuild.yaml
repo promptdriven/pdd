@@ -30,8 +30,8 @@ steps:
       - '${_AR_IMAGE}:$BUILD_ID'
       - '-c'
       - >
-        import pytest_timeout, pytest_xdist, pytest_mock,
-               pytest_asyncio, pytest_cov, pytest_testmon;
+        import pytest_timeout, xdist, pytest_mock,
+               pytest_asyncio, pytest_cov, testmon;
         print("image pytest-plugin contract OK")
   # Only republish :latest after the candidate image clears the plugin
   # contract. Failure above leaves the candidate tag behind for forensic
