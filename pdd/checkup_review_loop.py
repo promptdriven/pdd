@@ -141,6 +141,32 @@ _SECRET_SCRUB_PATTERNS: Tuple[re.Pattern[str], ...] = (
     re.compile(r"Authorization\s*:\s*[^\r\n]+", re.IGNORECASE),
     # Anthropic-style keys.
     re.compile(r"\bclaude[_-]?api[_-]?key[\"'\s:=]+[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
+    # Generic ``<PROVIDER>_API_KEY`` / ``<PROVIDER>_API_TOKEN`` envvar
+    # assignment lines. Reviewer subprocesses routinely dump their
+    # config when they crash, exposing keys for every supported
+    # provider (Anthropic, OpenAI, Gemini/Google, xAI, Groq, Mistral,
+    # DeepSeek, Cohere, Perplexity, OpenRouter, Azure, Fireworks,
+    # TogetherAI, Moonshot, …). Match the envvar name + ``=`` or
+    # ``:`` separator + the rest of the line; the surrounding line
+    # context (provider name, ``fatal: …``) still renders.
+    re.compile(
+        r"\b[A-Z][A-Z0-9_]*_(?:API_KEY|API_TOKEN|SECRET|TOKEN)\s*[:=]\s*[^\r\n]+",
+        re.IGNORECASE,
+    ),
+    # Bare Google / Firebase / Gemini API keys: ``AIza`` + 35 chars
+    # of base64url alphabet. These appear in ``litellm`` provider
+    # error tails even without the ``GEMINI_API_KEY=`` envvar prefix,
+    # so the generic envvar pattern above is not enough.
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+    # xAI bare tokens (``xai-…``).
+    re.compile(r"\bxai-[A-Za-z0-9]{20,}\b", re.IGNORECASE),
+    # Groq bare tokens (``gsk_…``).
+    re.compile(r"\bgsk_[A-Za-z0-9]{20,}\b"),
+    # AWS access key IDs (``AKIA…`` / ``ASIA…`` / ``ABIA…``); litellm
+    # / Bedrock error trails sometimes echo them.
+    re.compile(r"\b(?:AKIA|ASIA|ABIA)[A-Z0-9]{16}\b"),
+    # Slack tokens — diagnostics tools occasionally include them.
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
 )
 
 
