@@ -894,12 +894,17 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
     function/method signature raises a hard failure. Variadic `*args` and
     `**kwargs` in the generated code do **not** satisfy a declared named
     parameter.
-  - **Annotation / default drift**: when both the prompt and the generated
-    code annotate a parameter with a type or specify a default, and the
-    canonical sources differ (`bool = False` vs `str = True`), the gate
-    raises a hard failure. When only one side declares the annotation or
-    default, the gate stays quiet — gradually-typed code is allowed to
-    catch up.
+  - **Annotation drift (conservative)**: when both the prompt and the
+    generated code annotate a parameter with a type and the canonical
+    sources differ (e.g. `bool` vs `str`), the gate raises. When only one
+    side declares the annotation, the gate stays quiet — gradually-typed
+    code is allowed to catch up.
+  - **Default drift (strict)**: when the prompt declares a default
+    (e.g. `sync_metadata=False`) and the generated code either omits the
+    default OR specifies a different value, the gate raises. A missing
+    default is a runtime contract break — callers that omit the kwarg
+    would fail with `TypeError`, so this case is checked strictly rather
+    than treated as gradual typing.
   - **Repair loop**: `pdd sync` / `agentic_sync_runner` retry up to
     `MAX_CONFORMANCE_ATTEMPTS` with a per-shape repair directive that names
     the function to fix and the parameters/annotations to add or update.

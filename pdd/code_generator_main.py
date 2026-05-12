@@ -664,11 +664,16 @@ def _verify_pdd_interface_signatures(
 
     missing_params: List[str] = []
     missing_funcs: List[str] = []
-    # Annotation/default drift: declared signature explicitly specifies a type
-    # or default value AND the generated code's matching parameter explicitly
-    # specifies a different one. Conservative: we only raise when BOTH sides
-    # specify the value so that gradually-typed code (adding annotations later
-    # without changing the prompt) does not generate spurious failures.
+    # Signature drift detection:
+    # * Annotations are checked conservatively — only raise when BOTH sides
+    #   specify the annotation and the canonical sources differ. Adding an
+    #   annotation later (gradual typing) should not churn the gate.
+    # * Defaults are checked strictly — defaults are runtime signature
+    #   behavior, not static metadata. A prompt declaring
+    #   ``sync_metadata=False`` advertises that callers may omit the kwarg;
+    #   generated code lacking the default breaks those callers with
+    #   ``TypeError`` at runtime, so a missing default raises drift even
+    #   if the annotation is intact.
     drifted: List[Tuple[str, str, str, str, str]] = []  # (func, param, kind, declared, actual)
     declared_expected: List[str] = []
     found_in_code: List[str] = []
@@ -703,14 +708,29 @@ def _verify_pdd_interface_signatures(
                 drifted.append(
                     (func_name, declared_name, "annotation", declared_ann, actual_ann)
                 )
-            if (
-                declared_default
-                and actual_default
-                and declared_default != actual_default
-            ):
-                drifted.append(
-                    (func_name, declared_name, "default", declared_default, actual_default)
-                )
+            if declared_default is not None:
+                if actual_default is None:
+                    # Prompt declared a default; generated code dropped it.
+                    # Callers relying on the optional kwarg would now break.
+                    drifted.append(
+                        (
+                            func_name,
+                            declared_name,
+                            "default",
+                            declared_default,
+                            "<no default>",
+                        )
+                    )
+                elif declared_default != actual_default:
+                    drifted.append(
+                        (
+                            func_name,
+                            declared_name,
+                            "default",
+                            declared_default,
+                            actual_default,
+                        )
+                    )
 
     if not missing_params and not missing_funcs and not drifted:
         return
