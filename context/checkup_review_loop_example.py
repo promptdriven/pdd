@@ -78,6 +78,22 @@ class ReviewLoopConfig:
     reasoning_time: Optional[float] = None
     blocking_severities: Tuple[str, ...] = ("blocker", "critical", "medium")
     clean_reviewer_states: Tuple[str, ...] = ("clean",)
+    # APPENDED — when the primary reviewer ends in ``failed`` or
+    # ``missing`` (NOT ``degraded`` — that means reduced quality,
+    # don't silently lose signal), run a second review pass using the
+    # fixer's identity as a fallback reviewer. The fallback's result
+    # is recorded as a real reviewer row so the cloud verdict adapter
+    # sees a clean real-reviewer entry rather than the legacy
+    # ``fixer`` sentinel. The primary's original failure is preserved
+    # in ``ReviewLoopState.reviewer_status_details`` with a
+    # ``superseded_by_fallback="true"`` marker so the Reviewer
+    # Diagnostics block in the rendered report still shows what
+    # failed. MUST stay at the end of the field list so positional
+    # callers (e.g., ``ReviewLoopConfig(reviewers, reviewer, fixer, …,
+    # clean_reviewer_states)``) keep working unchanged — this contract
+    # example mirrors the live dataclass at
+    # ``pdd/checkup_review_loop.py``. Off by default.
+    fallback_reviewer_on_failure: bool = False
 
 
 @dataclass
@@ -109,6 +125,7 @@ class ReviewLoopState:
     reviewer_status: Dict[str, str] = field(default_factory=dict)
     active_reviewer: Optional[str] = None
     findings_by_key: Dict[str, ReviewFinding] = field(default_factory=dict)
+    raw_outputs: List[Tuple[str, str]] = field(default_factory=list)
     fixes: List[FixResult] = field(default_factory=list)
     stop_reason: str = ""
     issue_aligned: Optional[bool] = None
@@ -119,6 +136,7 @@ class ReviewLoopState:
     fix_attempts_by_key: Dict[str, int] = field(default_factory=dict)
     dispute_notes_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_feedback_by_key: Dict[str, str] = field(default_factory=dict)
+    reviewer_status_details: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -226,9 +244,28 @@ EXAMPLE_FIX_RESULT_PAYLOAD: Dict[str, object] = {
 EXAMPLE_DEDUP_STATE_PAYLOAD: List[Dict[str, str]] = [EXAMPLE_NORMALIZED_FINDING]
 
 
+EXAMPLE_REVIEWER_STATUS_DETAILS: Dict[str, Dict[str, str]] = {
+    "codex": {
+        "classification": "auth",
+        "exit_code": "1",
+        "reason": "Error: authentication failed",
+        "status": "failed",
+        "superseded_by_fallback": "true",
+        "fallback_reviewer": "claude",
+        "original_status": "failed",
+    }
+}
+
+
 EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "reviewer_status": {"codex": "clean", "claude": "fixer"},
     "active_reviewer": "codex",
+    # Always present in ``final-state.json``. Empty on the happy path;
+    # populated for any reviewer that ended in failed/degraded/missing
+    # (see ``EXAMPLE_REVIEWER_STATUS_DETAILS`` above for the shape,
+    # including the ``superseded_by_fallback`` marker that
+    # ``--fallback-reviewer-on-failure`` writes).
+    "reviewer_status_details": {},
     "fresh_final_status": "clean",
     "stop_reason": "Primary reviewer is satisfied after reviewing the fixer response.",
     "total_cost": 1.23,
