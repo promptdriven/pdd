@@ -422,21 +422,49 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                             "workflow completion)[/blue]"
                         )
                         continue
-                    console.print(
-                        f"[blue]↔ Reclassifying {basename}: phantom 'no "
-                        "run_report' crash on a touched module → example "
-                        "drift[/blue]"
-                    )
-                    decision = type(decision)(
-                        operation="example",
-                        reason=(
-                            "Phantom crash drift on touched module; refresh "
-                            "example instead of full sync"
-                        ),
-                        confidence=getattr(decision, "confidence", 0.85),
-                        estimated_cost=getattr(decision, "estimated_cost", 0.25),
-                        details=getattr(decision, "details", {}),
-                    )
+                    if code_changed and not prompt_changed:
+                        # Code-only change: prompt is stale relative to code,
+                        # so the right heal is `pdd update`, not example
+                        # refresh. Forcing `example` here would (with
+                        # PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT=1) skip the
+                        # existing example and exit successfully without ever
+                        # running pdd update, leaving the prompt stale.
+                        console.print(
+                            f"[blue]↑ Reclassifying {basename}: phantom 'no "
+                            "run_report' crash with code-only change → prompt "
+                            "(update) drift[/blue]"
+                        )
+                        code_path = (
+                            str(code_file_abs)
+                            if code_file_abs
+                            else next(iter(code_file_paths), "")
+                        )
+                        decision = type(decision)(
+                            operation="update",
+                            reason="Code changed but prompt unchanged (git-based detection)",
+                            confidence=getattr(decision, "confidence", 0.85),
+                            estimated_cost=getattr(decision, "estimated_cost", 0.25),
+                            details=getattr(decision, "details", {}),
+                        )
+                    else:
+                        # code+prompt changed, or prompt-only changed: example
+                        # refresh is the right heal — full pdd sync would
+                        # time out on an already-reviewed module.
+                        console.print(
+                            f"[blue]↔ Reclassifying {basename}: phantom 'no "
+                            "run_report' crash on a touched module → example "
+                            "drift[/blue]"
+                        )
+                        decision = type(decision)(
+                            operation="example",
+                            reason=(
+                                "Phantom crash drift on touched module; refresh "
+                                "example instead of full sync"
+                            ),
+                            confidence=getattr(decision, "confidence", 0.85),
+                            estimated_cost=getattr(decision, "estimated_cost", 0.25),
+                            details=getattr(decision, "details", {}),
+                        )
                 elif code_changed and prompt_changed and decision.operation in {"auto-deps", "generate"}:
                     console.print(
                         f"[blue]↔ Reclassifying {basename}: code and prompt "
