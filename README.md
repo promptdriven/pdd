@@ -1082,6 +1082,8 @@ Options:
 
 The command prints updated prompt entries and validation errors or warnings. It exits non-zero when validation fails, even if it was able to write requested metadata updates before validation.
 
+> Note: Validation is repo-wide and runs even when you target a single prompt. If your `architecture.json` already has unrelated missing-dependency errors elsewhere, the exit code stays non-zero on `--dry-run` even for an otherwise-clean target prompt. Fix the repo-wide errors (or scope your check) before relying on the exit code in scripts.
+
 ### 2. generate
 
 Create runnable code from a prompt file. This command produces the full implementation code that fulfills all requirements in the prompt. When changes are detected between the current prompt and its last committed version, it can automatically perform incremental updates rather than full regeneration.
