@@ -3030,6 +3030,66 @@ def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     assert "boom" in out
 
 
+@pytest.mark.parametrize("programming_error", [TypeError, AttributeError, NameError])
+def test_run_single_file_metadata_sync_propagates_programming_errors_unwrapped(
+    programming_error,
+    tmp_path,
+):
+    """Issue #936 regression: the metadata-sync helper must NOT swallow
+    programming errors.
+
+    `_run_single_file_metadata_sync` narrows its except clause to
+    `(RuntimeError, OSError, ValueError, ImportError)`. TypeError,
+    AttributeError, and NameError must propagate unchanged so a future
+    signature mistake or typo inside the orchestrator surfaces as a crash
+    and a non-zero exit, not a logged-and-swallowed line that lets `pdd
+    update` print success and exit 0.
+    """
+    from pdd.update_main import _run_single_file_metadata_sync
+
+    prompt_path = tmp_path / "demo.prompt"
+    code_path = tmp_path / "demo.py"
+    prompt_path.write_text("% demo\n", encoding="utf-8")
+    code_path.write_text("def foo(): pass\n", encoding="utf-8")
+
+    boom = programming_error("simulated programming bug")
+    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=boom):
+        with pytest.raises(programming_error):
+            _run_single_file_metadata_sync(prompt_path, code_path)
+
+
+@pytest.mark.parametrize(
+    "swallowed_error",
+    [RuntimeError, OSError, ValueError, ImportError],
+)
+def test_run_single_file_metadata_sync_still_catches_runtime_io_errors(
+    swallowed_error,
+    tmp_path,
+    capsys,
+):
+    """Issue #936: the narrowed except clause must still catch
+    RuntimeError / OSError / ValueError / ImportError — these represent
+    runtime/IO/configuration failures and the helper logs them and returns
+    False so the caller can raise click.exceptions.Exit(1).
+    """
+    from pdd.update_main import _run_single_file_metadata_sync
+
+    prompt_path = tmp_path / "demo.prompt"
+    code_path = tmp_path / "demo.py"
+    prompt_path.write_text("% demo\n", encoding="utf-8")
+    code_path.write_text("def foo(): pass\n", encoding="utf-8")
+
+    boom = swallowed_error("simulated runtime failure")
+    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=boom):
+        result = _run_single_file_metadata_sync(prompt_path, code_path)
+
+    assert result is False
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "orchestrator" in out
+    assert "simulated runtime failure" in out
+
+
 def test_sync_metadata_failed_stage_propagates_failure(
     mock_ctx,
     minimal_input_files,

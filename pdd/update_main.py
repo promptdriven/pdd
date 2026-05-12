@@ -1019,7 +1019,12 @@ def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
             code_path=code_path,
             dry_run=False,
         )
-    except Exception as exc:
+    except (RuntimeError, OSError, ValueError, ImportError) as exc:
+        # Issue #936: narrowed to runtime/IO/config failures. Programming
+        # errors (TypeError, AttributeError, NameError) must propagate so a
+        # future signature mistake or typo inside the orchestrator surfaces
+        # as a crash and a non-zero exit, not a logged-and-swallowed line
+        # that lets `pdd update` print success and exit 0.
         rprint(f"[error][metadata-sync] orchestrator: {exc}[/error]")
         return False
     if not sync_result.ok:
