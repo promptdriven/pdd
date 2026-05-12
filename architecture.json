@@ -7956,8 +7956,6 @@
       "user_story_tests_python.prompt",
       "agentic_common_python.prompt",
       "auto_include_python.prompt",
-      "agentic_langtest_python.prompt",
-      "architecture_sync_python.prompt",
       "metadata_sync_python.prompt"
     ],
     "priority": 80,
