@@ -85,6 +85,70 @@ def test_reverse_dep_detects_recursive_nested_include(monkeypatch):
     assert "core/cloud" in result
 
 
+def test_reverse_dep_respects_selected_function_changes(tmp_path, monkeypatch):
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "prompts"
+    context_dir = tmp_path / "context"
+    prompt_dir.mkdir()
+    context_dir.mkdir()
+
+    (prompt_dir / "old_consumer_python.prompt").write_text(
+        '<include select="def:old_func">context/shared_example.py</include>',
+        encoding="utf-8",
+    )
+    (prompt_dir / "new_consumer_python.prompt").write_text(
+        '<include select="def:new_func">context/shared_example.py</include>',
+        encoding="utf-8",
+    )
+    (context_dir / "shared_example.py").write_text(
+        "def old_func():\n    return 'old'\n\n"
+        "def new_func():\n    return 'new'\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        module,
+        "_changed_python_defs",
+        lambda path, diff_base: {"new_func"}
+        if path == "context/shared_example.py"
+        else None,
+    )
+
+    result = module._reverse_dep_basenames(
+        ["context/shared_example.py"], diff_base="origin/main...HEAD"
+    )
+
+    assert "new_consumer" in result
+    assert "old_consumer" not in result
+
+
+def test_reverse_dep_without_diff_base_keeps_conservative_matching(
+    tmp_path, monkeypatch
+):
+    module = _load_module()
+    monkeypatch.chdir(tmp_path)
+
+    prompt_dir = tmp_path / "prompts"
+    context_dir = tmp_path / "context"
+    prompt_dir.mkdir()
+    context_dir.mkdir()
+
+    (prompt_dir / "old_consumer_python.prompt").write_text(
+        '<include select="def:old_func">context/shared_example.py</include>',
+        encoding="utf-8",
+    )
+    (context_dir / "shared_example.py").write_text(
+        "def old_func():\n    return 'old'\n",
+        encoding="utf-8",
+    )
+
+    result = module._reverse_dep_basenames(["context/shared_example.py"])
+
+    assert "old_consumer" in result
+
+
 def test_reverse_dep_detects_include_many(monkeypatch):
     module = _load_module()
     monkeypatch.chdir(_repo_root())
