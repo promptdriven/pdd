@@ -121,12 +121,18 @@ HARD_NOT_CLEAN_STATES: frozenset[str] = frozenset({"failed", "degraded", "missin
 _SECRET_SCRUB_PATTERNS: Tuple[re.Pattern[str], ...] = (
     # OpenAI-style API keys (sk-..., sk-proj-..., sk-ant-..., etc.)
     re.compile(r"sk-(?:proj-|ant-|[A-Za-z0-9_-]{0,32})?[A-Za-z0-9_-]{12,}"),
-    # GitHub personal access tokens and OAuth tokens.
+    # GitHub personal access tokens and OAuth tokens. ``ghp_/gho_/
+    # ghu_/ghs_/ghr_`` are classic / OAuth / user / server / refresh
+    # token prefixes; ``github_pat_`` is the fine-grained PAT prefix
+    # GitHub documents at
+    # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-authentication-to-github
+    # — leaving it out leaks fine-grained PATs into public comments.
     re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bgho_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bghu_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bghs_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bghr_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
     # Bearer tokens — must cover the full base64/JWT alphabet (``+``, ``/``,
     # ``=`` are legal). The prior ``[A-Za-z0-9._-]+`` would only redact the
     # leading run before ``+`` or ``/`` and leak the rest into the public
