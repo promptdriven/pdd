@@ -14,6 +14,7 @@
 <pdd-dependency>construct_paths_python.prompt</pdd-dependency>
 <pdd-dependency>insert_includes_python.prompt</pdd-dependency>
 <pdd-dependency>validate_prompt_includes_python.prompt</pdd-dependency>
+<pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `auto_deps_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `auto-deps` command.
 
@@ -80,6 +81,21 @@
     - Error handling:
         • On `click.Abort` exception: re-raise to allow the orchestrator to stop the sync loop.
         • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
+    - Metadata finalization (after a successful run, before returning the success tuple):
+        • The goal is that a successful `pdd auto-deps` leaves `.pdd/meta/*` (fingerprint and include-dependency state) in sync with the mutated prompt, so a subsequent `pdd sync` can trust its starting state.
+        • Determine whether the prompt was actually mutated and persisted. The prompt is considered "mutated" when an `output_path` was resolved AND `modified_prompt` was written to disk. Track this as a boolean (e.g., `prompt_was_mutated`).
+        • When `prompt_was_mutated` is True, import `run_metadata_sync` from `pdd.metadata_sync` and call it on the mutated prompt path:
+              `run_metadata_sync(prompt_path=Path(output_path), code_path=None, dry_run=False)`
+          The `code_path` is None because `auto-deps` does not produce code; only prompt + include-dependency + fingerprint state need finalization.
+        • Inspect the returned `MetadataSyncResult`. If `result.ok` is True, the run is considered finalized and no extra log line is required.
+        • If `result.ok` is False, or if `run_metadata_sync` raises, log an explicit single-line message (unless `quiet`) of the exact form:
+              `[metadata-sync] not finalized: <reason>`
+          where `<reason>` is the failing stage name + its `reason` (e.g., `fingerprint: <detail>`), or the orchestrator exception string when the call raised. Use Rich's yellow/warning styling so it surfaces in normal CLI output.
+        • If `prompt_was_mutated` is False (no-op: nothing was written), log exactly one line (unless `quiet`):
+              `[metadata-sync] not finalized: no prompt mutation to persist`
+          This documents the no-op path explicitly rather than leaving stale `.pdd/meta` state silently.
+        • Failure isolation: a metadata-sync failure (whether `result.ok` is False or an exception was raised) MUST NOT change the return value of `auto_deps_main`. The success tuple `(modified_prompt, total_cost, model_name)` is still returned. Metadata finalization is a best-effort side effect — the auto-deps run is still considered successful even if `.pdd/meta` state could not be updated, but the explicit `[metadata-sync] not finalized:` line guarantees the user sees that downstream `pdd sync` may need attention.
+        • Behavior remains language-agnostic and hash-based: `run_metadata_sync` already handles arbitrary languages via the operation log fingerprint helpers; no language-specific branching is added here.
 
 <examples>
    % Here are examples of how to use internal modules:
@@ -99,6 +115,10 @@
       <validate_prompt_includes>
       <include select="def:sanitize_prompt_output">pdd/validate_prompt_includes.py</include>
       </validate_prompt_includes>
+      - Use `run_metadata_sync` from `pdd.metadata_sync` to finalize fingerprint and include-dependency state on the success path. The canonical pattern for a single-prompt finalization is `pdd/update_main.py::_run_single_file_metadata_sync` (call with `code_path=None` for auto-deps because the command does not produce code). Inspect `MetadataSyncResult.ok` and, when False, emit a single `[metadata-sync] not finalized: <stage>: <reason>` warning line; do not let metadata-sync failures change the auto-deps return tuple.
+      <metadata_sync_interface>
+      <include mode="interface">pdd/metadata_sync.py</include>
+      </metadata_sync_interface>
    </internal_example_modules>
 </examples>
 

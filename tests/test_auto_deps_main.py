@@ -492,8 +492,11 @@ def test_auto_deps_default_csv_path_fallback(
     mock_construct_paths,
     mock_ctx,
     tmp_dir,
+    monkeypatch,
 ):
     """When output_file_paths has no 'csv' key, default to 'project_dependencies.csv'."""
+    # Run inside tmp_dir so the default-named CSV write does not pollute the repo.
+    monkeypatch.chdir(tmp_dir)
     output_path = os.path.join(tmp_dir, "output.prompt")
     mock_construct_paths.return_value = (
         {},
@@ -660,8 +663,12 @@ def test_auto_deps_main_updates_architecture_json_after_write(
     mock_construct_paths,
     mock_ctx,
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     """End-to-end through auto_deps_main: written prompt triggers arch merge (real files)."""
+    # Operate from tmp_path so any side-effect writes (e.g. .pdd/meta or
+    # project_dependencies.csv) stay inside the sandbox rather than the repo.
+    monkeypatch.chdir(tmp_path)
     (tmp_path / ".git").mkdir()
     prompts = tmp_path / "prompts"
     prompts.mkdir()
@@ -704,3 +711,88 @@ def test_auto_deps_main_updates_architecture_json_after_write(
     assert row["dependencies"] == ["parent_Python.prompt"]
     assert total_cost == 0.01
     assert model_name == "test-model"
+
+
+# ---------------------------------------------------------------------------
+# 18. Regression: a mutating auto-deps run finalizes fingerprint + include deps
+#     metadata under .pdd/meta. Covers issue #955: prior implementations
+#     silently skipped fingerprint persistence even though the prompt was
+#     mutated and architecture state was updated.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_main_finalizes_fingerprint_and_include_deps(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """End-to-end through auto_deps_main: a mutating write must write a
+    ``.pdd/meta/<basename>_<lang>.json`` fingerprint with ``prompt_hash`` and
+    ``include_deps`` populated. This guards against regressions where the
+    finalization step was either silently skipped (``MetadataSyncResult.ok``
+    returning True for skipped fingerprint stages) or never reached because
+    ``prompt_was_mutated`` was set unconditionally on a no-op write.
+    """
+    # Operate from tmp_path so the .pdd/meta directory is created in the
+    # test sandbox (operation_log.META_DIR is a relative path).
+    monkeypatch.chdir(tmp_path)
+
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    child = prompts / "child_Python.prompt"
+    parent = prompts / "parent_Python.prompt"
+    original_text = "%\n"
+    child.write_text(original_text, encoding="utf-8")
+    parent.write_text("%\n", encoding="utf-8")
+    arch = [
+        {"filename": "child_Python.prompt", "dependencies": []},
+        {"filename": "parent_Python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    output_path = str(child.resolve())
+    csv_path = str(tmp_path / "project_dependencies.csv")
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        output_path, csv_path, prompt_content=original_text
+    )
+    new_text = '%\n<include>./parent_Python.prompt</include>\n'
+    mock_insert_includes.return_value = _make_insert_includes_return(
+        modified_prompt=new_text,
+        csv_output="",
+        cost=0.01,
+        model="test-model",
+    )
+
+    modified_prompt, total_cost, model_name = auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(child),
+        directory_path=str(tmp_path),
+        auto_deps_csv_path=None,
+        output=None,
+        force_scan=False,
+    )
+
+    # Prompt was actually mutated: the write path must produce a fingerprint.
+    # (The on-disk content may be further annotated by the metadata-sync tag
+    # stage, so we only assert the include landed.)
+    assert modified_prompt == new_text
+    assert "<include>./parent_Python.prompt</include>" in child.read_text(
+        encoding="utf-8"
+    )
+
+    fingerprint_path = tmp_path / ".pdd" / "meta" / "child_python.json"
+    assert fingerprint_path.exists(), (
+        "Mutating auto-deps run did not finalize .pdd/meta fingerprint"
+    )
+    fp_data = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+    # Fingerprint must reflect the new prompt content, not be left null/empty.
+    assert fp_data.get("prompt_hash"), "prompt_hash missing after auto-deps finalize"
+    # include_deps must be a dict (issue #522 stores resolved include dependencies).
+    include_deps = fp_data.get("include_deps")
+    assert isinstance(include_deps, dict), (
+        f"include_deps should be a dict after auto-deps finalize, got: {include_deps!r}"
+    )
