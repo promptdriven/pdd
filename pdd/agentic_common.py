@@ -3412,6 +3412,7 @@ _ENV_TOKEN_RE    = re.compile(r"\b(GH_TOKEN|GITHUB_TOKEN)\s*=\s*\S+")
 _BEARER_TOKEN_RE = re.compile(r"(Authorization:\s*Bearer\s+)\S+", re.IGNORECASE)
 
 _COMMENT_MAX_CHARS = 25_000
+_TRUNCATED_MARKER = "\n\n…[truncated]"
 
 
 def _extract_step_report(text: Optional[str]) -> Optional[str]:
@@ -3448,7 +3449,10 @@ def _sanitize_comment_body(
     redacted = _ENV_TOKEN_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", redacted)
     redacted = _BEARER_TOKEN_RE.sub(lambda m: f"{m.group(1)}[REDACTED]", redacted)
     if len(redacted) > max_chars:
-        redacted = redacted[:max_chars] + "\n\n…[truncated]"
+        # Reserve room for the marker so the returned length never exceeds the
+        # caller-supplied cap (codex review of PR #966).
+        keep = max(0, max_chars - len(_TRUNCATED_MARKER))
+        redacted = redacted[:keep] + _TRUNCATED_MARKER
     return redacted
 
 
