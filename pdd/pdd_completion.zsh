@@ -422,6 +422,39 @@ _pdd_sync() {
     '*: :'
 }
 
+# checkup
+# Usage: pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
+# Runs the agentic health checkup workflow or local diagnostics.
+_pdd_checkup() {
+  _arguments -s \
+    $_pdd_global_opts \
+    '--validate-arch-includes[Cross-validate architecture.json against module prompt include tags (local mode)]' \
+    '--project-root=[Project root for --validate-arch-includes]:directory:_files -/' \
+    '--strict[Treat architecture include drift as an error]' \
+    '--no-fix[Report-only mode; do not apply fixes]' \
+    '--timeout-adder=[Additional seconds added to each step timeout]:float' \
+    '--no-github-state[Disable GitHub state persistence]' \
+    '--pr=[Verify an existing pull-request URL]:pr-url' \
+    '--issue=[Source GitHub issue URL paired with --pr]:issue-url' \
+    '--review-loop[Run the primary-reviewer/fixer review loop in PR mode]' \
+    '--review-only[Run only the primary reviewer first pass (requires --review-loop)]' \
+    '--reviewers=[Comma-separated role order (default codex,claude)]:roles' \
+    '--reviewer=[Explicit primary reviewer role]:role' \
+    '--fixer=[Explicit fixer role]:role' \
+    '--max-review-rounds=[Maximum reviewer/fixer rounds (default 5)]:int' \
+    '--max-review-cost=[Maximum review-loop USD cost (default 10.0)]:float' \
+    '--max-review-minutes=[Maximum review-loop wall-clock minutes (default 90.0)]:float' \
+    '--require-all-reviewers-clean[Require every reviewer to end clean (default)]' \
+    '--no-require-all-reviewers-clean[Do not require every reviewer to end clean]' \
+    '--continue-on-reviewer-limit[Report provider/rate/timeout failures as degraded instead of failed]' \
+    '--require-final-fresh-review[Require a final fresh reviewer pass (default)]' \
+    '--no-require-final-fresh-review[Do not require a final fresh reviewer pass]' \
+    '--blocking-severities=[Comma-separated highest-priority severities (default blocker,critical,medium)]:severities' \
+    '--clean-reviewer-states=[Compatibility parser for reviewer-status gates (default clean)]:states' \
+    '--fallback-reviewer-on-failure[Promote the fixer to a fallback reviewer when the primary ends failed/missing (off by default)]' \
+    '1:github-issue-url:'
+}
+
 # setup (no options)
 _pdd_setup() {
   _arguments -s $_pdd_global_opts
