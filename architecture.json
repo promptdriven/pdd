@@ -7555,9 +7555,9 @@
         "artifacts_layout": {
           "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
           "per_round": [
-            "round-{N}-{review|verify}-{role}.prompt.txt",
-            "round-{N}-{review|verify}-{role}.output.txt",
-            "round-{N}-{review|verify}-{role}.findings.json",
+            "round-{N}-{review|verify|fallback}-{role}.prompt.txt",
+            "round-{N}-{review|verify|fallback}-{role}.output.txt",
+            "round-{N}-{review|verify|fallback}-{role}.findings.json",
             "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
             "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
             "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",

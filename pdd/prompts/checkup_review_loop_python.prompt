@@ -113,6 +113,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
     - `round-{N}-{mode}-{role}.prompt.txt` — the exact prompt sent to the role.
     - `round-{N}-{mode}-{role}.output.txt` — the raw LLM output.
     - `round-{N}-{mode}-{role}.findings.json` — `_normalize_findings(...)` output as JSON list (empty list when none parse out). Fix steps write `{"summary": "...", "changed_files": [...], "dispositions": {...}, "rationales": {...}}` JSON instead.
+    - `mode` is one of `review | verify | fix | fallback`. The `fallback` mode is used only by `_maybe_run_fallback_reviewer` when `--fallback-reviewer-on-failure` promotes the fixer's identity to a secondary reviewer; it writes its own slot so the primary's original `round-{N}-review-<primary>.*` artifacts stay untouched and the on-disk audit shows both attempts.
 23. After every reviewer or fixer step completes, write `dedup-state-round-{N}.json` containing the cumulative findings (one per dedup key) with their current `status`, `reviewer`, `round_number`, and full payload. Overwriting at each step is fine; we only need the latest cumulative snapshot per round.
 24. At end of loop write:
     - `final-report.md` — exact bytes returned to the caller.
