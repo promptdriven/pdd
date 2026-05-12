@@ -16,4 +16,3 @@ source "$completion_file"
 
 # After loading, zsh should know the completion function for `pdd`.
 whence -w _pdd >/dev/null
-
