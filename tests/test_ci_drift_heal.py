@@ -2428,7 +2428,43 @@ class TestHealModuleInvokesMetadataSync:
              patch("pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True), \
              patch("pdd.ci_drift_heal._enforce_structural_invariants", return_value=True), \
              patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False), \
-             patch("pdd.ci_drift_heal._revert_prompt_file") as mock_revert:
+             patch("pdd.ci_drift_heal._revert_prompt_file") as mock_revert, \
+             patch("pdd.ci_drift_heal._cleanup_metadata_artifacts") as mock_cleanup:
             result = heal_module(drift, env)
         assert result is False
         assert mock_revert.called, "prompt was not reverted on metadata_sync failure"
+        # Architecture.json + .pdd/meta writes that landed before the
+        # failing stage MUST also be rolled back, otherwise push-to-main
+        # mode's `git add -A` would publish this module's partial
+        # metadata alongside another module's successful heal
+        # (#871 "no half-synced state" guarantee).
+        assert mock_cleanup.called, (
+            "_cleanup_metadata_artifacts must run after a sync failure so "
+            "architecture.json and .pdd/meta writes do not piggyback on "
+            "git add -A"
+        )
+
+    def test_cleanup_metadata_artifacts_restores_architecture_json(self):
+        """Direct test for _cleanup_metadata_artifacts: must invoke
+        `git restore architecture.json` (in addition to the existing
+        .pdd clean + restore), so the architecture-stage write does not
+        survive a later-stage failure.
+        """
+        from pdd.ci_drift_heal import _cleanup_metadata_artifacts
+
+        calls = []
+
+        def _record(argv, **kwargs):
+            calls.append(list(argv))
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=_record), \
+             patch("pdd.ci_drift_heal._repo_root", return_value=Path("/repo")):
+            _cleanup_metadata_artifacts()
+
+        assert ["git", "clean", "-fdq", "--", ".pdd"] in calls
+        assert ["git", "restore", "--", ".pdd"] in calls
+        assert ["git", "restore", "--", "architecture.json"] in calls, (
+            f"architecture.json must be restored on metadata-sync failure; "
+            f"recorded calls: {calls}"
+        )

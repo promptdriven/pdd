@@ -558,29 +558,46 @@ def _revert_prompt_file(drift: DriftInfo) -> None:
 
 
 def _cleanup_metadata_artifacts() -> None:
-    """Best-effort: remove untracked metadata-sync artifacts under ``.pdd/``.
+    """Best-effort: undo metadata-sync side effects after a failed heal.
 
-    Called when a heal fails after ``metadata_sync`` wrote files, so the
-    working tree is left in the same state it was found in.
+    `run_metadata_sync` writes in pipeline order — tags (prompt file),
+    then architecture (`architecture.json`), then run_report (`.pdd/meta`
+    deletions), then fingerprint (`.pdd/meta` writes). The orchestrator's
+    own gates only stop writes from *later* stages once an *earlier*
+    stage fails; a fingerprint-stage failure cannot retroactively
+    un-write the tags or architecture changes that already landed on
+    disk. When the heal then runs `git add -A` (push-to-main mode) those
+    partial writes piggyback on another module's successful push,
+    contradicting the #871 "no half-synced state lands" guarantee.
+
+    Restore protected paths to HEAD so the working tree is back to its
+    pre-heal state for THIS module. The caller is also expected to
+    `_revert_prompt_file(drift)` for the prompt itself.
     """
     repo_root = _repo_root()
-    try:
-        subprocess.run(
-            ["git", "clean", "-fdq", "--", ".pdd"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        subprocess.run(
-            ["git", "restore", "--", ".pdd"],
-            cwd=str(repo_root),
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-    except (subprocess.SubprocessError, FileNotFoundError):
-        pass
+    # `.pdd/` covers fingerprint + run-report state (clean removes any
+    # untracked entries metadata_sync may have created; restore reverts
+    # tracked changes back to HEAD). `architecture.json` is the
+    # architecture-stage write; restore brings it back to HEAD if
+    # tracked. Both calls are best-effort — failure to roll back is
+    # logged but does not raise, because the heal path has already
+    # decided to fail this module and additional exceptions here would
+    # mask the real reason.
+    for argv in (
+        ["git", "clean", "-fdq", "--", ".pdd"],
+        ["git", "restore", "--", ".pdd"],
+        ["git", "restore", "--", "architecture.json"],
+    ):
+        try:
+            subprocess.run(
+                argv,
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+        except (subprocess.SubprocessError, FileNotFoundError):
+            pass
 
 
 # --------------------------------------------------------------------------- #
@@ -934,7 +951,17 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             if not _enforce_structural_invariants(drift):
                 return False
             if not _run_metadata_sync_safe(resolved_prompt, drift.code_path):
+                # Roll back the prompt file (tags-stage write) AND any
+                # architecture.json / .pdd/meta writes that landed before
+                # the failing stage. Without this, push-to-main mode's
+                # `git add -A` (commit_and_push) can publish the failed
+                # module's partial metadata alongside another module's
+                # successful heal — contradicting #871's "no half-synced
+                # state" guarantee. The example-fail branch below already
+                # follows the same revert-prompt + cleanup-artifacts
+                # pattern; mirror it here.
                 _revert_prompt_file(drift)
+                _cleanup_metadata_artifacts()
                 return False
 
         if in_skip_set:
