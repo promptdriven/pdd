@@ -5058,3 +5058,714 @@ class TestArchitectureConformanceErrorTypedException:
         # repair_directive computable from fields.
         assert "- b" in exc.repair_directive
         assert "Do not modify architecture.json. Do not remove existing valid exports." in exc.repair_directive
+
+
+# ---------------------------------------------------------------------------
+# Tests for <pdd-interface> signature conformance (Issue #928)
+# ---------------------------------------------------------------------------
+class TestPddInterfaceSignatureConformance:
+    """Tests for the <pdd-interface> signature conformance check (Issue #928).
+
+    The existing architecture conformance check verifies that declared symbols
+    EXIST in the generated code, but it does not check the function SIGNATURE.
+    This means PDD sync could silently regenerate code that drops a declared
+    keyword argument (e.g. ``sync_metadata=False``) without surfacing the bug.
+
+    These tests cover the new signature check that compares parameter names
+    declared in the prompt's ``<pdd-interface>`` block against the parameter
+    names of the matching ``ast.FunctionDef`` (or ``__init__`` for declared
+    classes) in the generated code.
+    """
+
+    def _write_arch(self, tmp_path, prompt_filename: str) -> str:
+        """Helper: write a minimal architecture.json that matches the prompt."""
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": f"src/{pathlib.Path(prompt_filename).stem}.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            # Declare a single function so the existing
+                            # symbol-existence check passes; the new signature
+                            # check operates on the prompt's <pdd-interface>.
+                            {"name": "update_main", "signature": "def update_main(...)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        return str(arch_path)
+
+    def test_missing_kwarg_in_function_raises_conformance_error(self, tmp_path):
+        """Missing kwarg declared in <pdd-interface> raises ArchitectureConformanceError."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, input, output, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+            '% You are an expert Python engineer.\n'
+        )
+        # Code that declares update_main without the sync_metadata kwarg
+        generated_code = "def update_main(ctx, input, output):\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+
+        exc = excinfo.value
+        assert exc.missing_symbols == ["update_main.sync_metadata"]
+        assert str(exc).startswith(
+            f"Architecture conformance error for {prompt_filename}:"
+        )
+        # Must surface the missing parameter name in the message.
+        assert "sync_metadata" in str(exc)
+
+    def test_cli_command_missing_kwarg_raises(self, tmp_path):
+        """CLI commands declared in <pdd-interface> with missing kwarg raise."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"cli","cli":{"commands":'
+            '[{"name":"update_main","signature":"(ctx, foo, bar, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "def update_main(ctx, foo, bar):\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert excinfo.value.missing_symbols == ["update_main.sync_metadata"]
+
+    def test_present_kwarg_passes(self, tmp_path):
+        """Generated code that includes the declared kwarg passes (no raise)."""
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, input, output, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "def update_main(ctx, input, output, sync_metadata=False):\n"
+            "    return sync_metadata\n"
+        )
+
+        # Should not raise.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_kwargs_variadic_does_not_satisfy_named_param(self, tmp_path):
+        """**kwargs catch-all does NOT satisfy a declared named param."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Variadic kwargs catch-all should NOT satisfy a named kwarg contract.
+        generated_code = "def update_main(ctx, **kwargs):\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "update_main.sync_metadata" in excinfo.value.missing_symbols
+
+    def test_missing_pdd_interface_skips_check(self, tmp_path):
+        """If the prompt has no <pdd-interface> block, the new check is skipped."""
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = "% You are an expert Python engineer. No tags here.\n"
+        # Function exists at top level (existing symbol-existence check passes)
+        # but uses different parameter names than caller would have expected.
+        generated_code = "def update_main(a, b, c):\n    pass\n"
+
+        # Should not raise -- no <pdd-interface> declared, nothing to enforce.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_malformed_pdd_interface_warns_and_skips(self, tmp_path, caplog):
+        """Malformed <pdd-interface> JSON logs a warning and skips the new check."""
+        import logging
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>not valid json at all</pdd-interface>\n'
+            '% Body.\n'
+        )
+        generated_code = "def update_main(ctx):\n    pass\n"
+
+        with caplog.at_level(logging.WARNING, logger="pdd.code_generator_main"):
+            # Must not raise.
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+
+        # Confirm a warning was emitted mentioning the parse error.
+        assert any(
+            "interface" in record.message.lower()
+            and ("parse" in record.message.lower() or "json" in record.message.lower())
+            for record in caplog.records
+            if record.levelno >= logging.WARNING
+        ), f"Expected a warning about pdd-interface parse error, got: {[r.message for r in caplog.records]}"
+
+    def test_extra_kwarg_in_code_does_not_raise(self, tmp_path):
+        """Extra parameters in generated code are allowed; only missing fail."""
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, input)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Generated code has MORE params than declared -- this must be allowed.
+        generated_code = (
+            "def update_main(ctx, input, extra_param=None, sync_metadata=False):\n"
+            "    pass\n"
+        )
+
+        # Should not raise.
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_reuses_architecture_conformance_error_fields(self, tmp_path):
+        """Raised exception has all structured fields populated correctly."""
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, input, output, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "def update_main(ctx, input, output):\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                output_path="src/update_main.py",
+                prompt_content=prompt_content,
+            )
+
+        exc = excinfo.value
+        # Must subclass click.UsageError so existing handlers still work.
+        assert isinstance(exc, click.UsageError)
+        # Structured fields populated.
+        assert exc.prompt_name == prompt_filename
+        assert exc.output_path == "src/update_main.py"
+        assert isinstance(exc.architecture_entry, dict)
+        assert exc.missing_symbols == ["update_main.sync_metadata"]
+        # expected/found symbols carry the declared/actual param names so the
+        # repair loop has the same diagnostic shape as the existing checks.
+        assert "update_main.sync_metadata" in exc.expected_symbols
+        # Repair directive must be a non-empty string with the missing param.
+        directive = exc.repair_directive
+        assert isinstance(directive, str) and directive.strip()
+        assert "sync_metadata" in directive
+        # The directive must NOT instruct removing the declared param from the
+        # prompt -- the prompt is the source of truth.
+        assert "Do not remove the declared parameters from the prompt" in directive
+
+    def test_signature_check_skips_when_function_absent_from_code(self, tmp_path):
+        """When the declared function is missing entirely, the existing
+        symbol-existence check fires; the new signature check must not
+        double-fire or mask that error.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        # Arch declares ``update_main`` as a required symbol; code provides none.
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "def something_else():\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        # The existing symbol-existence check must own this: the missing entry
+        # is the function name itself, not a dotted ``update_main.sync_metadata``.
+        assert "update_main" in excinfo.value.missing_symbols
+        assert "update_main.sync_metadata" not in excinfo.value.missing_symbols
+
+    def test_dotted_class_method_signature_is_checked(self, tmp_path):
+        """``Outer.method`` signatures declared in <pdd-interface> are resolved
+        through the class body, and missing params on the method are reported
+        as dotted ``Outer.method.param`` entries. Issue #928 follow-up: prior
+        to this fix, ``_find_target_function`` only handled bare names so
+        any prompt declaring a method on a class (e.g. ``ContentSelector.select``)
+        was silently skipped.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "content_selector_python.prompt"
+        # Architecture entry declares only the class; the method's signature
+        # contract is owned by the prompt's <pdd-interface>.
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "src/content_selector.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "ContentSelector", "signature": "class ContentSelector"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"ContentSelector.select",'
+            '"signature":"(content, selectors, file_path=None, mode=\\"full\\")"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "class ContentSelector:\n"
+            "    def select(self, content, selectors, file_path=None):\n"
+            "        return content\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert excinfo.value.missing_symbols == ["ContentSelector.select.mode"]
+
+    def test_dotted_method_absent_from_class_is_reported(self, tmp_path):
+        """When the class exists but the declared method is absent, surface
+        the missing method name (``ContentSelector.select``) so the repair
+        loop has something concrete to fix. Without this, prompts whose
+        architecture.json entry does not also enumerate the method would
+        leave the gap uncaught.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "content_selector_python.prompt"
+        # Arch declares only the class (no method) so its symbol check passes.
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "src/content_selector.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "ContentSelector", "signature": "class ContentSelector"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"ContentSelector.select",'
+            '"signature":"(content, selectors)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "class ContentSelector:\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert "ContentSelector.select" in excinfo.value.missing_symbols
+
+    def test_annotation_drift_raises_conformance_error(self, tmp_path):
+        """When the prompt declares ``sync_metadata: bool = False`` and the
+        generated code has ``sync_metadata: str = True``, the new drift check
+        must raise. Issue #928 named this 'type drift' as one of its
+        acceptance cases.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "def update_main(ctx, sync_metadata: str = True):\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        exc = excinfo.value
+        # Drift entries are reported as dotted ``func.param`` in missing_symbols.
+        assert "update_main.sync_metadata" in exc.missing_symbols
+        # Directive must surface the actual drift kind + declared/actual values.
+        assert "annotation" in exc.repair_directive
+        assert "`bool`" in exc.repair_directive
+        assert "`str`" in exc.repair_directive
+        # And default drift in the same parameter on the same call.
+        assert "default" in exc.repair_directive
+        assert "`False`" in exc.repair_directive
+        assert "`True`" in exc.repair_directive
+
+    def test_missing_default_raises_drift_even_when_annotation_present(self, tmp_path):
+        """Defaults are runtime signature behavior, not static metadata. A
+        prompt declaring ``sync_metadata=False`` is advertising that callers
+        may omit the kwarg. Generated code that drops the default would
+        break those callers with TypeError at the call site, so the drift
+        gate MUST fire even though the parameter name is present.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Actual has the param + annotation but is missing the default.
+        generated_code = (
+            "def update_main(ctx, sync_metadata: bool):\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        exc = excinfo.value
+        assert "update_main.sync_metadata" in exc.missing_symbols
+        assert "default" in exc.repair_directive
+        assert "`False`" in exc.repair_directive
+        # The "<no default>" sentinel surfaces in the diagnostic so the
+        # LLM knows what to restore.
+        assert "<no default>" in exc.repair_directive
+
+    def test_missing_symbols_dedups_when_param_hits_multiple_drift_kinds(self, tmp_path):
+        """When a single parameter drifts on BOTH annotation and default,
+        ``missing_symbols`` must list the canonical dotted symbol once.
+        Duplicates leak into the stuck-symbol-set short-circuit comparison
+        and the structured hard-failure block downstream.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Both annotation and default differ from the declared signature.
+        generated_code = (
+            "def update_main(ctx, sync_metadata: str = True):\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        exc = excinfo.value
+        # The same parameter must appear once in missing_symbols even though
+        # two drift tuples were generated (one annotation, one default).
+        assert exc.missing_symbols.count("update_main.sync_metadata") == 1
+        # The repair directive still itemises both drift kinds — the dedup
+        # only affects the canonical symbol set.
+        assert "annotation" in exc.repair_directive
+        assert "default" in exc.repair_directive
+
+    def test_drift_skipped_when_one_side_omits_annotation(self, tmp_path):
+        """Conservative behavior: when only one side declares an annotation,
+        the drift check does not fire. This keeps the gate from churning
+        on gradually-typed code that hasn't caught up to the prompt yet.
+        """
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Same default; actual omits annotation. Must not raise.
+        generated_code = (
+            "def update_main(ctx, sync_metadata=False):\n"
+            "    pass\n"
+        )
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=arch_path,
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_command_interface_type_signature_is_checked(self, tmp_path):
+        """``type: "command"`` interfaces (used by ``pdd/prompts/commands/*``)
+        must participate in the signature check when entries carry a
+        ``signature`` field. Both the multi-command (``commands: [...]``) and
+        single-command (``name`` at top) shapes are supported.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "modify_python.prompt"
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "pdd/commands/modify.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "split", "signature": "def split(...)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"command","command":{"commands":'
+            '[{"name":"split","signature":"(target_file, mode=\'agentic\')"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "def split(target_file):\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        assert excinfo.value.missing_symbols == ["split.mode"]
+
+    def test_command_interface_single_shape_skipped_without_signature(self, tmp_path):
+        """``type: "command"`` entries without a ``signature`` (the common
+        case today — name+description only) must be silent no-ops, same as
+        class-header signatures: they have nothing to check.
+        """
+        prompt_filename = "modify_python.prompt"
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "pdd/commands/modify.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "split", "signature": "def split(...)"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"command","command":{"commands":'
+            '[{"name":"split","description":"do a thing"}]}}'
+            '</pdd-interface>\n'
+        )
+        # No signature → no check → code doesn't need to match anything.
+        generated_code = "def split():\n    pass\n"
+
+        _verify_architecture_conformance(
+            generated_code=generated_code,
+            prompt_name=prompt_filename,
+            arch_path=str(arch_path),
+            language="python",
+            verbose=False,
+            prompt_content=prompt_content,
+        )
+
+    def test_dotted_method_repair_directive_groups_via_rsplit(self, tmp_path):
+        """The repair directive must group ``ContentSelector.select.mode``
+        as ("ContentSelector.select", "mode"), not ("ContentSelector",
+        "select.mode"). The previous ``partition('.')`` implementation
+        misattributed the parameter to the class.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "content_selector_python.prompt"
+        arch = [
+            {
+                "filename": prompt_filename,
+                "filepath": "src/content_selector.py",
+                "interface": {
+                    "type": "module",
+                    "module": {
+                        "functions": [
+                            {"name": "ContentSelector", "signature": "class ContentSelector"},
+                        ]
+                    },
+                },
+            }
+        ]
+        arch_path = tmp_path / "architecture.json"
+        arch_path.write_text(json.dumps(arch))
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"ContentSelector.select",'
+            '"signature":"(content, selectors, file_path=None, mode=\\"full\\")"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = (
+            "class ContentSelector:\n"
+            "    def select(self, content, selectors, file_path=None):\n"
+            "        return content\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        directive = excinfo.value.repair_directive
+        assert "On `ContentSelector.select`" in directive
+        assert "`mode`" in directive
+        # Must not misattribute "select.mode" to ContentSelector.
+        assert "select.mode" not in directive
+        assert "On `ContentSelector`," not in directive
+
+    def test_prompt_only_missing_function_without_architecture_entry(self, tmp_path):
+        """A function declared in <pdd-interface> that is entirely absent from
+        the generated code must be reported, even when architecture.json has
+        no matching entry. Without this, prompt-only declarations slip through
+        because the architecture.json symbol-existence check is a no-op.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "no_arch_module_python.prompt"
+        # No architecture.json at all: arch_path points at a non-existent file
+        # so the existing symbol-existence check returns early (silent).
+        arch_path = tmp_path / "architecture.json"
+        # Intentionally NOT writing the file.
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main","signature":"(ctx, sync_metadata=False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        generated_code = "def something_else():\n    pass\n"
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=str(arch_path),
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        # Missing entry is the bare function name, not a dotted param.
+        assert "update_main" in excinfo.value.missing_symbols
+        assert all("." not in s for s in excinfo.value.missing_symbols if s == "update_main")
