@@ -231,6 +231,12 @@ jobs:
           # touch < 10 files but defense in depth against a runaway PR.
           changed=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
             --jq '.[].filename')
+          # Empty diff is suspicious — fall through rather than auto-pass.
+          if [ -z "$changed" ]; then
+            echo "::warning::release short-circuit aborted: PR has no changed files"
+            echo "Falling through to normal heal pipeline"
+            exit 0
+          fi
           violation=false
           while IFS= read -r f; do
             [ -z "$f" ] && continue
