@@ -87,7 +87,7 @@ python - <<'PY' || {
     write_result "failed" "${SETUP_SECONDS}" "preflight" "missing pytest plugins"
     exit 1
 }
-import pytest_timeout, pytest_xdist, pytest_mock, pytest_asyncio, pytest_cov, pytest_testmon
+import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon
 PY
 
 # Pytest config contract: confirm pyproject.toml [tool.pytest.ini_options]
