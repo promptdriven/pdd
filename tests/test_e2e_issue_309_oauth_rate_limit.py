@@ -52,6 +52,8 @@ class TestAuthLoginSlowDownE2E:
         monkeypatch.setenv("NEXT_PUBLIC_FIREBASE_API_KEY", "test-firebase-key")
         monkeypatch.setenv("GITHUB_CLIENT_ID", "test-github-client-id")
         monkeypatch.setenv("PDD_ENV", "local")
+        monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
+        monkeypatch.delenv("CI", raising=False)
 
         # Mock JWT cache file location
         jwt_cache = tmp_path / ".pdd" / "jwt_cache"

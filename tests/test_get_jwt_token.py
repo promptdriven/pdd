@@ -17,13 +17,20 @@ import pdd._keyring_timeout as keyring_timeout
 
 
 @pytest.fixture(autouse=True)
-def _isolate_pdd_jwt_token_env(monkeypatch):
+def _isolate_auth_env(monkeypatch):
     """Cloud Batch's entrypoint exports PDD_JWT_TOKEN globally for all tasks so
     cloud-regression chunks can authenticate against staging. That same env var
     short-circuits get_jwt_token() at the top of the function, which would bypass
     every per-test mock in this file. Tests that exercise the injection path
-    explicitly call monkeypatch.setenv, which overrides this delenv."""
+    explicitly call monkeypatch.setenv, which overrides this delenv.
+
+    GitHub Actions also exports CI=true. Most tests in this file intentionally
+    mock the interactive device-flow branch, so they must not inherit the
+    production non-interactive guard from the runner environment.
+    """
     monkeypatch.delenv(PDD_JWT_TOKEN_ENV, raising=False)
+    monkeypatch.delenv("PDD_NO_INTERACTIVE", raising=False)
+    monkeypatch.delenv("CI", raising=False)
 
 
 @pytest.mark.asyncio
