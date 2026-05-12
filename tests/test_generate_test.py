@@ -43,7 +43,11 @@ def mock_console():
     return Console()
 
 # Test successful generation
+# Per-test timeouts bound real-LLM calls so a stalled provider produces a fast
+# attributable test failure rather than a chunk-wide timeout (exit 124) that
+# kills hundreds of unrelated tests with it.
 
+@pytest.mark.timeout(180)
 def test_generate_test_successful(valid_inputs):
     result = generate_test(**valid_inputs)
     assert isinstance(result, tuple)
@@ -57,6 +61,7 @@ def test_generate_test_successful(valid_inputs):
 
 # Test verbose output
 
+@pytest.mark.timeout(180)
 def test_generate_test_verbose(valid_inputs):
     valid_inputs['verbose'] = True
     result = generate_test(**valid_inputs)
@@ -100,6 +105,7 @@ def test_generate_test_invalid_template(valid_inputs, monkeypatch):
 
 # Test edge cases
 
+@pytest.mark.timeout(180)
 def test_generate_test_minimum_values(valid_inputs):
     valid_inputs['strength'] = 0.31
     valid_inputs['temperature'] = 0.0
@@ -109,6 +115,7 @@ def test_generate_test_minimum_values(valid_inputs):
 
 
 
+@pytest.mark.timeout(180)
 def test_generate_test_maximum_values(valid_inputs):
     valid_inputs['strength'] = 1.0
     valid_inputs['temperature'] = 1.0
