@@ -3519,7 +3519,7 @@ For detailed command examples for each workflow, see the respective command docu
 
 **Loop prevention**: Commits from auto-heal use `chore: auto-heal [skip ci]` message; the workflow skips runs triggered by this pattern.
 
-**Metadata Finalization**: The auto-heal `update` path invokes the same `run_metadata_sync` orchestrator as `pdd update --sync-metadata` and preflight drift-heal, so prompt tags, architecture entries, run reports, and fingerprint state are always reconciled together. Partial metadata results block the auto-heal checkpoint commit so a PR cannot land a half-synced state.
+**Metadata Finalization**: The auto-heal `update` path invokes the same `run_metadata_sync` orchestrator as `pdd update --sync-metadata` and preflight drift-heal, so prompt tags, architecture entries, run reports, and fingerprint state are always reconciled together. **Any stage reporting `failed`** blocks the auto-heal checkpoint commit so a PR cannot land a half-synced state; `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) and does not block — matching the contract documented in the CI Drift Detection section above.
 
 **Configuration**: Set `PDD_BUDGET_CAP` repository variable to control LLM spend per run (default: `5.00`).
 
