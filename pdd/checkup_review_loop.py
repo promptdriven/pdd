@@ -187,6 +187,7 @@ class ReviewLoopConfig:
     reviewers: Sequence[str] = DEFAULT_REVIEWERS
     reviewer: Optional[str] = None
     fixer: Optional[str] = None
+    reviewer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
     max_cost: float = 10.0
@@ -194,8 +195,9 @@ class ReviewLoopConfig:
     # Kept for CLI/API compatibility. The loop has one authoritative reviewer,
     # so this is no longer used as a ship gate.
     require_all_reviewers_clean: bool = True
-    # When enabled, provider/rate/context-limit failures are reported as
-    # "degraded" instead of "failed". They still stop mutation and cannot ship.
+    # When enabled, provider/rate/context-limit/auth/network/sandbox failures
+    # are reported as "degraded" instead of "failed". They still stop mutation
+    # unless a distinct fallback reviewer completes and takes over.
     continue_on_reviewer_limit: bool = False
     # Kept for report compatibility. A clean verifier pass by the primary
     # reviewer satisfies this; no separate fresh reviewer is spawned.
@@ -233,6 +235,7 @@ class ReviewLoopState:
     total_cost: float = 0.0
     last_model: str = "unknown"
     reviewer_status: Dict[str, str] = field(default_factory=dict)
+    active_reviewer: Optional[str] = None
     findings_by_key: Dict[str, ReviewFinding] = field(default_factory=dict)
     raw_outputs: List[Tuple[str, str]] = field(default_factory=list)
     fixes: List[FixResult] = field(default_factory=list)
@@ -275,13 +278,17 @@ def run_checkup_review_loop(
         state = ReviewLoopState(
             stop_reason=role_error,
             reviewer_status={reviewer or DEFAULT_REVIEWER: "failed"},
+            active_reviewer=reviewer or DEFAULT_REVIEWER,
         )
         return True, _render_final_report(context, state, roles), 0.0, "unknown"
 
     reviewer_status = {reviewer: "missing"}
     if not config.review_only:
         reviewer_status[fixer] = "fixer"
-    state = ReviewLoopState(reviewer_status=reviewer_status)
+    state = ReviewLoopState(
+        reviewer_status=reviewer_status,
+        active_reviewer=reviewer,
+    )
     deadline = time.monotonic() + (config.max_minutes * 60.0)
     worktree, setup_error = _setup_pr_worktree(
         cwd,
@@ -316,6 +323,7 @@ def run_checkup_review_loop(
         )
 
     pending_findings: Optional[List[ReviewFinding]] = None
+    fallback_used = False
     for round_number in range(1, config.max_rounds + 1):
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
@@ -347,11 +355,52 @@ def run_checkup_review_loop(
                 _mark_budget_exhausted(config, state, deadline)
                 break
             if review.status in HARD_NOT_CLEAN_STATES:
-                state.stop_reason = (
-                    f"Primary reviewer {reviewer} could not complete: "
-                    f"{review.status}."
+                fallback_candidates = _normalize_reviewers(
+                    [config.reviewer_fallback] if config.reviewer_fallback else []
                 )
-                break
+                fallback = fallback_candidates[0] if fallback_candidates else None
+                if (
+                    not fallback_used
+                    and fallback
+                    and fallback != fixer
+                    and fallback != reviewer
+                ):
+                    fallback_used = True
+                    fallback_review = _run_review(
+                        reviewer=fallback,
+                        context=context,
+                        worktree=worktree,
+                        round_number=round_number,
+                        state=state,
+                        config=config,
+                        verbose=verbose,
+                        quiet=quiet,
+                        artifacts_dir=artifacts_dir,
+                        pr_metadata=pr_metadata,
+                    )
+                    _record_review(state, fallback_review)
+                    _mark_non_required_findings_advisory(state, config)
+                    _write_dedup_snapshot(artifacts_dir, round_number, state)
+                    if _budget_exhausted(config, state, deadline):
+                        _mark_budget_exhausted(config, state, deadline)
+                        break
+                    if fallback not in roles:
+                        roles.append(fallback)
+                    if fallback_review.status in HARD_NOT_CLEAN_STATES:
+                        state.stop_reason = (
+                            f"Reviewer fallback {fallback} could not complete: "
+                            f"{fallback_review.status}."
+                        )
+                        break
+                    review = fallback_review
+                    reviewer = fallback
+                    state.active_reviewer = fallback
+                else:
+                    state.stop_reason = (
+                        f"Primary reviewer {reviewer} could not complete: "
+                        f"{review.status}."
+                    )
+                    break
 
             fix_findings = _actionable_findings(state, review.findings)
             if config.review_only:
@@ -2211,28 +2260,79 @@ def _mark_budget_exhausted(
         state.stop_reason = f"Max review duration reached: {config.max_minutes:g} minutes."
 
 
+# Multi-word / specific substrings used to classify transient/infra failures.
+# Each phrase is intentionally long enough that benign trace output (e.g.
+# "Author:", "logging request", "subprocess.run() helper") cannot match it.
+# Shared between `_failure_status` (which promotes them to "degraded") and
+# `_plain_text_clean_review` (which must refuse to call the output "clean"
+# when any of them appear alongside a clean marker).
+_TRANSIENT_DEGRADED_MARKERS = (
+    # Provider / capacity
+    "rate limit",
+    "quota",
+    "timeout",
+    "timed out",
+    "context length",
+    "context window",
+    "context limit",
+    "context_length_exceeded",
+    "maximum context",
+    "context exceeded",
+    # Authentication / authorization
+    "authentication failed",
+    "authentication error",
+    "unauthorized",
+    "login required",
+    "please log in",
+    "not logged in",
+    "please sign in",
+    # Network
+    "connection refused",
+    "connection reset",
+    "network unreachable",
+    "network is unreachable",
+    "dns resolution",
+    "name resolution",
+    # Sandbox / permissions
+    "permission denied",
+    "sandbox error",
+    "sandbox denied",
+    "failed to create sandbox",
+)
+
+# Non-zero exit codes signal an infra/CLI failure (zero exit is success-y
+# context and must NOT match).  Use a regex so "exit code 0" stays out.
+_TRANSIENT_EXIT_CODE_RE = re.compile(
+    r"(?:exit code|exit status|non-zero exit status|exited with status) "
+    r"(?:[1-9]\d*)"
+)
+
+
+def _looks_like_transient_infra_failure(lowered: str) -> bool:
+    """Return True if `lowered` contains any transient infra-failure marker.
+
+    Caller is responsible for lowercasing the input.  This is the predicate
+    that gates both `_failure_status` (degrading vs failing) and
+    `_plain_text_clean_review` (refusing to classify the output as clean).
+    """
+    if any(marker in lowered for marker in _TRANSIENT_DEGRADED_MARKERS):
+        return True
+    return bool(_TRANSIENT_EXIT_CODE_RE.search(lowered))
+
+
 def _failure_status(output: str, *, allow_degraded: bool = True) -> str:
     lowered = (output or "").lower()
-    degraded_markers = (
-        "rate limit",
-        "quota",
-        "timeout",
-        "timed out",
-        "context length",
-        "context window",
-        "context limit",
-        "context_length_exceeded",
-        "maximum context",
-        "context exceeded",
-    )
-    if allow_degraded and any(marker in lowered for marker in degraded_markers):
+    if allow_degraded and _looks_like_transient_infra_failure(lowered):
         return "degraded"
     return "failed"
 
 
 def _plain_text_clean_review(output: str) -> bool:
     lowered = (output or "").lower()
-    if any(marker in lowered for marker in ("rate limit", "quota", "timeout", "timed out")):
+    # If the output looks like a transient infra failure, it must not be
+    # classified as clean even when a clean marker line is also present —
+    # otherwise the fallback/`degraded` path in `_failure_status` is skipped.
+    if _looks_like_transient_infra_failure(lowered):
         return False
 
     clean_lines = {
@@ -2408,6 +2508,7 @@ def _write_final_state(
     """Persist the canonical machine-readable verdict at end of loop."""
     payload = {
         "reviewer_status": dict(state.reviewer_status),
+        "active_reviewer": state.active_reviewer,
         "fresh_final_status": state.fresh_final_status,
         "issue_aligned": issue_aligned,
         "stop_reason": state.stop_reason,
@@ -2487,6 +2588,8 @@ def _resolve_issue_aligned(state: ReviewLoopState) -> str:
 def _has_hard_not_clean_state(state: ReviewLoopState) -> bool:
     if state.fresh_final_status in HARD_NOT_CLEAN_STATES:
         return True
+    if state.active_reviewer:
+        return state.reviewer_status.get(state.active_reviewer) in HARD_NOT_CLEAN_STATES
     return any(status in HARD_NOT_CLEAN_STATES for status in state.reviewer_status.values())
 
 
@@ -2512,6 +2615,7 @@ def _render_final_report(
         f"PR: {context.pr_url}",
         f"Issue: {context.issue_url}",
         f"issue_aligned: {issue_aligned}",
+        f"active-reviewer: {state.active_reviewer or 'unknown'}",
         f"reviewer-status: {status_pairs}",
         f"fresh-final-review: {state.fresh_final_status}",
         f"max-rounds-reached: {str(state.max_rounds_reached).lower()}",
@@ -2527,8 +2631,25 @@ def _render_final_report(
         "| Reviewer | Status |",
         "|----------|--------|",
     ]
+    fallback_took_over = (
+        state.active_reviewer is not None
+        and bool(reviewers)
+        and state.active_reviewer != reviewers[0]
+    )
     for reviewer in reviewers:
-        lines.append(f"| {reviewer} | {state.reviewer_status.get(reviewer, 'missing')} |")
+        status = state.reviewer_status.get(reviewer, "missing")
+        is_superseded = (
+            fallback_took_over
+            and reviewer != state.active_reviewer
+            and status in HARD_NOT_CLEAN_STATES
+        )
+        if is_superseded:
+            cell = (
+                f"{status} (optional, superseded by {state.active_reviewer})"
+            )
+        else:
+            cell = status
+        lines.append(f"| {reviewer} | {cell} |")
     lines.extend([
         f"| fresh-final | {state.fresh_final_status} |",
         "",

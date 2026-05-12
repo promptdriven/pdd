@@ -32,6 +32,7 @@ complete -c pdd -n "__fish_use_subcommand" -a bug -d "Generate unit test from bu
 complete -c pdd -n "__fish_use_subcommand" -a auto-deps -d "Analyze and insert dependencies from directory or glob"
 complete -c pdd -n "__fish_use_subcommand" -a verify -d "Verify functional correctness using LLM judgment"
 complete -c pdd -n "__fish_use_subcommand" -a sync -d "Synchronize prompt, code, examples, tests"
+complete -c pdd -n "__fish_use_subcommand" -a checkup -d "Run architecture/PR review loop with optional reviewer fallback"
 complete -c pdd -n "__fish_use_subcommand" -a setup -d "Interactive setup and completion install"
 complete -c pdd -n "__fish_use_subcommand" -a install_completion -d "Install shell completion"
 complete -c pdd -n "__fish_use_subcommand" -a pytest-output -d "Run pytest and capture structured output"
@@ -132,6 +133,32 @@ complete -c pdd -n "__fish_seen_subcommand_from verify" -l budget -x -d "Max bud
 complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .prompt)"
 complete -c pdd -n "__fish_seen_subcommand_from verify" -a "(__fish_complete_suffix .py .js .java .cpp .rb .go)" # For CODE_FILE and PROGRAM_FILE
 
+# checkup command
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l validate-arch-includes -d "Validate architecture includes"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l project-root -r -d "Project root directory"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l strict -d "Strict checks"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l no-fix -d "Do not apply fixes"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l timeout-adder -x -d "Add seconds to step timeouts"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l no-github-state -d "Skip GitHub state checks"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l pr -x -d "Target PR number or URL"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l issue -x -d "Target issue number or URL"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l review-loop -d "Enable PR review loop"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l review-only -d "Run reviewer only, no fixer"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l reviewers -x -d "Comma-separated reviewer roles"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l reviewer -x -d "Primary reviewer role"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l fixer -x -d "Fixer role"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l reviewer-fallback -x -d "Fallback reviewer when primary fails"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l max-review-rounds -x -d "Max review rounds"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l max-review-cost -x -d "Max review cost (USD)"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l max-review-minutes -x -d "Max review wall-clock minutes"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l require-all-reviewers-clean -d "Require all reviewers clean"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l no-require-all-reviewers-clean -d "Do not require all reviewers clean"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l continue-on-reviewer-limit -d "Treat infra-limit failures as degraded"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l require-final-fresh-review -d "Require a final fresh review"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l no-require-final-fresh-review -d "Skip final fresh review"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l blocking-severities -x -d "Comma-separated blocking severities"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l clean-reviewer-states -x -d "Comma-separated reviewer states treated as clean"
+
 # sync command
 complete -c pdd -n "__fish_seen_subcommand_from sync" -l max-attempts -x -d "Max attempts for loops"
 complete -c pdd -n "__fish_seen_subcommand_from sync" -l budget -x -d "Total budget for sync"
@@ -154,4 +181,4 @@ complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess
 complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .log .txt .csv)"
 
 # Help completion
-complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync setup install_completion pytest-output" -d "Show help for specific command"
+complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync checkup setup install_completion pytest-output" -d "Show help for specific command"

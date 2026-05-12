@@ -1012,7 +1012,346 @@ class TestCheckupReviewLoopRuntime:
         assert "reviewer_status" in final_state
         assert final_state["reviewer_status"]["codex"] == "clean"
         assert final_state["reviewer_status"]["claude"] == "fixer"
+        assert final_state["active_reviewer"] == "codex"
         assert "findings" in final_state
+
+    def test_reviewer_fallback_used_when_primary_fails(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                reviewer_fallback="gemini",
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=degraded" in report
+        assert "gemini=clean" in report
+        assert "active-reviewer: gemini" in report
+        assert "issue_aligned: true" in report
+        assert "could not complete" not in report
+        assert any(role == "gemini" for role, _ in calls)
+        # End-to-end ship_degraded contract: the superseded primary's row
+        # in the Per-Reviewer Status table MUST contain the literal
+        # `optional` so the pdd_cloud `checkup_verdict_adapter` parser
+        # drops codex from the required-reviewer set. Without this the
+        # adapter's rule r1 trips on `codex=degraded` and the verdict is
+        # forced to `unknown` — the exact failure #923 was opened against.
+        assert (
+            "| codex | degraded (optional, superseded by gemini) |" in report
+        ), report
+
+    def test_no_reviewer_fallback_preserves_legacy_behavior(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # With continue_on_reviewer_limit=False (the _config default), an auth
+        # error from the primary reviewer must land as "failed", not
+        # "degraded". The earlier OR mask hid regressions in that gate.
+        assert "codex=failed" in report
+        assert "could not complete" in report
+        # Legacy path: no fallback configured, no takeover, so the report
+        # MUST NOT carry the `optional` annotation anywhere. If it did, a
+        # verdict adapter could mis-classify a hard primary failure as
+        # ship_degraded.
+        assert "optional" not in report.lower(), report
+
+    def test_reviewer_fallback_equal_to_fixer_is_ignored(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewer_fallback="claude"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not complete" in report
+        assert not any(label.startswith("checkup-review-loop-review-claude") for _, label in calls)
+
+    def test_reviewer_fallback_provider_alias_of_fixer_is_ignored(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewer_fallback="anthropic"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not complete" in report
+        assert not any(label.startswith("checkup-review-loop-review-claude") for _, label in calls)
+        assert not any(label.startswith("checkup-review-loop-review-anthropic") for _, label in calls)
+
+    def test_reviewer_fallback_provider_alias_of_primary_is_ignored(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            return False, "ERROR: authentication failed: token expired", 0.0, ""
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewer_fallback="openai"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not complete" in report
+        codex_review_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-review-codex")
+        ]
+        assert len(codex_review_calls) == 1
+
+    def test_reviewer_fallback_normalized_alias_takes_over(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(reviewer_fallback="google"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "gemini=clean" in report
+        assert any(role == "gemini" for role, _ in calls)
+
+    def test_reviewer_fallback_also_fails_breaks_loop(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            if role == "gemini":
+                return False, "network error: connection refused", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                reviewer_fallback="gemini",
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "codex=degraded" in report
+        assert "gemini=degraded" in report
+        assert "could not complete" in report
+        assert "gemini" in report.lower()
+        # Fallback ALSO failed — no successful takeover happened — so
+        # neither row may be tagged `optional`. The verdict adapter must
+        # continue to see both reviewers as required and short-circuit
+        # to `unknown`; silently demoting one to optional would let a
+        # fully-broken review-loop ship as ship_degraded.
+        assert "optional" not in report.lower(), report
+
+    def test_reviewer_fallback_takes_over_subsequent_rounds(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """After a successful fallback, the fallback role MUST drive every
+        subsequent reviewer step — including this round's verify call and any
+        later rounds — instead of retrying the original primary that already
+        failed once. Spec: prompts/checkup_review_loop_python.prompt §11
+        (reviewer_fallback)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        gemini_review_calls = {"count": 0}
+
+        finding = {
+            "severity": "blocker",
+            "reviewer": "gemini",
+            "area": "code",
+            "evidence": "test bait",
+            "finding": "leftover TODO marker",
+            "required_fix": "remove it",
+            "location": "pdd/foo.py:1",
+        }
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            # Round 1 review: codex (primary) auth-fails — triggers fallback.
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            # Gemini: first review-mode call returns findings (so the fixer
+            # runs); every later gemini review-mode call (verify, next-round
+            # review) returns clean so the loop terminates cleanly.
+            if role == "gemini" and "-review-" in label:
+                gemini_review_calls["count"] += 1
+                if gemini_review_calls["count"] == 1:
+                    return True, _json("findings", [finding]), 0.1, role
+                return True, _json("clean"), 0.1, role
+            # Verify and any other gemini call → clean. Fixer (claude) success.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                reviewer_fallback="gemini",
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+
+        # codex must only have been invoked once (the initial round-1 review
+        # attempt that failed) — it must NOT be retried after the fallback
+        # successfully takes over.
+        codex_calls = [(role, label) for role, label in calls if role == "codex"]
+        assert len(codex_calls) == 1, (
+            f"codex must not be retried after fallback takeover; got {codex_calls!r}"
+        )
+
+        # The verify call following the fix MUST be driven by gemini (the
+        # fallback), not codex. This is the load-bearing assertion: the
+        # fallback role takes over the reviewer slot for the rest of the loop.
+        verify_calls = [(role, label) for role, label in calls if "-verify-" in label]
+        assert verify_calls, f"expected at least one verify-mode call; got {calls!r}"
+        for role, label in verify_calls:
+            assert role == "gemini", (
+                f"verify must be driven by the fallback gemini, not {role}: {label}"
+            )
+
+        # The fixer (claude per _config default) must have run, addressing
+        # gemini's findings — i.e. the fallback drives the fix step too.
+        fix_calls = [(role, label) for role, label in calls if "-fix-" in label]
+        assert fix_calls, f"expected a fix call; got {calls!r}"
+        for _role, label in fix_calls:
+            assert "for-gemini" in label, (
+                f"fix must address gemini's findings (fallback as primary): {label}"
+            )
+
+        # Report should reflect codex preserved as degraded, gemini as clean.
+        assert "codex=degraded" in report
+        assert "gemini=clean" in report
+        assert "active-reviewer: gemini" in report
+        assert "issue_aligned: true" in report
+        # And the takeover must propagate the verdict-adapter contract on
+        # the multi-round path too (fix step + verify step + later rounds):
+        # the superseded primary's row is tagged `optional` so the verdict
+        # adapter's rule r1 ignores codex=degraded and r4 upgrades the
+        # ship to ship_degraded.
+        assert (
+            "| codex | degraded (optional, superseded by gemini) |" in report
+        ), report
 
 
 class TestPromptInjection:
@@ -1158,6 +1497,67 @@ class TestParseHelpers:
         # Empty / all-rejected input falls back to default.
         assert parse_state_list("failed,degraded") == ("clean",)
 
+    def test_failure_status_classifies_auth_error_as_degraded(self) -> None:
+        from pdd.checkup_review_loop import _failure_status
+
+        # ---- True positives: real infra-failure strings → "degraded".
+        assert _failure_status(
+            "ERROR: authentication failed: token expired", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "network error: connection refused", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "exit code 127: command not found", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "Command returned non-zero exit status 2", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "process exited with status 64", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "permission denied while creating sandbox", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "Unauthorized: missing API key", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "please log in to continue", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "dns resolution failed for api.example.com", allow_degraded=True
+        ) == "degraded"
+        assert _failure_status(
+            "failed to create sandbox: out of disk", allow_degraded=True
+        ) == "degraded"
+
+        # ---- True negatives: bait strings that the previous overly broad
+        # markers ("auth", "login", "exit code", "subprocess") would have
+        # falsely flagged. These must classify as "failed", not "degraded".
+        assert _failure_status(
+            "Author: Greg <g@example.com>\nfatal: stack trace", allow_degraded=True
+        ) == "failed"
+        assert _failure_status(
+            "DEBUG: logging request payload", allow_degraded=True
+        ) == "failed"
+        # exit code 0 is a success-y context — must not be flagged degraded.
+        assert _failure_status(
+            "trace line: exit code 0: ok", allow_degraded=True
+        ) == "failed"
+        assert _failure_status(
+            "trace line: exit status 0: ok", allow_degraded=True
+        ) == "failed"
+        # "subprocess" appearing in a traceback path must not flag degraded.
+        assert _failure_status(
+            "trace: subprocess.run() helper called", allow_degraded=True
+        ) == "failed"
+
+    def test_failure_status_unrelated_failure_still_failed(self) -> None:
+        from pdd.checkup_review_loop import _failure_status
+
+        assert _failure_status("diff parse error", allow_degraded=True) == "failed"
+
     def test_unparsable_reviewer_output_is_treated_as_failure(self) -> None:
         """When a reviewer returns success=True but output contains no JSON and
         no bracket findings, _parse_review_output must classify it as failed
@@ -1215,6 +1615,40 @@ class TestParseHelpers:
             result = _parse_review_output(output, "codex", 1)
             assert result.status == "clean"
             assert result.findings == []
+
+    def test_plain_text_clean_marker_with_infra_failure_is_not_clean(self) -> None:
+        """A clean-marker line accompanied by an auth/network/sandbox/exit-code
+        failure must not be classified as clean — the plain-text path must
+        block on the same transient markers `_failure_status` recognizes.
+
+        Regression for #923: previously `_plain_text_clean_review` only
+        rejected rate-limit/quota/timeout markers, so an auth or network
+        failure that appeared in the same output as a "No actionable
+        findings." line slipped past the fallback path."""
+        from pdd.checkup_review_loop import HARD_NOT_CLEAN_STATES, _parse_review_output
+
+        infra_failure_outputs = (
+            "No actionable findings.\nERROR: authentication failed: token expired",
+            "No actionable findings.\nnetwork error: connection refused",
+            "No actionable findings.\npermission denied while creating sandbox",
+            "No actionable findings.\nUnauthorized: missing API key",
+            "No actionable findings.\nfailed to create sandbox: out of disk",
+            "No actionable findings.\nCommand returned non-zero exit status 2",
+        )
+        for output in infra_failure_outputs:
+            result = _parse_review_output(output, "codex", 1)
+            assert result.status in HARD_NOT_CLEAN_STATES, (
+                f"Expected non-clean status for {output!r}, got {result.status!r}"
+            )
+
+        # Negative control: a clean marker without any infra failure stays clean.
+        result = _parse_review_output(
+            "No actionable findings.\n\nThe PR now matches the issue.",
+            "codex",
+            1,
+        )
+        assert result.status == "clean"
+        assert result.findings == []
 
     def test_markdown_severity_bullets_are_parsed_as_findings(self) -> None:
         """Codex CLI can return markdown bullets instead of the requested JSON."""

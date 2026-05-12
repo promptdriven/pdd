@@ -486,11 +486,13 @@ class TestRunAgenticCheckup:
             pr_url="https://github.com/owner/repo/pull/2",
             review_loop=True,
             review_only=True,
+            reviewer_fallback="gemini",
         )
 
         config = mock_review_loop.call_args.kwargs["config"]
         context = mock_review_loop.call_args.kwargs["context"]
         assert config.review_only is True
+        assert config.reviewer_fallback == "gemini"
         assert context.issue_title == "Check {workflow}"
         assert "check {value}" in context.issue_content
         assert context.pr_content == 'PR context {"ok": true}'

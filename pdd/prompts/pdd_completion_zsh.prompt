@@ -23,4 +23,4 @@
 % - The entry should follow the standard Zsh completion format, incorporating the description, for example: `'--time[Controls LLM reasoning effort (0.0-1.0)]'`.
 % - This `--time` option should be available for completion globally, meaning it can be used with the main `pdd` command and alongside any of its subcommands.
 %
-% The generated script must also include the `checkup` subcommand and its README-documented options, including PR mode (`--pr`, `--issue`), review-loop mode (`--review-loop`, `--review-only`, `--reviewers`, `--reviewer`, `--fixer`), review budget/limit flags, reviewer-status compatibility flags, `--blocking-severities`, and `--clean-reviewer-states`.
+% The generated script must also include the `checkup` subcommand and its README-documented options, including PR mode (`--pr`, `--issue`), review-loop mode (`--review-loop`, `--review-only`, `--reviewers`, `--reviewer`, `--fixer`, `--reviewer-fallback`), review budget/limit flags, reviewer-status compatibility flags, `--blocking-severities`, and `--clean-reviewer-states`.

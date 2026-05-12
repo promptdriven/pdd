@@ -19,11 +19,12 @@
   - `--reviewers` (legacy comma-separated role order, default `codex,claude`; first role is reviewer, second role is fixer)
   - `--reviewer` (explicit primary reviewer role; overrides the first `--reviewers` role)
   - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
+  - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
   - `--max-review-rounds` (int, default `5`)
   - `--max-review-cost` (float, default `10.0`)
   - `--max-review-minutes` (float, default `90.0`)
   - `--require-all-reviewers-clean/--no-require-all-reviewers-clean` (default true)
-  - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit reviewer failures as `degraded` instead of `failed`, but never marks them clean or continues mutation)
+  - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit/auth/network/sandbox reviewer failures as `degraded` instead of `failed`, but never marks the active reviewer clean or continues mutation without a completed review)
   - `--require-final-fresh-review/--no-require-final-fresh-review` (default true)
   - `--blocking-severities` (comma-separated highest-priority severities for review-loop reporting and prompt guidance; the fixer still receives every valid reviewer finding; default `blocker,critical,medium`; unknown severities silently dropped)
   - `--clean-reviewer-states` (compatibility parser for downstream reviewer-status gates; default `clean`; the tokens `failed`, `degraded`, and `missing` are always treated as not-clean regardless of this flag)
@@ -36,7 +37,7 @@
   - Otherwise (default issue mode): require `target`; validate via `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and message must mention "GitHub issue URL").
 - Force `--no-fix` when `--pr` is set and `--review-loop` is NOT set (legacy PR verification still cannot push fixes). Print a warning to stderr explaining why and how to re-invoke if fixes were intended.
 - `ctx.ensure_object(dict)`; read `quiet = ctx.obj.get("quiet", False)` and `verbose = ctx.obj.get("verbose", False)`.
-- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states)` where `pr_url` is `None` in non-PR modes.
+- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, reviewer_fallback=reviewer_fallback, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states)` where `pr_url` is `None` in non-PR modes.
 - If not quiet, `click.echo` exactly these lines:
   - `Status: Success|Failed`
   - `Message: {message}`
