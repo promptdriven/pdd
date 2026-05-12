@@ -6570,11 +6570,26 @@ class TestIssue814BillingErrorsPermanent:
 
         mock_subprocess_run.side_effect = [anthropic_failure, google_success]
 
-        with patch("pdd.agentic_common.time.sleep"):
-            success, *_ = run_agentic_task(
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, _output, _cost, provider = run_agentic_task(
                 "Do work", tmp_path, max_retries=3, retry_delay=5, quiet=True
             )
         assert success is True
+        # Permanent-error classification must break out of retries on the
+        # first attempt and advance to the fallback provider, not silently
+        # retry anthropic. Without these assertions the test could pass for
+        # the wrong reason — e.g. anthropic retried twice and consumed the
+        # google_success mock as a retry.
+        assert provider == "google", (
+            f"Expected fallback to google after anthropic permanent error, "
+            f"got provider={provider!r}"
+        )
+        assert mock_subprocess_run.call_count == 2, (
+            "Permanent error must skip retries — expected exactly one "
+            "anthropic attempt + one google attempt, got "
+            f"{mock_subprocess_run.call_count} subprocess calls"
+        )
+        sleep_mock.assert_not_called()
 
         printed = [
             str(call.args[0])
@@ -6585,6 +6600,65 @@ class TestIssue814BillingErrorsPermanent:
         assert not permanent_lines, (
             "quiet=True must suppress the permanent-error diagnostic, got: "
             f"{permanent_lines}"
+        )
+
+    def test_permanent_error_diagnostic_escapes_rich_markup(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """Issue #814 (codex follow-up): provider stderr is untrusted text.
+        A snippet containing literal Rich-tag substrings like ``[/yellow]``
+        must not raise MarkupError and abort fallback before the next
+        provider is tried."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        # Embed a literal Rich close tag inside the billing error — this used
+        # to crash console.print(f"[yellow]...{snippet}[/yellow]") with
+        # rich.errors.MarkupError because the inner [/yellow] closed the
+        # wrapper before the trailing [/yellow] was reached.
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low [/yellow] [bold]boom[/bold]"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        # Use a real Console writing to a StringIO so a MarkupError actually
+        # surfaces — mock_console would swallow the formatting bug.
+        from io import StringIO
+        from rich.console import Console as RealConsole
+        capture = StringIO()
+        real_console = RealConsole(file=capture, force_terminal=False, no_color=True)
+
+        with patch("pdd.agentic_common.console", real_console), \
+                patch("pdd.agentic_common.time.sleep"):
+            success, _output, _cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+        assert success is True
+        assert provider == "google"
+        out = capture.getvalue()
+        # The literal close tag must appear escaped in the rendered output
+        # rather than being interpreted as markup.
+        assert "[/yellow]" in out, (
+            "Diagnostic must include the escaped close-tag literal from "
+            f"the snippet, got: {out!r}"
         )
 
     def test_anthropic_is_error_json_envelope_skips_retries(

@@ -18,6 +18,7 @@ from typing import List, Optional, Tuple, Dict, Any, Union
 from dataclasses import dataclass
 
 from rich.console import Console
+from rich.markup import escape as _rich_escape
 
 def _load_model_data(*args, **kwargs):
     """Lazily load model data from ``pdd.llm_invoke``.
@@ -2076,9 +2077,13 @@ def run_agentic_task(
                     if not quiet:
                         stripped = (output or "").strip()
                         snippet = stripped.splitlines()[0][:200] if stripped else "(no detail)"
+                        # Issue #814: provider stderr is untrusted text — escape Rich
+                        # markup metacharacters so a snippet containing literal
+                        # ``[/yellow]`` (or any other tag) can't raise MarkupError
+                        # and abort fallback before the next provider is tried.
                         console.print(
                             f"[yellow]Provider {provider} reported a permanent error; "
-                            f"skipping retries — {snippet}[/yellow]"
+                            f"skipping retries — {_rich_escape(snippet)}[/yellow]"
                         )
                     break
 
