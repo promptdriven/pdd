@@ -191,6 +191,12 @@ _MISSING_CAMELCASE_MARKER = "Python code uses camelCase names"
 _MISSING_PDD_INTERFACE_PARAMS_MARKER = (
     "declares parameter(s) missing from the generated code"
 )
+_MISSING_PDD_INTERFACE_FUNCS_MARKER = (
+    "declares function(s)/method(s) missing from the generated code"
+)
+_PDD_INTERFACE_DRIFT_MARKER = (
+    "declares parameter(s) whose signature drifted in the generated code"
+)
 
 
 def _parse_conformance_failure(
@@ -224,13 +230,21 @@ def _parse_conformance_failure(
 
     # Track which shape each symbol came from so we can build a directive
     # that actually matches the failure mode: legacy export-missing vs. the
-    # new pdd-interface parameter/function-missing emitted by
-    # ``_verify_pdd_interface_signatures``. Mixing them under a single
-    # "Required missing exports" header tells the model to add an export
-    # named ``update_main.sync_metadata`` instead of a parameter — which
-    # is exactly the misdirection the previous directive caused.
+    # new pdd-interface parameter-missing vs. pdd-interface function/method-
+    # missing emitted by ``_verify_pdd_interface_signatures``. Mixing them
+    # under a single "Required missing exports" header tells the model to
+    # add an export named ``update_main.sync_metadata`` instead of a
+    # parameter — which is exactly the misdirection the previous directive
+    # caused. Bare dotted method names (``ContentSelector.select``) MUST
+    # route to ``iface_missing_funcs`` rather than ``iface_missing_params``
+    # so the parser does not split them into ("ContentSelector", "select").
     export_missing: List[str] = []
-    iface_missing: List[str] = []
+    iface_missing_params: List[str] = []
+    iface_missing_funcs: List[str] = []
+    # ``iface_drift`` carries the full parenthesised diagnostic for each
+    # drifted parameter so the directive can tell the model what kind of
+    # drift (annotation vs. default) and what value to restore.
+    iface_drift: List[str] = []
 
     def _split_symbols(blob: str) -> List[str]:
         out: List[str] = []
@@ -249,7 +263,7 @@ def _parse_conformance_failure(
     # field label.
     inline_re = re.compile(
         r"declared symbols missing from generated code:\s*(.+?)"
-        r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\.\s*\n|$)",
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
         re.MULTILINE,
     )
     for m in inline_re.finditer(combined):
@@ -263,25 +277,86 @@ def _parse_conformance_failure(
     for m in camel_re.finditer(combined):
         export_missing.extend(_split_symbols(m.group(1)))
 
-    # 3) Inline <pdd-interface> signature-conformance form:
+    # 3) Inline <pdd-interface> parameter-conformance form:
     #    "... <pdd-interface> declares parameter(s) missing from the
     #     generated code: foo.bar, baz.qux. Output: ..."
     # Emitted by code_generator_main._verify_pdd_interface_signatures.
-    pdd_iface_re = re.compile(
+    pdd_iface_params_re = re.compile(
         r"declares parameter\(s\) missing from the generated code:\s*(.+?)"
-        r"(?=\.\s+(?:Output|Expected|Found)\b|\.\s*$|\.\s*\n|$)",
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
         re.MULTILINE,
     )
-    for m in pdd_iface_re.finditer(combined):
-        iface_missing.extend(_split_symbols(m.group(1)))
+    for m in pdd_iface_params_re.finditer(combined):
+        iface_missing_params.extend(_split_symbols(m.group(1)))
 
-    # 4) Bullet form: capture bullet lines following the marker. The marker
+    # 4) Inline <pdd-interface> function/method-conformance form:
+    #    "... <pdd-interface> declares function(s)/method(s) missing from
+    #     the generated code: ContentSelector.select. Output: ..."
+    # Emitted alongside (3) when the prompt declares a function/method that
+    # is absent from the generated code; routed to the missing-function
+    # directive section so we don't tell the model to add ``select`` as a
+    # parameter of ``ContentSelector``.
+    pdd_iface_funcs_re = re.compile(
+        r"declares function\(s\)/method\(s\) missing from the generated "
+        r"code:\s*(.+?)"
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE,
+    )
+    for m in pdd_iface_funcs_re.finditer(combined):
+        iface_missing_funcs.extend(_split_symbols(m.group(1)))
+
+    # 5) Inline <pdd-interface> signature-drift form:
+    #    "... <pdd-interface> declares parameter(s) whose signature drifted
+    #     in the generated code: foo.bar (annotation: declared `bool`,
+    #     found `str`), baz.qux (default: declared `None`, found `0`).
+    #     Output: ..."
+    # The diagnostic is preserved verbatim per-entry so the directive can
+    # emit "update parameter X annotation to `bool`" rather than asking the
+    # model to add a missing parameter.
+    pdd_iface_drift_re = re.compile(
+        r"declares parameter\(s\) whose signature drifted in the generated "
+        r"code:\s*(.+?)"
+        r"(?=\.\s+(?:Output|Expected|Found|the\s+prompt)\b|\.\s*$|\.\s*\n|$)",
+        re.MULTILINE | re.DOTALL,
+    )
+    for m in pdd_iface_drift_re.finditer(combined):
+        # Split on ", " between entries — each entry contains a parenthesised
+        # diagnostic so a simple comma split would shred them. Walk the
+        # string and track parenthesis depth instead.
+        blob = m.group(1).strip()
+        entries: List[str] = []
+        depth = 0
+        current = ""
+        i = 0
+        while i < len(blob):
+            ch = blob[i]
+            if ch == "(":
+                depth += 1
+                current += ch
+            elif ch == ")":
+                depth = max(0, depth - 1)
+                current += ch
+            elif ch == "," and depth == 0:
+                if current.strip():
+                    entries.append(current.strip())
+                current = ""
+            else:
+                current += ch
+            i += 1
+        if current.strip():
+            entries.append(current.strip())
+        iface_drift.extend(entries)
+
+    # 6) Bullet form: capture bullet lines following the marker. The marker
     # text we matched dictates which bucket the bullets belong to.
     capture_bucket: Optional[List[str]] = None
     for line in combined.splitlines():
         stripped = line.strip()
+        if _MISSING_PDD_INTERFACE_FUNCS_MARKER in stripped:
+            capture_bucket = iface_missing_funcs
+            continue
         if _MISSING_PDD_INTERFACE_PARAMS_MARKER in stripped:
-            capture_bucket = iface_missing
+            capture_bucket = iface_missing_params
             continue
         if (
             _MISSING_DECLARED_MARKER in stripped
@@ -298,7 +373,23 @@ def _parse_conformance_failure(
                 continue
             capture_bucket = None
 
-    missing_sorted = tuple(sorted(set(export_missing) | set(iface_missing)))
+    # The drift bucket carries parenthesised diagnostics; strip them when
+    # contributing to ``missing_sorted`` so the short-circuit comparison on
+    # the canonical dotted symbol still works across retries.
+    drift_symbols = []
+    for entry in iface_drift:
+        head = entry.split("(", 1)[0].strip()
+        if head:
+            drift_symbols.append(head)
+
+    missing_sorted = tuple(
+        sorted(
+            set(export_missing)
+            | set(iface_missing_params)
+            | set(iface_missing_funcs)
+            | set(drift_symbols)
+        )
+    )
     if not missing_sorted:
         return None
 
@@ -313,37 +404,54 @@ def _parse_conformance_failure(
             "Do not remove existing valid exports."
         )
 
-    if iface_missing:
-        # The pdd-interface check emits two kinds of dotted entries:
-        # bare ``func_name`` for a missing function/method, and
-        # ``func[.qual].param`` for a missing parameter. rsplit so dotted
-        # method names like ``ContentSelector.select.mode`` group as
-        # ("ContentSelector.select", "mode") rather than misattributing the
-        # parameter to the class.
+    if iface_missing_params or iface_missing_funcs or iface_drift:
+        # The pdd-interface check emits dotted method/param names via two
+        # distinct error sentences so we can route them correctly here.
+        # Missing-function entries (possibly dotted, e.g.
+        # ``ContentSelector.select``) MUST stay grouped under "add the
+        # following missing function(s)/method(s)" — splitting on the dot
+        # would misdirect the model into adding a parameter named
+        # ``select`` to ``ContentSelector``.
         if export_missing:
             directive_lines.append("")
         directive_lines.append(
             "The prompt's <pdd-interface> declares function(s)/parameter(s) "
             "missing from the generated code:"
         )
+        if iface_missing_funcs:
+            directive_lines.append(
+                "- Add the following missing function(s)/method(s) declared "
+                f"in the prompt: `{', '.join(sorted(set(iface_missing_funcs)))}`."
+            )
+        # Parameter entries are dotted ``func[.qual].param``: rpartition so
+        # ``ContentSelector.select.mode`` groups as ("ContentSelector.select",
+        # "mode") rather than misattributing the parameter to the class.
         params_by_func: Dict[str, List[str]] = {}
-        missing_funcs: List[str] = []
-        for sym in sorted(set(iface_missing)):
+        for sym in sorted(set(iface_missing_params)):
             if "." in sym:
                 func, _, param = sym.rpartition(".")
                 params_by_func.setdefault(func, []).append(param)
             else:
-                missing_funcs.append(sym)
-        if missing_funcs:
-            directive_lines.append(
-                "- Add the following missing function(s)/method(s) declared "
-                f"in the prompt: `{', '.join(missing_funcs)}`."
-            )
+                # Defensive: a bare entry under the parameter shape would be
+                # malformed, but route it to the missing-function section so
+                # we never tell the model to add a nameless parameter.
+                directive_lines.append(
+                    "- Add the following missing function(s)/method(s) declared "
+                    f"in the prompt: `{sym}`."
+                )
         for func, params in params_by_func.items():
             directive_lines.append(
                 f"- On `{func}`, add the following missing parameter(s) to "
                 f"the signature and corresponding code paths: "
                 f"`{', '.join(params)}`."
+            )
+        # Signature drift entries: pass them through with a clarifying
+        # prefix. They already contain the symbol and the diagnostic that
+        # ``_verify_pdd_interface_signatures`` produced.
+        for entry in sorted(set(iface_drift)):
+            directive_lines.append(
+                f"- Update the generated code so parameter {entry} "
+                f"matches the prompt."
             )
         directive_lines.append(
             "Do not remove the declared parameters from the prompt's "

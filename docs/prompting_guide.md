@@ -883,6 +883,30 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
 - **Purpose**: JSON describing the module's public API (functions, commands, pages)
 - **Maps to**: `architecture.json["interface"]`
 - **Format**: Valid JSON matching one of four interface types (see below)
+- **Enforced contract (issue #928)**: For `module`, `cli`, and `command`
+  interfaces whose entries declare a parseable paren-list `signature`, `pdd
+  sync` performs an **architecture conformance** check after each generation:
+  - **Missing function/method**: a declared `name` (including dotted forms
+    like `ContentSelector.select`) absent from the generated code raises a
+    hard failure.
+  - **Missing parameter**: a parameter name in the declared signature
+    (positional, keyword-only, or positional-only) absent from the matching
+    function/method signature raises a hard failure. Variadic `*args` and
+    `**kwargs` in the generated code do **not** satisfy a declared named
+    parameter.
+  - **Annotation / default drift**: when both the prompt and the generated
+    code annotate a parameter with a type or specify a default, and the
+    canonical sources differ (`bool = False` vs `str = True`), the gate
+    raises a hard failure. When only one side declares the annotation or
+    default, the gate stays quiet — gradually-typed code is allowed to
+    catch up.
+  - **Repair loop**: `pdd sync` / `agentic_sync_runner` retry up to
+    `MAX_CONFORMANCE_ATTEMPTS` with a per-shape repair directive that names
+    the function to fix and the parameters/annotations to add or update.
+- **When the check is skipped silently**: prompts without a `<pdd-interface>`
+  block, entries without a paren-list `signature` (description-only command
+  entries, class-header signatures), or malformed JSON in the block (a
+  `logger.warning` is emitted in the malformed case).
 - **Example**:
   ```xml
   <pdd-interface>
@@ -895,6 +919,19 @@ Place architecture metadata tags at the **top of your prompt file** (after any `
     }
   }
   </pdd-interface>
+  ```
+- **Conformance-failure example**: a prompt declaring
+  `(ctx, sync_metadata: bool = False)` against generated code
+  `def update_main(ctx)` produces:
+  ```
+  Architecture conformance error for update_main_python.prompt:
+  the prompt's <pdd-interface> declares parameter(s) missing from
+  the generated code: update_main.sync_metadata.
+  ```
+  and the sync retry receives a directive like:
+  ```
+  - On `update_main`, add the following missing parameter(s) to the
+    signature and corresponding code paths: `sync_metadata`.
   ```
 
 **`<pdd-dependency>`**

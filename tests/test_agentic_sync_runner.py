@@ -1100,6 +1100,55 @@ class TestSyncOneModule:
         assert "missing function(s)/method(s)" in directive
         assert "`update_main`" in directive
 
+    def test_parse_conformance_failure_pdd_interface_bare_dotted_missing_method(self):
+        """A bare dotted method name (``ContentSelector.select``) emitted by
+        the missing-function shape MUST NOT be split into
+        ("ContentSelector", "select") under the parameter directive. The
+        previous implementation routed any dotted symbol to the parameter
+        bucket and rpartition'd it, producing 'On ContentSelector, add
+        parameter select' — which is wrong for a missing method.
+        """
+        stderr = (
+            "Architecture conformance error for content_selector_python.prompt: "
+            "the prompt's <pdd-interface> declares function(s)/method(s) "
+            "missing from the generated code: ContentSelector.select. "
+            "Output: pdd/content_selector.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        assert missing == ("ContentSelector.select",)
+        assert "missing function(s)/method(s)" in directive
+        assert "`ContentSelector.select`" in directive
+        # Must NOT split into a class+parameter directive.
+        assert "On `ContentSelector`," not in directive
+        assert "parameter(s) to the signature" not in directive
+
+    def test_parse_conformance_failure_pdd_interface_signature_drift(self):
+        """Annotation/default drift entries carry their parenthesised
+        diagnostic verbatim and route to an 'update parameter' directive.
+        Issue #928's 'type drift' acceptance case.
+        """
+        stderr = (
+            "Architecture conformance error for update_main_python.prompt: "
+            "the prompt's <pdd-interface> declares parameter(s) whose "
+            "signature drifted in the generated code: "
+            "update_main.sync_metadata (annotation: declared `bool`, "
+            "found `str`), update_main.sync_metadata "
+            "(default: declared `False`, found `True`). "
+            "Output: pdd/update_main.py."
+        )
+
+        directive, missing = _parse_conformance_failure("", stderr)
+
+        # ``missing`` is the canonical dotted symbol used for the short-
+        # circuit comparison, so the parenthesised drift diagnostic is
+        # stripped from the missing-symbol set.
+        assert "update_main.sync_metadata" in missing
+        assert "Update the generated code so parameter" in directive
+        assert "annotation: declared `bool`, found `str`" in directive
+        assert "default: declared `False`, found `True`" in directive
+
     def test_parse_conformance_failure_mixed_legacy_and_pdd_interface(self):
         """When both legacy-export and pdd-interface shapes appear in the
         output, the directive must contain both sections so the model gets
