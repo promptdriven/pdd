@@ -196,6 +196,7 @@ jobs:
           REPO: ${{ github.repository }}
           CHECK_ID: ${{ steps.check_start.outputs.check_id }}
           HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -204,6 +205,42 @@ jobs:
           # normal heal pipeline.
           if ! printf '%s' "$HEAD_REF" | grep -Eq '^release/v[0-9]+\.[0-9]+\.[0-9]+$'; then
             echo "head_ref '$HEAD_REF' does not match release/vX.Y.Z; falling through to normal heal"
+            exit 0
+          fi
+          # Validate diff is exactly version-stamp files. Each file must be
+          # on the allowlist. Anything outside (test/, pdd/*.py beyond
+          # setup.py, etc.) is a non-version-only change and must go through
+          # normal auto-heal. Without this check, a collaborator with write
+          # access could push arbitrary commits to a `release/v*` branch
+          # after the PR opens; each `synchronize` event would otherwise
+          # re-PATCH the check to success.
+          #
+          # Allowlist source: pyproject.toml's [tool.commitizen] version_files
+          # entries plus CHANGELOG.md (touched by update_changelog_on_bump).
+          # NOTE: continuation lines below MUST stay at this indent (matches
+          # the surrounding code's column). YAML `|` literal strips the
+          # common leading indent uniformly, so each entry renders flush-left
+          # in the resulting shell script — which is what `grep -Fxq` needs.
+          allowlist='pyproject.toml
+          CHANGELOG.md
+          README.md
+          pypi_description.rst
+          pdd/pdd_completion.sh
+          pdd/setup.py'
+          # `gh api --paginate` handles the 30-file-per-page default; releases
+          # touch < 10 files but defense in depth against a runaway PR.
+          changed=$(gh api --paginate "repos/$REPO/pulls/$PR_NUMBER/files" \
+            --jq '.[].filename')
+          violation=false
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            if ! printf '%s\n' "$allowlist" | grep -Fxq "$f"; then
+              echo "::warning::release short-circuit aborted: '$f' is not on the version-stamp allowlist"
+              violation=true
+            fi
+          done <<< "$changed"
+          if [ "$violation" = "true" ]; then
+            echo "Falling through to normal heal pipeline"
             exit 0
           fi
           gh api -X PATCH "repos/$REPO/check-runs/$CHECK_ID" \

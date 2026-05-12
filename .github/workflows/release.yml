@@ -90,8 +90,8 @@ jobs:
       pr_head_sha: ${{ steps.open_pr.outputs.pr_head_sha }}
     steps:
       - name: Checkout main
-        # TODO: pin to SHA
-        uses: actions/checkout@v4
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: main
           fetch-depth: 0
@@ -100,8 +100,8 @@ jobs:
           persist-credentials: true
 
       - name: Set up Python
-        # TODO: pin to SHA
-        uses: actions/setup-python@v5
+        # SHA-pinned to v5.6.0 (https://github.com/actions/setup-python/releases/tag/v5.6.0)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -214,8 +214,15 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+    outputs:
+      # SHA of the rebase-merged commit on main. Captured AFTER `gh pr merge`
+      # returns so the `tag` job can tag this exact commit, not a stale
+      # `origin/main` tip that may have advanced from another PR landing
+      # between merge and tag.
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
     steps:
       - name: Poll PR until mergeable, then merge
+        id: merge
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
@@ -257,6 +264,29 @@ jobs:
             --rebase \
             --delete-branch \
             --match-head-commit "$head_sha"
+          # After a rebase-merge, GitHub populates pull_request.merge_commit_sha
+          # asynchronously with the resulting commit on main. It can briefly
+          # be null right after `gh pr merge` returns; retry a few times.
+          # The rebased commit SHA is NOT the same as head_sha, so we cannot
+          # reuse that value. The `tag` job uses this SHA so the tag points
+          # at the exact merge commit even if another PR lands on main first.
+          merge_sha=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            merge_sha=$(gh pr view "$PR_NUMBER" \
+              --json mergeCommit --jq '.mergeCommit.oid // ""')
+            if printf '%s' "$merge_sha" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "merge_sha=$merge_sha (attempt=$attempt)"
+              break
+            fi
+            echo "mergeCommit.oid not yet populated (attempt=$attempt); retrying"
+            merge_sha=""
+            sleep 3
+          done
+          if [ -z "$merge_sha" ]; then
+            echo "::error::PR $PR_NUMBER merged but mergeCommit.oid never populated"
+            exit 1
+          fi
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
 
   tag:
     name: Tag main
@@ -268,8 +298,8 @@ jobs:
       contents: write
     steps:
       - name: Checkout main
-        # TODO: pin to SHA
-        uses: actions/checkout@v4
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: main
           fetch-depth: 0
@@ -284,15 +314,33 @@ jobs:
       - name: Tag the rebase-merged commit
         env:
           VERSION: ${{ needs.prepare.outputs.version }}
+          MERGE_SHA: ${{ needs.merge.outputs.merge_sha }}
         run: |
           set -euo pipefail
-          # Fetch and tag the fetched ref directly, never a stale local ref.
+          # Validate the SHA shape before doing anything with it. Defense in
+          # depth against an empty / malformed output bubbling through.
+          if ! printf '%s' "$MERGE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::MERGE_SHA '$MERGE_SHA' is not a 40-char hex SHA"
+            exit 1
+          fi
+          # Fetch origin/main (for the ancestor check) AND the exact merge
+          # commit. Using the merge SHA — not origin/main — closes the race
+          # where an unrelated PR lands on main between merge and tag, which
+          # would otherwise cause us to tag a commit that isn't the release.
           git fetch origin main
+          git fetch origin "$MERGE_SHA"
+          # Belt-and-suspenders: confirm the merge commit is actually on
+          # origin/main. If it isn't, something is badly wrong (e.g. main
+          # was force-pushed or rewound); refuse to tag.
+          if ! git merge-base --is-ancestor "$MERGE_SHA" origin/main; then
+            echo "::error::MERGE_SHA $MERGE_SHA is not an ancestor of origin/main; refusing to tag"
+            exit 1
+          fi
           if git rev-parse --verify --quiet "refs/tags/v$VERSION" >/dev/null; then
             echo "::error::tag v$VERSION already exists"
             exit 1
           fi
-          git tag "v$VERSION" origin/main
+          git tag "v$VERSION" "$MERGE_SHA"
           git push origin "v$VERSION"
 
   publish-prod:
@@ -312,14 +360,14 @@ jobs:
       contents: read
     steps:
       - name: Checkout release tag
-        # TODO: pin to SHA
-        uses: actions/checkout@v4
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: v${{ needs.prepare.outputs.version }}
 
       - name: Set up Python
-        # TODO: pin to SHA
-        uses: actions/setup-python@v5
+        # SHA-pinned to v5.6.0 (https://github.com/actions/setup-python/releases/tag/v5.6.0)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -347,8 +395,8 @@ jobs:
           python scripts/preprocess_wheel.py 'dist/*.whl'
 
       - name: Publish to PyPI (OIDC)
-        # TODO: pin to SHA
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # SHA-pinned to v1.14.0 (https://github.com/pypa/gh-action-pypi-publish/releases/tag/v1.14.0)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
         with:
           packages-dir: dist
 
@@ -366,14 +414,14 @@ jobs:
       contents: read
     steps:
       - name: Checkout release branch
-        # TODO: pin to SHA
-        uses: actions/checkout@v4
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
         with:
           ref: ${{ needs.prepare.outputs.branch }}
 
       - name: Set up Python
-        # TODO: pin to SHA
-        uses: actions/setup-python@v5
+        # SHA-pinned to v5.6.0 (https://github.com/actions/setup-python/releases/tag/v5.6.0)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -397,8 +445,8 @@ jobs:
           python scripts/preprocess_wheel.py 'dist/*.whl'
 
       - name: Publish to TestPyPI (OIDC)
-        # TODO: pin to SHA
-        uses: pypa/gh-action-pypi-publish@release/v1
+        # SHA-pinned to v1.14.0 (https://github.com/pypa/gh-action-pypi-publish/releases/tag/v1.14.0)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
         with:
           packages-dir: dist
           repository-url: https://test.pypi.org/legacy/
