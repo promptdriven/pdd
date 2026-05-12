@@ -109,6 +109,17 @@ from ..core.errors import handle_error
     help="Fixer role for --review-loop. Overrides the second --reviewers role.",
 )
 @click.option(
+    "--reviewer-fallback",
+    type=str,
+    default=None,
+    show_default=False,
+    help=(
+        "Optional secondary reviewer role to invoke once if the primary reviewer "
+        "fails (auth/network/exec/sandbox/rate-limit). Must differ from --reviewer "
+        "and --fixer."
+    ),
+)
+@click.option(
     "--max-review-rounds",
     type=int,
     default=5,
@@ -140,8 +151,9 @@ from ..core.errors import handle_error
     is_flag=True,
     default=False,
     help=(
-        "Report provider/rate/context-limit reviewer failures as degraded instead "
-        "of failed. This never marks the reviewer clean or continues mutation."
+        "Report provider/rate/context-limit/auth/network/sandbox reviewer "
+        "failures as degraded instead of failed. This never marks an active "
+        "reviewer clean or continues mutation without a completed review."
     ),
 )
 @click.option(
@@ -190,6 +202,7 @@ def checkup(
     reviewers: str,
     reviewer: Optional[str],
     fixer: Optional[str],
+    reviewer_fallback: Optional[str],
     max_review_rounds: int,
     max_review_cost: float,
     max_review_minutes: float,
@@ -331,6 +344,7 @@ def checkup(
             reviewers=reviewers,
             reviewer=reviewer,
             fixer=fixer,
+            reviewer_fallback=reviewer_fallback,
             max_review_rounds=max_review_rounds,
             max_review_cost=max_review_cost,
             max_review_minutes=max_review_minutes,
