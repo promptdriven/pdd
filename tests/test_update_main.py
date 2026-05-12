@@ -3265,18 +3265,22 @@ def test_repo_mode_sync_metadata_batch_continues_when_one_pair_orchestrator_rais
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
 
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=True,
-        )
+        # Batch must finish (subsequent pairs still get their orchestrator
+        # call) AND surface the per-pair failure as a non-zero CLI exit so
+        # automation does not see a false-green repo-mode update (#871).
+        with pytest.raises(click.exceptions.Exit) as excinfo:
+            update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=True,
+                sync_metadata=True,
+            )
 
-    assert result is not None
+    assert excinfo.value.exit_code == 1
     # Reached the summary table despite the first orchestrator call raising
     captured = capsys.readouterr()
     assert "Repository Update Summary" in captured.out

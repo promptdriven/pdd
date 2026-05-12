@@ -1408,6 +1408,28 @@ def update_main(
         console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")
 
         final_model_str = ", ".join(sorted(models_used)) if models_used else "N/A"
+
+        # When --sync-metadata was opted in, any per-pair MetadataSyncResult
+        # that is not .ok (i.e. a stage reported `failed`) must surface as a
+        # non-zero CLI exit. Without this, repo-mode silently returns the
+        # success tuple and Click exits 0 — masking partial-state heals and
+        # contradicting the single-file `click.exceptions.Exit(1)` contract.
+        # `skipped` is permitted (no arch entry, unregistered modules); only
+        # `failed` blocks. The summary table has already been printed above
+        # so the operator sees which pair(s) failed.
+        if sync_metadata and metadata_results:
+            failed_pairs = [
+                (p, r) for p, r in metadata_results.items()
+                if not getattr(r, "ok", False)
+            ]
+            if failed_pairs:
+                rprint(
+                    f"[error][metadata-sync] repo mode: "
+                    f"{len(failed_pairs)} pair(s) finalized with a failed stage; "
+                    f"exiting non-zero (#871)[/error]"
+                )
+                raise click.exceptions.Exit(1)
+
         return "Repository update complete.", total_repo_cost, final_model_str
 
     # --- Single file logic ---

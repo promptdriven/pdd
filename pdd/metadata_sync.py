@@ -340,56 +340,73 @@ def run_metadata_sync(
         _stage_log_exit("tags", "failed", reason)
 
     # ---- Stage 3: architecture ----
+    # Gate the architecture stage on prior `prompt`/`tags` hard failures.
+    # `update_architecture_from_prompt` writes architecture.json on success;
+    # running it after a tags-stage failure means the architecture entry can
+    # be modified on disk before the overall result reports `failed`, which
+    # on the push-to-main auto-heal path can land via `git add -A` even
+    # though downstream stages (run_report, fingerprint) correctly stop.
+    # Skip symmetrically so all write-bearing stages share one failure gate.
     _stage_log_enter("architecture")
-    try:
-        if architecture_path is None or not architecture_path.exists():
-            reason = "no architecture.json found"
-            result.stages["architecture"] = StageStatus(status="skipped", reason=reason)
-            _stage_log_exit("architecture", "skipped", reason)
-        else:
-            arch_result = update_architecture_from_prompt(
-                prompt_filename=arch_prompt_filename,
-                prompts_dir=prompts_dir,
-                architecture_path=architecture_path,
-                dry_run=dry_run,
-                prompt_content_override=refreshed_prompt_content,
-            )
-            if not arch_result.get("success", False):
-                err = arch_result.get("error") or "architecture update failed"
-                # Unregistered modules (no entry in architecture.json) are a
-                # normal state for tools, scripts, and not-yet-tracked code.
-                # Treat that as "skipped" so the fingerprint isn't gated off
-                # and CI auto-heal doesn't revert a clean prompt update for a
-                # module that simply isn't in the architecture index.
-                if isinstance(err, str) and err.startswith("No architecture entry found for:"):
-                    result.stages["architecture"] = StageStatus(
-                        status="skipped", reason=err
-                    )
-                    _stage_log_exit("architecture", "skipped", err)
-                else:
-                    raise RuntimeError(err)
+    _arch_prior_failed = [
+        name
+        for name in ("prompt", "tags")
+        if result.stages.get(name) and result.stages[name].status == "failed"
+    ]
+    if _arch_prior_failed:
+        reason = f"earlier stage failed: {_arch_prior_failed[0]}"
+        result.stages["architecture"] = StageStatus(status="skipped", reason=reason)
+        _stage_log_exit("architecture", "skipped", reason)
+    else:
+        try:
+            if architecture_path is None or not architecture_path.exists():
+                reason = "no architecture.json found"
+                result.stages["architecture"] = StageStatus(status="skipped", reason=reason)
+                _stage_log_exit("architecture", "skipped", reason)
             else:
-                updated = arch_result.get("updated", False)
-                changes = arch_result.get("changes") or {}
-                change_keys = list(changes.keys()) if isinstance(changes, dict) else []
-                if dry_run:
-                    detail = (
-                        f"would update fields: {change_keys}" if updated else "no changes"
-                    )
-                    result.stages["architecture"] = StageStatus(status="dry_run", detail=detail)
-                    _stage_log_exit("architecture", "dry_run", detail)
+                arch_result = update_architecture_from_prompt(
+                    prompt_filename=arch_prompt_filename,
+                    prompts_dir=prompts_dir,
+                    architecture_path=architecture_path,
+                    dry_run=dry_run,
+                    prompt_content_override=refreshed_prompt_content,
+                )
+                if not arch_result.get("success", False):
+                    err = arch_result.get("error") or "architecture update failed"
+                    # Unregistered modules (no entry in architecture.json) are a
+                    # normal state for tools, scripts, and not-yet-tracked code.
+                    # Treat that as "skipped" so the fingerprint isn't gated off
+                    # and CI auto-heal doesn't revert a clean prompt update for
+                    # a module that simply isn't in the architecture index.
+                    if isinstance(err, str) and err.startswith("No architecture entry found for:"):
+                        result.stages["architecture"] = StageStatus(
+                            status="skipped", reason=err
+                        )
+                        _stage_log_exit("architecture", "skipped", err)
+                    else:
+                        raise RuntimeError(err)
                 else:
-                    detail = (
-                        f"updated fields: {change_keys}" if updated else "no changes"
-                    )
-                    result.stages["architecture"] = StageStatus(status="ok", detail=detail)
-                    _stage_log_exit("architecture", "ok", detail)
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except Exception as exc:
-        reason = str(exc)
-        result.stages["architecture"] = StageStatus(status="failed", reason=reason)
-        _stage_log_exit("architecture", "failed", reason)
+                    updated = arch_result.get("updated", False)
+                    changes = arch_result.get("changes") or {}
+                    change_keys = list(changes.keys()) if isinstance(changes, dict) else []
+                    if dry_run:
+                        detail = (
+                            f"would update fields: {change_keys}" if updated else "no changes"
+                        )
+                        result.stages["architecture"] = StageStatus(status="dry_run", detail=detail)
+                        _stage_log_exit("architecture", "dry_run", detail)
+                    else:
+                        detail = (
+                            f"updated fields: {change_keys}" if updated else "no changes"
+                        )
+                        result.stages["architecture"] = StageStatus(status="ok", detail=detail)
+                        _stage_log_exit("architecture", "ok", detail)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            reason = str(exc)
+            result.stages["architecture"] = StageStatus(status="failed", reason=reason)
+            _stage_log_exit("architecture", "failed", reason)
 
     # ---- Stage 4: run_report ----
     _stage_log_enter("run_report")

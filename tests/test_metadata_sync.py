@@ -629,23 +629,31 @@ def test_fingerprint_dry_run_does_not_persist(tmp_path: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Regression: refreshed_prompt_content carries through on tags fail
+# Regression: architecture stage must be gated when tags fails so the
+# `update_architecture_from_prompt` write does not land on disk while the
+# overall result reports failure (push-to-main auto-heal would otherwise
+# pick up the partial state via `git add -A`).
 # ---------------------------------------------------------------------------
 
-def test_architecture_stage_runs_even_when_tags_failed(tmp_path: Path) -> None:
+def test_architecture_stage_skipped_when_tags_failed(tmp_path: Path) -> None:
     ws = _make_workspace(tmp_path)
     arch_path = tmp_path / "architecture.json"
     arch_path.write_text(json.dumps({"modules": []}), encoding="utf-8")
     with patch.object(ms, "_refresh_tags_content", side_effect=RuntimeError("tags boom")), \
          patch.object(ms, "update_architecture_from_prompt",
                        return_value=_arch_update_ok()) as mock_upd, \
-         patch.object(ms, "clear_run_report"), \
-         patch.object(ms, "save_fingerprint"):
+         patch.object(ms, "clear_run_report") as mock_clear, \
+         patch.object(ms, "save_fingerprint") as mock_fp:
         result = run_metadata_sync(ws["prompt_path"], dry_run=False, architecture_path=arch_path)
     assert result.stages["tags"].status == "failed"
-    # Architecture stage still runs.
-    mock_upd.assert_called_once()
-    # Fingerprint blocked due to tags failure.
+    # Architecture stage MUST be gated — no on-disk write when tags failed.
+    mock_upd.assert_not_called()
+    assert result.stages["architecture"].status == "skipped"
+    assert "earlier stage failed: tags" in (result.stages["architecture"].reason or "")
+    # run_report and fingerprint are also gated symmetrically.
+    mock_clear.assert_not_called()
+    mock_fp.assert_not_called()
+    assert result.stages["run_report"].status == "skipped"
     assert result.stages["fingerprint"].status == "skipped"
 
 
