@@ -1,19 +1,20 @@
 {
-  "pdd_version": "0.0.228",
-  "timestamp": "2026-05-06T03:28:20.550217+00:00",
-  "command": "regenerate-public",
-  "prompt_hash": "c8e7ed9712d1bc53f57577aa35c2dedbf357cf6039551157e0783606874f9fb9",
-  "code_hash": "1be27569e653774011e94e7ecb376320ede83f538cb62ae1fc85555b4c0b2cc5",
-  "example_hash": "83804a5a51020c2a5c55d821570ac0c15d69599bc22dadca115418faa232e1c6",
-  "test_hash": "9f189b915ae2da9f03eec1fd6cc7b782e95eff7581226dbed66db6be85f51c94",
+  "pdd_version": "0.0.235",
+  "timestamp": "2026-05-12T23:11:43.060753+00:00",
+  "command": "example",
+  "prompt_hash": "e7087b2f9b0eacc6f6ba9f4240ba13b52fed574fe8135fdbeb854de3e254d1fc",
+  "code_hash": "fcfe94890d755eb2f704a75c0fcc569160b02c1262300f05d3f43612ec9fb869",
+  "example_hash": "19c38f6a8459082cdfc525c540a53b79353b0ee46d6a857e6ed2bc71368b6541",
+  "test_hash": "75ed5d42c484cd8f03cc52fb9f3aeb11ac602315098d0d3bf90b86a81f9aceb5",
   "test_files": {
-    "test_agentic_bug_orchestrator.py": "9f189b915ae2da9f03eec1fd6cc7b782e95eff7581226dbed66db6be85f51c94",
-    "test_agentic_bug_orchestrator_1.py": "2f8ba8ce40f8f1fcba01c98eadc57e77f34e517358e9a26c655aa9cb654103f4"
+    "test_agentic_bug_orchestrator.py": "75ed5d42c484cd8f03cc52fb9f3aeb11ac602315098d0d3bf90b86a81f9aceb5",
+    "test_agentic_bug_orchestrator_1.py": "8085e2041355e53aef1709eeba3591fa0f7c512a637038b8c48d633e4cd07aa2",
+    "test_agentic_bug_orchestrator_step_comments.py": "5436e993efa78d2bbc812dccf72f26e088dfc7110c51bedb76103ec5a7cca051"
   },
   "include_deps": {
     "context/agentic_bug_example.py": "96e35df4e8425a9173ff6a30281892c2bd8b81361cff72b732e488172ddf52f5",
     "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }
