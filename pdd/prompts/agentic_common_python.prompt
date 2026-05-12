@@ -10,7 +10,7 @@
       {"name": "run_agentic_task", "signature": "(instruction, cwd, *, verbose=False, quiet=False, label=\"\", timeout=None, max_retries=1, retry_delay=DEFAULT_RETRY_DELAY, deadline=None, use_playwright=False, reasoning_time=None) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
       {"name": "detect_control_token", "signature": "(output, token, tail_lines=_SEMANTIC_TAIL_LINES) -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
       {"name": "classify_step_output", "signature": "(output, expected_tokens, model=\"gemini/gemini-3-flash\") -> Optional[TokenMatch]", "returns": "Optional[TokenMatch]"},
-      {"name": "substitute_template_variables", "signature": "(template, variables) -> str", "returns": "str"},
+      {"name": "substitute_template_variables", "signature": "(template, context, *, strict_unresolved: bool = False) -> str", "returns": "str"},
       {"name": "set_agentic_progress", "signature": "(workflow, current_step, total_steps, step_name, completed_steps) -> None", "returns": "None"},
       {"name": "clear_agentic_progress", "signature": "() -> None", "returns": "None"},
       {"name": "get_and_clear_agentic_interrupt_context", "signature": "() -> Optional[Dict]", "returns": "Optional[Dict]"},
