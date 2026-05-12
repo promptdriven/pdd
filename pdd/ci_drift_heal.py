@@ -914,7 +914,8 @@ def _run_metadata_sync_safe(prompt_path: Optional[str], code_path: Optional[str]
     if not prompt_path:
         console.print(
             "[red]metadata_sync skipped: prompt_path is unset; refusing to "
-            "checkpoint without finalization[/red]"
+            "checkpoint without finalization[/red]",
+            soft_wrap=True,
         )
         return False
     try:
@@ -922,14 +923,16 @@ def _run_metadata_sync_safe(prompt_path: Optional[str], code_path: Optional[str]
     except Exception as exc:
         console.print(
             f"[red]metadata_sync unavailable (ImportError: {exc}); refusing "
-            f"to checkpoint without finalization[/red]"
+            f"to checkpoint without finalization[/red]",
+            soft_wrap=True,
         )
         return False
     p = Path(str(prompt_path))
     if not p.exists():
         console.print(
             f"[red]metadata_sync skipped: prompt file {p} does not exist; "
-            f"refusing to checkpoint without finalization[/red]"
+            f"refusing to checkpoint without finalization[/red]",
+            soft_wrap=True,
         )
         return False
     try:
