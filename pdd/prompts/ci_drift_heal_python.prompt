@@ -89,6 +89,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 18. **CLI interface:** `argparse` with `--modules` (space/comma-separated), `--budget-cap` (float), `--skip-ci` (flag), `--diff-base` (string). Invoked as `python -m pdd.ci_drift_heal`.
 
 19. **Error handling:** Subprocess failures are captured per-module (continue healing remaining). Subprocess timeout is 1200s. `PromptRevertError` blocks the commit phase entirely. Return exit code 1 if any module failed (except in skip-ci/push-to-main mode).
+    - **Narrow exception handling in `_run_metadata_sync_safe` (issue #936)**: The wrapper that invokes `run_metadata_sync` for the `update` heal MUST narrow its `except` to `(RuntimeError, OSError, ValueError)` rather than catching bare `Exception` (`ImportError` is already handled by the outer module-level guard around the `pdd.metadata_sync` import). Programming errors such as `TypeError`, `AttributeError`, and `NameError` MUST propagate so future signature mistakes or typos in the orchestrator crash the heal loudly instead of being logged as a yellow line while `_run_metadata_sync_safe` quietly returns False. A normal `MetadataSyncResult` with any `failed` stage continues to be treated as a heal failure per Requirement 15; this narrowing only changes which *raised* exceptions are caught.
 
 20. **Output:** Rich console with drift summary table before healing. Per-module heal result and cost. Final summary of healed/failed/skipped counts.
 
