@@ -332,7 +332,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     # Extract the filename without extension and directory
     code_filename = os.path.basename(code_file_path)
     base_name, _ = os.path.splitext(code_filename)
-    
+
     code_file_abs_path = os.path.abspath(code_file_path)
     code_dir = os.path.dirname(code_file_abs_path)
 
@@ -503,11 +503,11 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             f for f in code_files
             if os.path.splitext(f)[1].lower() in allowed_extensions
         ]
-    
+
     for file_path in code_files:
         prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet, output_dir, create_missing=False)
         pairs.append((prompt_path, code_path))
-        
+
     return pairs
 
 def get_git_changed_files(repo_root: str, base_branch: str = "main") -> Set[str]:
@@ -1331,14 +1331,13 @@ def update_main(
                         quiet=True,
                         label="prd-sync",
                     )
-                    
+
                     if llm_cost:
                         total_repo_cost += llm_cost
 
                     if not llm_success:
                         prd_status = f"error: {llm_output}"
                     elif llm_output and "<updated-prd>" in llm_output:
-                        import re
                         match = re.search(
                             r"<updated-prd>(.*?)</updated-prd>",
                             llm_output,

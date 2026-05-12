@@ -58,9 +58,6 @@ def test_dummy(mock_agentic, mock_find_prd, mock_git, mock_changed, mock_update,
                 )
 
     out = capsys.readouterr().out
-    print("OUTPUT:", out)
-    print("PRD CONTENT:", prd_file.read_text())
-    print("RESULT:", result)
 
 if __name__ == "__main__":
     pytest.main(["-v", "-s", "test_dummy_prd_sync.py"])
