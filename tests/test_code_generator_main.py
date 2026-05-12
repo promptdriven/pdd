@@ -5535,6 +5535,46 @@ class TestPddInterfaceSignatureConformance:
         # LLM knows what to restore.
         assert "<no default>" in exc.repair_directive
 
+    def test_missing_symbols_dedups_when_param_hits_multiple_drift_kinds(self, tmp_path):
+        """When a single parameter drifts on BOTH annotation and default,
+        ``missing_symbols`` must list the canonical dotted symbol once.
+        Duplicates leak into the stuck-symbol-set short-circuit comparison
+        and the structured hard-failure block downstream.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Both annotation and default differ from the declared signature.
+        generated_code = (
+            "def update_main(ctx, sync_metadata: str = True):\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        exc = excinfo.value
+        # The same parameter must appear once in missing_symbols even though
+        # two drift tuples were generated (one annotation, one default).
+        assert exc.missing_symbols.count("update_main.sync_metadata") == 1
+        # The repair directive still itemises both drift kinds — the dedup
+        # only affects the canonical symbol set.
+        assert "annotation" in exc.repair_directive
+        assert "default" in exc.repair_directive
+
     def test_drift_skipped_when_one_side_omits_annotation(self, tmp_path):
         """Conservative behavior: when only one side declares an annotation,
         the drift check does not fire. This keeps the gate from churning

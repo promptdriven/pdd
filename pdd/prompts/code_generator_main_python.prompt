@@ -73,7 +73,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     <include>pdd/core/cloud.py</include>
 </cloud_config>
 <architecture_sync>
-    <include select="def:_verify_architecture_conformance,def:_verify_architecture_json_conformance,def:_verify_pdd_interface_signatures,def:_extract_pdd_interface_signatures,def:_parse_declared_param_names,def:_collect_actual_param_names,def:_parse_declared_param_specs,def:_collect_actual_param_specs,def:_ast_args_to_specs,def:_find_target_function,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
+    <include select="pattern:^ParamSpec\s*=,def:_verify_architecture_conformance,def:_verify_architecture_json_conformance,def:_verify_pdd_interface_signatures,def:_extract_pdd_interface_signatures,def:_parse_declared_param_names,def:_collect_actual_param_names,def:_parse_declared_param_specs,def:_collect_actual_param_specs,def:_ast_args_to_specs,def:_find_target_function,def:_collect_python_symbols,def:_wire_to_parent_init,def:_parse_front_matter,def:_expand_vars,def:_run_git_command,def:is_git_repository,def:_run_discovery,def:_should_wire_generated_exports">pdd/code_generator_main.py</include>
 </architecture_sync>
 <env_detector>
     <include>pdd/python_env_detector.py</include>
