@@ -146,11 +146,12 @@ def test_get_context_limit_hang_returns_none(monkeypatch):
         return {"max_input_tokens": 99999}
 
     # Shrink the timeout so the test is fast.
+    # Use object-ref monkeypatch (not string paths) so resolution does not
+    # depend on ``pdd.server`` exposing ``token_counter`` as an attribute,
+    # which it does not in fresh imports (e.g. on a pytest-xdist worker).
+    monkeypatch.setattr(token_counter, "_LITELLM_CALL_TIMEOUT_SEC", 0.25)
     monkeypatch.setattr(
-        "pdd.server.token_counter._LITELLM_CALL_TIMEOUT_SEC", 0.25
-    )
-    monkeypatch.setattr(
-        "pdd.server.token_counter.litellm.get_model_info", _slow_get_model_info
+        token_counter.litellm, "get_model_info", _slow_get_model_info
     )
 
     start = _time.monotonic()
@@ -170,11 +171,12 @@ def test_count_tokens_hang_falls_back_to_tiktoken(monkeypatch):
         _time.sleep(2.0)
         return 9999
 
+    # Use object-ref monkeypatch (not string paths) so resolution does not
+    # depend on ``pdd.server`` exposing ``token_counter`` as an attribute,
+    # which it does not in fresh imports (e.g. on a pytest-xdist worker).
+    monkeypatch.setattr(token_counter, "_LITELLM_CALL_TIMEOUT_SEC", 0.25)
     monkeypatch.setattr(
-        "pdd.server.token_counter._LITELLM_CALL_TIMEOUT_SEC", 0.25
-    )
-    monkeypatch.setattr(
-        "pdd.server.token_counter.litellm.token_counter", _slow_token_counter
+        token_counter.litellm, "token_counter", _slow_token_counter
     )
 
     start = _time.monotonic()
