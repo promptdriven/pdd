@@ -25,6 +25,7 @@ def auto_deps_main(
     include_docs: bool = False,
     no_dedup: bool = False,
     concurrency: int = 1,
+    skip_metadata_sync: bool = False,
 ) -> Tuple[str, float, str]:
     """
     Main function to analyze a prompt file and insert dependencies found in a directory.
@@ -39,6 +40,11 @@ def auto_deps_main(
     :param include_docs: Flag to include documentation files (.md, .txt, .rst) in dependency discovery.
     :param no_dedup: Flag to disable redundant inline content removal.
     :param concurrency: Number of parallel workers for file summarization.
+    :param skip_metadata_sync: When True, do not run the internal metadata-sync
+        finalization step. Callers like ``pdd sync`` that write auto-deps output
+        to a temporary path and only later move it onto the real prompt MUST set
+        this so we don't fingerprint a transient ``*_with_deps`` module. Such
+        callers are responsible for finalizing against the real prompt path.
     :return: A tuple containing the modified prompt, total cost, and model name used.
     """
     from filelock import FileLock
@@ -47,6 +53,10 @@ def auto_deps_main(
     # can decide whether metadata finalization needs to run.
     prompt_was_mutated = False
     output_path = None
+    # Architecture merge outcome (defaults assume success so the no-op path
+    # below treats "no write happened" as not blocking finalization).
+    arch_merge_ok = True
+    arch_merge_reason: Optional[str] = None
 
     try:
         # Construct file paths
@@ -131,6 +141,11 @@ def auto_deps_main(
                 # not trigger metadata finalization; instead the explicit
                 # "[metadata-sync] not finalized" no-op line should fire below.
                 prompt_was_mutated = modified_prompt != prompt_content
+                # Track architecture merge outcome so we can gate metadata
+                # finalization on a successful (or genuinely no-op) architecture
+                # update. A partial failure (added dependencies could not be
+                # written) must surface as "not finalized" rather than silently
+                # persisting a fingerprint that disagrees with architecture state.
                 try:
                     from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 
@@ -142,7 +157,26 @@ def auto_deps_main(
                     if arch_report.get("messages") and not ctx.obj.get("quiet", False):
                         for line in arch_report["messages"]:
                             rprint(f"[dim]{line}[/dim]")
+                    # Partial-failure detection: the arch helper returns
+                    # ``updated=False`` with non-empty ``added_dependencies``
+                    # (and a "file left unchanged" message) when it knew which
+                    # deps should have been added but could not read/patch/write
+                    # architecture.json. Treat that as an arch-merge failure so
+                    # downstream fingerprint state is not silently saved.
+                    if (
+                        not arch_report.get("updated")
+                        and arch_report.get("added_dependencies")
+                    ):
+                        arch_merge_ok = False
+                        # Prefer the most specific message (the helper appends
+                        # its "file left unchanged" line last).
+                        messages = arch_report.get("messages") or []
+                        arch_merge_reason = (
+                            messages[-1] if messages else "architecture merge incomplete"
+                        )
                 except (OSError, json.JSONDecodeError, ValueError) as arch_exc:
+                    arch_merge_ok = False
+                    arch_merge_reason = str(arch_exc)
                     if not ctx.obj.get("quiet", False):
                         rprint(
                             f"[yellow]Warning: Could not update architecture.json after auto-deps: "
@@ -161,7 +195,22 @@ def auto_deps_main(
         # that downstream sync may need attention.
         quiet = ctx.obj.get('quiet', False)
         try:
-            if prompt_was_mutated and output_path:
+            if skip_metadata_sync:
+                # Caller opted out (e.g. `pdd sync` writes to a temporary
+                # ``*_with_deps.prompt`` and finalizes against the real prompt
+                # path after the move). Stay silent to avoid noisy "not
+                # finalized" lines in the normal sync path.
+                pass
+            elif not arch_merge_ok:
+                # Architecture state was not fully updated (e.g. file could not
+                # be written). Do NOT persist a fingerprint that would mark the
+                # prompt as "in sync" while architecture.json disagrees.
+                if not quiet:
+                    rprint(
+                        f"[yellow][metadata-sync] not finalized: "
+                        f"architecture: {arch_merge_reason or 'merge incomplete'}[/yellow]"
+                    )
+            elif prompt_was_mutated and output_path:
                 from .metadata_sync import run_metadata_sync
 
                 result = run_metadata_sync(

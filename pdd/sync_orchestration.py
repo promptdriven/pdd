@@ -2189,13 +2189,60 @@ def sync_orchestration(
                                     auto_deps_csv_path="project_dependencies.csv",
                                     output=str(temp_output),
                                     force_scan=False,
-                                    progress_callback=progress_callback_ref[0]
+                                    progress_callback=progress_callback_ref[0],
+                                    # Suppress auto-deps's internal metadata
+                                    # finalization: it would fingerprint the
+                                    # transient ``*_with_deps.prompt`` module
+                                    # (creating .pdd/meta/*_with_deps.json for
+                                    # a file that won't exist after the move).
+                                    # We finalize against the real prompt path
+                                    # below, after the move completes.
+                                    skip_metadata_sync=True,
                                 )
                                 if temp_output.exists():
                                     import shutil
                                     new_content = temp_output.read_text(encoding='utf-8')
                                     if new_content != original_content:
                                         shutil.move(str(temp_output), str(pdd_files['prompt']))
+                                        # Finalize metadata against the real
+                                        # prompt path now that the move has
+                                        # completed. Best-effort: failures are
+                                        # surfaced as "[metadata-sync] not
+                                        # finalized" but never abort sync.
+                                        try:
+                                            from .metadata_sync import run_metadata_sync as _ad_run_metadata_sync
+                                            _ad_result = _ad_run_metadata_sync(
+                                                prompt_path=pdd_files['prompt'],
+                                                code_path=None,
+                                                dry_run=False,
+                                            )
+                                            _ad_fp_stage = _ad_result.stages.get("fingerprint")
+                                            _ad_fp_ok = (
+                                                _ad_fp_stage is not None
+                                                and _ad_fp_stage.status == "ok"
+                                            )
+                                            if (not _ad_result.ok or not _ad_fp_ok) and not quiet:
+                                                _ad_stage_name = (
+                                                    _ad_result.failing_stage
+                                                    or ("fingerprint" if not _ad_fp_ok else "unknown")
+                                                )
+                                                _ad_status = _ad_result.stages.get(_ad_stage_name)
+                                                _ad_reason = (
+                                                    _ad_status.reason
+                                                    if _ad_status is not None and _ad_status.reason
+                                                    else "unknown reason"
+                                                )
+                                                print(
+                                                    f"[metadata-sync] not finalized: "
+                                                    f"{_ad_stage_name}: {_ad_reason}",
+                                                    flush=True,
+                                                )
+                                        except Exception as _ad_meta_exc:
+                                            if not quiet:
+                                                print(
+                                                    f"[metadata-sync] not finalized: {_ad_meta_exc}",
+                                                    flush=True,
+                                                )
                                     else:
                                         temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')
