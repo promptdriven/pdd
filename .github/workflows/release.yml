@@ -1,0 +1,452 @@
+name: release
+
+# PyPI release workflow. Replaces the local `make release` flow so that
+# branch-protected `main` is never bypassed and PyPI credentials never live
+# on a developer laptop.
+#
+# Flow (workflow_dispatch only):
+#   guard   — fails fast unless the user invoking AND triggering is gltanaka.
+#   prepare — bumps the version on a `release/vX.Y.Z` branch and opens a PR.
+#   merge   — waits for the PR to go green, then rebase-merges into main.
+#   tag     — tags the new main tip as `vX.Y.Z` and pushes the tag.
+#   publish — builds the wheel, runs the preprocessor, uploads via OIDC.
+#
+# Dry-run path skips merge+tag and publishes the candidate wheel to TestPyPI
+# from the release branch so end-to-end behavior can be verified before a
+# real release ever ships.
+#
+# ---- Security boundaries ----
+# - `workflow_dispatch` cannot be triggered by a PR or comment, only by a
+#   user with `write` (or higher) on the repo. The `guard` job further
+#   restricts to gltanaka by both `actor` and `triggering_actor`, so a rerun
+#   by another collaborator is rejected.
+# - PyPI uploads use OIDC trusted publishing via `pypa/gh-action-pypi-publish`.
+#   No long-lived API tokens live in GitHub Actions secrets.
+# - Both PyPI and TestPyPI uploads are gated behind GitHub `environment`s
+#   that require manual approval from gltanaka.
+# - Every event-derived value (workflow inputs, etc.) is passed through
+#   `env:` and read via shell variables — never interpolated directly into
+#   `run:` blocks. Matches the security pattern in auto-heal.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: 'Version bump type'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+        default: patch
+      dry_run:
+        description: 'Dry run (publish to TestPyPI, skip merge/tag)'
+        type: boolean
+        default: false
+
+# Deny-by-default at the top level. Each job opts in to exactly what it needs.
+permissions: {}
+
+# Serialize releases. `cancel-in-progress: false` so an in-flight release is
+# never interrupted partway through (e.g. between merge and tag).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  guard:
+    name: Authorize triggering user
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify actor + triggering_actor
+        env:
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+        run: |
+          set -euo pipefail
+          # Both must be gltanaka. `actor` is the user who created the run;
+          # `triggering_actor` is the user who triggered the latest run
+          # attempt (e.g. on rerun). Requiring both prevents a different
+          # collaborator from rerunning a release.
+          if [ "$ACTOR" != "gltanaka" ] || [ "$TRIGGERING_ACTOR" != "gltanaka" ]; then
+            echo "::error::release workflow is restricted to gltanaka (actor='$ACTOR' triggering_actor='$TRIGGERING_ACTOR')"
+            exit 1
+          fi
+          echo "Authorized: actor=$ACTOR triggering_actor=$TRIGGERING_ACTOR"
+
+  prepare:
+    name: Bump version and open PR
+    needs: guard
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.bump.outputs.version }}
+      branch: ${{ steps.bump.outputs.branch }}
+      pr_number: ${{ steps.open_pr.outputs.pr_number }}
+      pr_head_sha: ${{ steps.open_pr.outputs.pr_head_sha }}
+    steps:
+      - name: Checkout main
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: main
+          fetch-depth: 0
+          # Use the default GITHUB_TOKEN for the push; required to be able
+          # to push to the release branch.
+          persist-credentials: true
+
+      - name: Set up Python
+        # SHA-pinned to v5.6.0 (https://github.com/actions/setup-python/releases/tag/v5.6.0)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Configure git identity
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Install commitizen
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install commitizen
+
+      - name: Bump version (files only) and create release branch
+        id: bump
+        env:
+          BUMP_INPUT: ${{ inputs.bump }}
+        run: |
+          set -euo pipefail
+          # Whitelist the bump input. cz expects uppercase MAJOR/MINOR/PATCH.
+          case "$BUMP_INPUT" in
+            patch) increment=PATCH ;;
+            minor) increment=MINOR ;;
+            major) increment=MAJOR ;;
+            *) echo "::error::invalid bump '$BUMP_INPUT'"; exit 1 ;;
+          esac
+          # --files-only updates the version files but does NOT commit or tag.
+          # We do the commit/push ourselves on a release branch so the version
+          # change goes through the normal PR + required-check pipeline rather
+          # than landing directly on protected main.
+          python -m commitizen bump \
+            --files-only \
+            --increment "$increment" \
+            --yes \
+            --check-consistency
+          # Read the new version from pyproject.toml. -m1 picks the first
+          # `version = "..."` line (the [project] block); the [tool.commitizen]
+          # block also has one but cz keeps them in sync.
+          version=$(grep -m1 '^version' pyproject.toml | sed -E 's/version *= *"([^"]+)"/\1/')
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::computed version '$version' is not X.Y.Z"
+            exit 1
+          fi
+          branch="release/v$version"
+          git checkout -b "$branch"
+          # Explicit add: only files cz actually rewrote should land in the
+          # commit. `git add -A` is intentionally avoided.
+          git add pyproject.toml
+          # Some projects also track version in additional files via cz's
+          # version_files config. Pick those up if cz modified them.
+          if ! git diff --quiet; then
+            git add -u
+          fi
+          git commit -m "bump: version → $version"
+          git push origin "$branch"
+          {
+            echo "version=$version"
+            echo "branch=$branch"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Open release PR
+        id: open_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          BRANCH: ${{ steps.bump.outputs.branch }}
+          DRY_RUN: ${{ inputs.dry_run }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Body is built from workflow-controlled values only. Never
+          # interpolate event-derived strings into rendered markdown.
+          body_file=$(mktemp)
+          trap 'rm -f "$body_file"' EXIT
+          {
+            echo "Automated version bump to **v$VERSION**."
+            echo
+            echo "This PR was opened by the [release workflow]($RUN_URL)."
+            echo
+            echo "- Bump type: \`$VERSION\`"
+            echo "- Dry run: \`$DRY_RUN\`"
+            echo
+            echo "After this PR merges, the release workflow tags \`v$VERSION\` on \`main\` and uploads the wheel to PyPI."
+          } > "$body_file"
+          gh pr create \
+            --base main \
+            --head "$BRANCH" \
+            --title "bump: version → $VERSION" \
+            --body-file "$body_file"
+          # gh pr create prints the URL but not the number reliably; query
+          # both number and head SHA explicitly so downstream jobs don't
+          # have to re-resolve.
+          pr_info=$(gh pr view "$BRANCH" --json number,headRefOid)
+          pr_number=$(printf '%s' "$pr_info" | python -c 'import json,sys; print(json.load(sys.stdin)["number"])')
+          pr_head_sha=$(printf '%s' "$pr_info" | python -c 'import json,sys; print(json.load(sys.stdin)["headRefOid"])')
+          {
+            echo "pr_number=$pr_number"
+            echo "pr_head_sha=$pr_head_sha"
+          } >> "$GITHUB_OUTPUT"
+
+  merge:
+    name: Wait for green and merge
+    needs: prepare
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    permissions:
+      contents: write
+      pull-requests: write
+    outputs:
+      # SHA of the rebase-merged commit on main. Captured AFTER `gh pr merge`
+      # returns so the `tag` job can tag this exact commit, not a stale
+      # `origin/main` tip that may have advanced from another PR landing
+      # between merge and tag.
+      merge_sha: ${{ steps.merge.outputs.merge_sha }}
+    steps:
+      - name: Poll PR until mergeable, then merge
+        id: merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ needs.prepare.outputs.pr_number }}
+        run: |
+          set -euo pipefail
+          # Poll PR status. Timeout at 60 minutes (120 iterations × 30s).
+          # CLEAN + MERGEABLE means all required checks passed and the PR
+          # is fast-forward / clean-merge-ready.
+          max_iter=120
+          i=0
+          while : ; do
+            i=$((i + 1))
+            status=$(gh api "repos/$REPO/pulls/$PR_NUMBER" \
+              --jq '[.mergeable_state, .mergeable] | @tsv')
+            state=$(printf '%s' "$status" | cut -f1)
+            mergeable=$(printf '%s' "$status" | cut -f2)
+            echo "iter=$i mergeable_state=$state mergeable=$mergeable"
+            if [ "$state" = "clean" ] && [ "$mergeable" = "true" ]; then
+              break
+            fi
+            # `dirty` means merge conflict; `blocked` past iteration 1 with
+            # mergeable=false typically means a required check failed.
+            # Don't fail early though — auto-heal may still be running.
+            if [ "$i" -ge "$max_iter" ]; then
+              echo "::error::PR $PR_NUMBER did not reach CLEAN+MERGEABLE within 60 minutes (last state='$state' mergeable='$mergeable')"
+              exit 1
+            fi
+            sleep 30
+          done
+          # Capture current head SHA right before merge to detect drift
+          # (e.g. a late auto-heal commit landing between poll and merge).
+          head_sha=$(gh pr view "$PR_NUMBER" --json headRefOid --jq .headRefOid)
+          echo "Merging PR $PR_NUMBER at head $head_sha"
+          # --match-head-commit aborts the merge if a new commit landed
+          # between the poll and the merge call, so we never accidentally
+          # rebase-merge a SHA we didn't verify was green.
+          gh pr merge "$PR_NUMBER" \
+            --rebase \
+            --delete-branch \
+            --match-head-commit "$head_sha"
+          # After a rebase-merge, GitHub populates pull_request.merge_commit_sha
+          # asynchronously with the resulting commit on main. It can briefly
+          # be null right after `gh pr merge` returns; retry a few times.
+          # The rebased commit SHA is NOT the same as head_sha, so we cannot
+          # reuse that value. The `tag` job uses this SHA so the tag points
+          # at the exact merge commit even if another PR lands on main first.
+          merge_sha=""
+          for attempt in 1 2 3 4 5 6 7 8 9 10; do
+            merge_sha=$(gh pr view "$PR_NUMBER" \
+              --json mergeCommit --jq '.mergeCommit.oid // ""')
+            if printf '%s' "$merge_sha" | grep -Eq '^[0-9a-f]{40}$'; then
+              echo "merge_sha=$merge_sha (attempt=$attempt)"
+              break
+            fi
+            echo "mergeCommit.oid not yet populated (attempt=$attempt); retrying"
+            merge_sha=""
+            sleep 3
+          done
+          if [ -z "$merge_sha" ]; then
+            echo "::error::PR $PR_NUMBER merged but mergeCommit.oid never populated"
+            exit 1
+          fi
+          echo "merge_sha=$merge_sha" >> "$GITHUB_OUTPUT"
+
+  tag:
+    name: Tag main
+    needs: [prepare, merge]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout main
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git identity
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Tag the rebase-merged commit
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          MERGE_SHA: ${{ needs.merge.outputs.merge_sha }}
+        run: |
+          set -euo pipefail
+          # Validate the SHA shape before doing anything with it. Defense in
+          # depth against an empty / malformed output bubbling through.
+          if ! printf '%s' "$MERGE_SHA" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::MERGE_SHA '$MERGE_SHA' is not a 40-char hex SHA"
+            exit 1
+          fi
+          # Fetch origin/main (for the ancestor check) AND the exact merge
+          # commit. Using the merge SHA — not origin/main — closes the race
+          # where an unrelated PR lands on main between merge and tag, which
+          # would otherwise cause us to tag a commit that isn't the release.
+          git fetch origin main
+          git fetch origin "$MERGE_SHA"
+          # Belt-and-suspenders: confirm the merge commit is actually on
+          # origin/main. If it isn't, something is badly wrong (e.g. main
+          # was force-pushed or rewound); refuse to tag.
+          if ! git merge-base --is-ancestor "$MERGE_SHA" origin/main; then
+            echo "::error::MERGE_SHA $MERGE_SHA is not an ancestor of origin/main; refusing to tag"
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/v$VERSION" >/dev/null; then
+            echo "::error::tag v$VERSION already exists"
+            exit 1
+          fi
+          git tag "v$VERSION" "$MERGE_SHA"
+          git push origin "v$VERSION"
+
+  publish-prod:
+    name: Publish to PyPI
+    needs: [prepare, tag]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # `environment` requires manual approval from gltanaka before the job
+    # actually starts. This is the last human checkpoint before the wheel
+    # ships to PyPI.
+    environment:
+      name: pypi-publish
+      url: https://pypi.org/project/pdd-cli/${{ needs.prepare.outputs.version }}/
+    permissions:
+      id-token: write   # required for PyPI trusted publishing (OIDC)
+      contents: read
+    steps:
+      - name: Checkout release tag
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: v${{ needs.prepare.outputs.version }}
+
+      - name: Set up Python
+        # SHA-pinned to v5.6.0 (https://github.com/actions/setup-python/releases/tag/v5.6.0)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install build tools and pdd
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          # `pdd` must be on PATH for scripts/preprocess_wheel.py to call out
+          # to the CLI to preprocess *_LLM.prompt files inside the wheel.
+          python -m pip install -e .
+
+      - name: Build wheel
+        run: |
+          set -euo pipefail
+          python -m build
+          # Match Makefile behavior: only upload the wheel; the preprocessor
+          # only handles wheels. The sdist would ship unprocessed prompts.
+          rm -f dist/*.tar.gz
+
+      - name: Preprocess wheel
+        run: |
+          set -euo pipefail
+          python scripts/preprocess_wheel.py 'dist/*.whl'
+
+      - name: Publish to PyPI (OIDC)
+        # SHA-pinned to v1.14.0 (https://github.com/pypa/gh-action-pypi-publish/releases/tag/v1.14.0)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+        with:
+          packages-dir: dist
+
+  publish-test:
+    name: Publish to TestPyPI (dry-run)
+    needs: prepare
+    if: ${{ inputs.dry_run }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment:
+      name: pypi-test-publish
+      url: https://test.pypi.org/project/pdd-cli/${{ needs.prepare.outputs.version }}/
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout release branch
+        # SHA-pinned to v4.3.1 (https://github.com/actions/checkout/releases/tag/v4.3.1)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+        with:
+          ref: ${{ needs.prepare.outputs.branch }}
+
+      - name: Set up Python
+        # SHA-pinned to v5.6.0 (https://github.com/actions/setup-python/releases/tag/v5.6.0)
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: '3.12'
+          cache: 'pip'
+
+      - name: Install build tools and pdd
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          python -m pip install build twine
+          python -m pip install -e .
+
+      - name: Build wheel
+        run: |
+          set -euo pipefail
+          python -m build
+          rm -f dist/*.tar.gz
+
+      - name: Preprocess wheel
+        run: |
+          set -euo pipefail
+          python scripts/preprocess_wheel.py 'dist/*.whl'
+
+      - name: Publish to TestPyPI (OIDC)
+        # SHA-pinned to v1.14.0 (https://github.com/pypa/gh-action-pypi-publish/releases/tag/v1.14.0)
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b
+        with:
+          packages-dir: dist
+          repository-url: https://test.pypi.org/legacy/

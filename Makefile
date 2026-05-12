@@ -58,7 +58,8 @@ help:
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
-	@echo "  make release                 - Bump version, tag, and upload to PyPI (public origin only)"
+	@echo "  make release [BUMP=patch]    - Trigger GHA release workflow (bump=patch|minor|major)"
+	@echo "  make release-local           - Emergency: local release flow (bypasses GHA, requires direct main push)"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
@@ -107,7 +108,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release check-release-remote check-release-branch check-release-clean
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release release-local check-release-remote check-release-branch check-release-clean
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -690,7 +691,20 @@ check-release-clean:
 		exit 1; \
 	fi
 
-release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean
+# Trigger the GitHub Actions release workflow. CI handles the bump, PR,
+# merge, tag, and PyPI upload — see .github/workflows/release.yml. Use
+# `make release BUMP=patch|minor|major` to choose the bump type (default
+# patch). The workflow requires `workflow_dispatch` permission on
+# promptdriven/pdd and is restricted to gltanaka.
+release:
+	@gh workflow run release.yml -f bump=$(or $(BUMP),patch)
+	@echo "release workflow dispatched (bump=$(or $(BUMP),patch)). Watch with: gh run watch"
+
+# Emergency fallback: the original local release flow. Preserved verbatim
+# for the case where the GHA release workflow is broken and a release must
+# go out manually. Requires push access to branch-protected main, a working
+# `conda run -n pdd` environment, and ~/.pypirc with PyPI credentials.
+release-local: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean
 	@echo "Preparing release"
 	@set -e; \
 	CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
