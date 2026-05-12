@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "cli", "signature": "(ctx, force, strength, temperature, time, verbose, quiet, output_cost, review_examples, local, context, list_contexts, core_dump, keep_core_dumps)", "returns": "None"},
+      {"name": "cli", "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)", "returns": "None"},
       {"name": "process_commands", "signature": "(ctx, results, **kwargs)", "returns": "None"},
       {"name": "_derive_success_from_normalized_results", "signature": "(normalized_results: List[Any])", "returns": "bool"},
       {"name": "_restore_captured_streams", "signature": "(ctx)", "returns": "None"},

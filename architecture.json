@@ -46,7 +46,7 @@
           },
           {
             "name": "substitute_template_variables",
-            "signature": "(template, variables) -> str",
+            "signature": "(template, context, *, strict_unresolved: bool = False) -> str",
             "returns": "str"
           },
           {
@@ -5237,7 +5237,7 @@
         "commands": [
           {
             "name": "split_main",
-            "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[str, str, float, str]"
+            "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[Dict[str, str], float, str]"
           }
         ]
       }
@@ -8445,7 +8445,7 @@
         "functions": [
           {
             "name": "cli",
-            "signature": "(ctx, force, strength, temperature, time, verbose, quiet, output_cost, review_examples, local, context, list_contexts, core_dump, keep_core_dumps)",
+            "signature": "(ctx, force, strength, temperature, verbose, quiet, output_cost, review_examples, local, time, context_override, list_contexts, core_dump, keep_core_dumps)",
             "returns": "None"
           },
           {
@@ -8507,7 +8507,7 @@
           },
           {
             "name": "save_last_run",
-            "signature": "(project_root, record)",
+            "signature": "(project_root: Path, argv_tail: List[str], subcommand: str) -> None",
             "returns": "None"
           }
         ]
