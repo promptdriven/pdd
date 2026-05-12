@@ -2424,47 +2424,79 @@ class TestHealModuleInvokesMetadataSync:
         from pdd.ci_drift_heal import heal_module
         drift = self._make_update_drift(tmp_path)
         env = {}
+        captured_snapshot = {"arch": b"pre-sync arch bytes"}
         with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True), \
              patch("pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True), \
              patch("pdd.ci_drift_heal._enforce_structural_invariants", return_value=True), \
              patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False), \
              patch("pdd.ci_drift_heal._revert_prompt_file") as mock_revert, \
-             patch("pdd.ci_drift_heal._cleanup_metadata_artifacts") as mock_cleanup:
+             patch("pdd.ci_drift_heal._snapshot_metadata_state_for",
+                   return_value=captured_snapshot) as mock_snap, \
+             patch("pdd.ci_drift_heal._restore_metadata_state_for") as mock_restore:
             result = heal_module(drift, env)
         assert result is False
         assert mock_revert.called, "prompt was not reverted on metadata_sync failure"
-        # Architecture.json + .pdd/meta writes that landed before the
-        # failing stage MUST also be rolled back, otherwise push-to-main
-        # mode's `git add -A` would publish this module's partial
-        # metadata alongside another module's successful heal
-        # (#871 "no half-synced state" guarantee).
-        assert mock_cleanup.called, (
-            "_cleanup_metadata_artifacts must run after a sync failure so "
-            "architecture.json and .pdd/meta writes do not piggyback on "
-            "git add -A"
+        # The pre-sync snapshot MUST be taken before run_metadata_sync runs
+        # so the per-module rollback has bytes to restore from.
+        assert mock_snap.called, (
+            "_snapshot_metadata_state_for must run before metadata_sync so "
+            "a per-module rollback is possible"
         )
+        # And restore MUST receive the captured snapshot (NOT a global
+        # git restore that would wipe other modules' successful writes).
+        assert mock_restore.called, (
+            "_restore_metadata_state_for must run on sync failure to revert "
+            "this module's architecture/fingerprint writes without touching "
+            "other modules' state"
+        )
+        assert mock_restore.call_args.args[0] is captured_snapshot
 
-    def test_cleanup_metadata_artifacts_restores_architecture_json(self):
-        """Direct test for _cleanup_metadata_artifacts: must invoke
-        `git restore architecture.json` (in addition to the existing
-        .pdd clean + restore), so the architecture-stage write does not
-        survive a later-stage failure.
+    def test_per_module_snapshot_preserves_other_modules_state(self, tmp_path):
+        """Regression for the global-rollback bug: when module B's sync
+        fails after module A heals successfully, restoring B must NOT
+        wipe A's architecture.json / .pdd/meta writes.
+
+        Verifies via the snapshot/restore primitives directly: the
+        snapshot for module B captures architecture.json bytes AT B's
+        snapshot time (which already include A's earlier writes), so
+        restoring from that snapshot preserves A's state.
         """
-        from pdd.ci_drift_heal import _cleanup_metadata_artifacts
-
-        calls = []
-
-        def _record(argv, **kwargs):
-            calls.append(list(argv))
-            return MagicMock(returncode=0, stdout="", stderr="")
-
-        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=_record), \
-             patch("pdd.ci_drift_heal._repo_root", return_value=Path("/repo")):
-            _cleanup_metadata_artifacts()
-
-        assert ["git", "clean", "-fdq", "--", ".pdd"] in calls
-        assert ["git", "restore", "--", ".pdd"] in calls
-        assert ["git", "restore", "--", "architecture.json"] in calls, (
-            f"architecture.json must be restored on metadata-sync failure; "
-            f"recorded calls: {calls}"
+        from pdd.ci_drift_heal import (
+            _snapshot_metadata_state_for,
+            _restore_metadata_state_for,
         )
+
+        repo = tmp_path
+        (repo / ".pdd" / "meta").mkdir(parents=True)
+        # State at the moment we're about to heal module B:
+        # architecture.json already contains module A's healed writes.
+        arch = repo / "architecture.json"
+        arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}')
+
+        drift_b = MagicMock()
+        drift_b.basename = "b"
+        drift_b.language = "python"
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=repo):
+            snapshot_b = _snapshot_metadata_state_for(drift_b)
+
+            # Simulate B's run_metadata_sync writing partial state before
+            # failing: corrupt architecture.json (overwriting A) and
+            # create a partial fingerprint for B.
+            arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"WIPED"},'
+                             b'{"name":"b","fingerprint":"PARTIAL"}]}')
+            (repo / ".pdd" / "meta" / "b_python.json").write_bytes(b"partial")
+
+            _restore_metadata_state_for(snapshot_b)
+
+        # After restore: architecture.json is back to its pre-B-sync state,
+        # which CONTAINS module A's NEW_A write. The repo-wide
+        # `git restore architecture.json` approach (the previous fix)
+        # would have wiped NEW_A back to HEAD.
+        assert arch.read_bytes() == b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}', (
+            "Module-scoped restore must preserve other modules' successful "
+            "writes (here, module A's NEW_A fingerprint must survive)."
+        )
+        # B's partial fingerprint must be removed (it did not exist
+        # pre-snapshot, so restore deletes the file).
+        assert not (repo / ".pdd" / "meta" / "b_python.json").exists()

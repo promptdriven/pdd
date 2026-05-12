@@ -557,47 +557,93 @@ def _revert_prompt_file(drift: DriftInfo) -> None:
         )
 
 
-def _cleanup_metadata_artifacts() -> None:
-    """Best-effort: undo metadata-sync side effects after a failed heal.
+def _snapshot_metadata_state_for(drift: "DriftInfo") -> Dict[str, Optional[bytes]]:
+    """Capture pre-heal bytes of files that ``run_metadata_sync`` may
+    modify for THIS module — module-scoped so a failed module's rollback
+    cannot wipe another module's successful writes during a multi-module
+    push-to-main run.
 
-    `run_metadata_sync` writes in pipeline order — tags (prompt file),
-    then architecture (`architecture.json`), then run_report (`.pdd/meta`
-    deletions), then fingerprint (`.pdd/meta` writes). The orchestrator's
-    own gates only stop writes from *later* stages once an *earlier*
-    stage fails; a fingerprint-stage failure cannot retroactively
-    un-write the tags or architecture changes that already landed on
-    disk. When the heal then runs `git add -A` (push-to-main mode) those
-    partial writes piggyback on another module's successful push,
-    contradicting the #871 "no half-synced state lands" guarantee.
+    Files captured:
+    - ``architecture.json`` (shared across modules; full-file snapshot
+      because the orchestrator rewrites the whole file). At snapshot
+      time this contains any earlier modules' successful writes from
+      this run; restoring it on a later module's failure preserves
+      those.
+    - ``.pdd/meta/<basename>_<language>.json`` (per-module fingerprint).
+      ``None`` value indicates the file did not exist pre-heal, so
+      restore should remove the file rather than restore old bytes.
 
-    Restore protected paths to HEAD so the working tree is back to its
-    pre-heal state for THIS module. The caller is also expected to
-    `_revert_prompt_file(drift)` for the prompt itself.
+    Returns a dict mapping repo-relative POSIX path → file bytes
+    (``None`` ⇒ file absent pre-heal). Used together with
+    :func:`_restore_metadata_state_for`.
     """
     repo_root = _repo_root()
-    # `.pdd/` covers fingerprint + run-report state (clean removes any
-    # untracked entries metadata_sync may have created; restore reverts
-    # tracked changes back to HEAD). `architecture.json` is the
-    # architecture-stage write; restore brings it back to HEAD if
-    # tracked. Both calls are best-effort — failure to roll back is
-    # logged but does not raise, because the heal path has already
-    # decided to fail this module and additional exceptions here would
-    # mask the real reason.
-    for argv in (
-        ["git", "clean", "-fdq", "--", ".pdd"],
-        ["git", "restore", "--", ".pdd"],
-        ["git", "restore", "--", "architecture.json"],
-    ):
+    snapshot: Dict[str, Optional[bytes]] = {}
+
+    arch_path = repo_root / "architecture.json"
+    try:
+        snapshot["architecture.json"] = (
+            arch_path.read_bytes() if arch_path.exists() else None
+        )
+    except OSError:
+        snapshot["architecture.json"] = None
+
+    basename = getattr(drift, "basename", None)
+    language = getattr(drift, "language", None)
+    if basename and language:
+        fp_path = repo_root / ".pdd" / "meta" / f"{basename}_{language}.json"
         try:
-            subprocess.run(
-                argv,
-                cwd=str(repo_root),
-                capture_output=True,
-                text=True,
-                timeout=20,
+            snapshot[f".pdd/meta/{basename}_{language}.json"] = (
+                fp_path.read_bytes() if fp_path.exists() else None
             )
-        except (subprocess.SubprocessError, FileNotFoundError):
+        except OSError:
+            snapshot[f".pdd/meta/{basename}_{language}.json"] = None
+
+    return snapshot
+
+
+def _restore_metadata_state_for(snapshot: Dict[str, Optional[bytes]]) -> None:
+    """Restore files captured by :func:`_snapshot_metadata_state_for` to
+    their pre-sync bytes. Module-scoped — never touches other modules'
+    fingerprints or unrelated ``.pdd/meta`` entries. Best-effort: I/O
+    failures during restore are swallowed because the caller has already
+    decided to fail this module and additional exceptions here would
+    mask the real reason.
+
+    Empty/``None`` snapshot values mean "file did not exist pre-heal";
+    restore removes the file in that case so that, e.g., a fingerprint
+    finalize that ran before a later stage failed does not survive the
+    rollback.
+    """
+    repo_root = _repo_root()
+    for rel, data in snapshot.items():
+        path = repo_root / rel
+        try:
+            if data is None:
+                if path.exists():
+                    path.unlink()
+            else:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+        except OSError:
             pass
+
+
+def _cleanup_metadata_artifacts() -> None:
+    """DEPRECATED — kept only so existing callers/tests that import this
+    name keep resolving. The previous implementation did
+    ``git restore .pdd`` and ``git restore architecture.json``, which is
+    repository-scoped: in a multi-module push-to-main heal, restoring
+    those paths to HEAD also wipes earlier modules' successful writes
+    from this run. Use :func:`_snapshot_metadata_state_for` paired with
+    :func:`_restore_metadata_state_for` instead — they capture the
+    bytes for THIS module's protected paths so rollback is scoped.
+
+    No-ops are safer than the old global restore: leaving the working
+    tree as-is is the right default for callers that haven't yet been
+    migrated to the snapshot/restore pattern.
+    """
+    return None
 
 
 # --------------------------------------------------------------------------- #
@@ -945,23 +991,27 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         except OSError:
             prompt_exists = False
 
+        # Carries the pre-sync snapshot across both failure branches
+        # below (sync-fail AND example-regen fail). None when prompt did
+        # not exist (no sync ran) or when prompt_exists was False — in
+        # which case _restore_metadata_state_for is simply skipped.
+        metadata_snapshot: Optional[Dict[str, Optional[bytes]]] = None
+
         if prompt_exists:
             if not _enforce_prompt_churn_gate(drift):
                 return False
             if not _enforce_structural_invariants(drift):
                 return False
+            # Snapshot architecture.json + this module's fingerprint BEFORE
+            # invoking run_metadata_sync so a failure can be rolled back
+            # without touching other modules' state. A repo-scoped restore
+            # (the previous approach) would, in a multi-module
+            # push-to-main heal, wipe earlier successful modules' writes
+            # from this run when a later module's sync failed.
+            metadata_snapshot = _snapshot_metadata_state_for(drift)
             if not _run_metadata_sync_safe(resolved_prompt, drift.code_path):
-                # Roll back the prompt file (tags-stage write) AND any
-                # architecture.json / .pdd/meta writes that landed before
-                # the failing stage. Without this, push-to-main mode's
-                # `git add -A` (commit_and_push) can publish the failed
-                # module's partial metadata alongside another module's
-                # successful heal — contradicting #871's "no half-synced
-                # state" guarantee. The example-fail branch below already
-                # follows the same revert-prompt + cleanup-artifacts
-                # pattern; mirror it here.
                 _revert_prompt_file(drift)
-                _cleanup_metadata_artifacts()
+                _restore_metadata_state_for(metadata_snapshot)
                 return False
 
         if in_skip_set:
@@ -980,8 +1030,17 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
             str(drift.code_path),
         ]
         if not _run_pdd_command(example_cmd, env, f"example {drift.basename}"):
+            # Roll back BOTH the prompt and the per-module metadata
+            # writes that landed before the example regen failed. Use
+            # the module-scoped snapshot taken pre-sync so we don't
+            # erase other modules' state on a multi-module push-to-main
+            # heal (see _snapshot_metadata_state_for for the scope
+            # contract). metadata_snapshot is None when prompt_exists
+            # was False — in that case run_metadata_sync never ran and
+            # there is nothing module-scoped to roll back.
             _revert_prompt_file(drift)
-            _cleanup_metadata_artifacts()
+            if metadata_snapshot is not None:
+                _restore_metadata_state_for(metadata_snapshot)
             return False
         return True
 
