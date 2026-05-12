@@ -122,9 +122,17 @@ jobs:
             fork=true
           fi
 
+          manual_heal_required=false
+          if [ "$EVENT_NAME" = "pull_request_target" ] &&
+             [ "$fork" = "false" ] &&
+             [ "$requester" = "prompt-driven-github[bot]" ]; then
+            manual_heal_required=true
+          fi
+
           {
             echo "skip=false"
             echo "fork=$fork"
+            echo "manual_heal_required=$manual_heal_required"
             echo "pr_number=$pr_number"
             echo "pr_head_sha=$pr_head_sha"
             echo "pr_head_repo=$pr_head_repo"
@@ -172,8 +180,27 @@ jobs:
             -f "output[title]=auto-heal skipped (fork PR)" \
             -f "output[summary]=Fork PRs are not auto-healed because the heal pushes commits to the PR branch (not possible across forks). [Workflow run]($RUN_URL)."
 
+      # Generated PRs are authored by prompt-driven-github[bot], which is not
+      # itself a pdd_cloud collaborator. Leave the job green and wait for an
+      # authorized collaborator to comment /heal; the comment path validates
+      # that human requester before dispatching Cloud Build.
+      - name: Wait for collaborator /heal on generated PRs
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          CHECK_ID: ${{ steps.check_start.outputs.check_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh api -X PATCH "repos/$REPO/check-runs/$CHECK_ID" \
+            -f status='completed' \
+            -f conclusion='neutral' \
+            -f "output[title]=auto-heal waiting for /heal" \
+            -f "output[summary]=Generated PRs require a pdd_cloud collaborator to comment /heal before auto-heal can run. [Workflow run]($RUN_URL)."
+
       - name: Mint pdd_cloud App token
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required != 'true'
         id: app_token
         # SHA-pinned to v3.1.1 (https://github.com/actions/create-github-app-token/releases/tag/v3.1.1)
         uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3
@@ -184,7 +211,7 @@ jobs:
           repositories: pdd_cloud
 
       - name: Authorize requester (must be pdd_cloud collaborator)
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required != 'true'
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           REQUESTER: ${{ steps.pf.outputs.requester }}
@@ -220,7 +247,7 @@ jobs:
           esac
 
       - name: Authenticate to GCP via Workload Identity Federation
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required != 'true'
         # SHA-pinned to v3.0.0 (https://github.com/google-github-actions/auth/releases/tag/v3.0.0)
         uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093
         with:
@@ -228,12 +255,12 @@ jobs:
           service_account: pdd-public-heal-dispatcher@prompt-driven-development-stg.iam.gserviceaccount.com
 
       - name: Set up gcloud
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required != 'true'
         # SHA-pinned to v3.0.1 (https://github.com/google-github-actions/setup-gcloud/releases/tag/v3.0.1)
         uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db
 
       - name: Submit Cloud Build (async)
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required != 'true'
         id: gcb_submit
         env:
           PR_NUMBER: ${{ steps.pf.outputs.pr_number }}
@@ -267,7 +294,7 @@ jobs:
           echo "Cloud Build $build_id submitted; polling for completion."
 
       - name: Wait for Cloud Build to complete
-        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false'
+        if: steps.pf.outputs.skip != 'true' && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required != 'true'
         env:
           BUILD_ID: ${{ steps.gcb_submit.outputs.build_id }}
         run: |
@@ -296,7 +323,7 @@ jobs:
           done
 
       - name: Finalize check_run
-        if: always() && steps.check_start.outputs.check_id && steps.pf.outputs.fork == 'false'
+        if: always() && steps.check_start.outputs.check_id && steps.pf.outputs.fork == 'false' && steps.pf.outputs.manual_heal_required != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
