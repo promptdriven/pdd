@@ -1,6 +1,25 @@
 <include>context/python_preamble.prompt</include>
 <include>context/ctx_obj_params.prompt</include>
+
+<pdd-reason>CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, and optional metadata sync.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "update_main",
+        "signature": "(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git, repo, extensions, directory, strength, temperature, simple=False, base_branch='main', budget=None, dry_run=False, sync_metadata=False)",
+        "returns": "Optional[Tuple[str, float, str]]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
+<pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
 
 % Goal
 Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on modified code, featuring repository-wide scanning, agentic routing, and post-update synchronization.
@@ -9,7 +28,7 @@ Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on mod
 Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability. In repo mode, detects changed files via fingerprint comparison (with git fallback) and performs post-update architecture/PRD sync.
 
 % Requirements
-1. Function: `update_main(ctx, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git, repo, extensions, directory, strength: Optional[float], temperature: Optional[float], simple: bool = False, base_branch: str = "main") -> Optional[Tuple[str, float, str]]`
+1. Function: `update_main(ctx, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git, repo, extensions, directory, strength: Optional[float], temperature: Optional[float], simple: bool = False, base_branch: str = "main", budget: Optional[float] = None, dry_run: bool = False, sync_metadata: bool = False) -> Optional[Tuple[str, float, str]]`
 2. Return (prompt, cost, model) on success, None on error.
 3. Agentic routing (when `simple=False` and agents available): try agentic first, fall back to legacy on failure — applies to all three modes.
 4. Read updated prompt file content after successful agentic update (agentic writes directly to file).
@@ -19,6 +38,12 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 8. Without --output, overwrite input_prompt_file in place.
 9. use_git and input_code_file are mutually exclusive (raise ValueError).
 10. Before any legacy path writes generated/updated `.prompt` content, call `sanitize_prompt_output(content, destination_path)` so invalid `<include>` tags or selected includes are cleaned before a later `pdd sync` preprocess pass.
+11. **Metadata sync orchestration** (opt-in via `sync_metadata=True`):
+    - **Single-file & regeneration modes**: After the prompt has been written successfully, call `run_metadata_sync(prompt_path=<written prompt path>, code_path=<modified_code_file>, dry_run=False)` from `pdd.metadata_sync`. Aggregate per-stage status into a returned summary and surface any unresolved gaps in the Rich console (one line per failed stage, naming the stage). Do not run when the update itself failed or returned None. **When the orchestrator returns a `MetadataSyncResult` whose `.ok` is False (or it raises), `update_main` MUST raise `click.exceptions.Exit(1)`** — `return None` is insufficient because the Click command wrapper (`pdd/commands/modify.py:update`) treats a None return as a normal completion (`exit_code 0`). Raising `click.exceptions.Exit(1)` is the only way to make the CLI exit non-zero, which is what the preflight auto-heal subprocess keys off (`agentic_change_orchestrator.py:1009` checks `returncode == 0`). The Click command wrapper must include `click.exceptions.Exit` in its re-raise list so a bare `except Exception` does not swallow the signal back into exit 0 (#871 acceptance criterion).
+    - **Repo mode**: Replace the existing post-update per-pair fingerprint + per-pair architecture-sync sequence with a single `run_metadata_sync` call per successfully updated pair. The orchestrator handles fingerprint finalization (last), architecture sync, and run-report cleanup. **PRD sync remains in `update_main`** (called once after the per-pair loop, keyed off the count of pairs whose `MetadataSyncResult.stages['architecture']` reports updates) — the orchestrator deliberately does NOT call PRD sync itself, keeping its blast radius scoped to per-prompt metadata. One pair's failure must not abort the batch — accumulate per-pair `MetadataSyncResult` and render them in the summary table. **After the summary table is printed, if any per-pair `MetadataSyncResult.ok` is False, `update_main` MUST raise `click.exceptions.Exit(1)`** — same contract as single-file mode (the success tuple is reserved for "every pair finalized cleanly"). Without this, repo-mode silently returns the success tuple and Click exits 0, which is the exact false-green automation hazard #871 was wired up to prevent.
+    - **Summary table**: Add a `metadata` column showing one of `synced`, `partial:<stage>`, `failed:<stage>`, `skipped`, or `dry-run`. When `sync_metadata=False`, render `skipped` so the column is present but informative.
+    - **Failure reporting**: When any stage in `MetadataSyncResult` is not `ok`, print a Rich error line per failed stage with the stage name and reason. The `metadata` column makes it obvious which layer is incomplete.
+    - **Backward compatibility**: When `sync_metadata=False` (default), behavior is unchanged — repo mode keeps its current post-update fingerprint and architecture-sync calls; single-file/regeneration modes do nothing extra.
 
 % Modes
 1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
@@ -57,11 +82,15 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 - After resolving pairs, call `ensure_pddrc_for_scan` from `pddrc_initializer` to auto-create `.pddrc` if needed.
 - **Change detection**: Use `get_git_changed_files` + `is_code_changed` to filter pairs. Also include pairs with empty (0-byte) prompt files regardless of code changes. Include dependency hashes from fingerprints are checked so that changes to shared include files (preambles, examples) trigger updates.
 - Progress bar: Rich Progress with spinner, bar, percentage, time remaining, and running total cost.
-- **Post-update fingerprinting**: After successful update, `save_fingerprint` for the pair via `infer_module_identity`.
-- **Post-update architecture sync**: Use `find_architecture_for_project` to locate architecture files. For each successfully updated prompt, call `update_architecture_from_prompt` if architecture file exists.
-- **Post-update PRD sync**: If architecture entries were updated, find PRD file and use `run_agentic_task` to review/update PRD content (parse `<updated-prd>` tags from LLM output).
-- Summary table: prompt file, status, cost, model, error columns. Show architecture/PRD status if relevant.
-- Return: ("Repository update complete.", total_cost, "models") or None if no files/no changes.
+- **Post-update fingerprinting** (legacy, `sync_metadata=False` only): After each successful pair update, `save_fingerprint` via `infer_module_identity`. When `sync_metadata=True`, the per-pair `run_metadata_sync` call replaces this — do NOT also call `save_fingerprint` here, or the fingerprint will be written before the orchestrator's gates run and a stale fingerprint can record "in sync" even when an earlier metadata stage failed.
+- **Post-update architecture sync** (legacy, `sync_metadata=False` only): Use `find_architecture_for_project` to locate architecture files; for each successfully updated prompt, call `update_architecture_from_prompt` if architecture file exists. When `sync_metadata=True`, this is handled inside `run_metadata_sync` (which also gates the write on prior-stage success), so do NOT call it again from `update_main`.
+- **Post-update PRD sync** (both branches): If architecture entries were updated, find PRD file and use `run_agentic_task` to review/update PRD content (parse `<updated-prd>` tags from LLM output). PRD sync stays in `update_main` even under `sync_metadata=True` — the orchestrator deliberately does NOT call it (see Requirement 11). Key off the count of pairs whose `MetadataSyncResult.stages['architecture']` reported `updated`/`ok` (or, in the legacy branch, off the count returned by the inline arch loop).
+- Summary table: `prompt file`, `status`, `cost`, `model`, `error` columns. When `sync_metadata=True`, append a `metadata` column (one of `synced`, `partial:<stage>`, `failed:<stage>`, `skipped`, `dry-run`) so partial heals surface visibly. Show architecture/PRD status if relevant.
+- **Non-zero exit on per-pair metadata failure** (`sync_metadata=True` only): After the summary table prints, if any per-pair `MetadataSyncResult.ok` is False, raise `click.exceptions.Exit(1)` — the success tuple is reserved for "every pair finalized cleanly". Without this, repo-mode silently returns success and Click exits 0, which is the false-green automation hazard #871 was wired up to prevent.
+- Return values:
+  - `("Repository update complete.", total_cost, "models")` on a completed batch — i.e. at least one pair was actually updated (and, under `sync_metadata=True`, every per-pair `MetadataSyncResult.ok` is True). `total_cost` is summed across the batch; `"models"` is a comma-joined sorted list of models used.
+  - `None` on early no-op exits BEFORE any pair is updated: not-in-a-git-repo, no scannable code files in the scan dir (the "No scannable code files found" branch), no changed code files (the "Everything is in sync" branch), and other input-error paths (ValueError, InvalidGitRepositoryError, broad Exception). `None` here means "nothing to do or nothing changed" and is the documented signal the CLI layer treats as exit_code 0.
+  - `click.exceptions.Exit(1)` raised when `sync_metadata=True` and any per-pair `MetadataSyncResult.ok` is False (after the summary table prints). Reserved for "we ran the batch and at least one pair finalized with a `failed` stage" — distinct from the `None` no-op above.
 
 % Error Handling
 - Print Rich error (unless quiet) and return None on errors (ValueError, InvalidGitRepositoryError, Exception).
@@ -87,6 +116,9 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 <pdd.auto_include>
     <include select="def:main">context/auto_include_example.py</include>
 </pdd.auto_include>
+<pdd.metadata_sync>
+    <include optional>context/metadata_sync_example.py</include>
+</pdd.metadata_sync>
 </module_dependencies>
 
 % Deliverables

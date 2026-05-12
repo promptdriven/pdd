@@ -325,6 +325,12 @@ def change(
     default=False,
     help="Repository-wide only: show which prompts would be updated without calling the LLM or writing outputs.",
 )
+@click.option(
+    "--sync-metadata",
+    is_flag=True,
+    default=False,
+    help="After update, run the shared metadata-sync orchestrator (preserve/seed PDD tags, reconcile architecture.json entry, clear stale run reports, finalize fingerprint last). On any stage failed, exits non-zero. Stages may report skipped for legitimate cases (no architecture.json, unregistered modules). LLM-first refresh of stale-but-present tags is tracked at #870 and is NOT invoked here.",
+)
 @click.pass_context
 @log_operation(operation="update", clears_run_report=True)
 @track_cost
@@ -340,6 +346,7 @@ def update(
     base_branch: str,
     budget: Optional[float],
     dry_run: bool,
+    sync_metadata: bool,
 ) -> Optional[Tuple[Any, float, str]]:
     """
     Update the original prompt file based on code changes.
@@ -443,13 +450,18 @@ def update(
             base_branch=base_branch,
             budget=budget,
             dry_run=dry_run,
+            sync_metadata=sync_metadata,
         )
 
         if ret is None:
             return None
         return ret
 
-    except (click.Abort, click.UsageError):
+    except (click.Abort, click.UsageError, click.exceptions.Exit):
+        # click.exceptions.Exit carries an intentional non-zero exit code
+        # (raised e.g. when sync_metadata finalization fails — see
+        # update_main). Letting `except Exception` swallow it would silently
+        # convert it to exit 0 and re-introduce the bug fixed for #871.
         raise
     except Exception as e:
         handle_error(e, "update", ctx.obj.get("quiet", False))
