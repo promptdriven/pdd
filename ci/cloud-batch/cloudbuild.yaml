@@ -1,20 +1,54 @@
 steps:
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['pull', '${_AR_IMAGE}']
+    id: pull-cache
+    args: ['pull', '${_AR_IMAGE}:latest']
     allowFailure: true
   - name: 'gcr.io/cloud-builders/docker'
+    id: build-image
+    waitFor: ['pull-cache']
     args:
       - 'build'
-      - '--cache-from=${_AR_IMAGE}'
+      - '--cache-from=${_AR_IMAGE}:latest'
       - '-t'
-      - '${_AR_IMAGE}'
+      - '${_AR_IMAGE}:$BUILD_ID'
       - '-f'
       - 'ci/cloud-batch/Dockerfile'
       - '.'
-images:
-  - '${_AR_IMAGE}'
+  # Phantom-contract guard: verify the candidate image actually carries the
+  # pytest plugins our markers and config rely on. If a requirements.txt /
+  # Dockerfile drift leaves any plugin uninstalled, this step fails BEFORE we
+  # republish :latest, so the next Cloud Batch run keeps using the last good
+  # image instead of fanning 76 VMs out against a broken one.
+  - name: 'gcr.io/cloud-builders/docker'
+    id: verify-image-plugins
+    waitFor: ['build-image']
+    args:
+      - 'run'
+      - '--rm'
+      - '--entrypoint'
+      - 'python'
+      - '${_AR_IMAGE}:$BUILD_ID'
+      - '-c'
+      - >
+        import pytest_timeout, pytest_xdist, pytest_mock,
+               pytest_asyncio, pytest_cov, pytest_testmon;
+        print("image pytest-plugin contract OK")
+  # Only republish :latest after the candidate image clears the plugin
+  # contract. Failure above leaves the candidate tag behind for forensic
+  # inspection but does NOT update :latest.
+  - name: 'gcr.io/cloud-builders/docker'
+    id: retag-and-push-latest
+    waitFor: ['verify-image-plugins']
+    entrypoint: 'bash'
+    args:
+      - '-c'
+      - |
+        set -euo pipefail
+        docker tag '${_AR_IMAGE}:$BUILD_ID' '${_AR_IMAGE}:latest'
+        docker push '${_AR_IMAGE}:$BUILD_ID'
+        docker push '${_AR_IMAGE}:latest'
 options:
   machineType: 'E2_HIGHCPU_8'
 substitutions:
-  _AR_IMAGE: 'us-central1-docker.pkg.dev/prompt-driven-development-stg/pdd-ci/pdd-test:latest'
-timeout: '1200s'
+  _AR_IMAGE: 'us-central1-docker.pkg.dev/prompt-driven-development-stg/pdd-ci/pdd-test'
+timeout: '1800s'

@@ -78,6 +78,26 @@ pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-d
 SETUP_END=$(date +%s)
 SETUP_SECONDS=$((SETUP_END - SETUP_START))
 
+# ── Phantom-contract preflight ────────────────────────────────────────────
+# Image plugin contract: confirm pytest plugins required by markers in tests/
+# are actually importable. Catches a stale image, or someone bumping
+# requirements.txt without updating Dockerfile's explicit plugin install.
+python - <<'PY' || {
+    echo "FATAL: image missing expected pytest plugins"
+    write_result "failed" "${SETUP_SECONDS}" "preflight" "missing pytest plugins"
+    exit 1
+}
+import pytest_timeout, pytest_xdist, pytest_mock, pytest_asyncio, pytest_cov, pytest_testmon
+PY
+
+# Pytest config contract: confirm pyproject.toml [tool.pytest.ini_options]
+# parses cleanly and all markers we use are registered (strict-markers).
+python -m pytest --collect-only --quiet --strict-markers --strict-config tests/ -k __nonexistent__ >/dev/null 2>&1 || {
+    echo "FATAL: pytest config or marker registration is broken"
+    write_result "failed" "${SETUP_SECONDS}" "preflight" "pytest config invalid"
+    exit 1
+}
+
 # ── Vertex AI auth via ADC (service account attached to VM) ───────────────
 export VERTEX_PROJECT="${VERTEX_PROJECT:-prompt-driven-development-stg}"
 export VERTEX_LOCATION="global"
