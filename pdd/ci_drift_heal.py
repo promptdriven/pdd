@@ -34,14 +34,19 @@ _HEAL_PROMPT_CHURN_MAX_RATIO = 5.0
 # regresses and needs a short-lived operational bypass.
 
 
-def _get_git_changed_files(diff_base: str) -> set:
+def _get_git_changed_files(diff_base: str) -> Optional[set]:
     """Return the set of file paths changed between diff_base and HEAD.
 
     Args:
         diff_base: Git diff base reference (e.g. "origin/main...HEAD" or "HEAD~1").
 
     Returns:
-        Set of changed file paths (relative to repo root), or empty set on failure.
+        Set of changed file paths (relative to repo root) on success, or
+        ``None`` when the lookup failed (e.g. shallow checkout, unknown ref,
+        subprocess error). Callers must treat ``None`` as "unknown" — distinct
+        from "empty diff" — so they do not fail-open against touched-module
+        checks (notably the phantom-crash filter, which would otherwise drop
+        real drift if a missing diff base were mistaken for "nothing changed").
     """
     try:
         result = subprocess.run(
@@ -52,9 +57,17 @@ def _get_git_changed_files(diff_base: str) -> set:
         )
         if result.returncode == 0:
             return {line.strip() for line in result.stdout.splitlines() if line.strip()}
-        return set()
-    except Exception:
-        return set()
+        console.print(
+            f"[yellow]⚠ git diff --name-only {diff_base} exited "
+            f"{result.returncode}; treating changed-file resolution as failed.[/yellow]"
+        )
+        return None
+    except Exception as e:
+        console.print(
+            f"[yellow]⚠ git diff --name-only {diff_base} failed: {e}; "
+            "treating changed-file resolution as failed.[/yellow]"
+        )
+        return None
 
 
 def _git_relative_path_candidates(path: Optional[Path], repo_root: Path) -> set:

@@ -217,16 +217,22 @@ class TestGetGitChangedFiles:
             result = _get_git_changed_files("origin/main...HEAD")
         assert result == {"pdd/auth.py", "pdd/api.py"}
 
-    def test_returns_empty_on_failure(self):
+    def test_returns_none_on_failure(self):
+        """Return None (not an empty set) when git diff fails so callers can
+        distinguish "no changes" from "lookup failed" — critical for the
+        phantom-crash filter, which must not treat a failed lookup as
+        "module is untouched"."""
         mock_result = MagicMock(returncode=1, stdout="", stderr="error")
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result):
             result = _get_git_changed_files("origin/main...HEAD")
-        assert result == set()
+        assert result is None
 
-    def test_returns_empty_on_exception(self):
+    def test_returns_none_on_exception(self):
+        """Return None on subprocess error (e.g. git missing) for the same
+        reason as test_returns_none_on_failure."""
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=FileNotFoundError):
             result = _get_git_changed_files("origin/main...HEAD")
-        assert result == set()
+        assert result is None
 
     def test_strips_whitespace(self):
         mock_result = MagicMock(returncode=0, stdout="  pdd/auth.py  \n\n  pdd/api.py\n")
@@ -458,6 +464,34 @@ class TestDetectDriftWithDiffBase:
         basenames = {d.basename for d in (*prompt_drifts, *example_drifts)}
         assert "checkup" not in basenames
         assert "api" in basenames
+
+    def test_phantom_crash_with_failed_diff_lookup_is_not_dropped(self):
+        """If _get_git_changed_files returns None (shallow checkout / missing
+        diff base / subprocess error), the phantom-crash filter must not
+        fire — treating an unresolved diff as "module is untouched" would
+        silently drop real drift on a touched module. The drift falls
+        through to the drift list and the heal_module guard takes over
+        (less ideal, but never silently loses touched-module drift)."""
+        phantom = MagicMock(
+            operation="crash",
+            reason="All files exist but needs validation - no run_report",
+        )
+        files, infer, sync = self._setup_mocks({"checkup": phantom})
+        mock_paths = {"code": Path("pdd/checkup.py"), "prompt": Path("prompts/checkup_python.prompt")}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=None):
+            prompt_drifts, example_drifts = detect_drift(diff_base="origin/main...HEAD")
+
+        # Phantom crash falls through (operation kept as "crash") — heal_module
+        # guard, not detect_drift, decides what to do.
+        all_drifts = [*prompt_drifts, *example_drifts]
+        assert len(all_drifts) == 1
+        assert all_drifts[0].basename == "checkup"
+        assert all_drifts[0].operation == "crash"
 
     def test_phantom_crash_on_touched_module_is_reclassified_to_example(self):
         """Phantom 'no run_report' crash on a module whose code or prompt

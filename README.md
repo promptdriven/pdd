@@ -3489,17 +3489,22 @@ PDD can be integrated into various development workflows. Here are the conceptua
 **Usage:**
 ```bash
 # Scan all modules (main branch trigger)
-python -m pdd.ci_drift_heal
+python -m pdd.ci_drift_heal --diff-base HEAD~1
 
-# Scan specific modules (PR trigger)
-python -m pdd.ci_drift_heal --modules module_a module_b
+# Scan specific modules (PR trigger) — pass --diff-base so clean-CI
+# reclassification and the phantom-crash filter can run
+python -m pdd.ci_drift_heal \
+    --modules module_a module_b \
+    --diff-base origin/main...HEAD
 
 # With budget cap and skip-ci flag
-python -m pdd.ci_drift_heal --budget-cap 5.00 --skip-ci
+python -m pdd.ci_drift_heal \
+    --budget-cap 5.00 --skip-ci --diff-base HEAD~1
 ```
 
 **Key Options:**
 - `--modules`: Limit detection to specific modules (for PR-scoped checks)
+- `--diff-base`: Git diff base (e.g. `origin/main...HEAD` on PR builds, `HEAD~1` on push-to-main). **Required in CI.** Without it, the phantom "no run_report" crash filter cannot run in `detect_drift` and falls back to the `heal_module` guard, which returns `None` — counted as a skipped module — which in PR mode suppresses commits of otherwise-healed modules.
 - `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
 - `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
 
@@ -3520,7 +3525,7 @@ For detailed command examples for each workflow, see the respective command docu
 
 ### CI Auto-Heal
 
-**Workflow File**: `.github/workflows/auto-heal-drift.yml`
+**Workflow File**: `.github/workflows/auto-heal.yml` (dispatches to Cloud Build; the legacy in-runner script `.github/workflows/auto-heal-drift.yml` is kept as a disabled rollback path)
 
 **Purpose**: Automatically detect and fix prompt-code drift in CI.
 
