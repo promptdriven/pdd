@@ -119,10 +119,10 @@ Returns a dictionary containing:
         <include>context/python_env_detector_example.py</include>
     </python_env_detector>
     <get_run_command>
-        <include>context/get_run_command_example.py</include>
+        <!-- Invalid selector for context/get_run_command_example.py: Function 'get_run_command_for_file' not found in source -->
     </get_run_command>
     <pytest_output>
-        <include>context/pytest_output_example.py</include>
+        <!-- Invalid selector for context/pytest_output_example.py: Function 'extract_failing_files_from_output' not found in source -->
     </pytest_output>
 </examples>
 

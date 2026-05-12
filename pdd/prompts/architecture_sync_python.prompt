@@ -12,7 +12,7 @@
       },
       {
         "name": "update_architecture_from_prompt",
-        "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: success, updated, changes, error, warnings"
       },
       {
@@ -83,6 +83,7 @@ This module handles the synchronization of architecture metadata between `archit
 13. Filename normalization (Issue #617): `normalize_architecture_filenames()` rewrites each module's `filename` from its `filepath` so prompt filenames mirror the source directory structure (e.g., `app/api/route.ts` -> `app/api/route_TypeScript.prompt`). Import `filepath_to_prompt_filename` from `.architecture_sync_helper`. Also rewrite dependency references to use the new filenames. Skip extensionless files (e.g., Makefile).
 14. `get_architecture_entry_for_prompt` supports both exact path match and basename fallback for callers that pass just the filename without subdirectory prefix.
 15. Use Path.cwd() for default paths to work with user's project directory, not package installation
+16. **`prompt_content_override` (additive, optional)**: `update_architecture_from_prompt` accepts an optional `prompt_content_override: Optional[str] = None` kwarg. When provided, parse PDD metadata tags from this in-memory string instead of reading the file from disk. This lets the `run_metadata_sync` orchestrator hand in freshly-generated tags from the prompt-update + tag-refresh stages without an extra disk round-trip and without racing against the file write. When `None` (default), behavior is unchanged — read content from disk as before. All other parameters retain their existing semantics.
 
 % Dependencies
 - `lxml.etree` for XML parsing with recovery mode
