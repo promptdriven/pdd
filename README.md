@@ -1053,6 +1053,20 @@ Options (agentic mode):
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
+### sync-architecture
+
+Sync `architecture.json` by scanning all `.prompt` files in the repository and updating metadata (tags, descriptions, context URLs). This ensures the dependency graph and module discovery stay up to date.
+
+```bash
+pdd sync-architecture [OPTIONS] [FILENAMES]...
+```
+
+**Arguments:**
+*   `[FILENAMES]...`: Optional specific prompt files to scan. If omitted, scans all `.prompt` files.
+
+**Options:**
+*   `--dry-run`: Analyze prompt-to-architecture sync without writing `architecture.json`. Shows what would be updated.
+
 ### 2. generate
 
 Create runnable code from a prompt file. This command produces the full implementation code that fulfills all requirements in the prompt. When changes are detected between the current prompt and its last committed version, it can automatically perform incremental updates rather than full regeneration.

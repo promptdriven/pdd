@@ -439,51 +439,6 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
-    "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
-    "dependencies": [],
-    "priority": 18,
-    "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
-    "tags": [
-      "backend",
-      "api",
-      "scheduling",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://cloud.google.com/scheduler/docs/creating",
-        "purpose": "Cloud Scheduler daily job configuration"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore compound queries for contribution threshold scanning"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
-        "purpose": "GitHub API for merged PR count verification"
-      },
-      {
-        "url": "https://cloud.google.com/functions/docs/writing/write-http-functions",
-        "purpose": "Cloud Functions HTTP entry point for scheduler triggers"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_resurface_check",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
-          }
-        ]
-      }
-    }
-  },
-  {
     "reason": "Enhances test plan with contract/schema validation and accessibility test cases.",
     "description": "Step 5b of the 18-step agentic test workflow. Enhances the test plan with OpenAPI contract validation and axe-core accessibility test cases.",
     "dependencies": [],
@@ -2993,30 +2948,6 @@
     }
   },
   {
-    "reason": "LLM prompt template for agentic bug step4 reproduce operations.",
-    "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15280,
-      "y": 660
-    }
-  },
-  {
     "reason": "Analyzes bug root cause with cross-cutting detection, variable reference audit, and state symmetry checks.",
     "description": "Defines the prompt structure for agentic bug step6 root cause. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
@@ -3112,31 +3043,6 @@
     "position": {
       "x": 15600,
       "y": 660
-    }
-  },
-  {
-    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
-    "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
-    "dependencies": [],
-    "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "command",
-      "command": {
-        "name": "agentic_bug_step10",
-        "description": "Generate draft PR with failing tests and link to GitHub issue"
-      }
-    },
-    "position": {
-      "x": 15000,
-      "y": 220
     }
   },
   {
@@ -3473,30 +3379,6 @@
     },
     "position": {
       "x": 3000,
-      "y": 0
-    }
-  },
-  {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
-    "tags": [
-      "config",
-      "extraction",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 1800,
       "y": 0
     }
   },
@@ -4022,25 +3904,6 @@
     }
   },
   {
-    "reason": "Shell completion script for bash.",
-    "description": "Provides command-line completion for pdd in bash. Lists commands and options.",
-    "dependencies": [],
-    "priority": 116,
-    "filename": "pdd_completion_bash.prompt",
-    "filepath": "pdd_completion.sh",
-    "tags": [
-      "cli",
-      "shell"
-    ],
-    "interface": {
-      "type": "cli"
-    },
-    "position": {
-      "x": 4800,
-      "y": 660
-    }
-  },
-  {
     "reason": "Shell completion script for fish.",
     "description": "Provides command-line completion for pdd in fish. Lists commands and options.",
     "dependencies": [],
@@ -4076,27 +3939,6 @@
     "position": {
       "x": 5360,
       "y": 660
-    }
-  },
-  {
-    "reason": "Configuration data for pdd theme.",
-    "description": "Defines pdd theme settings and data. Used by runtime modules.",
-    "dependencies": [],
-    "priority": 119,
-    "filename": "pdd_theme_json.prompt",
-    "filepath": "pdd_theme.json",
-    "tags": [
-      "config"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 4800,
-      "y": 1100
     }
   },
   {
@@ -4270,46 +4112,6 @@
     }
   },
   {
-    "reason": "Implements regression analysis functionality.",
-    "description": "Provides regression analysis capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 124,
-    "filename": "regression_analysis_log.prompt",
-    "filepath": "regression_analysis.log",
-    "tags": [
-      "config"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 5960,
-      "y": 0
-    }
-  },
-  {
-    "reason": "Implements regression functionality.",
-    "description": "Provides regression capabilities for PDD operations.",
-    "dependencies": [],
-    "priority": 125,
-    "filename": "regression_bash.prompt",
-    "filepath": "regression.sh",
-    "tags": [
-      "cli",
-      "shell"
-    ],
-    "interface": {
-      "type": "cli"
-    },
-    "position": {
-      "x": 5400,
-      "y": 440
-    }
-  },
-  {
     "reason": "Renders Mermaid diagrams to HTML.",
     "description": "Converts Mermaid diagram specifications to HTML visualization. Used for architecture diagrams.",
     "dependencies": [],
@@ -4353,26 +4155,6 @@
     },
     "position": {
       "x": 10200,
-      "y": 0
-    }
-  },
-  {
-    "reason": "Generates run generated from specifications.",
-    "description": "Creates run generated using LLM. Handles input processing, generation, and output validation.",
-    "dependencies": [],
-    "priority": 127,
-    "filename": "run_generated_python.prompt",
-    "filepath": "pdd/run_generated.py",
-    "tags": [
-      "generation",
-      "module",
-      "python"
-    ],
-    "interface": {
-      "type": "module"
-    },
-    "position": {
-      "x": 6880,
       "y": 0
     }
   },
@@ -5077,26 +4859,6 @@
     }
   },
   {
-    "reason": "Module that test the prompt for a given prompt file.",
-    "description": "Implements functionality to test the prompt for a given prompt file. Integrates with PDD workflow.",
-    "dependencies": [],
-    "priority": 143,
-    "filename": "prompt_tester_python.prompt",
-    "filepath": "pdd/prompt_tester.py",
-    "tags": [
-      "module",
-      "python",
-      "testing"
-    ],
-    "interface": {
-      "type": "module"
-    },
-    "position": {
-      "x": 6280,
-      "y": 1020
-    }
-  },
-  {
     "reason": "Provides real-time progress visualization for sync.",
     "description": "Displays animated progress indicators, step status, and cost tracking during sync operations.",
     "dependencies": [],
@@ -5724,55 +5486,6 @@
     "position": {
       "x": 20400,
       "y": 800
-    }
-  },
-  {
-    "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
-    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
-    "dependencies": [],
-    "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15560,
-      "y": 440
-    }
-  },
-  {
-    "reason": "Generates E2E tests that verify the bug at a system level.",
-    "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
-    "dependencies": [],
-    "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
-    "tags": [
-      "agentic",
-      "config",
-      "llm",
-      "template",
-      "testing"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 15880,
-      "y": 440
     }
   },
   {
@@ -7800,9 +7513,12 @@
     }
   },
   {
-    "reason": "Registers maintenance CLI commands: sync, auto-deps, and setup with all options.",
+    "reason": "Registers maintenance CLI commands: sync, sync-architecture, auto-deps, and setup with all options.",
     "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument or explicit `architecture.json` global sync with resolved default budget, and GitHub issue sync dispatch.",
-    "dependencies": [],
+    "dependencies": [
+      "auto_deps_main_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",
     "filepath": "pdd/commands/maintenance.py",
@@ -7811,12 +7527,16 @@
       "python"
     ],
     "interface": {
-      "type": "command",
-      "command": {
+      "type": "cli",
+      "cli": {
         "commands": [
           {
             "name": "sync",
-            "description": "Synchronize one prompt module, all stale architecture modules when no basename is provided, or modules affected by a GitHub issue URL"
+            "description": "Synchronize a prompt with its code, tests, and examples"
+          },
+          {
+            "name": "sync-architecture",
+            "description": "Sync architecture.json from prompt metadata tags"
           },
           {
             "name": "auto-deps",
@@ -8715,5 +8435,30 @@
         ]
       }
     }
+  },
+  {
+    "reason": "Registers all PDD CLI subcommands with the main click.Group to keep cli.py clean.",
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "register_commands",
+            "signature": "(cli: click.Group) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    },
+    "dependencies": [
+      "python_preamble.prompt"
+    ],
+    "filename": "commands/__init___python.prompt",
+    "filepath": "pdd/commands/__init__.py",
+    "priority": 50,
+    "tags": [
+      "module",
+      "python"
+    ]
   }
 ]
