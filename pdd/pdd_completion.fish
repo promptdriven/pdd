@@ -181,4 +181,4 @@ complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess
 complete -c pdd -n "__fish_seen_subcommand_from generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify" -a "(__fish_complete_suffix .log .txt .csv)"
 
 # Help completion
-complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync setup install_completion pytest-output" -d "Show help for specific command"
+complete -c pdd -n "__fish_seen_subcommand_from help" -a "generate example test preprocess fix split change update detect conflicts crash trace bug auto-deps verify sync checkup setup install_completion pytest-output" -d "Show help for specific command"
