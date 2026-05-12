@@ -326,3 +326,77 @@ jobs:
             -f conclusion="$conclusion" \
             -f "output[title]=auto-heal $conclusion" \
             -f "output[summary]=$summary"
+
+      # Why this step exists:
+      # On `pull_request_target` events, GitHub Actions auto-posts a
+      # check-run named after this job (`heal`) to the PR head SHA — so the
+      # PR's check list always reflects the conclusion of the most recent
+      # push's auto-trigger run. For bot-authored PRs that conclusion is
+      # always `failure` (auth-gate exits 1 because the bot is not a
+      # pdd_cloud collaborator), and for human-authored PRs it can be
+      # `failure` due to Cloud Build flakes (#941).
+      #
+      # On `issue_comment` events the workflow runs in the default-branch
+      # context, so GitHub Actions' auto-posted check-run goes to main's
+      # SHA, NOT the PR head — the pre-existing `heal: failure` check-run
+      # on the PR head is therefore left untouched even after a successful
+      # `/heal`. The PR's "auto-heal" check (the one we manage explicitly
+      # in `Finalize check_run`) flips green, but the structural `heal`
+      # red sits next to it permanently.
+      #
+      # This step explicitly creates a new `heal` check-run on the PR head
+      # SHA on every `/heal` run. GitHub's checks-API rollup uses the most
+      # recently updated check-run per (name, app) on a given SHA — and
+      # GITHUB_TOKEN runs as the same `github-actions` app that auto-posts
+      # the original, so this fresh check-run becomes the authoritative
+      # one. The result: `/heal` actively clears (or refreshes) the red
+      # `heal` check-run on the PR, matching the operator mental model.
+      #
+      # Scope:
+      # - `issue_comment` only — `pull_request_target` already gets a fresh
+      #   GHA-auto-posted `heal` check-run on the PR head, so duplicating
+      #   here would be redundant.
+      # - `fork == 'false'` — fork PRs are short-circuited to `neutral`
+      #   earlier and never reach this step.
+      # - `skip != 'true'` — `/healthcheck`, `/healz`, etc. don't get a
+      #   privileged refresh.
+      # - `always()` so failures (auth-gate reject, Cloud Build fail) still
+      #   refresh the check-run with the correct conclusion rather than
+      #   leaving stale state on the PR head.
+      - name: Mirror conclusion to `heal` check-run on PR head (issue_comment /heal)
+        if: |
+          always() &&
+          github.event_name == 'issue_comment' &&
+          steps.pf.outputs.skip != 'true' &&
+          steps.pf.outputs.fork == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_HEAD_SHA: ${{ steps.pf.outputs.pr_head_sha }}
+          JOB_STATUS: ${{ job.status }}
+          BUILD_ID: ${{ steps.gcb_submit.outputs.build_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Match Finalize check_run's collapse: only `success` maps to
+          # success; everything else (cancelled, timed-out, failure) maps
+          # to `failure` so branch protection cannot be tricked by a
+          # cancelled run.
+          case "$JOB_STATUS" in
+            success) conclusion=success ;;
+            *)       conclusion=failure ;;
+          esac
+          if [ -n "${BUILD_ID:-}" ]; then
+            summary="heal $conclusion via /heal. Cloud Build: $BUILD_ID. [Workflow run]($RUN_URL)."
+          else
+            summary="heal $conclusion via /heal (build did not start). [Workflow run]($RUN_URL)."
+          fi
+          gh api -X POST \
+            "repos/$REPO/check-runs" \
+            -f name='heal' \
+            -f head_sha="$PR_HEAD_SHA" \
+            -f status='completed' \
+            -f conclusion="$conclusion" \
+            -f details_url="$RUN_URL" \
+            -f "output[title]=heal $conclusion via /heal" \
+            -f "output[summary]=$summary"
