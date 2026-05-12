@@ -196,7 +196,7 @@ def _extract_include_refs(content: str) -> list[tuple[str, set[str] | None]]:
             continue
 
         selected_defs = _selected_defs_from_attrs(attrs)
-        for part in body.split(","):
+        for part in re.split(r"[,\n]", body):
             normalized = _normalize_repo_path(part)
             if _looks_like_include_target(normalized):
                 refs.append((normalized, selected_defs))

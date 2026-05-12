@@ -1,44 +1,64 @@
 # Role and Scope
-You are a DevOps and Automation Engineer. Your responsibility is to create a CI/CD utility script (`scripts/ci_detect_changed_modules.py`) that identifies PDD (Prompt-Driven Development) module basenames affected by changes in a Git diff. The script must support workflows on both GitHub Actions and Google Cloud Build by determining which modules need to be re-processed or "healed" based on modifications to their prompts, logic, context, or tests.
+You are a DevOps and Automation Engineer. Your responsibility is to create a CI/CD utility script (`scripts/ci_detect_changed_modules.py`) that identifies PDD module basenames affected by changes in a Git diff. The script supports auto-heal workflows on both GitHub Actions and Google Cloud Build by determining which modules need to be re-processed or "healed" based on modifications to their prompts, logic, context, or tests, including selector-aware reverse dependency resolution that filters by which Python function definitions actually changed.
 
 # Requirements
-1. **Module Detection**: Identify module basenames from changed files within specific prefixes: `pdd/`, `prompts/`, `context/`, and `tests/`.
+1. **Module Detection**: Identify module basenames from changed files under specific prefixes: `pdd/`, `prompts/`, `context/`, and `tests/`.
 2. **Path Mapping**:
-    - **Prompts**: `prompts/[subdir/...]/{basename}_{language}.prompt` maps to `{subdir/...}/{basename}`.
-    - **Context**: `context/[subdir/...]/{basename}_example.{ext}` maps to `{subdir/...}/{basename}`.
-    - **Logic**: `pdd/{path/to/module}.py` maps to `{path/to/module}`, excluding root-level `__init__.py`.
+    - **Prompts**: `prompts/[subdir/...]/{basename}_{language}.prompt` and `pdd/prompts/[subdir/...]/{basename}_{language}.prompt` map to `{subdir/...}/{basename}`.
+    - **Context**: `context/[subdir/...]/{basename}_example.{ext}` and `pdd/context/[subdir/...]/{basename}_example.{ext}` map to `{subdir/...}/{basename}`.
+    - **Logic**: `pdd/{path/to/module}.py` maps to `{path/to/module}`, excluding root-level `pdd/__init__.py`. Nested `__init__.py` files (e.g. `pdd/commands/__init__.py`) map to real basenames like `commands/__init__`.
     - **Tests**: `tests/[subdir/...]/test_{basename}.py` maps to `{subdir/...}/{basename}`.
-3. **Dependency Tracking (Reverse Lookup)**: Scan all `.prompt` files for `<include>` or `<include-many>` tags. If a changed file is referenced in a prompt's include block, the basename of that prompt must also be included in the output.
-4. **Git Integration**: Execute `git diff --name-only` using a provided `--diff-base` argument.
-5. **Output Format**: Print a single line of comma-separated, alphabetically sorted module basenames. Print an empty line if no relevant files changed.
-6. **Error Handling**: The script should exit with a non-zero code only if the `git` command fails; otherwise, it should exit with 0.
-7. **Portability**: Must use only Python 3 standard libraries to ensure compatibility across different CI environments.
+3. **Helper Basename Exclusions**: A configurable set of excluded basenames is filtered out across all four path categories (prompt, context, logic, test). Excludes at minimum `__main__`, `ci_detect_changed_modules` itself, `copy_package_data_to_public`, and `generate_model_catalog` (agent-reviewed manifest-driven module that headless auto-heal must not regenerate).
+4. **Dependency Tracking (Reverse Lookup)**: Scan every `.prompt` file under both `prompts/` and `pdd/prompts/` for `<include>` and `<include-many>` tags. If a changed file is referenced by an include, the prompt's basename is added to the output. Tag opener parsing must:
+    - Use a regex that captures the tag name (`include` or `include-many`) and the attribute substring, so attributes like `select="def:foo"` can be parsed.
+    - Skip include bodies that themselves contain another `<include` opener (this guards against prose that mentions tag syntax before the real tag block).
+5. **Body Splitting**: `<include-many>` bodies must be split on both **commas and newlines** — real prompts often list one entry per line (e.g. `pdd/prompts/frontend/components/GenerationProgressModal_typescriptreact.prompt`). Splitting on commas only silently drops newline-delimited entries.
+6. **Selector-Aware Matching**: Parse the optional `select="..."` attribute on include tags. Only `def:<name>` selectors map to Python function definitions; any other selector type means "fall back to conservative path-only matching". When a selector resolves to a set of function names:
+    - For the changed file (Python only), compute the set of function definitions whose AST dump differs between the current working tree and the diff base (deletions count as changed too). Use `git show <base-ref>:<path>` for the old content; if `git show` fails or either side has a `SyntaxError`, treat the file conservatively (path match only).
+    - The include only triggers if the intersection of selected defs and changed defs is non-empty.
+    - When no `--diff-base` is supplied, all selector matches degrade to conservative path-only behavior.
+7. **Diff-Base Normalization**: For `git show`, extract the left-hand ref from either `a...b` or `a..b` expressions; pass through any other ref unchanged.
+8. **Git Integration**: Run `git diff --name-only <diff-base> -- <PDD prefixes>` to fetch the changed file list, scoped to the four prefixes above.
+9. **Output Format**: Print a single line of comma-separated, alphabetically sorted module basenames. Print an empty line if no relevant files changed.
+10. **Error Handling**: Exit 0 in normal operation (including empty output). Exit non-zero only if the `git diff` invocation itself fails.
+11. **Portability**: Use only Python 3 standard library (`argparse`, `ast`, `os`, `re`, `subprocess`, `sys`, `pathlib`) so the script runs identically on GitHub Actions and Google Cloud Build.
 
 # Dependencies & Context
-The script interacts with the repository structure and PDD conventions. While it does not import external libraries, it relies on the following file patterns:
+The script does not import the PDD package; it operates on repo file conventions. The relevant file patterns are:
 <pdd_structure>
     <include-many>
         pdd/*.py,
         prompts/**/*.prompt,
+        pdd/prompts/**/*.prompt,
         context/**/*_example.*,
+        pdd/context/**/*_example.*,
         tests/**/test_*.py
     </include-many>
 </pdd_structure>
 
 # Instructions
-1. **Argument Parsing**: Use `argparse` to accept a `--diff-base` string (e.g., 'origin/main...HEAD').
-2. **Path Normalization**: Implement a helper to normalize repository paths (strip `./`, handle backslashes, etc.) for consistent matching between Git output and include-tag content.
-3. **Extraction Logic**:
-    - Implement `_basename_from_path` to handle the specific regex and string slicing logic for the four primary file categories.
-    - Implement `_extract_include_paths` using regex to parse `<include>` and `<include-many>` tags from prompt files.
-4. **Reverse Dependency Resolution**:
-    - For every prompt file in the repo, check if its internal `<include>` paths match any of the files identified in the Git diff.
-    - Match using three strategies: full path match, path suffix match, or filename match.
-5. **Execution Flow**:
-    - Fetch changed files from Git.
-    - Convert file paths to basenames.
-    - Identify additional basenames via reverse dependency lookups.
-    - Sort and join the resulting unique set of basenames.
+1. **Argument Parsing**: Use `argparse` with a required `--diff-base` string (e.g. `origin/main...HEAD` or `HEAD~1`).
+2. **Path Normalization**: A helper normalizes repo paths (strip leading `./`, collapse backslashes, `os.path.normpath`) before any matching.
+3. **Basename Extraction**: Implement `_basename_from_path` that dispatches across prompt, context, logic, and test path patterns, applying `EXCLUDED_MODULE_BASENAMES` consistently to all four categories.
+4. **Include Extraction**:
+    - `_extract_include_refs(content)` returns a list of `(normalized_path, selected_defs)` tuples.
+    - `selected_defs` is `None` when there is no `select=` attribute OR when the selector is not of the supported `def:<name>` form (conservative fallback).
+    - Multiple selectors are comma-separated inside the attribute value; whitespace is stripped.
+5. **AST Function Diffing**:
+    - `_function_dumps(source)` walks the AST and returns a `{name: ast.dump(node, include_attributes=False)}` mapping for every `FunctionDef` and `AsyncFunctionDef`.
+    - `_changed_python_defs(path, diff_base)` returns the set of function names whose dump changed (or that were added/removed) between the base ref and the working tree. Returns `None` to signal "unknown — fall back to conservative match" whenever `diff_base` is missing, the file isn't `.py`, I/O fails, or parsing fails.
+6. **Reverse Dependency Resolution**:
+    - Walk both `prompts/` and `pdd/prompts/` if they exist.
+    - For each prompt file, derive its own basename via `_prompt_basename_from_path` and skip prompts whose basename can't be derived.
+    - For each `(include_path, selected_defs)` ref, match against every changed file using three path strategies: full path match, suffix match, or basename match. Selector filtering only applies when the path matched and `selected_defs` is non-None.
+7. **Execution Flow**:
+    - Fetch changed files via `git diff --name-only <diff-base> -- pdd/ prompts/ context/ tests/`.
+    - Direct basename extraction across the changed file list (skipping excluded basenames).
+    - Union with reverse-dependency basenames.
+    - Print sorted, comma-joined result; empty line if the set is empty.
 
 # Deliverables
-A standalone Python 3 script located at `scripts/ci_detect_changed_modules.py`. The script must be executable (`#!/usr/bin/env python3`) and include a clear docstring explaining its usage and purpose.
+A standalone Python 3 script located at `scripts/ci_detect_changed_modules.py`. The script must:
+- Begin with `#!/usr/bin/env python3` and a module docstring covering CLI usage.
+- Use only Python 3 standard library imports.
+- Expose `detect(diff_base) -> list[str]` and `main() -> int` as importable callables (the package re-exports `main` from `pdd.ci_detect_changed_modules` for legacy entry points).
