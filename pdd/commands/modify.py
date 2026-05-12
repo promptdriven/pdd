@@ -329,7 +329,7 @@ def change(
     "--sync-metadata",
     is_flag=True,
     default=False,
-    help="Run prompt metadata sync (tags, architecture, fingerprint) after update so all metadata layers land consistently.",
+    help="After update, run the shared metadata-sync orchestrator (preserve/seed PDD tags, reconcile architecture.json entry, clear stale run reports, finalize fingerprint last). On any stage failed, exits non-zero. Stages may report skipped for legitimate cases (no architecture.json, unregistered modules). LLM-first refresh of stale-but-present tags is tracked at #870 and is NOT invoked here.",
 )
 @click.pass_context
 @log_operation(operation="update", clears_run_report=True)
