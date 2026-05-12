@@ -2379,11 +2379,12 @@ Options:
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 - `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
-- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt tags, `architecture.json` entries, run reports, and fingerprint state are finalized atomically in one step. Works in single-file, regeneration, and repo modes. Without this flag, behavior is unchanged and metadata layers must be reconciled with separate commands.
+- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt PDD tags, `architecture.json` entries, run reports, and fingerprint state are reconciled in one step. Works in single-file, regeneration, and repo modes. Without this flag, behavior is unchanged and metadata layers must be reconciled with separate commands. **Scope note:** the `tags` stage currently *preserves* existing PDD tags and only *seeds* tags from the matching `architecture.json` entry when a prompt has none — LLM-first **refresh** of stale-but-present tags is tracked at issue [#870](https://github.com/promptdriven/pdd/issues/870) and is not invoked by this orchestrator. When a prompt has zero PDD tags AND no architecture entry, the `tags` stage reports `skipped` (never `ok`) so operators see honest status. On any stage `failed`, `pdd update --sync-metadata` exits non-zero so CI auto-heal does not treat a half-finalized update as healed.
 
 Example (Metadata Sync):
 ```bash
-# Update a single prompt and finalize all metadata (tags, architecture, fingerprint) in one step
+# Update a single prompt and reconcile metadata (preserve/seed tags,
+# architecture entry, run reports, fingerprint) in one step
 pdd update --sync-metadata src/my_module.py
 
 # Repo-wide update with metadata sync — each updated pair is finalized via the shared orchestrator

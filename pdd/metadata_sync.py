@@ -393,32 +393,48 @@ def run_metadata_sync(
 
     # ---- Stage 4: run_report ----
     _stage_log_enter("run_report")
-    try:
-        basename, language = infer_module_identity(prompt_path)
-        if not basename or not language:
-            reason = "could not infer (basename, language) from prompt path"
-            result.stages["run_report"] = StageStatus(status="skipped", reason=reason)
-            _stage_log_exit("run_report", "skipped", reason)
-        else:
-            detail = f"basename={basename} language={language}"
-            if dry_run:
-                result.stages["run_report"] = StageStatus(
-                    status="dry_run",
-                    detail=f"would clear run report for {detail}",
-                )
-                _stage_log_exit("run_report", "dry_run", detail)
+    # Gate the run_report side effect on prior stages, the same way
+    # fingerprint is gated below. clear_run_report() deletes tracked
+    # entries on disk; running it after an earlier hard failure would
+    # leave partial .pdd/meta state that auto-heal could pick up via
+    # `git add -A` on the push-to-main path, even though fingerprint
+    # itself is correctly held back. Skip symmetrically with fingerprint.
+    _rr_prior_failed = [
+        name
+        for name in ("prompt", "tags", "architecture")
+        if result.stages.get(name) and result.stages[name].status == "failed"
+    ]
+    if _rr_prior_failed:
+        reason = f"earlier stage failed: {_rr_prior_failed[0]}"
+        result.stages["run_report"] = StageStatus(status="skipped", reason=reason)
+        _stage_log_exit("run_report", "skipped", reason)
+    else:
+        try:
+            basename, language = infer_module_identity(prompt_path)
+            if not basename or not language:
+                reason = "could not infer (basename, language) from prompt path"
+                result.stages["run_report"] = StageStatus(status="skipped", reason=reason)
+                _stage_log_exit("run_report", "skipped", reason)
             else:
-                clear_run_report(basename, language)
-                result.stages["run_report"] = StageStatus(
-                    status="ok", detail=f"cleared run report for {detail}"
-                )
-                _stage_log_exit("run_report", "ok", detail)
-    except (KeyboardInterrupt, SystemExit):
-        raise
-    except Exception as exc:
-        reason = str(exc)
-        result.stages["run_report"] = StageStatus(status="failed", reason=reason)
-        _stage_log_exit("run_report", "failed", reason)
+                detail = f"basename={basename} language={language}"
+                if dry_run:
+                    result.stages["run_report"] = StageStatus(
+                        status="dry_run",
+                        detail=f"would clear run report for {detail}",
+                    )
+                    _stage_log_exit("run_report", "dry_run", detail)
+                else:
+                    clear_run_report(basename, language)
+                    result.stages["run_report"] = StageStatus(
+                        status="ok", detail=f"cleared run report for {detail}"
+                    )
+                    _stage_log_exit("run_report", "ok", detail)
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except Exception as exc:
+            reason = str(exc)
+            result.stages["run_report"] = StageStatus(status="failed", reason=reason)
+            _stage_log_exit("run_report", "failed", reason)
 
     # ---- Stage 5: fingerprint (gated) ----
     _stage_log_enter("fingerprint")

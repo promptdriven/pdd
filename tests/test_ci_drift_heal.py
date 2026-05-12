@@ -2313,18 +2313,38 @@ class TestStructuralInvariants:
 class TestRunMetadataSyncSafe:
     """`_run_metadata_sync_safe` wraps `run_metadata_sync` for the update heal path."""
 
-    def test_returns_true_when_prompt_path_none(self):
+    def test_returns_false_when_prompt_path_none(self, capsys):
+        # Fails closed: missing prompt_path means sync did not run, and
+        # treating that as "ok" would let auto-heal silently checkpoint a
+        # module whose metadata was never finalized — exactly the bug-class
+        # #871 was wired up to prevent.
         from pdd.ci_drift_heal import _run_metadata_sync_safe
-        assert _run_metadata_sync_safe(None, None) is True
+        assert _run_metadata_sync_safe(None, None) is False
+        assert "prompt_path is unset" in capsys.readouterr().out
 
-    def test_returns_true_when_prompt_path_empty_string(self):
+    def test_returns_false_when_prompt_path_empty_string(self, capsys):
         from pdd.ci_drift_heal import _run_metadata_sync_safe
-        assert _run_metadata_sync_safe("", None) is True
+        assert _run_metadata_sync_safe("", None) is False
+        assert "prompt_path is unset" in capsys.readouterr().out
 
-    def test_returns_true_when_prompt_file_does_not_exist(self, tmp_path):
+    def test_returns_false_when_prompt_file_does_not_exist(self, tmp_path, capsys):
         from pdd.ci_drift_heal import _run_metadata_sync_safe
         missing = tmp_path / "nope.prompt"
-        assert _run_metadata_sync_safe(str(missing), None) is True
+        assert _run_metadata_sync_safe(str(missing), None) is False
+        assert "does not exist" in capsys.readouterr().out
+
+    def test_returns_false_when_metadata_sync_module_import_fails(self, tmp_path, capsys):
+        # Fail-closed on ImportError: a missing orchestrator must not be
+        # confused with a successful no-op. Was silently returning True
+        # pre-fix, which let the heal path checkpoint as if sync ran.
+        import sys as _sys
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        # Force `from pdd.metadata_sync import run_metadata_sync` to raise.
+        with patch.dict(_sys.modules, {"pdd.metadata_sync": None}):
+            assert _run_metadata_sync_safe(str(prompt), None) is False
+        assert "metadata_sync unavailable" in capsys.readouterr().out
 
     def test_returns_false_and_logs_when_orchestrator_raises(self, tmp_path, capsys):
         from pdd.ci_drift_heal import _run_metadata_sync_safe

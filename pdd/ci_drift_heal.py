@@ -821,22 +821,44 @@ def _auto_deps_directory() -> str:
 
 
 def _run_metadata_sync_safe(prompt_path: Optional[str], code_path: Optional[str]) -> bool:
-    """Invoke the metadata-sync orchestrator. Returns True on ok / skipped."""
+    """Invoke the metadata-sync orchestrator. Returns True only when every
+    stage reports `ok`/`dry_run`/`skipped`.
+
+    Fails closed on infrastructure errors:
+    - missing prompt_path or non-existent prompt file → treated as a heal
+      misconfiguration (False), so auto-heal does not silently checkpoint a
+      module whose metadata was never finalized.
+    - ImportError on `pdd.metadata_sync` → False with a logged reason; a
+      missing orchestrator must not be confused with a successful no-op
+      (that's exactly the bug-class #871 was wired up to prevent).
+    """
     if not prompt_path:
-        return True
+        console.print(
+            "[red]metadata_sync skipped: prompt_path is unset; refusing to "
+            "checkpoint without finalization[/red]"
+        )
+        return False
     try:
         from pdd.metadata_sync import run_metadata_sync  # type: ignore
-    except Exception:
-        return True
+    except Exception as exc:
+        console.print(
+            f"[red]metadata_sync unavailable (ImportError: {exc}); refusing "
+            f"to checkpoint without finalization[/red]"
+        )
+        return False
     p = Path(str(prompt_path))
     if not p.exists():
-        return True
+        console.print(
+            f"[red]metadata_sync skipped: prompt file {p} does not exist; "
+            f"refusing to checkpoint without finalization[/red]"
+        )
+        return False
     try:
         result = run_metadata_sync(
             p, code_path=Path(str(code_path)) if code_path else None
         )
     except Exception as exc:
-        console.print(f"[yellow]metadata_sync raised: {exc}[/yellow]")
+        console.print(f"[red]metadata_sync raised: {exc}[/red]")
         return False
     ok = bool(getattr(result, "ok", False))
     if not ok:
