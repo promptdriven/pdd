@@ -368,7 +368,8 @@ jobs:
           always() &&
           github.event_name == 'issue_comment' &&
           steps.pf.outputs.skip != 'true' &&
-          steps.pf.outputs.fork == 'false'
+          steps.pf.outputs.fork == 'false' &&
+          steps.pf.outputs.pr_head_sha != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
