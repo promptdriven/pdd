@@ -45,16 +45,12 @@ You are working on step 2 of 11 in an agentic bug investigation workflow. Previo
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+Return your findings between `<step_report>` and `</step_report>` tags. The PDD orchestrator will sanitize, truncate, and post the contents as a GitHub comment using trusted credentials. **Do NOT run `gh issue comment` yourself** — model subprocesses cannot reliably authenticate.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
+Pick exactly ONE of the three templates below and place it inside the tags. Status text (e.g. `Feature Request (Not a Bug)`, `User Error (Not a Bug)`) is what the orchestrator parses for hard-stop detection, so keep the wording exact.
 
-Your comment should follow this format:
-
-**If Confirmed Bug or Needs Investigation:**
-```markdown
+**If Confirmed Bug, Documentation Gap, or Needs Investigation:**
+<step_report>
 ## Step 2: Documentation Check
 
 **Status:** [Confirmed Bug | Documentation Gap | Needs Investigation]
@@ -67,10 +63,10 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 3: Triage*
-```
+</step_report>
 
 **If Feature Request (STOP workflow):**
-```markdown
+<step_report>
 ## Step 2: Documentation Check
 
 **Status:** Feature Request (Not a Bug)
@@ -92,10 +88,10 @@ If you'd like to change this behavior, consider using `pdd change` to create a f
 
 ---
 *Investigation paused - this appears to be a feature request, not a bug.*
-```
+</step_report>
 
 **If User Error (STOP workflow):**
-```markdown
+<step_report>
 ## Step 2: Documentation Check
 
 **Status:** User Error (Not a Bug)
@@ -117,13 +113,13 @@ Please try the correct usage above. If you still experience issues after followi
 
 ---
 *Investigation paused - this appears to be a usage error, not a bug.*
-```
+</step_report>
 
 % Important
 
-- **STOP the workflow** if status is "Feature Request" or "User Error"
-- **CONTINUE the workflow** if status is "Confirmed Bug", "Documentation Gap", or "Needs Investigation"
-- Tag the issue author when asking for clarification
-- Mention `pdd change` as an alternative for feature requests
-- Be helpful and non-judgmental in your assessment
-- Always post your findings as a GitHub comment before completing
+- **STOP the workflow** if status is "Feature Request" or "User Error" — the orchestrator detects this from the report body.
+- **CONTINUE the workflow** if status is "Confirmed Bug", "Documentation Gap", or "Needs Investigation".
+- Tag the issue author when asking for clarification.
+- Mention `pdd change` as an alternative for feature requests.
+- Be helpful and non-judgmental in your assessment.
+- Place your findings inside the `<step_report>` block above — the orchestrator will post it to GitHub for you.

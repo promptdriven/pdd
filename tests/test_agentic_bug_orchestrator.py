@@ -77,7 +77,8 @@ def mock_dependencies(tmp_path):
          patch("pdd.agentic_bug_orchestrator.load_workflow_state", return_value=(None, None)) as mock_load_state, \
          patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=tmp_path) as mock_git_root, \
          patch("pdd.agentic_bug_orchestrator.set_agentic_progress") as mock_set_progress, \
-         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear_progress:
+         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress") as mock_clear_progress, \
+         patch("pdd.agentic_bug_orchestrator.post_step_comment", return_value=True):
 
         # Default behavior: successful run, generic output
         # Note: run_agentic_task returns 4 values: (success, output, cost, provider)
