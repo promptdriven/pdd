@@ -20,6 +20,8 @@ from .agentic_common import (
     clear_workflow_state,
     set_agentic_progress,
     clear_agentic_progress,
+    post_step_comment,
+    _extract_step_report,
     DEFAULT_MAX_RETRIES,
 )
 from .get_test_command import get_test_command_for_file
@@ -2319,6 +2321,45 @@ def run_agentic_bug_orchestrator(
         save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:
             github_comment_id = save_result
+
+        # Issue #964: orchestrator (not the model) owns visible step comments.
+        # Posting through trusted credentials means Gemini's sandboxed shell no
+        # longer needs GH_TOKEN passthrough. The posted-state is tracked in
+        # workflow state so a resume after an interruption does not double-post.
+        if step_success:
+            state.setdefault("step_comments", {})
+            already_posted = (
+                state["step_comments"].get(str(step_num), {}).get("posted", False)
+            )
+            if not already_posted:
+                extracted = _extract_step_report(step_output)
+                if extracted is None:
+                    body_to_post = (
+                        f"_Step {step_num} completed; no `<step_report>` block "
+                        f"returned by agent. Raw output retained in workflow state._"
+                    )
+                else:
+                    body_to_post = extracted
+                step_num_int = step_num if isinstance(step_num, int) else int(step_num)
+                posted = post_step_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=step_num_int,
+                    total_steps=12,
+                    description=description,
+                    output=step_output,
+                    cwd=cwd,
+                    body=body_to_post,
+                )
+                if posted:
+                    state["step_comments"][str(step_num)] = {"posted": True}
+                    save_result = save_workflow_state(
+                        cwd, issue_number, "bug", state, state_dir,
+                        repo_owner, repo_name, use_github_state, github_comment_id,
+                    )
+                    if save_result:
+                        github_comment_id = save_result
 
         # Print step completion marker (required for credential waterfall detection)
         if not quiet:

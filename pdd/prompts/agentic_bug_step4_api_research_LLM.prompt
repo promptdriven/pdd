@@ -70,15 +70,9 @@ You are working on step 4 of 12 in an agentic bug investigation workflow. Previo
 
 % Output
 
-After completing your research, use `gh issue comment` to post your findings to issue #{issue_number}:
+Return your findings between `<step_report>` and `</step_report>` tags. The PDD orchestrator will sanitize, truncate, and post the contents as a GitHub comment using trusted credentials. **Do NOT run `gh issue comment` yourself** — model subprocesses cannot reliably authenticate.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 4: External API Research
 
 ### External API Dependencies Found
@@ -103,7 +97,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 5: Reproduction*
-```
+</step_report>
 
 % Important
 
@@ -111,4 +105,4 @@ Your comment should follow this format:
 - Even if no external API issues are found, document that finding (it helps downstream steps rule out API causes)
 - Focus on the specific auth type used in THIS codebase, not general API docs
 - If the bug report mentions permission errors, 403s, or "not found" responses, prioritize researching auth-type limitations
-- Always post your findings as a GitHub comment before completing
+- Place your findings inside the `<step_report>` block above — the orchestrator will post it to GitHub for you.

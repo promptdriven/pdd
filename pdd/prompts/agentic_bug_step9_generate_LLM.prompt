@@ -223,15 +223,9 @@ Step 8 planned {planned_test_count} tests. You MUST generate exactly that many `
 
 % Output
 
-After generating the test, use `gh issue comment` to post your findings to issue #{issue_number}:
+Return your findings between `<step_report>` and `</step_report>` tags. The PDD orchestrator will sanitize, truncate, and post the contents as a GitHub comment using trusted credentials. **Do NOT run `gh issue comment` yourself** — model subprocesses cannot reliably authenticate.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 9: Generated Test
 
 ### Test File
@@ -252,20 +246,19 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 10: Verification*
-```
+</step_report>
 
 % Important
 
 - The test MUST fail on the current (buggy) code
 - The test should pass once the bug is fixed
 - Focus on testing behavior, not implementation details — do NOT use reflection, introspection, or source scanning to verify code structure
-- Write the test file to disk before posting the comment
-- Always post your findings as a GitHub comment before completing
+- Write the test file to disk before emitting the report
+- Place your findings inside the `<step_report>` block — the orchestrator will post it to GitHub for you. Keep the `FILES_CREATED:`/`FILES_MODIFIED:` marker OUTSIDE the tags so the orchestrator can parse it.
 
 % CRITICAL: Machine-Readable Output (REQUIRED)
 
-**You MUST output exactly one of these lines at the very end of your response.**
-This is required for the automation to continue. Without this line, the workflow will fail.
+**You MUST output exactly one of these lines on its own line AFTER the closing `</step_report>` tag.** The orchestrator parses raw output for this marker — it MUST live OUTSIDE the report block. Without this line, the workflow will fail.
 
 If you created a new test file:
 ```
