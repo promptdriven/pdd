@@ -34,7 +34,7 @@ Runs example generation, crash-fix, verify, test generation, and test-fix steps 
 % Dependencies
 <pdd.agentic_common><include select="def:run_agentic_task">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
-<pdd.preprocess><include>context/preprocess_example.py</include></pdd.preprocess>
+<pdd.preprocess><include select="def:preprocess">pdd/preprocess.py</include></pdd.preprocess>
 <pdd.agentic_sync_runner>
     <include>context/agentic_sync_runner_example.py</include>
 </pdd.agentic_sync_runner>
