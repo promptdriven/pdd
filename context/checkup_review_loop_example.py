@@ -44,6 +44,15 @@ class ReviewResult:
     findings: List[ReviewFinding] = field(default_factory=list)
     summary: str = ""
     raw_output: str = ""
+    # Diagnostics surfaced on the final report when the reviewer fails or
+    # degrades. ``status_classification`` is a short best-effort tag
+    # (``auth``/``network``/``timeout``/``rate-limit``/``crash``/``unknown``).
+    # ``status_exit_code`` is parsed best-effort from ``raw_output``
+    # (``"no exit code"`` when absent). ``status_reason`` is the last
+    # ~20 lines of stderr/stdout for operator triage.
+    status_classification: str = ""
+    status_exit_code: str = ""
+    status_reason: str = ""
 
 
 @dataclass
