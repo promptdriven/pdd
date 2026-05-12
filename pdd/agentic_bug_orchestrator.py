@@ -1540,6 +1540,40 @@ def run_agentic_bug_orchestrator(
 
     total_steps = len(steps_config)  # 12
 
+    # Issue #964: backfill any visible step comments missed by a prior crash
+    # or transient `gh issue comment` failure. Only retries steps whose
+    # outputs we already trust (not "FAILED:" sentinels). The helper is
+    # idempotent — successful resumes are gated by step_comments[n].posted.
+    if state.get("step_outputs"):
+        state.setdefault("step_comments", {})
+        for s_key, s_out in list(state["step_outputs"].items()):
+            if not isinstance(s_out, str) or s_out.startswith("FAILED:"):
+                continue
+            if state["step_comments"].get(s_key, {}).get("posted"):
+                continue
+            try:
+                s_num = int(float(s_key))
+            except (TypeError, ValueError):
+                continue
+            desc = next(
+                (d for (n, _name, d) in steps_config if n == s_num),
+                str(s_key),
+            )
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=s_num,
+                description=desc,
+                step_output=s_out,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
+
     current_work_dir = cwd
     consecutive_failures = 0
     skip_e2e = False
@@ -1767,7 +1801,9 @@ def run_agentic_bug_orchestrator(
             last_completed_step = 5
             # Recalculate start_step so the loop skips 4 and 5
             start_step = 6
-            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
             # Issue #964: post the step-3 triage comment before short-circuiting,
             # otherwise the user sees no visible signal that triage succeeded.
             github_comment_id = _maybe_post_step_comment(
@@ -2381,7 +2417,9 @@ def run_agentic_bug_orchestrator(
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = step_output
-            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
             # Issue #964: post the model's report even on hard stop. The step's
             # WORK succeeded (e.g. detected duplicate, classified user error);
             # the orchestrator just decided not to continue. Without this the

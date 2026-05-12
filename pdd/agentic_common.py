@@ -3450,9 +3450,11 @@ def _sanitize_comment_body(
     redacted = _BEARER_TOKEN_RE.sub(lambda m: f"{m.group(1)}[REDACTED]", redacted)
     if len(redacted) > max_chars:
         # Reserve room for the marker so the returned length never exceeds the
-        # caller-supplied cap (codex review of PR #966).
+        # caller-supplied cap (codex review of PR #966). When max_chars is
+        # smaller than the marker itself, the marker won't fit either — the
+        # final slice enforces the cap unconditionally.
         keep = max(0, max_chars - len(_TRUNCATED_MARKER))
-        redacted = redacted[:keep] + _TRUNCATED_MARKER
+        redacted = (redacted[:keep] + _TRUNCATED_MARKER)[:max_chars]
     return redacted
 
 
