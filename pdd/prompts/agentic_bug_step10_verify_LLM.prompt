@@ -143,12 +143,15 @@ Return your findings between `<step_report>` and `</step_report>` tags. The PDD 
 4. Submit PR with fix and test
 
 ---
-*{{If E2E_NEEDED: yes → "Proceeding to Step 11: E2E Tests" | If E2E_NEEDED: no → "E2E skipped — proceeding to Step 12: Create Draft PR"}}*
+*Proceeding to {{Step 11: E2E Tests | Step 12: Create Draft PR}} based on E2E classification (emitted after this report).*
 </step_report>
 
-After the closing `</step_report>` tag, emit the E2E classification marker on its own line (parsed from raw output — MUST live OUTSIDE the report block):
+After the closing `</step_report>` tag, emit the E2E classification marker on its own line (parsed from raw output — MUST live OUTSIDE the report block). The marker literal `E2E_NEEDED:` must never appear inside the report body because the orchestrator parses raw `step_output` for it.
+
+Choose one of:
 ```
-E2E_NEEDED: [yes|no] — [one-line justification]
+E2E_NEEDED: yes — [one-line justification why a user-facing E2E test is needed]
+E2E_NEEDED: no  — [one-line justification why the unit test covers it end-to-end]
 ```
 
 % Important — MANDATORY

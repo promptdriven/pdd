@@ -175,13 +175,24 @@ def test_sanitize_redacts_bearer_token():
 
 
 def test_sanitize_truncates_long_body():
+    """Truncation reserves room for the marker so the cap is respected (codex review of PR #966)."""
     from pdd.agentic_common import _sanitize_comment_body
 
     body = "x" * 30_000
     out = _sanitize_comment_body(body)
-    assert len(out) <= 30_000  # truncated + tag suffix is shorter than 30k
+    # The cap MUST hold: returned length ≤ max_chars (default 25 000).
+    assert len(out) <= 25_000
     assert out.endswith("…[truncated]")
     assert out.startswith("x" * 1000)
+
+
+def test_sanitize_truncates_respects_custom_max_chars():
+    """An explicit max_chars must also include the marker length in the cap."""
+    from pdd.agentic_common import _sanitize_comment_body
+
+    out = _sanitize_comment_body("y" * 500, max_chars=100)
+    assert len(out) <= 100
+    assert out.endswith("…[truncated]")
 
 
 def test_sanitize_short_body_passes_through():
@@ -478,3 +489,93 @@ def test_bug_orchestrator_falls_back_when_no_step_report_tag(bug_orchestrator_mo
     fallback_body = step1_calls[0].kwargs.get("body")
     assert fallback_body is not None
     assert "no `<step_report>` block" in fallback_body
+
+
+def test_bug_orchestrator_posts_step_comment_on_fast_track(bug_orchestrator_mocks, bug_default_args):
+    """FAST_TRACK at step 3 must still post the triage report before short-circuiting.
+
+    Regression for codex review of PR #966 — the `continue` that skips
+    steps 4 and 5 ran BEFORE the post-comment block, hiding the triage
+    result from the user.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step3":
+            return (
+                True,
+                (
+                    "<step_report>\n## Step 3: Triage\n\nFast-tracked: pre-diagnosed.\n</step_report>\n"
+                    "FAST_TRACK: pre-diagnosed by author"
+                ),
+                0.1,
+                "claude",
+            )
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: t.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(**bug_default_args)
+    assert success is True
+
+    posted_steps = [
+        c.kwargs.get("step_num")
+        for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+    ]
+    assert 3 in posted_steps, f"Step 3 (FAST_TRACK) must post a comment. Calls: {posted_steps}"
+
+    step3_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 3
+    ]
+    body = step3_calls[0].kwargs.get("body")
+    assert body is not None
+    assert "Fast-tracked" in body
+    # Steps 4 and 5 are skipped by FAST_TRACK — they must NOT get comments.
+    assert 4 not in posted_steps
+    assert 5 not in posted_steps
+
+
+def test_bug_orchestrator_posts_step_comment_on_hard_stop(bug_orchestrator_mocks, bug_default_args):
+    """Hard stops (Duplicate/NeedsInfo/etc.) must still post the model's report.
+
+    Regression for codex review of PR #966 — `_check_hard_stop` causes an
+    early return BEFORE the original post-comment block, so users saw no
+    visible signal for stops like Duplicate-of-#999.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step1":
+            return (
+                True,
+                "<step_report>\n## Step 1: Duplicate Check\n\nDuplicate of #999.\n</step_report>",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, msg, _cost, _model, _files = run_agentic_bug_orchestrator(**bug_default_args)
+    # Hard stop must short-circuit the workflow.
+    assert success is False
+    assert "Stopped at step 1" in msg
+
+    step1_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 1
+    ]
+    assert step1_calls, "Step 1 must post the visible report even on hard stop"
+    body = step1_calls[0].kwargs.get("body")
+    assert body is not None
+    assert "Duplicate of #999" in body

@@ -924,6 +924,68 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
     return None
 
 
+def _maybe_post_step_comment(
+    *,
+    step_success: bool,
+    step_num: Union[int, float],
+    description: str,
+    step_output: str,
+    state: Dict,
+    state_dir: Path,
+    cwd: Path,
+    issue_number: int,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool,
+    github_comment_id: Optional[str],
+) -> Optional[str]:
+    """Post a per-step visible comment via trusted credentials (issue #964).
+
+    Used by the bug orchestrator's three step-exit paths (success-continue,
+    FAST_TRACK-continue at step 3, and hard-stop early return). Resume-safe:
+    ``state["step_comments"][n]["posted"]`` gates reposts. Returns the
+    (possibly refreshed) ``github_comment_id`` so the caller can thread it.
+
+    NOTE: a literal ``</step_report>`` substring inside the model body would
+    terminate ``_extract_step_report`` early. Acceptable for v1 — models do
+    not normally emit the closing tag inside their own report body.
+    """
+    if not step_success:
+        return github_comment_id
+    state.setdefault("step_comments", {})
+    if state["step_comments"].get(str(step_num), {}).get("posted"):
+        return github_comment_id
+    extracted = _extract_step_report(step_output)
+    if extracted is None:
+        body_to_post = (
+            f"_Step {step_num} completed; no `<step_report>` block "
+            f"returned by agent. Raw output retained in workflow state._"
+        )
+    else:
+        body_to_post = extracted
+    step_num_int = step_num if isinstance(step_num, int) else int(step_num)
+    posted = post_step_comment(
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+        step_num=step_num_int,
+        total_steps=12,
+        description=description,
+        output=step_output,
+        cwd=cwd,
+        body=body_to_post,
+    )
+    if posted:
+        state["step_comments"][str(step_num)] = {"posted": True}
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+    return github_comment_id
+
+
 def _get_state_dir(cwd: Path) -> Path:
     """Get the state directory relative to git root."""
     root = _get_git_root(cwd) or cwd
@@ -1706,6 +1768,22 @@ def run_agentic_bug_orchestrator(
             # Recalculate start_step so the loop skips 4 and 5
             start_step = 6
             save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            # Issue #964: post the step-3 triage comment before short-circuiting,
+            # otherwise the user sees no visible signal that triage succeeded.
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=step_num,
+                description=description,
+                step_output=step_output,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
             if not quiet:
                 console.print(f"[cyan]  → Fast-track: skipping Steps 4-5 (issue pre-diagnosed)[/cyan]")
             continue
@@ -2304,6 +2382,25 @@ def run_agentic_bug_orchestrator(
             state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = step_output
             save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            # Issue #964: post the model's report even on hard stop. The step's
+            # WORK succeeded (e.g. detected duplicate, classified user error);
+            # the orchestrator just decided not to continue. Without this the
+            # final visible signal (Duplicate-of-X, Needs-More-Info, etc.) is
+            # lost to the user.
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=step_num,
+                description=description,
+                step_output=step_output,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
         if not step_success:
@@ -2326,40 +2423,20 @@ def run_agentic_bug_orchestrator(
         # Posting through trusted credentials means Gemini's sandboxed shell no
         # longer needs GH_TOKEN passthrough. The posted-state is tracked in
         # workflow state so a resume after an interruption does not double-post.
-        if step_success:
-            state.setdefault("step_comments", {})
-            already_posted = (
-                state["step_comments"].get(str(step_num), {}).get("posted", False)
-            )
-            if not already_posted:
-                extracted = _extract_step_report(step_output)
-                if extracted is None:
-                    body_to_post = (
-                        f"_Step {step_num} completed; no `<step_report>` block "
-                        f"returned by agent. Raw output retained in workflow state._"
-                    )
-                else:
-                    body_to_post = extracted
-                step_num_int = step_num if isinstance(step_num, int) else int(step_num)
-                posted = post_step_comment(
-                    repo_owner=repo_owner,
-                    repo_name=repo_name,
-                    issue_number=issue_number,
-                    step_num=step_num_int,
-                    total_steps=12,
-                    description=description,
-                    output=step_output,
-                    cwd=cwd,
-                    body=body_to_post,
-                )
-                if posted:
-                    state["step_comments"][str(step_num)] = {"posted": True}
-                    save_result = save_workflow_state(
-                        cwd, issue_number, "bug", state, state_dir,
-                        repo_owner, repo_name, use_github_state, github_comment_id,
-                    )
-                    if save_result:
-                        github_comment_id = save_result
+        github_comment_id = _maybe_post_step_comment(
+            step_success=step_success,
+            step_num=step_num,
+            description=description,
+            step_output=step_output,
+            state=state,
+            state_dir=state_dir,
+            cwd=cwd,
+            issue_number=issue_number,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+            github_comment_id=github_comment_id,
+        )
 
         # Print step completion marker (required for credential waterfall detection)
         if not quiet:
