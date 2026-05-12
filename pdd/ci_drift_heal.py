@@ -401,11 +401,12 @@ def detect_drift(modules: Optional[List[str]] = None, diff_base: Optional[str] =
                 elif (
                     not code_changed
                     and not prompt_changed
-                    and decision.operation == "generate"
+                    and decision.operation in {"auto-deps", "generate"}
                 ):
                     console.print(
-                        f"[blue]✓ Skipping {basename}: clean-CI generate decision "
-                        "but neither code nor prompt changed[/blue]"
+                        f"[blue]✓ Skipping {basename}: clean-CI "
+                        f"{decision.operation} decision but neither code nor "
+                        "prompt changed[/blue]"
                     )
                     continue
                 elif code_changed and not prompt_changed:

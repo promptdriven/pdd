@@ -309,6 +309,27 @@ class TestDetectDriftWithDiffBase:
         assert example_drifts[0].prompt_path == "prompts/auth_python.prompt"
         assert example_drifts[0].code_path == "pdd/auth.py"
 
+    def test_auto_deps_without_code_or_prompt_change_is_skipped(self):
+        """Clean-CI auto-deps false positives should not fan out to every module."""
+        decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
+        files, infer, sync = self._setup_mocks({"auth": decision})
+        changed_files = {"tests/test_unrelated.py"}
+        mock_paths = {
+            "code": Path("pdd/auth.py"),
+            "prompt": Path("prompts/auth_python.prompt"),
+            "example": Path("context/auth_example.py"),
+        }
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=sync), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=mock_paths), \
+             patch("pdd.ci_drift_heal._get_git_changed_files", return_value=changed_files):
+            prompt_drifts, example_drifts = detect_drift(modules=["auth"], diff_base="origin/main...HEAD")
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+
     def test_no_diff_base_skips_reclassification(self):
         """Without diff_base, no git-based reclassification occurs."""
         decision = MagicMock(operation="auto-deps", reason="New prompt with dependencies detected")
