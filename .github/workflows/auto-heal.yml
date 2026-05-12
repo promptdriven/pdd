@@ -56,13 +56,25 @@ concurrency:
 
 jobs:
   heal:
-    # Non-draft PR events, or a /heal comment on a PR (issue-comment events
-    # for issues that aren't PRs are filtered out). `startsWith('/heal')`
+    # Non-draft, non-bot PR events, or a /heal comment on a PR (issue-comment
+    # events for issues that aren't PRs are filtered out). `startsWith('/heal')`
     # also matches /healthcheck — the pre-flight step rejects false positives
     # before any privileged work runs.
+    #
+    # Bot-authored PRs (`user.type == 'Bot'`, e.g. `prompt-driven-github[bot]`)
+    # are intentionally excluded from the `pull_request_target` trigger. They
+    # would otherwise hit the `Authorize requester` step and exit 1 because
+    # the bot is not a pdd_cloud collaborator, leaving a permanent failing
+    # `heal` check-run on the PR head that no subsequent `/heal` comment can
+    # overwrite (the auto-posted check-run is per-workflow-run). This matches
+    # the security model: bot PRs require an explicit human `/heal` to
+    # authorize, so skipping the auto-trigger removes only redundant fail
+    # signal — every legitimate run still goes through the same auth gate
+    # via the issue-comment branch.
     if: |
       (github.event_name == 'pull_request_target'
-        && github.event.pull_request.draft == false) ||
+        && github.event.pull_request.draft == false
+        && github.event.pull_request.user.type != 'Bot') ||
       (github.event_name == 'issue_comment'
         && github.event.action == 'created'
         && github.event.issue.pull_request != null
