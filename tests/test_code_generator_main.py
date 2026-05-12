@@ -5495,6 +5495,46 @@ class TestPddInterfaceSignatureConformance:
         assert "`False`" in exc.repair_directive
         assert "`True`" in exc.repair_directive
 
+    def test_missing_default_raises_drift_even_when_annotation_present(self, tmp_path):
+        """Defaults are runtime signature behavior, not static metadata. A
+        prompt declaring ``sync_metadata=False`` is advertising that callers
+        may omit the kwarg. Generated code that drops the default would
+        break those callers with TypeError at the call site, so the drift
+        gate MUST fire even though the parameter name is present.
+        """
+        from pdd.code_generator_main import ArchitectureConformanceError
+
+        prompt_filename = "update_main_python.prompt"
+        arch_path = self._write_arch(tmp_path, prompt_filename)
+        prompt_content = (
+            '<pdd-interface>{"type":"module","module":{"functions":'
+            '[{"name":"update_main",'
+            '"signature":"(ctx, sync_metadata: bool = False)"}]}}'
+            '</pdd-interface>\n'
+        )
+        # Actual has the param + annotation but is missing the default.
+        generated_code = (
+            "def update_main(ctx, sync_metadata: bool):\n"
+            "    pass\n"
+        )
+
+        with pytest.raises(ArchitectureConformanceError) as excinfo:
+            _verify_architecture_conformance(
+                generated_code=generated_code,
+                prompt_name=prompt_filename,
+                arch_path=arch_path,
+                language="python",
+                verbose=False,
+                prompt_content=prompt_content,
+            )
+        exc = excinfo.value
+        assert "update_main.sync_metadata" in exc.missing_symbols
+        assert "default" in exc.repair_directive
+        assert "`False`" in exc.repair_directive
+        # The "<no default>" sentinel surfaces in the diagnostic so the
+        # LLM knows what to restore.
+        assert "<no default>" in exc.repair_directive
+
     def test_drift_skipped_when_one_side_omits_annotation(self, tmp_path):
         """Conservative behavior: when only one side declares an annotation,
         the drift check does not fire. This keeps the gate from churning
