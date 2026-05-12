@@ -2199,7 +2199,8 @@
     "reason": "CLI entry point for the update command.",
     "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
-      "auto_include_python.prompt"
+      "auto_include_python.prompt",
+      "metadata_sync_python.prompt"
     ],
     "priority": 62,
     "filename": "update_main_python.prompt",
@@ -2226,7 +2227,7 @@
           },
           {
             "name": "update_main",
-            "signature": "(ctx: click.Context, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git: bool = False, repo: bool = False, extensions: Optional[str] = None, directory: Optional[str] = None, strength: Optional[float] = None, temperature: Optional[float] = None, simple: bool = False) -> Optional[Tuple[str, float, str]]"
+            "signature": "(ctx: click.Context, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git: bool = False, repo: bool = False, extensions: Optional[str] = None, directory: Optional[str] = None, strength: Optional[float] = None, temperature: Optional[float] = None, simple: bool = False, base_branch: str = 'main', budget: Optional[float] = None, dry_run: bool = False, sync_metadata: bool = False) -> Optional[Tuple[str, float, str]]"
           }
         ]
       }
@@ -6887,7 +6888,7 @@
           },
           {
             "name": "update_architecture_from_prompt",
-            "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+            "signature": "(prompt_filename: str, prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
             "returns": "Dict with keys: success, updated, changes, error, warnings"
           },
           {
@@ -7918,7 +7919,8 @@
       "agentic_sync_runner_python.prompt",
       "user_story_tests_python.prompt",
       "agentic_common_python.prompt",
-      "auto_include_python.prompt"
+      "auto_include_python.prompt",
+      "metadata_sync_python.prompt"
     ],
     "priority": 80,
     "filename": "ci_drift_heal_python.prompt",
@@ -8714,6 +8716,39 @@
           }
         ]
       }
+    }
+  },
+  {
+    "reason": "Shared orchestrator that finalizes prompt metadata (tags, architecture, run report, fingerprint) in a fixed order so update/auto-heal/preflight workflows leave no half-synced state.",
+    "description": "Shared orchestrator that finalizes prompt metadata stages (prompt, tags, architecture, run_report, fingerprint) in a fixed order so update/auto-heal/preflight workflows leave no half-synced state.",
+    "dependencies": [
+      "architecture_sync_python.prompt",
+      "sync_determine_operation_python.prompt",
+      "operation_log_python.prompt"
+    ],
+    "priority": 5,
+    "filename": "metadata_sync_python.prompt",
+    "filepath": "pdd/metadata_sync.py",
+    "tags": [
+      "sync",
+      "metadata",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "run_metadata_sync",
+            "signature": "(prompt_path: Path, code_path: Optional[Path] = None, *, dry_run: bool = False, repo_root: Optional[Path] = None, architecture_path: Optional[Path] = None) -> MetadataSyncResult",
+            "returns": "MetadataSyncResult with per-stage status"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 24600,
+      "y": 800
     }
   }
 ]

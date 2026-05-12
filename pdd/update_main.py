@@ -1003,6 +1003,33 @@ def _find_prd_file(project_root: Path) -> Optional[Path]:
     return None
 
 
+def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
+    """Run metadata sync for a single (prompt, code) pair.
+
+    Returns True when every stage reports `ok`/`dry_run`/`skipped`; False when
+    any stage `failed` or the orchestrator raised. Callers in single-file
+    update modes must propagate False as a non-success exit so preflight
+    auto-heal (which keys off the subprocess return code) does not treat a
+    half-finalized update as healed (#871 acceptance criterion).
+    """
+    try:
+        from .metadata_sync import run_metadata_sync
+        sync_result = run_metadata_sync(
+            prompt_path=prompt_path,
+            code_path=code_path,
+            dry_run=False,
+        )
+    except Exception as exc:
+        rprint(f"[error][metadata-sync] orchestrator: {exc}[/error]")
+        return False
+    if not sync_result.ok:
+        for stage_name, stage in sync_result.stages.items():
+            if stage.status == "failed":
+                rprint(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
+        return False
+    return True
+
+
 def update_main(
     ctx: click.Context,
     input_prompt_file: Optional[str],
@@ -1019,6 +1046,7 @@ def update_main(
     base_branch: str = "main",
     budget: Optional[float] = None,
     dry_run: bool = False,
+    sync_metadata: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """
     CLI wrapper for updating prompts based on modified code.
@@ -1038,6 +1066,9 @@ def update_main(
     :param base_branch: Git branch to compare against for change detection in repo mode.
     :param budget: Optional repository-wide cap; stop processing once cumulative update cost reaches this amount.
     :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
+    :param sync_metadata: If True, orchestrate prompt metadata finalization via run_metadata_sync
+        after the update writes the prompt. In repo mode, replaces the legacy per-pair fingerprint
+        and post-loop architecture/PRD sync with a per-pair run_metadata_sync call.
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -1130,6 +1161,7 @@ def update_main(
         results = []
         total_repo_cost = 0.0
         budget_reached = False
+        metadata_results: Dict[str, Any] = {}
 
         progress = Progress(
             SpinnerColumn(),
@@ -1176,58 +1208,98 @@ def update_main(
 
                 total_repo_cost += result.get("cost", 0.0)
 
-                # Save fingerprint so the file isn't detected as changed next run
-                if "Success" in result.get("status", ""):
-                    from .operation_log import save_fingerprint, infer_module_identity
-                    basename, language = infer_module_identity(prompt_path)
-                    if basename and language:
+                if not sync_metadata:
+                    # Save fingerprint so the file isn't detected as changed next run
+                    if "Success" in result.get("status", ""):
+                        from .operation_log import save_fingerprint, infer_module_identity
+                        basename, language = infer_module_identity(prompt_path)
+                        if basename and language:
+                            try:
+                                paths = {
+                                    "prompt": Path(prompt_path),
+                                    "code": Path(code_path),
+                                }
+                                save_fingerprint(
+                                    basename, language,
+                                    operation="update",
+                                    paths=paths,
+                                    cost=result.get("cost", 0.0),
+                                    model=result.get("model", "unknown"),
+                                )
+                            except Exception:
+                                pass  # Best-effort; don't fail the update
+                else:
+                    if "Success" in result.get("status", ""):
                         try:
-                            paths = {
-                                "prompt": Path(prompt_path),
-                                "code": Path(code_path),
-                            }
-                            save_fingerprint(
-                                basename, language,
-                                operation="update",
-                                paths=paths,
-                                cost=result.get("cost", 0.0),
-                                model=result.get("model", "unknown"),
+                            from .metadata_sync import run_metadata_sync
+                            sync_res = run_metadata_sync(
+                                prompt_path=Path(prompt_path),
+                                code_path=Path(code_path),
+                                dry_run=False,
                             )
-                        except Exception:
-                            pass  # Best-effort; don't fail the update
+                            metadata_results[prompt_path] = sync_res
+                        except Exception as exc:
+                            from .metadata_sync import MetadataSyncResult, StageStatus
+                            metadata_results[prompt_path] = MetadataSyncResult(
+                                prompt_path=Path(prompt_path),
+                                code_path=Path(code_path),
+                                dry_run=False,
+                                stages={"prompt": StageStatus(status="failed", reason=str(exc))},
+                            )
 
                 progress.update(task, advance=1, total_cost=total_repo_cost)
 
-        # --- Post-update: Architecture sync ---
+        # --- Post-update: Architecture sync (+ PRD sync if arch changed) ---
+        # The PRD-sync block always runs (independent of `sync_metadata`) so
+        # that opting into `--sync-metadata` does not silently drop PRD
+        # propagation. The orchestrator handles per-pair arch updates when
+        # `sync_metadata=True`, so we only run the legacy arch loop when
+        # `sync_metadata=False`; the PRD step keys off the resulting count
+        # of architecture entries that actually changed.
         arch_entries_updated = 0
         prd_status = "skipped"
 
-        # Determine prompts directory and architecture path
-        prompts_dir = Path(repo_root) / "prompts"
         from .architecture_registry import find_architecture_for_project
         arch_files = find_architecture_for_project(Path(repo_root))
         architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
+        prompts_dir = Path(repo_root) / "prompts"
 
-        successful_prompts = [
-            res["prompt_file"] for res in results
-            if "Success" in res.get("status", "")
-        ]
+        if not sync_metadata:
+            successful_prompts = [
+                res["prompt_file"] for res in results
+                if "Success" in res.get("status", "")
+            ]
 
-        if successful_prompts and architecture_path.exists():
-            from .architecture_sync import update_architecture_from_prompt
-            for prompt_file in successful_prompts:
-                prompt_filename = os.path.basename(prompt_file)
-                try:
-                    arch_result = update_architecture_from_prompt(
-                        prompt_filename,
-                        prompts_dir=prompts_dir,
-                        architecture_path=architecture_path,
-                    )
-                    if arch_result.get("success") and arch_result.get("updated"):
-                        arch_entries_updated += 1
-                except Exception:
-                    # Architecture sync is best-effort; don't fail the update
-                    pass
+            if successful_prompts and architecture_path.exists():
+                from .architecture_sync import update_architecture_from_prompt
+                for prompt_file in successful_prompts:
+                    prompt_filename = os.path.basename(prompt_file)
+                    try:
+                        arch_result = update_architecture_from_prompt(
+                            prompt_filename,
+                            prompts_dir=prompts_dir,
+                            architecture_path=architecture_path,
+                        )
+                        if arch_result.get("success") and arch_result.get("updated"):
+                            arch_entries_updated += 1
+                    except Exception:
+                        # Architecture sync is best-effort; don't fail the update
+                        pass
+        else:
+            # The orchestrator already ran update_architecture_from_prompt per
+            # pair. Count entries whose architecture stage reported a real
+            # update so the downstream PRD-sync decision matches the legacy
+            # semantics (only run when arch actually changed).
+            for sync_res in metadata_results.values():
+                arch_stage = sync_res.stages.get("architecture")
+                if (
+                    arch_stage is not None
+                    and arch_stage.status == "ok"
+                    and arch_stage.detail
+                    and arch_stage.detail.startswith("updated fields:")
+                    and arch_stage.detail != "updated fields: []"
+                ):
+                    arch_entries_updated += 1
 
         # --- Post-update: PRD sync (only if architecture changed) ---
         if arch_entries_updated > 0:
@@ -1279,12 +1351,39 @@ def update_main(
         else:
             prd_status = "skipped (no arch changes)"
 
+        from .metadata_sync import STAGE_ORDER
+
+        def _metadata_column_value(prompt_file_key: str) -> str:
+            res = metadata_results.get(prompt_file_key)
+            if res is None:
+                return "skipped"
+            stages = res.stages
+            failing = res.failing_stage
+            if failing:
+                return f"failed:{failing}"
+            if any(s.status == "dry_run" for s in stages.values()):
+                return "dry-run"
+            # ``partial:<stage>`` surfaces the first skipped stage (e.g. an
+            # unregistered module → architecture stage skipped). Result is
+            # still ``ok`` (skipped is a non-failure), but the column makes it
+            # obvious that not every metadata layer was actually written.
+            skipped = next(
+                (n for n in STAGE_ORDER if stages.get(n) and stages[n].status == "skipped"),
+                None,
+            )
+            if skipped:
+                return f"partial:{skipped}"
+            if res.ok:
+                return "synced"
+            return "skipped"
+
         table = Table(show_header=True, header_style="bold magenta")
         table.add_column("Prompt File", style="dim", width=50)
         table.add_column("Status")
         table.add_column("Cost", justify="right")
         table.add_column("Model")
         table.add_column("Error", style="error")
+        table.add_column("Metadata")
 
         models_used = set()
         for res in sorted(results, key=lambda x: x["prompt_file"]):
@@ -1294,6 +1393,7 @@ def update_main(
                 f"${res['cost']:.6f}",
                 res["model"],
                 res["error"],
+                _metadata_column_value(res["prompt_file"]),
             )
             if res["model"]:
                 models_used.add(res["model"])
@@ -1308,6 +1408,28 @@ def update_main(
         console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")
 
         final_model_str = ", ".join(sorted(models_used)) if models_used else "N/A"
+
+        # When --sync-metadata was opted in, any per-pair MetadataSyncResult
+        # that is not .ok (i.e. a stage reported `failed`) must surface as a
+        # non-zero CLI exit. Without this, repo-mode silently returns the
+        # success tuple and Click exits 0 — masking partial-state heals and
+        # contradicting the single-file `click.exceptions.Exit(1)` contract.
+        # `skipped` is permitted (no arch entry, unregistered modules); only
+        # `failed` blocks. The summary table has already been printed above
+        # so the operator sees which pair(s) failed.
+        if sync_metadata and metadata_results:
+            failed_pairs = [
+                (p, r) for p, r in metadata_results.items()
+                if not getattr(r, "ok", False)
+            ]
+            if failed_pairs:
+                rprint(
+                    f"[error][metadata-sync] repo mode: "
+                    f"{len(failed_pairs)} pair(s) finalized with a failed stage; "
+                    f"exiting non-zero (#871)[/error]"
+                )
+                raise click.exceptions.Exit(1)
+
         return "Repository update complete.", total_repo_cost, final_model_str
 
     # --- Single file logic ---
@@ -1363,6 +1485,15 @@ def update_main(
                         rprint(f"[bold]Provider:[/bold] {provider}")
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
+
+                    if sync_metadata:
+                        if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
+                            # Surface as a non-zero CLI exit, not a soft None
+                            # return. modify.py re-raises click.exceptions.Exit,
+                            # so this bubbles to Click's command boundary and
+                            # the preflight subprocess sees returncode != 0
+                            # (#871 acceptance criterion).
+                            raise click.exceptions.Exit(1)
 
                     return generated_prompt, agentic_cost, provider
 
@@ -1432,6 +1563,10 @@ def update_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
+            if sync_metadata:
+                if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
+                    raise click.exceptions.Exit(1)
+
             return modified_prompt, total_cost, model_name
 
         # Case 2: True Update Mode.
@@ -1473,6 +1608,10 @@ def update_main(
                         rprint(f"[bold]Provider:[/bold] {provider}")
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
+
+                    if sync_metadata:
+                        if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
+                            raise click.exceptions.Exit(1)
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1577,6 +1716,10 @@ def update_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
 
+            if sync_metadata:
+                if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
+                    raise click.exceptions.Exit(1)
+
             return modified_prompt, total_cost, model_name
 
     except (ValueError, git.InvalidGitRepositoryError) as e:
@@ -1586,6 +1729,13 @@ def update_main(
         return None
     except click.Abort:
         # User cancelled - re-raise to stop the sync loop
+        raise
+    except click.exceptions.Exit:
+        # Intentional non-zero exit (e.g. sync_metadata finalization failure).
+        # Must propagate so the CLI surfaces returncode != 0 and the preflight
+        # auto-heal subprocess does not mark a half-synced update as healed
+        # (#871). Letting the bare `except Exception` below swallow this would
+        # silently convert it to exit 0.
         raise
     except Exception as e:
         if not quiet:
