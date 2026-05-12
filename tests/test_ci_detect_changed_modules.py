@@ -50,21 +50,30 @@ def test_basename_excludes_ci_helper_script_tests():
     assert module._basename_from_path("tests/test_copy_package_data_to_public.py") is None
 
 
-def test_basename_excludes_path_qualified_ci_detect_prompt():
-    """The prompt lives at pdd/prompts/scripts/..., so its derived basename is
-    path-qualified as "scripts/ci_detect_changed_modules". Auto-heal must
-    skip both the bare and the path-qualified forms; otherwise a change to
-    the detector's own prompt triggers heal against a bogus
-    pdd/scripts/ci_detect_changed_modules.py path."""
+def test_basename_excludes_ci_detect_prompt_and_module():
+    """The detector's own prompt and packaged copy must never be flagged for
+    auto-heal. The bare-basename form covers the canonical path
+    (pdd/prompts/ci_detect_changed_modules_python.prompt + the packaged
+    module); the path-qualified form is kept as defensive coverage in case
+    the prompt is ever relocated back under a subdirectory, since that
+    placement would otherwise re-introduce the auto-heal failure mode where
+    a bogus pdd/scripts/ci_detect_changed_modules.py path gets fed to
+    ``pdd example``."""
     module = _load_module()
 
+    assert (
+        module._basename_from_path(
+            "pdd/prompts/ci_detect_changed_modules_python.prompt"
+        )
+        is None
+    )
+    assert module._basename_from_path("pdd/ci_detect_changed_modules.py") is None
     assert (
         module._basename_from_path(
             "pdd/prompts/scripts/ci_detect_changed_modules_python.prompt"
         )
         is None
     )
-    assert module._basename_from_path("pdd/ci_detect_changed_modules.py") is None
 
 
 def test_basename_excludes_agent_reviewed_model_catalog():
