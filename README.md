@@ -2636,6 +2636,8 @@ The command maintains a CSV file with the following columns:
 
 **Note:** Existing CSV files using the old 3-column format (without `key_exports` and `dependencies`) are automatically re-summarized on the next run.
 
+**Metadata finalization:** On a successful run that actually mutates the prompt, `auto-deps` finalizes the same `.pdd/meta/*` state that `pdd sync` and `pdd update --repo` write — the prompt fingerprint and include-dependency metadata are updated for every prompt the command modified. This guarantees that a follow-up `pdd sync` starts from a trusted baseline rather than a half-synced view. The behavior is language-agnostic and hash-based; it reuses the same helper used by `pdd sync` and `pdd update --repo`. If metadata cannot be finalized (e.g. a no-op run with nothing written, a dry-run-style path, or a partial failure in a finalization stage), the command logs an explicit single line of the form `[metadata-sync] not finalized: <reason>` rather than leaving stale state silently. A metadata-sync failure does not change the `auto-deps` exit status — the prompt edit and architecture merge are still considered successful — but the explicit log line signals that downstream `pdd sync` may need attention.
+
 Examples:
 ```
 # Search code examples and documentation files
