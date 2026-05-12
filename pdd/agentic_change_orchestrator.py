@@ -991,8 +991,15 @@ def _preflight_drift_heal(
             # would pick up whatever pdd binary is on PATH, which can be
             # a different version when devs have a global install plus a
             # project-local one.
+            #
+            # `--sync-metadata` routes the heal through the shared
+            # `run_metadata_sync` orchestrator so prompt tags, architecture
+            # entries, run-report cleanup, and fingerprint state are all
+            # finalized atomically (issue #871). Without it, single-file
+            # `pdd update` leaves the fingerprint stale and the same drift is
+            # re-detected on the next preflight pass.
             result = subprocess.run(
-                [sys.executable, "-m", "pdd", "update", drift.code_path],
+                [sys.executable, "-m", "pdd", "update", "--sync-metadata", drift.code_path],
                 cwd=str(worktree_path),
                 capture_output=True,
                 text=True,

@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-05-12T02:53:56.046606+00:00",
+  "exit_code": 0,
+  "tests_passed": 1,
+  "tests_failed": 0,
+  "coverage": 100.0,
+  "test_hash": "68227d429442ac109b1cb1c47e796d470a4617165c2d8eb379d4ead19f6280ae",
+  "test_files": {
+    "test_agentic_change_orchestrator.py": "68227d429442ac109b1cb1c47e796d470a4617165c2d8eb379d4ead19f6280ae"
+  }
+}

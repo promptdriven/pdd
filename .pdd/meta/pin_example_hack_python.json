@@ -1,0 +1,24 @@
+{
+  "pdd_version": "0.0.234",
+  "timestamp": "2026-05-12T02:53:56.323298+00:00",
+  "command": "fix",
+  "prompt_hash": "77e8c17f1eb7ed4e1347312a702129bcfd8af95a985ee1ccd718291f83c93fae",
+  "code_hash": "c90df80316bc8339fcf9d4690ac29e4dc8ae3391e25c26c82e496b87dcd4a788",
+  "example_hash": "34e285dedea6ad0d3f3a5539401cc7c0bf5b2181d954915963fd66cd86e54e3c",
+  "test_hash": "7fbffec72f9941a52b4ba7efd6468330dd2a3235dc53d0bb81168ea6eb6c3a72",
+  "test_files": {
+    "test_pin_example_hack.py": "7fbffec72f9941a52b4ba7efd6468330dd2a3235dc53d0bb81168ea6eb6c3a72"
+  },
+  "include_deps": {
+    "context/auto_deps_main_example.py": "9b9c36c18d39494b6e31b46f6e4758c25135b6fa3d1672fbb7365844f7d2de04",
+    "context/cmd_test_main_example.py": "0774984ee29f70407429f1eff4a1b76287715b7ddd6adf2bc149e874c9b844bb",
+    "context/code_generator_main_example.py": "679590f0913600886d99469d8ece23fbbfe6bea2e626b0d5d2ab5fdcdc079b80",
+    "context/context_generator_main_example.py": "77c3de786f31392540ec609d4b3942e98e996ae14c4014f5018cf2b05a560df4",
+    "context/crash_main_example.py": "5c9b909107f74f773ccf7013d556a5812643d2a3b086e79fe07da7ea7877458c",
+    "context/fix_main_example.py": "29f88d8bfcc2256ebebe6efcb611f9487eb5ca6d8781286a6dd98689f92bca7a",
+    "context/fix_verification_main_example.py": "6490f398aca6df47b1a95e46a4ecfc0aabe299b5022de5c31ebc436e1bc3e459",
+    "context/get_test_command_example.py": "33b16476536f8c9424d3222ffc4a5cd5ecee6ad0589b2c66a4f3c7f1e265106c",
+    "context/sync_determine_operation_example.py": "94a333b37d9875bcc9b39e22d4d00de1b196ad2f7e0fa997e6f638e153dbdfad",
+    "context/update_main_example.py": "b318834c648f25e6141d81f3ecac1d9da592a6bb4740500983f2b07b8a10d902"
+  }
+}
