@@ -126,9 +126,11 @@ def auto_deps_main(
                     )
                 with open(output_path, 'w', encoding='utf-8') as f:
                     f.write(modified_prompt)
-                # Mark mutation only after the write succeeded; this is the
-                # signal the metadata-sync block uses to decide whether to run.
-                prompt_was_mutated = True
+                # Mark mutation only when the saved content actually differs
+                # from the original prompt. A byte-identical no-op write must
+                # not trigger metadata finalization; instead the explicit
+                # "[metadata-sync] not finalized" no-op line should fire below.
+                prompt_was_mutated = modified_prompt != prompt_content
                 try:
                     from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 
@@ -167,10 +169,29 @@ def auto_deps_main(
                     code_path=None,
                     dry_run=False,
                 )
-                if not result.ok:
-                    # Build a "<stage>: <reason>" message from the failing stage.
-                    stage_name = result.failing_stage or "unknown"
-                    stage_status = result.stages.get(stage_name) if stage_name else None
+                # Finalization specifically requires the fingerprint stage to
+                # have completed with status "ok" -- a skipped fingerprint
+                # (e.g. when (basename, language) cannot be inferred) means
+                # no fingerprint was written, so .pdd/meta is not in sync and
+                # the user must see the explicit "not finalized" line.
+                fingerprint_stage = result.stages.get("fingerprint")
+                fingerprint_finalized = (
+                    fingerprint_stage is not None
+                    and fingerprint_stage.status == "ok"
+                )
+                if not result.ok or not fingerprint_finalized:
+                    # Build a "<stage>: <reason>" message. Prefer the failing
+                    # stage; otherwise fall back to the non-ok fingerprint
+                    # status so a skipped fingerprint is surfaced.
+                    if result.failing_stage:
+                        stage_name = result.failing_stage
+                    elif not fingerprint_finalized:
+                        stage_name = "fingerprint"
+                    else:
+                        stage_name = "unknown"
+                    stage_status = (
+                        result.stages.get(stage_name) if stage_name else None
+                    )
                     reason_detail = (
                         stage_status.reason
                         if stage_status is not None and stage_status.reason
