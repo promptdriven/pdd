@@ -43,7 +43,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
    - If the code file changed but the prompt file didn't (relative to diff_base), reclassify the drift as `update` (prompt stale).
    - If `sync_determine_operation` reports `auto-deps` or `generate` but both the code file and prompt file changed in the PR, reclassify the drift as `example`. In a clean CI checkout this usually means the PR already updated both sides and only example refresh remains; do not rerun dependency insertion or full code generation over reviewed code.
    - If `sync_determine_operation` reports `auto-deps` or `generate` but only the prompt file changed, reclassify the drift as `example`; this may refresh or skip the reviewed example without rerunning dependency insertion or full code generation.
-   - If `sync_determine_operation` reports `generate` but neither the code nor prompt file changed, skip the module as no drift. This prevents example/test-only PR edits from being routed into full `pdd sync` just because clean CI has no fingerprints.
+   - If `sync_determine_operation` reports `auto-deps` or `generate` but neither the code nor prompt file changed, skip the module as no drift. This prevents unrelated PR edits from fanning out into dependency insertion or full `pdd sync` just because clean CI has no fingerprints.
    This fixes detection in CI where fingerprints are absent and `sync_determine_operation` returns `auto-deps`/`generate` instead of the true drift direction.
 
 4. **Code-without-prompt detection:** When `--modules` is specified, also scan for code files that have no corresponding prompt. These are collected as `update` drifts with `reason='Code exists without prompt'`.
