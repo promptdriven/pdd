@@ -1,7 +1,7 @@
 {
-  "pdd_version": "0.0.228",
-  "timestamp": "2026-05-12T19:08:51.954688+00:00",
-  "command": "metadata_sync",
+  "pdd_version": "0.0.235",
+  "timestamp": "2026-05-12T20:37:07.056697+00:00",
+  "command": "test",
   "prompt_hash": "2cc66fc9280e2adb361b68b4ad3e0bb5523b31c0e69c5f095127cd0a6bc47f3c",
   "code_hash": "bc1bc89af04d6f50909312c212c5dd14aec1361dda0dfa68e6f0e7e763e80d05",
   "example_hash": "847008502198ff360190831172d5d6cc6de6e5e76d3782d2b53823297a5b1349",
