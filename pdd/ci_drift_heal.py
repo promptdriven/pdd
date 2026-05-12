@@ -1239,13 +1239,25 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         # This preserves the original pdd-sync-based behavior for the rarer
         # drift types that can't be served by pdd example alone.
         if _is_ci_missing_run_report_crash(drift):
+            # Phantom "no run_report" crash only reaches heal_module when
+            # detect_drift could not determine whether the module was
+            # touched by the PR — i.e. --diff-base was omitted or the
+            # `git diff` lookup returned None (shallow checkout, missing
+            # ref). Returning None here would mark the module "skipped"
+            # in main, and if it is the only drift, main would exit 0
+            # without healing real drift. Fail closed instead: surface a
+            # loud failure so the operator re-runs with a resolvable
+            # --diff-base. Filtering in detect_drift handles the genuine
+            # untouched-on-clean-CI case where we have proof.
             console.print(
-                f"[yellow]⚠ Skipping auto-heal sync for {drift.basename} "
-                "(operation=crash): the 'no run_report' classification on a clean "
-                "CI checkout is not real drift — the fingerprint already attests "
-                "workflow completion.[/yellow]"
+                f"[red]✗ Cannot decide phantom 'no run_report' crash for "
+                f"{drift.basename}: --diff-base unset or git lookup "
+                "failed, so detect_drift could not prove the module is "
+                "untouched. Re-run with --diff-base origin/<base>...HEAD "
+                "(or HEAD~1 for push-to-main) so the touched/untouched "
+                "filter can run.[/red]"
             )
-            return None
+            return False
         skip_reason = _get_heal_sync_skip_reason(drift.basename)
         if skip_reason:
             console.print(

@@ -964,16 +964,17 @@ class TestHealModule:
             "/repo/agentic_split.py",
         ]
 
-    def test_crash_drift_with_missing_run_report_on_clean_checkout_is_skipped(self):
-        """Crash drift caused only by missing run_report on a clean CI checkout is not real drift.
+    def test_crash_drift_with_missing_run_report_at_heal_time_fails_closed(self):
+        """Phantom 'no run_report' crash that reaches heal_module must fail closed.
 
-        sync_determine_operation flags any module whose fingerprint exists but
-        whose ephemeral run_report does not as ``operation='crash'`` with reason
-        ``All files exist but needs validation - no run_report``. Run reports
-        are not committed to git, so every CI build hits this for every
-        untouched module — healing it burns a full ``pdd sync`` cycle and
-        routinely times out. The fingerprint already attests workflow
-        completion; skip the heal.
+        detect_drift filters phantom crashes when it can prove the module is
+        untouched (git_changed is not None). The only way a phantom crash
+        reaches heal_module is if --diff-base was omitted or the git diff
+        lookup returned None, so touched/untouched cannot be determined.
+        Returning None here would mark the module "skipped" — and if it is
+        the only drift, main would exit 0 without healing real drift. Fail
+        closed instead so the operator re-runs with --diff-base. The heal
+        is not attempted (no pdd subprocess call).
         """
         drift = DriftInfo(
             "commands/checkup",
@@ -987,7 +988,7 @@ class TestHealModule:
         with patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
             result = heal_module(drift, self._make_env())
 
-        assert result is None
+        assert result is False
         mock_run.assert_not_called()
 
     def test_crash_drift_with_real_failure_is_still_healed(self):
