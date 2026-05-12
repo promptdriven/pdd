@@ -291,7 +291,12 @@ run_test() {
         local duration=$((end_time - START_TIME))
         echo "=== FAILED exit=${exit_code} (${duration}s) ==="
         if [ "${exit_code}" -eq 124 ]; then
-            echo "=== Retryable timeout; leaving final result for the retry attempt ==="
+            # Exit 124 indicates the GNU coreutils `timeout` killed the task.
+            # Cloud Batch lifecycle policy no longer retries 124 (see PR
+            # change 3); record a failed result so post-run reports show the
+            # timeout instead of leaving a gap, then exit non-zero.
+            echo "=== Task timed out (exit 124); recording failed result ==="
+            write_result "failed" "${duration}" "${suite}" "${detail} (timeout)"
             tail -50 "${RESULT_LOG}" || true
             exit "${exit_code}"
         fi
