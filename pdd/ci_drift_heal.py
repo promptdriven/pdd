@@ -557,6 +557,18 @@ def _revert_prompt_file(drift: DriftInfo) -> None:
         )
 
 
+def _operation_log_metadata_relpaths(basename: str, language: str) -> List[str]:
+    """Return repo-relative metadata paths using operation_log naming."""
+    from pdd.operation_log import _safe_basename
+
+    safe_basename = _safe_basename(str(basename))
+    language = str(language)
+    return [
+        f".pdd/meta/{safe_basename}_{language}.json",
+        f".pdd/meta/{safe_basename}_{language}_run.json",
+    ]
+
+
 def _snapshot_metadata_state_for(drift: "DriftInfo") -> Dict[str, Optional[bytes]]:
     """Capture pre-heal bytes of files that ``run_metadata_sync`` may
     modify for THIS module — module-scoped so a failed module's rollback
@@ -569,9 +581,12 @@ def _snapshot_metadata_state_for(drift: "DriftInfo") -> Dict[str, Optional[bytes
       time this contains any earlier modules' successful writes from
       this run; restoring it on a later module's failure preserves
       those.
-    - ``.pdd/meta/<basename>_<language>.json`` (per-module fingerprint).
-      ``None`` value indicates the file did not exist pre-heal, so
-      restore should remove the file rather than restore old bytes.
+    - ``.pdd/meta/<safe_basename>_<language>.json`` (per-module
+      fingerprint) and ``..._run.json`` (per-module run report), using
+      the same subdirectory-safe basename semantics as
+      :mod:`pdd.operation_log`. ``None`` value indicates the file did
+      not exist pre-heal, so restore should remove the file rather than
+      restore old bytes.
 
     Returns a dict mapping repo-relative POSIX path → file bytes
     (``None`` ⇒ file absent pre-heal). Used together with
@@ -591,13 +606,14 @@ def _snapshot_metadata_state_for(drift: "DriftInfo") -> Dict[str, Optional[bytes
     basename = getattr(drift, "basename", None)
     language = getattr(drift, "language", None)
     if basename and language:
-        fp_path = repo_root / ".pdd" / "meta" / f"{basename}_{language}.json"
-        try:
-            snapshot[f".pdd/meta/{basename}_{language}.json"] = (
-                fp_path.read_bytes() if fp_path.exists() else None
-            )
-        except OSError:
-            snapshot[f".pdd/meta/{basename}_{language}.json"] = None
+        for rel in _operation_log_metadata_relpaths(basename, language):
+            metadata_path = repo_root / rel
+            try:
+                snapshot[rel] = (
+                    metadata_path.read_bytes() if metadata_path.exists() else None
+                )
+            except OSError:
+                snapshot[rel] = None
 
     return snapshot
 

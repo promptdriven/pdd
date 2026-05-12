@@ -2500,3 +2500,93 @@ class TestHealModuleInvokesMetadataSync:
         # B's partial fingerprint must be removed (it did not exist
         # pre-snapshot, so restore deletes the file).
         assert not (repo / ".pdd" / "meta" / "b_python.json").exists()
+
+    def test_per_module_snapshot_uses_subdir_safe_metadata_paths(self, tmp_path):
+        """Subdirectory basenames must snapshot operation_log metadata paths."""
+        from pdd.ci_drift_heal import (
+            _snapshot_metadata_state_for,
+            _restore_metadata_state_for,
+        )
+
+        repo = tmp_path
+        meta_dir = repo / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        (repo / "architecture.json").write_bytes(b'{"modules":[]}')
+
+        drift = MagicMock()
+        drift.basename = "commands/foo"
+        drift.language = "python"
+
+        fingerprint_path = meta_dir / "commands_foo_python.json"
+        run_report_path = meta_dir / "commands_foo_python_run.json"
+        unsanitized_path = meta_dir / "commands" / "foo_python.json"
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=repo):
+            snapshot = _snapshot_metadata_state_for(drift)
+
+            fingerprint_path.write_bytes(b"partial fingerprint")
+            run_report_path.write_bytes(b"partial run report")
+            _restore_metadata_state_for(snapshot)
+
+        assert ".pdd/meta/commands_foo_python.json" in snapshot
+        assert ".pdd/meta/commands_foo_python_run.json" in snapshot
+        assert ".pdd/meta/commands/foo_python.json" not in snapshot
+        assert not fingerprint_path.exists()
+        assert not run_report_path.exists()
+        assert not unsanitized_path.exists()
+
+    def test_example_failure_restores_subdir_metadata_after_sync(self, tmp_path):
+        """If example regen fails, rollback restores subdir metadata files."""
+        from pdd.ci_drift_heal import DriftInfo, heal_module
+
+        repo = tmp_path
+        meta_dir = repo / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        prompts_dir = repo / "prompts" / "commands"
+        code_dir = repo / "pdd" / "commands"
+        prompts_dir.mkdir(parents=True)
+        code_dir.mkdir(parents=True)
+
+        prompt = prompts_dir / "foo_python.prompt"
+        code = code_dir / "foo.py"
+        prompt.write_text("Prompt body for commands/foo.\n")
+        code.write_text("def foo(): return 1\n")
+
+        arch = repo / "architecture.json"
+        fingerprint = meta_dir / "commands_foo_python.json"
+        run_report = meta_dir / "commands_foo_python_run.json"
+        arch.write_bytes(b'{"modules":[{"name":"commands/foo","state":"old"}]}')
+        fingerprint.write_bytes(b"old fingerprint")
+        run_report.write_bytes(b"old run report")
+
+        drift = DriftInfo(
+            basename="commands/foo",
+            language="python",
+            operation="update",
+            reason="code drift",
+            code_path=str(code),
+            prompt_path=str(prompt),
+        )
+
+        def fake_metadata_sync(_prompt_path, _code_path):
+            arch.write_bytes(b'{"modules":[{"name":"commands/foo","state":"new"}]}')
+            fingerprint.write_bytes(b"new fingerprint")
+            run_report.unlink()
+            return True
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=repo), \
+             patch("pdd.ci_drift_heal._run_pdd_command",
+                   side_effect=[True, False]), \
+             patch("pdd.ci_drift_heal._enforce_prompt_churn_gate",
+                   return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_structural_invariants",
+                   return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe",
+                   side_effect=fake_metadata_sync), \
+             patch("pdd.ci_drift_heal._revert_prompt_file"):
+            result = heal_module(drift, {})
+
+        assert result is False
+        assert arch.read_bytes() == b'{"modules":[{"name":"commands/foo","state":"old"}]}'
+        assert fingerprint.read_bytes() == b"old fingerprint"
+        assert run_report.read_bytes() == b"old run report"
