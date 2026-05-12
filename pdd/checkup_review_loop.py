@@ -232,8 +232,11 @@ def _defang_severity_tags(text: str) -> str:
 #   - ``_BUDGET_EXHAUSTED_RE`` (``max-*-reached: true``) → ``_defang_budget_reached``
 #   - ``_REVIEWER_SECTION_RE`` / ``_FRESH_FINAL_SECTION_RE`` (markdown
 #     heading scanners) → ``_defang_section_headings``
-#   - ``_extract_findings`` pipe-table parser (lines starting with
-#     ``|<severity>|…``) → ``_defang_pipe_finding_rows``
+#   - ``_extract_findings`` pipe-table parser (any line starting with
+#     ``|``, including markdown-wrapped severity cells like
+#     ``| **critical** |`` / ``| `critical` |`` / ``| *critical* |``
+#     and empty-leading-cell shapes like ``| | critical |``) →
+#     ``_defang_pipe_table_lines``
 # Defang at the RENDER boundary only — ``state.reviewer_status_details``
 # and ``final-state.json`` keep the original text so on-disk audit and
 # diagnostic forwarding stay truthful. The adapter's regexes scan the
@@ -295,17 +298,26 @@ _DEFANG_SECTION_HEADING_RE: re.Pattern[str] = re.compile(
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Markdown pipe-table rows whose first cell is a known severity token
-# are parsed by the adapter's ``_extract_findings`` as real findings,
-# even inside fenced code blocks. A reviewer that echoes a prior
-# report's ``### Findings`` table (or a malicious ``| critical | … |``
-# line in stderr) would inject a synthetic critical finding and flip
-# the verdict to ``fail``. The adapter requires the line to start with
-# ``|`` after ``.strip()``; prefixing ``*`` breaks that anchor while
-# the line still reads as text to a human.
-_DEFANG_PIPE_FINDING_ROW_RE: re.Pattern[str] = re.compile(
-    r"^(?P<indent>\s*)\|(?P<rest>\s*(?:blocker|critical|medium|low|nit|info)\b[^\r\n]*)$",
-    re.IGNORECASE | re.MULTILINE,
+# Markdown pipe-table rows are parsed by the adapter's
+# ``_extract_findings`` as real findings whenever the first non-empty
+# cell (after ``_strip_markdown_cell`` peels ``**bold**``, ``*italic*``,
+# and `` `code` `` wrappers) is a severity token. A reviewer that
+# echoes a prior report's ``### Findings`` table — or a malicious
+# stderr line like ``| **critical** | … |``, ``| `critical` | … |``,
+# ``| *critical* | … |``, or even ``| | critical | … |`` with an
+# empty leading cell — would inject a synthetic critical finding and
+# flip the verdict to ``fail``. Trying to match every wrapper / empty-
+# cell variant in a regex is brittle, so the defang neutralizes EVERY
+# pipe-prefixed line in the diagnostics reason: prefix the leading
+# ``|`` with ``*``, breaking the adapter's ``stripped.startswith("|")``
+# anchor while keeping the row readable to a human. The defang is
+# only applied to ``reviewer_status_details[*]["reason"]`` text —
+# legitimate ``### Per-Reviewer Status`` / ``### Findings`` tables
+# emitted by ``_render_final_report`` never pass through this filter
+# and remain untouched.
+_DEFANG_PIPE_TABLE_LINE_RE: re.Pattern[str] = re.compile(
+    r"^(?P<indent>\s*)\|",
+    re.MULTILINE,
 )
 
 
@@ -394,20 +406,27 @@ def _defang_section_headings(text: str) -> str:
     )
 
 
-def _defang_pipe_finding_rows(text: str) -> str:
-    """Neutralize markdown pipe-table rows whose first cell is a known
-    severity token. The adapter's ``_extract_findings`` parses any
-    line starting with ``|<severity>|...`` as a real finding (even
-    inside fenced code blocks), so leaking such a row through reviewer
-    stderr would inject a synthetic finding and flip the verdict.
+def _defang_pipe_table_lines(text: str) -> str:
+    """Neutralize EVERY markdown pipe-table line in the diagnostics
+    reason text. The adapter's ``_extract_findings`` strips markdown
+    wrappers (``**bold**``, ``*italic*``, `` `code` ``) and skips
+    empty leading cells before checking the first cell's severity, so
+    matching only the bare ``|<severity>|`` shape leaves real bypasses:
+    ``| **critical** | … |``, ``| `critical` | … |``,
+    ``| *critical* | … |``, and ``| | critical | … |`` all become
+    synthetic findings.
 
-    Prefix the leading pipe with ``*`` so the line no longer starts
-    with ``|`` after ``.strip()`` — the adapter's table walker skips
-    any line that fails that anchor check.
+    Rather than enumerate every wrapper / empty-cell permutation,
+    defang every line that starts (after optional whitespace) with
+    ``|``. Prefix the leading ``|`` with ``*`` so the adapter's
+    ``stripped.startswith("|")`` anchor no longer holds. Legitimate
+    finding/status tables emitted by ``_render_final_report`` are
+    built outside the diagnostics path and never pass through this
+    filter, so this is safe to apply broadly.
     """
     if not text:
         return text
-    return _DEFANG_PIPE_FINDING_ROW_RE.sub(r"\g<indent>*|\g<rest>", text)
+    return _DEFANG_PIPE_TABLE_LINE_RE.sub(r"\g<indent>*|", text)
 
 
 def _defang_adapter_trip_wires(text: str) -> str:
@@ -427,7 +446,7 @@ def _defang_adapter_trip_wires(text: str) -> str:
     text = _defang_fresh_final_inline(text)
     text = _defang_budget_reached(text)
     text = _defang_section_headings(text)
-    text = _defang_pipe_finding_rows(text)
+    text = _defang_pipe_table_lines(text)
     return text
 
 
