@@ -94,7 +94,7 @@ def example_happy_path() -> None:
                 return (
                     True,
                     "<step_report>## Step 10\n\nUnit tests verified.</step_report>\n"
-                    "E2E_NEEDED: no",
+                    "E2E_NEEDED: yes - integration path should be covered",
                     0.10,
                     "anthropic",
                 )

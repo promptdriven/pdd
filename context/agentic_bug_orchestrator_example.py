@@ -57,8 +57,8 @@ _STEP_TRAILERS = {
     7: "\nDEFECT_TYPE: code",
     8: "\nPLANNED_TEST_COUNT: 1",
     9: "\nFILES_CREATED: tests/test_calculator_bug.py",
-    10: "\nE2E_NEEDED: no",
-    11: "\nE2E_SKIP: not required (E2E_NEEDED: no)",
+    10: "\nE2E_NEEDED: yes - integration path should be covered",
+    11: "\nE2E_FILES_CREATED: tests/e2e/test_calculator_e2e.py",
 }
 
 
