@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.230",
-  "timestamp": "2026-05-13T01:32:23.474025+00:00",
-  "command": "metadata_sync",
-  "prompt_hash": "d4e20c3b3adea5a4b23d1b635fdd90201641ac013af7504a96b4e6a14336f13a",
-  "code_hash": "62e24b66543726e58f0d578a960ab5765c6b242b885729838a5996c413699542",
+  "pdd_version": "0.0.235",
+  "timestamp": "2026-05-13T02:33:30.854896+00:00",
+  "command": "manual-review-fix",
+  "prompt_hash": "69f92c057776b3742b7b8134871e81cffe88d42f8e42f268856d22f45c1fb30d",
+  "code_hash": "af83de0ce4a6858ff79dd095372fc8b22f017a00ba0399ba8fa1ff7bf7b3ea55",
   "example_hash": "dd2fcce23eaf91ee69847eff0e47eed0d3ab45c3bc5aaa2cd29298a8e37f9d5e",
-  "test_hash": "6fe383ff13a64f377d82b34018897dc3f29f9f3aa2a670d31095ed8d18e2a8c3",
+  "test_hash": "d01de12b433d9a5800cd1eb260f363bcec18d35a090701a59979419fdc4aa70b",
   "test_files": {
-    "test_checkup_review_loop.py": "6fe383ff13a64f377d82b34018897dc3f29f9f3aa2a670d31095ed8d18e2a8c3"
+    "test_checkup_review_loop.py": "d01de12b433d9a5800cd1eb260f363bcec18d35a090701a59979419fdc4aa70b"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"

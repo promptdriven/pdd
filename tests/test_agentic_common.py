@@ -3585,7 +3585,11 @@ def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
     """Codex positional prompt must be '-' so it receives the prompt body."""
     from pdd.agentic_common import _run_with_provider
 
-    with patch.dict(os.environ, {"OPENAI_API_KEY": "test-key"}, clear=False), \
+    with patch.dict(
+        os.environ,
+        {"OPENAI_API_KEY": "test-key", "CODEX_MODEL": "test-model"},
+        clear=False,
+    ), \
          patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
          patch("pdd.agentic_common._subprocess_run") as mock_run:
         mock_run.return_value = MagicMock(
@@ -3612,7 +3616,8 @@ def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
     assert output == "ok"
     args, kwargs = mock_run.call_args
     cmd = args[0]
-    assert cmd[-1] == "-"
+    assert cmd[cmd.index("--json") + 1] == "-"
+    assert cmd[cmd.index("--model") + 1] == "test-model"
     assert str(prompt_file) not in cmd
     assert kwargs["input"] == "test prompt body"
 

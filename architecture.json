@@ -6191,10 +6191,10 @@
           },
           {
             "name": "push_with_retry",
-            "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True) -> Tuple[bool, str]",
+            "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True, force_with_lease_on_non_fast_forward: bool = True) -> Tuple[bool, str]",
             "returns": "Tuple[bool, str]",
             "sideEffects": [
-              "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward",
+              "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true",
               "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"
             ]
           }
@@ -7511,8 +7511,8 @@
               "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
               "Can invoke one normalized reviewer_fallback if the primary reviewer cannot complete; the fallback becomes active for subsequent review/fix/verify gating",
               "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
-              "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper (refuses to leave tokenized URL in git config)",
-              "If the PR head advances remotely during the fixer turn, fetches the updated head, rebases the local fixer commit onto it, and retries the push instead of force-pushing over remote work",
+              "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper with force_with_lease_on_non_fast_forward disabled (refuses to leave tokenized URL in git config)",
+              "If the PR head advances remotely during the fixer turn, fetches the updated head, runs a plain git rebase of the local fixer commit onto it, and retries the push instead of force-pushing over remote work; rebase conflicts abort before verifier",
               "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/",

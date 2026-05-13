@@ -1832,6 +1832,30 @@ Local tests passed.
         assert result.findings[1].finding == "Project Gallery link points to a non-existent route."
         assert all("trailing whitespace" not in finding.evidence for finding in result.findings)
 
+    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+        """Codex can prefix priority headings with 'Finding:'."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """**Findings**
+
+Finding: [P2] Fallback comments still bypass sanitization.
+Trigger: `post_step_comment(..., body=None)` receives failure output containing a token assignment.
+Evidence: [pdd/agentic_common.py:3410](/tmp/w/pdd/agentic_common.py:3410) builds fallback from raw output.
+
+Checks:
+`git diff --check` passed.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        finding = result.findings[0]
+        assert finding.severity == "medium"
+        assert finding.finding == "Fallback comments still bypass sanitization."
+        assert finding.location == "pdd/agentic_common.py:3410"
+        assert "token assignment" in finding.evidence
+        assert "git diff --check" not in finding.evidence
+
     def test_bold_priority_colon_bullets_keep_embedded_location(self) -> None:
         """Codex can emit '- **P1:** sentence with inline file links."""
         from pdd.checkup_review_loop import _parse_review_output
@@ -2082,10 +2106,14 @@ class TestCommitAndPushIfChanged:
         }
         monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
 
-        pushes: List[Tuple[str, str]] = []
+        pushes: List[Tuple[str, str, bool]] = []
 
         def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
-            pushes.append((kwargs["remote"], kwargs["refspec"]))
+            pushes.append((
+                kwargs["remote"],
+                kwargs["refspec"],
+                kwargs["force_with_lease_on_non_fast_forward"],
+            ))
             if len(pushes) == 1:
                 return (
                     False,
@@ -2113,11 +2141,65 @@ class TestCommitAndPushIfChanged:
         assert success is True
         assert "rebasing" in message
         assert pushes == [
-            ("https://github.com/o/r.git", "HEAD:feature"),
-            ("https://github.com/o/r.git", "HEAD:feature"),
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+            ("https://github.com/o/r.git", "HEAD:feature", False),
         ]
         assert ["git", "fetch", "--no-tags", "https://github.com/o/r.git", "feature"] in runs
-        assert ["git", "rebase", "-X", "theirs", "FETCH_HEAD"] in runs
+        assert ["git", "rebase", "FETCH_HEAD"] in runs
+
+    def test_non_fast_forward_rebases_instead_of_force_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes: List[Tuple[str, str, bool]] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            pushes.append((
+                kwargs["remote"],
+                kwargs["refspec"],
+                kwargs["force_with_lease_on_non_fast_forward"],
+            ))
+            if len(pushes) == 1:
+                return (
+                    False,
+                    " ! [rejected] HEAD -> feature (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your "
+                    "current branch is behind.",
+                )
+            return True, ""
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        assert pushes == [
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+        ]
+        assert ["git", "fetch", "--no-tags", "https://github.com/o/r.git", "feature"] in runs
+        assert ["git", "rebase", "FETCH_HEAD"] in runs
 
     def test_fetch_first_rebase_failure_aborts_before_second_push(
         self, monkeypatch: Any, tmp_path: Path
@@ -2160,6 +2242,40 @@ class TestCommitAndPushIfChanged:
         assert pushes == 1
         assert "Failed to rebase fixes" in message
         assert ["git", "rebase", "--abort"] in runs
+
+    def test_push_with_retry_can_leave_non_fast_forward_to_caller(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        calls: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            calls.append(list(cmd))
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": " ! [rejected] HEAD -> feature (non-fast-forward)",
+                },
+            )()
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run):
+            success, err = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                remote="https://github.com/o/r.git",
+                refspec="HEAD:feature",
+                set_upstream=False,
+                force_with_lease_on_non_fast_forward=False,
+            )
+
+        assert success is False
+        assert "non-fast-forward" in err
+        assert not any("--force-with-lease" in cmd for cmd in calls)
 
 
 class TestStaticAnalysisCandidateFindingsIntegration:

@@ -96,7 +96,7 @@ On the first cycle, look for a sibling `bug_state_<issue>.json` under the state 
 After a successful inner loop, `_commit_and_push` stages only files whose hashes differ from `initial_file_hashes` (filtered through `_is_intermediate_file` to drop `*_fixed.*`, `*.bak`, `error_output*.txt`, `.pdd/**` except `e2e-fix-state/`, `step*_output.md`, `test_issue_*_reproduction.py`, etc.), commits as `"fix: {issue_title}\n\nFixes #{issue_number}"`, and pushes via `push_with_retry`.
 
 `push_with_retry` MUST:
-- Retry non-fast-forward rejections (markers `"non-fast-forward"`, `"tip of your current branch is behind"`) with `--force-with-lease`. Other `[rejected]` reasons (protected branches, hooks) MUST NOT force-push.
+- Accept `force_with_lease_on_non_fast_forward: bool = True`. When true, retry non-fast-forward rejections (markers `"non-fast-forward"`, `"tip of your current branch is behind"`) with `--force-with-lease`. When false, return the non-fast-forward error to the caller so shared-branch workflows can fetch/rebase/retry instead. Other `[rejected]` reasons (protected branches, hooks) MUST NOT force-push.
 - On auth failure (`"Authentication failed"`, `"HTTP 401"`, `"could not read Username"`, `"HTTP Basic: Access denied"`), first read a non-empty `PDD_GH_TOKEN_FILE`; if no token file token is available, fall back to `GH_TOKEN`, `GITHUB_TOKEN`, then `PDD_GITHUB_TOKEN`. Rewrite the remote URL to `https://x-access-token:{quote(token)}@github.com/{owner}/{repo}.git`, retry once, and restore the original URL in `finally` so the token never leaks into git config. Accept `remote` as either a configured remote name or a clone URL (handle both paths).
 
 % Step 11: Code Cleanup

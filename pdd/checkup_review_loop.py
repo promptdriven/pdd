@@ -10,11 +10,13 @@ Worktree / cwd ownership
 The loop creates ONE PR worktree at startup via ``_setup_pr_worktree`` and
 all reviewer, fixer, and verifier invocations run with that worktree as their
 ``cwd``. The user's primary checkout is never touched.
-The worktree is not re-fetched mid-loop: a verifier always sees the exact
+The worktree is not recreated mid-loop. A verifier always sees the exact
 post-fix checkout the fixer wrote, and only after a successful push back to
-the PR head ref. A failed push aborts the loop without running the
-verifier — preventing the loop from declaring a finding "fixed" against a
-local commit that never reached the PR.
+the PR head ref. If the PR head advanced remotely during the fixer turn, the
+loop fetches that updated head and tries a plain rebase before one push retry.
+A failed push or rebase aborts the loop without running the verifier —
+preventing the loop from declaring a finding "fixed" against a local commit
+that never reached the PR.
 
 GitHub state
 ------------
@@ -2422,8 +2424,10 @@ def _commit_and_push_if_changed(
     """Commit any worktree changes with the bot identity and push to the PR head ref.
 
     The actual push delegates to ``push_with_retry`` so that auth retries via
-    ``PDD_GH_TOKEN_FILE`` and non-fast-forward fallback to ``--force-with-lease``
-    behave identically to the e2e fix orchestrator's push contract.
+    ``PDD_GH_TOKEN_FILE`` stay shared with the e2e fix orchestrator. The review
+    loop disables that helper's force-with-lease fallback because PR head refs
+    can be shared with humans and other automation; remote advancement is
+    handled by fetch/rebase/retry below.
     """
     changed = _git_changed_files(worktree)
     if not changed:
@@ -2460,6 +2464,7 @@ def _commit_and_push_if_changed(
         remote=clone_url,
         refspec=f"HEAD:{head_ref}",
         set_upstream=False,
+        force_with_lease_on_non_fast_forward=False,
     )
     if success:
         return True, "Pushed fixes to PR branch."
@@ -2478,6 +2483,7 @@ def _commit_and_push_if_changed(
             remote=clone_url,
             refspec=f"HEAD:{head_ref}",
             set_upstream=False,
+            force_with_lease_on_non_fast_forward=False,
         )
         if success:
             return True, "Pushed fixes to PR branch after rebasing onto updated PR head."
@@ -2491,6 +2497,7 @@ def _is_remote_advanced_push_error(error: str) -> bool:
         for marker in (
             "(fetch first)",
             "fetch first",
+            "non-fast-forward",
             "remote contains work that you do not have locally",
             "updates were rejected because the remote contains work",
             "tip of your current branch is behind",
@@ -2508,10 +2515,9 @@ def _rebase_onto_updated_pr_head(
 
     Review-loop fixes can race with auto-heal or a maintainer push to the same
     PR branch. Force-pushing over those commits would discard remote work, so
-    recover by rebasing before retrying the push. ``-X theirs`` is intentional:
-    during rebase, "theirs" is the fix commit being replayed. Non-conflicting
-    remote changes are preserved, while conflicting hunks keep the fixer output
-    that the verifier will review next.
+    recover by rebasing before retrying the push. Use a plain rebase: if the
+    fixer commit conflicts with remote changes, abort and let the next run
+    review/fix from the updated PR head instead of choosing a side silently.
     """
     fetch = subprocess.run(
         ["git", "fetch", "--no-tags", clone_url, head_ref],
@@ -2526,7 +2532,7 @@ def _rebase_onto_updated_pr_head(
         )
 
     rebase = subprocess.run(
-        ["git", "rebase", "-X", "theirs", "FETCH_HEAD"],
+        ["git", "rebase", "FETCH_HEAD"],
         cwd=worktree,
         capture_output=True,
         text=True,

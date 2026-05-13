@@ -25,7 +25,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 % Worktree, cwd, and checkout ownership
 4. The loop owns the worktree lifecycle for the entire session.
    - Create exactly one worktree via `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False)` before any reviewer runs.
-   - Never re-fetch or re-create the worktree mid-loop.
+   - Never re-create the worktree mid-loop. Fetch only the PR head for the bounded push-retry recovery path after a remote-advanced push rejection.
    - Reviewer, fixer, and verifier roles all run with this worktree as their `cwd`. They never operate on the user's primary checkout.
 5. Each reviewer/fixer/verifier role MUST be invoked with `cwd=worktree`. Document this in code comments and ensure no role escapes the worktree by computing paths via `_get_git_root` or by falling back to the current process cwd.
 6. The fixer mutates files in the worktree, then `_commit_and_push_if_changed` commits and pushes. The verifier MUST run only after a successful push, against the same worktree the fixer wrote. A failed push aborts the loop with `state.stop_reason` set; no verifier runs against unpushed local commits, and the failed reviewer's status remains non-clean.
@@ -39,14 +39,14 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 
 % Authenticated push contract
 9. Pushing fixes back to the PR head branch reuses the shared token-refresh helper from `agentic_e2e_fix_orchestrator` (`_push_with_retry_remote`, exposed as `pdd.agentic_e2e_fix_orchestrator.push_with_retry` or equivalent). The helper MUST:
-   - Accept `(cwd, remote, repo_owner, repo_name, refspec)` so it can target the PR head repo's clone URL and the PR head ref instead of `origin HEAD`.
-   - Run `git push <remote> <refspec>` first; on `non-fast-forward`, retry with `--force-with-lease`.
+   - Accept `(cwd, remote, repo_owner, repo_name, refspec, force_with_lease_on_non_fast_forward=True)` so it can target the PR head repo's clone URL and the PR head ref instead of `origin HEAD`, while letting shared-branch callers disable force-with-lease.
+   - Run `git push <remote> <refspec>` first; on `non-fast-forward`, retry with `--force-with-lease` only when `force_with_lease_on_non_fast_forward=True`.
    - On auth failure (`Authentication failed`, `HTTP 401`, `could not read Username`, `HTTP Basic: Access denied`), first read a non-empty `PDD_GH_TOKEN_FILE`; if no token file token is available, fall back to `GH_TOKEN`, `GITHUB_TOKEN`, then `PDD_GITHUB_TOKEN`. Rewrite the remote URL to `https://x-access-token:{quote(token, safe='')}@github.com/{owner}/{repo}.git`, retry the push, and then restore the original URL in a `finally` block. Never leave a tokenized URL in git config.
 10. `_commit_and_push_if_changed` MUST:
    - Stage with `git add -A`, then commit with the explicit bot identity `PDD Bot <pdd-bot@users.noreply.github.com>` only when `git status --porcelain` is non-empty.
    - Resolve `(clone_url, head_ref)` from `gh api repos/{pr_owner}/{pr_repo}/pulls/{pr_number}` via `_fetch_pr_metadata`. Missing values abort with a clear message.
-   - Delegate the push itself to the shared retry helper, passing the head repo's `clone_url` and `HEAD:{head_ref}` as the refspec.
-   - If the first push fails because the PR branch advanced remotely (`fetch first`, remote contains work, or branch-behind wording), MUST NOT force-push over the remote commit. Instead fetch the PR head, rebase the local fixer commit onto the fetched head using `git rebase -X theirs FETCH_HEAD`, then retry the same push. If fetch or rebase fails, abort before verifier because the PR still does not contain the local fix.
+   - Delegate the push itself to the shared retry helper, passing the head repo's `clone_url`, `HEAD:{head_ref}` as the refspec, and `force_with_lease_on_non_fast_forward=False`.
+   - If the first push fails because the PR branch advanced remotely (`fetch first`, `non-fast-forward`, remote contains work, or branch-behind wording), MUST NOT force-push over the remote commit. Instead fetch the PR head, rebase the local fixer commit onto the fetched head using plain `git rebase FETCH_HEAD`, then retry the same non-force push. If fetch or rebase fails, abort before verifier because the PR still does not contain the local fix.
 
 % Configurable reviewer status gates
 11. `ReviewLoopConfig` exposes the gate knobs (also surfaced through CLI flags):
