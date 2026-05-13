@@ -182,16 +182,19 @@ def auto_deps_main(
 
         # Metadata finalization for the mutated prompt file. Errors here must
         # not mask the successful auto-deps result — log a warning and continue.
+        # Identity must be derived from the *original* prompt file because the
+        # default auto-deps output is `<basename>_<language>_with_deps.prompt`,
+        # which would otherwise yield a bogus ``(<basename>_<language>_with,
+        # deps)`` identity.
         try:
-            identity = infer_module_identity(Path(output_path))
-            if identity is None:
+            basename, language = infer_module_identity(Path(prompt_file))
+            if basename is None or language is None:
                 if not quiet:
                     console.print(
                         f"[yellow]Warning: could not infer module identity for "
-                        f"{output_path}; skipping metadata finalization.[/yellow]"
+                        f"{prompt_file}; skipping metadata finalization.[/yellow]"
                     )
             else:
-                basename, language = identity
                 # Clear stale per-module run report because the prompt changed.
                 try:
                     clear_run_report(basename, language)
