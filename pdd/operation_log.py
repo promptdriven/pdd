@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import re
+import threading
 
 import time
 from datetime import datetime
@@ -14,6 +15,36 @@ from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 from rich.console import Console
 
 logger = logging.getLogger(__name__)
+
+# Thread-local collector for non-fatal warnings the operation should surface
+# in its exit-log entry without changing the operation's success/exit code.
+# Used by `_run_single_file_metadata_sync` when the default path (#988)
+# fails to finalize metadata: the helper still warns on stderr and the
+# operation continues with exit 0, but the failure is also attached to the
+# operation log entry as a `warnings` field so it is visible to anyone
+# reading `.pdd/meta/<module>_<lang>_sync.log`.
+_pending_warnings = threading.local()
+
+
+def record_operation_warning(message: str) -> None:
+    """Record a non-fatal warning to surface on the next operation log entry.
+
+    Intended for the default-path metadata-sync helper (#988): a finalization
+    failure must not change the CLI exit code, but it should still appear in
+    the operation/exit log so it is not silently lost.
+    """
+    messages = getattr(_pending_warnings, "messages", None)
+    if messages is None:
+        messages = []
+        _pending_warnings.messages = messages
+    messages.append(message)
+
+
+def _drain_pending_warnings() -> List[str]:
+    """Return and clear any warnings recorded for the current operation."""
+    messages = getattr(_pending_warnings, "messages", None) or []
+    _pending_warnings.messages = []
+    return list(messages)
 
 # We assume standard paths relative to the project root
 PDD_DIR = ".pdd"
@@ -364,11 +395,14 @@ def log_operation(
                 clear_run_report(basename, language)
 
             entry = create_manual_log_entry(operation=operation)
+            # Reset the per-thread warning collector so warnings from a
+            # previous invocation can't leak into this entry.
+            _drain_pending_warnings()
             start_time = time.time()
             success = False
             result = None
             error_msg = None
-            
+
             try:
                 result = func(*args, **kwargs)
                 success = True
@@ -388,6 +422,12 @@ def log_operation(
                         model = _extract_model_from_result(operation, result)
 
                 update_log_entry(entry, success=success, cost=cost, model=model, duration=duration, error=error_msg)
+                pending_warnings = _drain_pending_warnings()
+                if pending_warnings:
+                    # Surface default-path warnings (e.g. #988 metadata-sync
+                    # finalization failures) without changing the operation
+                    # success flag or exit code.
+                    entry["warnings"] = pending_warnings
                 if basename and language:
                     append_log_entry(basename, language, entry)
                     if success:

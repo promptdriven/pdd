@@ -1017,6 +1017,12 @@ def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
     auto-heal (which keys off the subprocess return code) does not treat a
     half-finalized update as healed (#871 acceptance criterion).
     """
+    # Use literal "Warning: metadata-sync ..." text (not Rich markup) so the
+    # prefix survives terminals that strip styling AND so Rich does not parse
+    # `[metadata-sync]` as a markup tag and drop it from the rendered output
+    # (#988 user-visible warning requirement — earlier `[error][metadata-sync]
+    # ...[/error]` rendered as just the trailing reason).
+    from .operation_log import record_operation_warning
     try:
         from .metadata_sync import run_metadata_sync
         sync_result = run_metadata_sync(
@@ -1025,12 +1031,20 @@ def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
             dry_run=False,
         )
     except Exception as exc:
-        stderr_console.print(f"[error][metadata-sync] orchestrator: {exc}[/error]")
+        message = f"orchestrator: {exc}"
+        stderr_console.print(f"Warning: metadata-sync {message}", style="warning", highlight=False)
+        record_operation_warning(f"metadata-sync {message}")
         return False
     if not sync_result.ok:
         for stage_name, stage in sync_result.stages.items():
             if stage.status == "failed":
-                stderr_console.print(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
+                message = f"{stage_name}: {stage.reason}"
+                stderr_console.print(
+                    f"Warning: metadata-sync {message}",
+                    style="warning",
+                    highlight=False,
+                )
+                record_operation_warning(f"metadata-sync {message}")
         return False
     return True
 

@@ -3037,9 +3037,10 @@ def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     # (#988 — `rich.print` / a default Console writes to stdout, which would
     # mask the warning from tooling that only reads stderr).
     err = captured.err
-    # Rich strips [error] / [metadata-sync] style markup; assert on rendered content.
-    assert "orchestrator" in err
-    assert "boom" in err
+    # The literal "Warning: metadata-sync ..." prefix must render — Rich
+    # markup like `[error][metadata-sync] ...[/error]` would strip the
+    # `metadata-sync` token (#988 user-visible warning requirement).
+    assert "Warning: metadata-sync orchestrator: boom" in err
 
 
 def test_sync_metadata_failed_stage_propagates_failure(
@@ -3085,9 +3086,11 @@ def test_sync_metadata_failed_stage_propagates_failure(
     # stderr (#988). Asserting `captured.err` directly catches regressions
     # where the helper accidentally falls back to stdout.
     err = captured.err
-    # Rich strips style markup like [error] / [metadata-sync]; assert rendered text.
-    assert "prompt" in err
-    assert "missing arch" in err
+    # The literal "Warning: metadata-sync <stage>: <reason>" prefix must
+    # render so the warning is visible — Rich markup like `[error]
+    # [metadata-sync] ...[/error]` previously dropped the metadata-sync
+    # token (#988 user-visible warning requirement).
+    assert "Warning: metadata-sync prompt: missing arch" in err
 
 
 def test_sync_metadata_false_failed_stage_warns_on_stderr_but_does_not_exit(
@@ -3128,9 +3131,54 @@ def test_sync_metadata_false_failed_stage_warns_on_stderr_but_does_not_exit(
 
     # No raise; normal success tuple.
     assert result is not None
-    # Diagnostic was written to stderr.
+    # Diagnostic was written to stderr with the literal warning prefix so it
+    # is visible to tooling that only reads stderr (#988 user-visible
+    # warning requirement — Rich markup like `[error][metadata-sync]
+    # ...[/error]` would strip the `metadata-sync` token).
     captured = capsys.readouterr()
-    assert "missing arch" in captured.err
+    assert "Warning: metadata-sync prompt: missing arch" in captured.err
+
+
+def test_sync_metadata_false_failure_records_operation_warning(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # #988: a default-path metadata-sync failure must also surface in the
+    # operation log via record_operation_warning, so the exit-log entry
+    # carries a `warnings` field (without changing the success/exit code).
+    from pdd import operation_log as op_log
+
+    failed_stages = {
+        "prompt": StageStatus(status="failed", reason="missing arch"),
+    }
+
+    def _sync(prompt_path, code_path, dry_run):
+        return MetadataSyncResult(
+            prompt_path=Path(prompt_path),
+            code_path=Path(code_path),
+            dry_run=False,
+            stages=failed_stages,
+        )
+
+    # Ensure the per-thread collector starts empty.
+    op_log._drain_pending_warnings()
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync):
+        update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+        )
+
+    drained = op_log._drain_pending_warnings()
+    assert any("metadata-sync prompt: missing arch" in m for m in drained), drained
 
 
 def test_cli_update_sync_metadata_failure_exits_non_zero(tmp_path):
