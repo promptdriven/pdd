@@ -82,13 +82,11 @@ SETUP_SECONDS=$((SETUP_END - SETUP_START))
 # Image plugin contract: confirm pytest plugins required by markers in tests/
 # are actually importable. Catches a stale image, or someone bumping
 # requirements.txt without updating Dockerfile's explicit plugin install.
-python - <<'PY' || {
+python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
     echo "FATAL: image missing expected pytest plugins"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "missing pytest plugins"
     exit 1
 }
-import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon
-PY
 
 # Pytest config contract: confirm pyproject.toml [tool.pytest.ini_options]
 # parses cleanly and all markers we use are registered (strict-markers).
