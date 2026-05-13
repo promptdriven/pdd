@@ -538,7 +538,7 @@ CLOUD_BATCH_DIR := ci/cloud-batch
 GCP_PROJECT_ID := prompt-driven-development-stg
 GCP_REGION ?= us-central1
 GCS_BUCKET ?= pdd-stg-ci-results
-AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test:latest
+AR_IMAGE := $(GCP_REGION)-docker.pkg.dev/$(GCP_PROJECT_ID)/pdd-ci/pdd-test
 
 # Files baked into the Docker image — changes to these require a rebuild
 CLOUD_IMAGE_DEPS := requirements.txt pyproject.toml $(CLOUD_BATCH_DIR)/entrypoint.sh $(CLOUD_BATCH_DIR)/Dockerfile
