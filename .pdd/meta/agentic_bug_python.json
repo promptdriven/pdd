@@ -1,6 +1,6 @@
 {
   "pdd_version": "0.0.228",
-  "timestamp": "2026-05-13T02:17:05+00:00",
+  "timestamp": "2026-05-13T03:03:58+00:00",
   "command": "regenerate-public",
   "prompt_hash": "f74527dd61981e4663f4d6767b38b158ec8ead1bed4eef331f8bd93a2b475cd8",
   "code_hash": "5d9e16efe88528a9eaaec4fcfc8df314fe8eb7d0693c565c49d1e63212900b34",
@@ -15,7 +15,7 @@
     "test_agentic_bug_step7_prompt.py": "60c139b52632113013e2e1ac5c77f13257d0d370fc2be61d2420522bf44c830a"
   },
   "include_deps": {
-    "context/agentic_bug_orchestrator_example.py": "97b2da07e76fb037bf663387f5647e89cd469ce6f2fdb152c089efe81259753c",
+    "context/agentic_bug_orchestrator_example.py": "23b545fc0f892e14ee9660902d3f7e04893f0b793246c1ea9d559656fd39ffe6",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }

@@ -2589,7 +2589,7 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 10. **Verify detection** - Confirm the unit test successfully detects the bug. Classifies whether an E2E test is needed (`E2E_NEEDED: yes|no`) based on bug scope. Posts comment confirming verification.
 
-11. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Skipped deterministically when Step 10 outputs `E2E_NEEDED: no`, avoiding unnecessary LLM calls for purely internal bugs. Posts comment with E2E test results or skip reason.
+11. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Skipped deterministically when Step 10 outputs `E2E_NEEDED: no`, avoiding unnecessary LLM calls for purely internal bugs. Posts comment with E2E test results when run; skipped Step 11 is recorded in workflow state without an extra visible comment.
 
 12. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 
