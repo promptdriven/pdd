@@ -161,7 +161,7 @@ def count_tokens_for_messages(messages: Any, model: str = "gpt-4o") -> int:
             litellm.token_counter, model=model, messages=messages
         )
     except Exception as exc:
-        logger.debug(
+        logger.warning(
             "count_tokens_for_messages: tiktoken fallback for model=%s (%s)",
             model,
             exc,
@@ -193,7 +193,7 @@ def count_tokens(text: str, model: str = "gpt-4o") -> int:
             litellm.token_counter, model=model, messages=messages
         )
     except Exception as exc:  # includes TimeoutError from our wrapper
-        logger.debug(
+        logger.warning(
             "count_tokens: falling back to tiktoken for model=%s (%s)",
             model,
             exc,
