@@ -1530,6 +1530,27 @@ def run_agentic_bug_orchestrator(
 
     # State validation: find actual last successful step
     ordered_steps: List[Union[int, float]] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    # Codex review #5 of PR #966: legacy E2E-skip states (before we persisted
+    # a synthetic Step 11 entry) can have step_outputs with keys 1..10 + 12
+    # but no 11. The contiguous walk below would stop at 10, downgrade a
+    # completed last_completed_step from 12 → 10, miss Step 12's backfill,
+    # and rerun the side-effectful PR creation step. Heal those states by
+    # synthesizing the missing Step 11 entry in-memory when Step 10's cached
+    # output indicates E2E_NEEDED:no AND Step 12 is also cached.
+    s10_out_pre = step_outputs.get("10")
+    s12_out_pre = step_outputs.get("12")
+    if (
+        "11" not in step_outputs
+        and isinstance(s10_out_pre, str)
+        and "E2E_NEEDED: no" in s10_out_pre
+        and isinstance(s12_out_pre, str)
+        and not s12_out_pre.startswith("FAILED:")
+    ):
+        step_outputs["11"] = (
+            "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+            "provide sufficient coverage."
+        )
+        state.setdefault("step_outputs", {})["11"] = step_outputs["11"]
     actual_last: Union[int, float] = 0
     for s in ordered_steps:
         key = str(s)
@@ -1648,6 +1669,14 @@ def run_agentic_bug_orchestrator(
     consecutive_failures = 0
     skip_e2e = False
 
+    # Codex review #5 of PR #966: rehydrate skip_e2e from cached Step 10
+    # output so a resume that lands on Step 11 (e.g. after a crash between
+    # Steps 10 and 11) still honors the E2E_NEEDED:no classification instead
+    # of unconditionally rerunning E2E generation.
+    cached_step10 = step_outputs.get("10")
+    if isinstance(cached_step10, str) and "E2E_NEEDED: no" in cached_step10:
+        skip_e2e = True
+
     # Worktree restoration for resume
     if start_step >= 5 and start_step <= 12:
         if worktree_path and worktree_path.exists():
@@ -1724,6 +1753,28 @@ def run_agentic_bug_orchestrator(
         if step_num == 11 and skip_e2e:
             if not quiet:
                 console.print("Skipping Step 11 (E2E): unit tests provide sufficient coverage")
+            # Codex review #5 of PR #966: persist a synthetic Step 11 skip
+            # entry. Without it, step_outputs has a gap at "11" so the resume
+            # validator (lines 1531-1543) walks contiguously, stops at 10,
+            # and silently downgrades a completed last_completed_step=12 to
+            # 10 — causing Step 12's cached body to miss backfill AND the
+            # side-effectful PR creation step to rerun on resume. The
+            # synthetic body intentionally omits <step_report> so the
+            # backfill sweep (lines 1622-1623) correctly skips posting any
+            # bogus "step 11 done" comment.
+            synthetic = (
+                "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+                "provide sufficient coverage."
+            )
+            state["step_outputs"]["11"] = synthetic
+            state["last_completed_step"] = 11
+            last_completed_step = 11
+            save_result = save_workflow_state(
+                cwd, issue_number, "bug", state, state_dir,
+                repo_owner, repo_name, use_github_state, github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
             continue
 
         # Record progress so KeyboardInterrupt can report how far we got.
