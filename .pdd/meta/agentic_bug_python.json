@@ -1,21 +1,21 @@
 {
   "pdd_version": "0.0.228",
-  "timestamp": "2026-05-06T03:28:20.609035+00:00",
+  "timestamp": "2026-05-13T03:03:58+00:00",
   "command": "regenerate-public",
-  "prompt_hash": "d1a77f330389d59db598e1cfc37daefcc358a845bad29ccf60d0249dc1656c01",
+  "prompt_hash": "f74527dd61981e4663f4d6767b38b158ec8ead1bed4eef331f8bd93a2b475cd8",
   "code_hash": "5d9e16efe88528a9eaaec4fcfc8df314fe8eb7d0693c565c49d1e63212900b34",
   "example_hash": null,
   "test_hash": "37a6cd9557683fd852c44a5f267ae6f18773379f8ca0ffbe9c40ba0397d7c230",
   "test_files": {
     "test_agentic_bug.py": "37a6cd9557683fd852c44a5f267ae6f18773379f8ca0ffbe9c40ba0397d7c230",
-    "test_agentic_bug_orchestrator.py": "9f189b915ae2da9f03eec1fd6cc7b782e95eff7581226dbed66db6be85f51c94",
-    "test_agentic_bug_orchestrator_1.py": "2f8ba8ce40f8f1fcba01c98eadc57e77f34e517358e9a26c655aa9cb654103f4",
+    "test_agentic_bug_orchestrator.py": "75ed5d42c484cd8f03cc52fb9f3aeb11ac602315098d0d3bf90b86a81f9aceb5",
+    "test_agentic_bug_orchestrator_1.py": "8085e2041355e53aef1709eeba3591fa0f7c512a637038b8c48d633e4cd07aa2",
     "test_agentic_bug_step10_prompt.py": "cca4e817639dabd0afd5f805eb894b78decc1858472d114debf885ffacbdf3d2",
     "test_agentic_bug_step11_prompt.py": "8b41000be193c0024d999dd6cf1bd9f2f4615692e1c6bc52d0c46a83b560427b",
     "test_agentic_bug_step7_prompt.py": "60c139b52632113013e2e1ac5c77f13257d0d370fc2be61d2420522bf44c830a"
   },
   "include_deps": {
-    "context/agentic_bug_orchestrator_example.py": "00db52821223449eeb381e3d57e0fff538628415ac57aacc3266d8cf83f46121",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+    "context/agentic_bug_orchestrator_example.py": "23b545fc0f892e14ee9660902d3f7e04893f0b793246c1ea9d559656fd39ffe6",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }
