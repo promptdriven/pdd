@@ -1,16 +1,16 @@
 {
-  "pdd_version": "0.0.228",
-  "timestamp": "2026-05-06T03:28:20.931522+00:00",
-  "command": "regenerate-public",
-  "prompt_hash": "83cb1f4bc9108f08c81dfeebb6a66b334f35da06bb351fd2909cc386d0910251",
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-13T02:50:17.642493+00:00",
+  "command": "fix",
+  "prompt_hash": "a6ac025fcefb41a8abd37b25ba4655e582f73cbf67005f805cbfe0a59a19ba7d",
   "code_hash": "c798bbc20c7765f2f3186510095f70c36d24118593e060cd194b3e1d2c7acfb6",
-  "example_hash": "8cb026c4a4f63f2a8ff1eae9a271f76885503a44aa3c93c067ad6ba113dab2fb",
-  "test_hash": "bc235e8fdbf8b416f01f63890ecf5e410c8511a612c6b7c1dff14a513e37b385",
+  "example_hash": "3de20bfd0d4f8b22aabf1738f905d6bfa8873a7537be20eece44353b02c23c0a",
+  "test_hash": "8bac0be5eddf646a15fbf59c9233eea96d32e0642ffe9c16c01f9f70f2940e32",
   "test_files": {
-    "test_agentic_e2e_fix_orchestrator.py": "bc235e8fdbf8b416f01f63890ecf5e410c8511a612c6b7c1dff14a513e37b385"
+    "test_agentic_e2e_fix_orchestrator.py": "8bac0be5eddf646a15fbf59c9233eea96d32e0642ffe9c16c01f9f70f2940e32"
   },
   "include_deps": {
     "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }
