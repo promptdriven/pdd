@@ -1,22 +1,22 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 from typing import Callable, Optional, Tuple
 
 import click
+import filelock
 from rich.console import Console
 
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 from .validate_prompt_includes import sanitize_prompt_output
+from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 from .operation_log import (
     infer_module_identity,
     save_fingerprint,
     clear_run_report,
 )
-from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 
 
 def auto_deps_main(
@@ -34,88 +34,68 @@ def auto_deps_main(
     """
     CLI entry point for the `auto-deps` command.
 
-    Analyzes a prompt file to discover and insert relevant dependencies
-    (code examples and optionally documentation), with deduplication and
-    parallelization support. Holds an exclusive file lock on the CSV path
-    to prevent redundant LLM calls when multiple processes target the
-    same cache.
+    Analyzes the given prompt file, discovers dependencies (and optionally docs)
+    in `directory_path`, inserts `<include>` directives, deduplicates redundant
+    inline content (unless disabled), writes the modified prompt + dependency
+    CSV, and finalizes per-module fingerprint metadata when overwriting the
+    canonical prompt in place.
+
+    Returns:
+        (cleaned_prompt, total_cost, model_name) on success.
+        ("", 0.0, f"Error: {exc}") on non-Abort failures so orchestrators can
+        continue gracefully.
     """
     console = Console()
     quiet = ctx.obj.get("quiet", False) if ctx.obj else False
 
     try:
-        # Build path-construction inputs.
+        # Build inputs for construct_paths
         input_file_paths = {"prompt_file": prompt_file}
-        command_options = {
-            "output": output,
-            "csv": auto_deps_csv_path,
-        }
+        command_options = {"output": output, "csv": auto_deps_csv_path}
 
-        # Resolve paths via the shared path constructor.
-        resolved = construct_paths(
+        force = ctx.obj.get("force", False) if ctx.obj else False
+        context_override = ctx.obj.get("context") if ctx.obj else None
+        confirm_callback = ctx.obj.get("confirm_callback") if ctx.obj else None
+
+        resolved_config, input_strings, output_file_paths, _ = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.obj.get("force", False) if ctx.obj else False,
+            force=force,
             quiet=quiet,
             command="auto-deps",
             command_options=command_options,
-            context_override=ctx.obj.get("context") if ctx.obj else None,
-            confirm_callback=ctx.obj.get("confirm_callback") if ctx.obj else None,
+            context_override=context_override,
+            confirm_callback=confirm_callback,
         )
-        # construct_paths returns (resolved_config, input_strings, output_file_paths, language)
-        _resolved_config, input_strings, output_file_paths, _ = resolved
 
-        # Resolve CSV path with safe default.
+        # Resolve CSV path with default fallback
         csv_path = output_file_paths.get("csv", "project_dependencies.csv")
 
-        # Honor --force-scan by removing existing CSV so it gets rebuilt.
-        if force_scan and Path(csv_path).exists():
-            if not quiet:
-                console.print(
-                    f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]"
-                )
-            try:
-                Path(csv_path).unlink()
-            except OSError as exc:
+        # Acquire exclusive lock for the entire operation
+        lock_path = Path(f"{csv_path}.lock")
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        lock = filelock.FileLock(f"{csv_path}.lock")
+        with lock:
+            # Force-scan: delete existing CSV if requested
+            if force_scan and Path(csv_path).exists():
                 if not quiet:
                     console.print(
-                        f"[yellow]Warning: failed to remove CSV file {csv_path}: {exc}[/yellow]"
+                        f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]"
                     )
+                try:
+                    Path(csv_path).unlink()
+                except OSError as exc:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Warning: Could not remove CSV file {csv_path}: {exc}[/yellow]"
+                        )
 
-        # Pull LLM parameters from the Click context with sensible defaults.
-        strength = ctx.obj.get("strength", DEFAULT_STRENGTH) if ctx.obj else DEFAULT_STRENGTH
-        temperature = ctx.obj.get("temperature", 0) if ctx.obj else 0
-        time_budget = ctx.obj.get("time", DEFAULT_TIME) if ctx.obj else DEFAULT_TIME
-        verbose = not quiet
+            # LLM parameters
+            strength = ctx.obj.get("strength", DEFAULT_STRENGTH) if ctx.obj else DEFAULT_STRENGTH
+            temperature = ctx.obj.get("temperature", 0) if ctx.obj else 0
+            time_budget = ctx.obj.get("time", DEFAULT_TIME) if ctx.obj else DEFAULT_TIME
+            verbose = not quiet
 
-        # Acquire an exclusive lock on the CSV path to serialize concurrent
-        # auto-deps invocations targeting the same cache. The lock is held
-        # for the entire operation so the CSV read/write cycle is atomic
-        # from the caller's perspective.
-        lock_path = Path(f"{csv_path}.lock")
-        try:
-            lock_path.parent.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            # If we can't create the parent (unlikely if csv_path is valid),
-            # fall through and let file open report a clear error.
-            pass
-
-        # Use function-scope import for the optional `filelock` dependency,
-        # falling back to a no-op lock if it isn't installed.
-        try:
-            from filelock import FileLock  # type: ignore
-            file_lock = FileLock(str(lock_path))
-        except ImportError:
-            class _NullLock:
-                def __enter__(self):  # noqa: D401
-                    return self
-
-                def __exit__(self, exc_type, exc, tb):
-                    return False
-
-            file_lock = _NullLock()
-
-        with file_lock:
-            # Run the dependency insertion pipeline.
+            # Run insert_includes
             modified_prompt, csv_output, total_cost, model_name = insert_includes(
                 input_prompt=input_strings["prompt_file"],
                 directory_path=directory_path,
@@ -131,134 +111,106 @@ def auto_deps_main(
                 max_workers=concurrency,
             )
 
-            # Sanitize the modified prompt before persisting so missing or
-            # invalid `<include select=...>` tags don't survive to a later
-            # `pdd sync` failure.
+            # Sanitize prompt output before persisting (removes invalid <include>
+            # selectors so a later `pdd sync` does not trip on them).
             output_path = output_file_paths["output"]
-            cleaned_prompt, _warnings = sanitize_prompt_output(
-                modified_prompt, output_path
-            )
+            cleaned_prompt, _removed = sanitize_prompt_output(modified_prompt, output_path)
 
-            # Write the cleaned modified prompt.
-            output_path_obj = Path(output_path)
-            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
-            output_path_obj.write_text(cleaned_prompt, encoding="utf-8")
+            # Persist modified prompt
+            Path(output_path).parent.mkdir(parents=True, exist_ok=True)
+            with open(output_path, "w", encoding="utf-8") as fh:
+                fh.write(cleaned_prompt)
 
-            # Write the CSV cache only if non-empty.
+            # Persist CSV if non-empty
             if csv_output:
-                csv_path_obj = Path(csv_path)
-                csv_path_obj.parent.mkdir(parents=True, exist_ok=True)
-                csv_path_obj.write_text(csv_output, encoding="utf-8")
+                Path(csv_path).parent.mkdir(parents=True, exist_ok=True)
+                with open(csv_path, "w", encoding="utf-8") as fh:
+                    fh.write(csv_output)
 
-            # Merge any new <include> dependencies from the mutated prompt
-            # into architecture.json. This helper has its own atomicity
-            # guarantees and is intentionally outside the fingerprint
-            # finalization block per the spec.
+            # Merge architecture.json dependencies (if architecture.json exists in project root)
             try:
                 merge_auto_deps_includes_from_cwd(
                     Path(output_path),
-                    input_strings["prompt_file"],
-                    cleaned_prompt,
+                    old_prompt_text=input_strings["prompt_file"],
+                    new_prompt_text=cleaned_prompt,
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as merge_exc:
                 if not quiet:
                     console.print(
-                        f"[yellow]Warning: architecture.json merge skipped due to error: {exc}[/yellow]"
+                        f"[yellow]Warning: architecture.json merge failed: {merge_exc}[/yellow]"
                     )
 
-        # Console output (unless quiet).
-        if not quiet:
-            console.print(
-                "[bold green]Successfully analyzed and inserted dependencies![/bold green]"
-            )
-            console.print(f"[bold]Model used:[/bold] {model_name}")
-            console.print(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-            console.print(
-                f"[bold]Modified prompt saved to:[/bold] {output_path}"
-            )
-            console.print(
-                f"[bold]Dependency information saved to:[/bold] {csv_path}"
-            )
-
-        # Metadata finalization for the mutated prompt file. Errors here must
-        # not mask the successful auto-deps result — log a warning and continue.
-        #
-        # Identity must be derived from the *original* prompt file because the
-        # default auto-deps output is `<basename>_<language>_with_deps.prompt`,
-        # which would otherwise yield a bogus ``(<basename>_<language>_with,
-        # deps)`` identity.
-        #
-        # Additionally, only finalize when the resolved output path refers to
-        # the *same* file as the original prompt (i.e. in-place overwrite, as
-        # used by ``pdd sync``). For the default CLI invocation the output is a
-        # separate ``*_with_deps.prompt`` file and the canonical prompt is
-        # untouched, so writing a fingerprint that hashes a non-canonical file
-        # under the canonical module identity would leave ``.pdd/meta`` in an
-        # inconsistent state.
-        try:
-            try:
-                same_target = (
-                    Path(output_path).resolve() == Path(prompt_file).resolve()
-                )
-            except OSError:
-                # Resolution can fail if either path does not exist on disk;
-                # fall back to a textual comparison rather than guessing.
-                same_target = str(output_path) == str(prompt_file)
-
-            if not same_target:
-                if not quiet:
-                    console.print(
-                        "[yellow]Note: auto-deps wrote a separate output file; "
-                        "skipping metadata finalization because the canonical "
-                        "prompt is unchanged.[/yellow]"
-                    )
-            else:
-                basename, language = infer_module_identity(Path(prompt_file))
-                if basename is None or language is None:
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Warning: could not infer module identity for "
-                            f"{prompt_file}; skipping metadata finalization.[/yellow]"
-                        )
-                else:
-                    # Clear stale per-module run report because the prompt changed.
-                    try:
-                        clear_run_report(basename, language)
-                    except Exception as exc:  # noqa: BLE001
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: failed to clear run report for "
-                                f"{basename}/{language}: {exc}[/yellow]"
-                            )
-
-                    # Persist the new fingerprint with current include-dependency hashes.
-                    try:
-                        save_fingerprint(
-                            basename=basename,
-                            language=language,
-                            operation="auto-deps",
-                            paths={"prompt": Path(output_path)},
-                            cost=total_cost,
-                            model=model_name,
-                        )
-                    except Exception as exc:  # noqa: BLE001
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: failed to save fingerprint for "
-                                f"{basename}/{language}: {exc}[/yellow]"
-                            )
-        except Exception as exc:  # noqa: BLE001
+            # Console reporting
             if not quiet:
                 console.print(
-                    f"[yellow]Warning: metadata finalization skipped due to error: {exc}[/yellow]"
+                    "[bold green]Successfully analyzed and inserted dependencies![/bold green]"
                 )
+                console.print(f"[bold]Model used:[/bold] {model_name}")
+                console.print(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+                console.print(f"[bold]Modified prompt saved to:[/bold] {output_path}")
+                console.print(f"[bold]Dependency information saved to:[/bold] {csv_path}")
 
-        return cleaned_prompt, total_cost, model_name
+            # Metadata finalization (only on in-place overwrite of the canonical prompt)
+            try:
+                same_file = False
+                try:
+                    same_file = Path(output_path).resolve() == Path(prompt_file).resolve()
+                except OSError:
+                    same_file = str(output_path) == str(prompt_file)
+
+                if same_file:
+                    basename, language = infer_module_identity(Path(prompt_file))
+                    if basename is None or language is None:
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: Could not infer module identity for "
+                                f"{prompt_file}; skipping fingerprint finalization.[/yellow]"
+                            )
+                    else:
+                        # Clear stale run report; do not let its failure block fingerprint save
+                        try:
+                            clear_run_report(basename, language)
+                        except Exception as cr_exc:
+                            if not quiet:
+                                console.print(
+                                    f"[yellow]Warning: Failed to clear run report for "
+                                    f"{basename}_{language}: {cr_exc}[/yellow]"
+                                )
+                        try:
+                            save_fingerprint(
+                                basename=basename,
+                                language=language,
+                                operation="auto-deps",
+                                paths={"prompt": Path(output_path)},
+                                cost=total_cost,
+                                model=model_name,
+                            )
+                        except Exception as fp_exc:
+                            if not quiet:
+                                console.print(
+                                    f"[yellow]Warning: Failed to save fingerprint for "
+                                    f"{basename}_{language}: {fp_exc}[/yellow]"
+                                )
+                else:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Note: Output file ({output_path}) differs from input "
+                            f"prompt ({prompt_file}); skipping fingerprint finalization to "
+                            f"avoid recording a non-canonical hash under the module identity.[/yellow]"
+                        )
+            except Exception as meta_exc:
+                # Never mask a successful auto-deps result on metadata errors
+                if not quiet:
+                    console.print(
+                        f"[yellow]Warning: Metadata finalization encountered an error: {meta_exc}[/yellow]"
+                    )
+
+            return cleaned_prompt, total_cost, model_name
 
     except click.Abort:
-        # Re-raise so the orchestrator (e.g. sync loop) can stop cleanly.
+        # Re-raise to allow orchestrators (e.g. pdd sync) to stop the loop
         raise
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         if not quiet:
-            console.print(f"[bold red]Error in auto-deps: {exc}[/bold red]")
+            console.print(f"[red]Error in auto-deps: {exc}[/red]")
         return "", 0.0, f"Error: {exc}"
