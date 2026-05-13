@@ -8,6 +8,7 @@ from pdd.architecture_sync import (
     parse_prompt_tags,
     update_architecture_from_prompt,
     sync_all_prompts_to_architecture,
+    sync_prompts_to_architecture,
     validate_dependencies,
     validate_interface_structure,
     get_architecture_entry_for_prompt,
@@ -90,6 +91,25 @@ def example_sync_all():
     if result['errors']:
         print("Errors:")
         for error in result['errors']:
+            print(f"  - {error}")
+
+    return result
+
+
+def example_sync_prompts_to_architecture():
+    """Sync selected prompt metadata tags into architecture.json."""
+    result = sync_prompts_to_architecture(
+        filenames=["commands/maintenance_python.prompt"],
+        dry_run=True,
+    )
+
+    print(f"Success: {result['success']}")
+    print(f"Updated: {result['updated_count']} modules")
+    print(f"Skipped: {result['skipped_count']} modules")
+
+    if result["errors"]:
+        print("Errors:")
+        for error in result["errors"]:
             print(f"  - {error}")
 
     return result
