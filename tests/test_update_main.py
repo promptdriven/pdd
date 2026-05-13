@@ -3448,7 +3448,7 @@ def test_repo_mode_sync_metadata_true_still_runs_prd_sync_when_arch_changed(
     with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
          patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
         # Force agentic PRD-sync to claim it didn't need an update.
-        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
 
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
@@ -3518,7 +3518,7 @@ def test_repo_mode_sync_metadata_true_skips_prd_when_arch_not_updated(
 
     with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
          patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
-        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
 
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
@@ -3610,6 +3610,8 @@ def test_repo_mode_summary_emits_partial_when_arch_stage_skipped(
     assert result is not None
     captured = capsys.readouterr()
     assert "partial:architecture" in captured.out, captured.out
+
+
 def _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd):
     mock_update.return_value = {
         "prompt_file": "prompts/src/module1_python.prompt",
@@ -3631,6 +3633,30 @@ def _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd):
     ctx = click.Context(click.Command('update'))
     ctx.obj = {"verbose": False}
     return repo_root, prd_file, ctx
+
+
+def _run_prd_sync_update(repo_root, ctx, sync_metadata=False):
+    with (
+        patch(
+            "pdd.update_main.find_and_resolve_all_pairs",
+            return_value=[("prompts/src/module1_python.prompt", "src/module1.py")],
+        ),
+        patch("pdd.update_main.git.Repo") as mock_repo,
+        patch("pdd.update_main.os.getcwd", return_value=str(repo_root)),
+        patch("pdd.pddrc_initializer.ensure_pddrc_for_scan"),
+    ):
+        mock_repo.return_value.working_tree_dir = str(repo_root)
+        return update_main(
+            ctx=ctx,
+            use_git=False,
+            repo=True,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            dry_run=False,
+            sync_metadata=sync_metadata,
+        )
 
 
 @patch('pdd.update_main.update_file_pair')
@@ -3660,23 +3686,7 @@ def test_prd_sync_updated(
     """
     repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
     mock_agentic.return_value = (True, "<updated-prd>new PRD content</updated-prd>", 0.12, "agent_model")
-    with patch(
-        'pdd.update_main.find_and_resolve_all_pairs',
-        return_value=[("prompts/src/module1_python.prompt", "src/module1.py")],
-    ):
-        with patch('pdd.update_main.git.Repo'):
-            with patch('pdd.update_main.os.getcwd', return_value=str(repo_root)):
-                result = update_main(
-                    ctx=ctx,
-                    use_git=False,
-                    repo=True,
-                    input_prompt_file=None,
-                    modified_code_file=None,
-                    input_code_file=None,
-                    output=None,
-                    dry_run=False,
-                    sync_metadata=False,
-                )
+    result = _run_prd_sync_update(repo_root, ctx)
     assert "new PRD content" in prd_file.read_text(), "PRD file was not updated."
     assert result is not None
     assert result[1] == pytest.approx(0.17), f"Cost should be 0.17, got {result[1]}"
@@ -3708,23 +3718,7 @@ def test_prd_sync_no_update_needed(
     """
     repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
     mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.05, "agent_model")
-    with patch(
-        'pdd.update_main.find_and_resolve_all_pairs',
-        return_value=[("prompts/src/module1_python.prompt", "src/module1.py")],
-    ):
-        with patch('pdd.update_main.git.Repo'):
-            with patch('pdd.update_main.os.getcwd', return_value=str(repo_root)):
-                result = update_main(
-                    ctx=ctx,
-                    use_git=False,
-                    repo=True,
-                    input_prompt_file=None,
-                    modified_code_file=None,
-                    input_code_file=None,
-                    output=None,
-                    dry_run=False,
-                    sync_metadata=False,
-                )
+    result = _run_prd_sync_update(repo_root, ctx)
     assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged."
     assert result is not None
     assert result[1] == pytest.approx(0.10), f"Cost should be 0.10, got {result[1]}"
@@ -3756,23 +3750,7 @@ def test_prd_sync_failure(
     """
     repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
     mock_agentic.return_value = (False, "API Limit reached", 0.0, "agent_model")
-    with patch(
-        'pdd.update_main.find_and_resolve_all_pairs',
-        return_value=[("prompts/src/module1_python.prompt", "src/module1.py")],
-    ):
-        with patch('pdd.update_main.git.Repo'):
-            with patch('pdd.update_main.os.getcwd', return_value=str(repo_root)):
-                update_main(
-                    ctx=ctx,
-                    use_git=False,
-                    repo=True,
-                    input_prompt_file=None,
-                    modified_code_file=None,
-                    input_code_file=None,
-                    output=None,
-                    dry_run=False,
-                    sync_metadata=False,
-                )
+    _run_prd_sync_update(repo_root, ctx)
     out = capsys.readouterr().out
     assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged on failure."
     assert "API Limit reached" in out, "Failure reason should be in the output."

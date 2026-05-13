@@ -1068,7 +1068,8 @@ def update_main(
     :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
     :param sync_metadata: If True, orchestrate prompt metadata finalization via run_metadata_sync
         after the update writes the prompt. In repo mode, replaces the legacy per-pair fingerprint
-        and post-loop architecture/PRD sync with a per-pair run_metadata_sync call.
+        and architecture sync with a per-pair run_metadata_sync call; PRD sync remains in this
+        wrapper and runs once after the batch when architecture entries changed.
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
