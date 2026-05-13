@@ -156,6 +156,11 @@ custom_theme = Theme({
     "path": "dim blue",
 })
 console = Console(theme=custom_theme)
+# Stderr console for diagnostics that must surface as stderr (e.g. the
+# metadata-sync helper's per-stage failure lines). The default `rich.print`
+# / module `console` writes to stdout, which would mask warnings from any
+# tooling that only reads stderr — see #988 acceptance criteria.
+stderr_console = Console(theme=custom_theme, stderr=True)
 
 def _extract_template_vars(concrete_path: str, template: str) -> Optional[Dict[str, str]]:
     """Reverse-match a concrete path against a template to extract variable values.
@@ -1020,12 +1025,12 @@ def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
             dry_run=False,
         )
     except Exception as exc:
-        rprint(f"[error][metadata-sync] orchestrator: {exc}[/error]")
+        stderr_console.print(f"[error][metadata-sync] orchestrator: {exc}[/error]")
         return False
     if not sync_result.ok:
         for stage_name, stage in sync_result.stages.items():
             if stage.status == "failed":
-                rprint(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
+                stderr_console.print(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
         return False
     return True
 
@@ -1486,14 +1491,17 @@ def update_main(
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
-                    if sync_metadata:
-                        if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
-                            # Surface as a non-zero CLI exit, not a soft None
-                            # return. modify.py re-raises click.exceptions.Exit,
-                            # so this bubbles to Click's command boundary and
-                            # the preflight subprocess sees returncode != 0
-                            # (#871 acceptance criterion).
-                            raise click.exceptions.Exit(1)
+                    # Finalize metadata on the default path too (#988): always
+                    # call the helper so .pdd/meta/<module>.json reflects the
+                    # post-update prompt/code state. Under sync_metadata=True
+                    # (#871) a helper failure must surface as a non-zero CLI
+                    # exit so preflight auto-heal does not mark a half-synced
+                    # update as healed; on the default path (sync_metadata=False)
+                    # the helper's stderr diagnostics are the sole escalation
+                    # and we still return the normal success tuple (exit 0).
+                    sync_ok = _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file))
+                    if sync_metadata and not sync_ok:
+                        raise click.exceptions.Exit(1)
 
                     return generated_prompt, agentic_cost, provider
 
@@ -1563,9 +1571,9 @@ def update_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
 
-            if sync_metadata:
-                if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
-                    raise click.exceptions.Exit(1)
+            sync_ok = _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file))
+            if sync_metadata and not sync_ok:
+                raise click.exceptions.Exit(1)
 
             return modified_prompt, total_cost, model_name
 
@@ -1609,9 +1617,9 @@ def update_main(
                         rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
                         rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
 
-                    if sync_metadata:
-                        if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
-                            raise click.exceptions.Exit(1)
+                    sync_ok = _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file))
+                    if sync_metadata and not sync_ok:
+                        raise click.exceptions.Exit(1)
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1716,9 +1724,9 @@ def update_main(
                 rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
                 rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
 
-            if sync_metadata:
-                if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
-                    raise click.exceptions.Exit(1)
+            sync_ok = _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file))
+            if sync_metadata and not sync_ok:
+                raise click.exceptions.Exit(1)
 
             return modified_prompt, total_cost, model_name
 

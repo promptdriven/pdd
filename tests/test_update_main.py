@@ -2915,13 +2915,18 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_regeneration_legacy(
     assert kwargs["dry_run"] is False
 
 
-def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_true_update(
+def test_sync_metadata_false_still_invokes_run_metadata_sync_in_true_update(
     mock_ctx,
     minimal_input_files,
     mock_construct_paths,
     mock_update_prompt,
     mock_open_file,
 ):
+    # #988: single-file/true-update mode on the default path
+    # (sync_metadata=False) must STILL finalize the fingerprint via the
+    # shared orchestrator so .pdd/meta/<module>.json reflects the
+    # post-update prompt/code state. It must NOT raise on the default
+    # path — the helper's stderr warning is the sole escalation.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
         result = update_main(
@@ -2934,15 +2939,17 @@ def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_true_update(
         )
 
     assert result is not None
-    assert mock_sync.call_count == 0
+    assert mock_sync.call_count == 1
 
 
-def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_git_update(
+def test_sync_metadata_false_still_invokes_run_metadata_sync_in_git_update(
     mock_ctx,
     mock_construct_paths,
     mock_git_update,
     mock_open_file,
 ):
+    # #988: git-based update on the default path also finalizes the
+    # fingerprint via the shared orchestrator.
     mock_construct_paths.return_value = (
         {},
         {
@@ -2965,16 +2972,18 @@ def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_git_update(
         )
 
     assert result is not None
-    assert mock_sync.call_count == 0
+    assert mock_sync.call_count == 1
 
 
 @patch("pdd.update_main.resolve_prompt_code_pair")
-def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_regeneration(
+def test_sync_metadata_false_still_invokes_run_metadata_sync_in_regeneration(
     mock_resolve_pair,
     mock_ctx,
     mock_update_prompt,
     tmp_path,
 ):
+    # #988: regeneration mode on the default path also finalizes the
+    # fingerprint via the shared orchestrator.
     code_file = tmp_path / "modified_code.py"
     code_file.write_text("def foo(): return 1\n")
     derived_prompt = tmp_path / "modified_code_python.prompt"
@@ -2993,7 +3002,7 @@ def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_regeneration(
         )
 
     assert result is not None
-    assert mock_sync.call_count == 0
+    assert mock_sync.call_count == 1
 
 
 def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
@@ -3024,10 +3033,13 @@ def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
 
     assert excinfo.value.exit_code == 1
     captured = capsys.readouterr()
-    out = captured.out + captured.err
+    # Helper uses a Console(stderr=True), so failures must surface on stderr
+    # (#988 — `rich.print` / a default Console writes to stdout, which would
+    # mask the warning from tooling that only reads stderr).
+    err = captured.err
     # Rich strips [error] / [metadata-sync] style markup; assert on rendered content.
-    assert "orchestrator" in out
-    assert "boom" in out
+    assert "orchestrator" in err
+    assert "boom" in err
 
 
 def test_sync_metadata_failed_stage_propagates_failure(
@@ -3069,10 +3081,56 @@ def test_sync_metadata_failed_stage_propagates_failure(
 
     assert excinfo.value.exit_code == 1
     captured = capsys.readouterr()
-    out = captured.out + captured.err
+    # Helper uses a Console(stderr=True), so per-stage failures surface on
+    # stderr (#988). Asserting `captured.err` directly catches regressions
+    # where the helper accidentally falls back to stdout.
+    err = captured.err
     # Rich strips style markup like [error] / [metadata-sync]; assert rendered text.
-    assert "prompt" in out
-    assert "missing arch" in out
+    assert "prompt" in err
+    assert "missing arch" in err
+
+
+def test_sync_metadata_false_failed_stage_warns_on_stderr_but_does_not_exit(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+    capsys,
+):
+    # #988 default path: a metadata-sync failure must NOT raise
+    # click.exceptions.Exit(1). The helper writes one stderr line per
+    # failed stage and update_main still returns the normal success tuple
+    # so existing successful flows (single-file `pdd update <code>`)
+    # continue to exit 0.
+    failed_stages = {
+        "prompt": StageStatus(status="failed", reason="missing arch"),
+    }
+
+    def _sync(prompt_path, code_path, dry_run):
+        return MetadataSyncResult(
+            prompt_path=Path(prompt_path),
+            code_path=Path(code_path),
+            dry_run=False,
+            stages=failed_stages,
+        )
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync):
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+        )
+
+    # No raise; normal success tuple.
+    assert result is not None
+    # Diagnostic was written to stderr.
+    captured = capsys.readouterr()
+    assert "missing arch" in captured.err
 
 
 def test_cli_update_sync_metadata_failure_exits_non_zero(tmp_path):
