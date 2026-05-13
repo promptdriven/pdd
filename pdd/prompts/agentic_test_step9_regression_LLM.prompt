@@ -46,15 +46,15 @@ You are working on step 9 of 18 in an agentic test generation workflow. Step 8 f
 
 % Output
 
-After creating the regression tests, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 9: Regression Tests Created
 
 **Status:** Tests Generated
@@ -70,6 +70,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 10: Validate Regression Tests*
+</step_report>
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -94,4 +95,5 @@ REGRESSION_TESTS: 0
 - Tests should FAIL against current code (they reproduce bugs)
 - Do NOT modify application code
 - Each test should be self-contained and independently runnable
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

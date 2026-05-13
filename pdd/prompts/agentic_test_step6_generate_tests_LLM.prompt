@@ -268,15 +268,15 @@ When generating tests that use `subprocess.run(..., cwd=...)` or any path relati
 
 % Output
 
-After generating the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 12: Generated Tests
 
 ### Test Files Created
@@ -303,6 +303,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 13: Run Tests*
+</step_report>
 ```
 
 % CRITICAL: Machine-Readable Output (REQUIRED)
@@ -333,4 +334,5 @@ Examples:
 - Use descriptive test names and error messages
 - Include proper setup and cleanup
 - Tests should be self-contained and runnable
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

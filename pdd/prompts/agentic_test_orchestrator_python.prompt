@@ -38,14 +38,23 @@ The orchestrator owns posting per-step status comments to the GitHub issue using
 2. State shape additions:
    - `state["step_comments"]` is a sorted `List[int]` of step indices whose comment was successfully posted. Hydrated to `Set[int]` via `normalize_step_comments_state` on resume; persisted back as a sorted list before every `save_workflow_state` call (including the hard-stop early-return save).
 
-3. Posting protocol inside the per-step loop (applies to all 18 steps, including fractional steps like 5.5 — use the same integer/string key the orchestrator already uses for `step_outputs`):
+3. Posting protocol inside the per-step loop (applies to all 18 steps, including fractional steps like 5.5):
    - Compute `report_body = extract_step_report(step_output)`. If `None`, skip posting and continue (do not fail the run).
    - Otherwise build the comment body as `f"## Step {step_num}/{total_steps}: {description}\n\n{report_body}"` and call `post_step_comment_once(...)`.
    - Post BEFORE the hard-stop check (duplicate detection at Step 1, `STOP_CONDITION` at Step 3, etc.) so hard-stop steps still emit their user-visible comment. The legacy hard-stop / failure-fallback comment behavior MUST remain intact for steps that did not emit a `<step_report>` block.
+   - **Composite-key encoding (REQUIRED — helper is `Set[int]`-typed)**: `post_step_comment_once`, `normalize_step_comments_state`, and the persisted `step_comments` list are all `int`-only. The orchestrator MUST therefore project the step key into a deterministic non-negative integer before passing it as `step_num=` to the helper. Use this canonical formula:
+       ```python
+       def _step_comment_key(step_num: float, iteration: int = 1) -> int:
+           # iteration defaults to 1 for non-iterative steps.
+           # step_num supports fractional values (e.g., 5.5 -> 55).
+           # Stable encoding: 1->10010, 5.5->10055, 12->10120.
+           return iteration * 10000 + int(round(step_num * 10))
+       ```
+     Use `iteration=1` for the linear 18-step pipeline. For the optional manual-testing loop (Steps 8–11, max 3 iterations) pass the actual iteration so re-runs of the same logical step across iterations are not collapsed into a single "already posted" no-op. The encoding round-trips through JSON/list serialization without loss because keys are plain integers.
    - Persist `state["step_comments"] = sorted(posted_step_comments)` in BOTH the normal step-completion save AND the hard-stop / failure early-return save.
 
 4. Resume replay loop (before the main step loop):
-   - Iterate completed-step indices in order. For each completed step whose index is missing from `posted_step_comments`, run `extract_step_report` on its cached output and call `post_step_comment_once`. The helper is a no-op for already-posted indices, so the loop is safe to run unconditionally on every resume. Persist `step_comments` if any new indices were posted. This restores the contract that failed posts (transient `gh` errors, missing CLI) are retried on the next resume rather than silently lost.
+   - Iterate completed-step indices in order. For each completed step, recompute its integer key via `_step_comment_key(step_num, iteration)` (the same encoding used during the live posting pass). If the key is missing from `posted_step_comments`, run `extract_step_report` on its cached output and call `post_step_comment_once` with the computed key. The helper is a no-op for already-posted keys, so the loop is safe to run unconditionally on every resume. Persist `step_comments` if any new keys were posted. This restores the contract that failed posts (transient `gh` errors, missing CLI) are retried on the next resume rather than silently lost.
 
 # Dependencies
 <agentic_common>

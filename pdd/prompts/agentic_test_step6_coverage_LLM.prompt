@@ -59,15 +59,15 @@ You are working on step 6 of 18 in an agentic test generation workflow. This ste
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 6: Automated Test Coverage Assessment
 
 **Status:** Assessment Complete
@@ -84,6 +84,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 7: Create Manual Testing Checklist*
+</step_report>
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -100,4 +101,5 @@ If no gaps found, output `COVERAGE_GAPS: 0` (this will cause Steps 7-11 to be sk
 
 - Be thorough but realistic about what automated tests can and cannot cover
 - If `COVERAGE_GAPS: 0`, Steps 7-11 will be skipped entirely
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

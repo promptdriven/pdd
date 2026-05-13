@@ -47,15 +47,15 @@ You are working on step 10 of 18 in an agentic test generation workflow. Step 9 
 
 % Output
 
-After running the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 10: Regression Test Validation
 
 **Status:** [CONFIRMED | PARTIAL | FAILED]
@@ -74,6 +74,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 11: Loop Check*
+</step_report>
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -90,4 +91,5 @@ BUGS_CONFIRMED: [N]
 - Actually run the tests — do not assume results
 - Tests SHOULD fail (that's the expected behavior)
 - Do not modify any test or application code
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

@@ -105,16 +105,16 @@ You are working on step 13 of 18 in an agentic test generation workflow. Previou
 
 % Output
 
-After running the tests, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+The `<step_report>` content should follow one of these formats:
 
 **If all tests pass:**
-```markdown
+```
+<step_report>
 ## Step 13: Run Tests
 
 **Status:** All Tests Passing
@@ -133,10 +133,12 @@ All generated tests pass successfully.
 
 ---
 *Proceeding to Step 15: Validate Tests Against Plan*
+</step_report>
 ```
 
 **If some tests fail:**
-```markdown
+```
+<step_report>
 ## Step 13: Run Tests
 
 **Status:** Tests Failing
@@ -165,6 +167,7 @@ All generated tests pass successfully.
 
 ---
 *Proceeding to Step 14: Fix & Iterate*
+</step_report>
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -189,4 +192,5 @@ Examples:
 - Capture full error messages for failing tests
 - Note if failures are due to test issues vs application issues
 - If tests pass, Step 14 will be skipped
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

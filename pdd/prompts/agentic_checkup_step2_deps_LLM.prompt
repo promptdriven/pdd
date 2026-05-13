@@ -43,15 +43,15 @@ You are working on step 2 of 8 in an agentic checkup workflow. Step 1 has alread
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 2/8: Dependency Audit
 
 ### Missing Dependencies
@@ -68,10 +68,12 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 3: Build Check*
+</step_report>
 ```
 
 % Important
 
 - Focus on the tech stack discovered in Step 1
 - Read actual source files to verify imports — don't guess
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

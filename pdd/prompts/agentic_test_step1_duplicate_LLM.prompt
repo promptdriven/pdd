@@ -53,17 +53,15 @@ You are working on step 1 of 18 in an agentic test generation workflow. Your fin
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the regular step report. The orchestrator
+posts step reports to the GitHub issue using trusted credentials. Instead,
+emit your findings inside a `<step_report>...</step_report>` block in your
+final response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
-## Step 1: Duplicate Check
-
+<step_report>
 **Status:** [No duplicates found | Duplicate of #XXX]
 
 ### Search Performed
@@ -76,10 +74,18 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 2: Documentation Check*
+</step_report>
 ```
+
+NOTE: The legacy hard-stop closure comment on the original (canonical) issue
+when a duplicate is detected and the original is resolved is still posted by
+the agent via `gh issue comment` (it targets a different issue and is part of
+the duplicate-handling workflow, not the per-step status report).
 
 % Important
 
-- Always post your findings as a GitHub comment before completing
-- If this is a duplicate, still post a comment explaining the closure
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.
+- The hard-stop duplicate closure comment (on the canonical issue) is still
+  posted by the agent, since it targets a different issue.
 - Be thorough but efficient in your search

@@ -50,7 +50,15 @@ You are working on step 11 of 18 in an agentic test generation workflow. Steps 8
 
 % Output
 
-```markdown
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
+
+```
+<step_report>
 ## Step 11: Checklist Completion Check (Iteration {iteration_number})
 
 ### Status: [COMPLETE | PARTIAL]
@@ -67,6 +75,7 @@ You are working on step 11 of 18 in an agentic test generation workflow. Steps 8
 *[If COMPLETE: Proceeding to Step 12: Generate Tests]*
 *[If PARTIAL and iteration < 3: Looping back to Step 8 for remaining items]*
 *[If PARTIAL and iteration = 3: Max iterations reached, proceeding to Step 12]*
+</step_report>
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -84,7 +93,5 @@ ITERATIONS: {iteration_number}
 - This step only compares data — it does NOT run any tests
 - Be strict about what counts as "tested" — an item needs an explicit PASS or FAIL
 - If iteration_number >= 3, the loop exits regardless of completion status
-- Always post your findings as a GitHub comment before completing:
-  ```
-  gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-  ```
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.
