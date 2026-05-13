@@ -749,18 +749,20 @@ def test_auto_deps_main_updates_architecture_json_after_write(
 
 
 # ---------------------------------------------------------------------------
-# 18a. Metadata finalization: when the default output is a separate
-#      ``*_with_deps.prompt`` file, the canonical prompt is untouched and
-#      finalization must be SKIPPED — otherwise ``.pdd/meta/<module>.json``
-#      would record the hash of a non-canonical file under the canonical
-#      module identity.
+# 18a. Metadata finalization: even when the default output is a separate
+#      ``*_with_deps.prompt`` file, finalization must run under the canonical
+#      module identity inferred from the *original* prompt_file (not from
+#      the output stem, which would yield a bogus ``(<basename>_<language>_with,
+#      deps)`` identity). The fingerprint records the hashes of the mutated
+#      output file so subsequent sync runs see a refreshed view, and the
+#      stale per-module ``_run.json`` is cleared for the canonical identity.
 # ---------------------------------------------------------------------------
 @patch("pdd.auto_deps_main.save_fingerprint")
 @patch("pdd.auto_deps_main.clear_run_report")
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
-def test_auto_deps_metadata_skipped_when_output_differs_from_prompt(
+def test_auto_deps_metadata_finalized_when_output_differs_from_prompt(
     mock_insert_includes,
     mock_construct_paths,
     mock_infer_identity,
@@ -771,8 +773,10 @@ def test_auto_deps_metadata_skipped_when_output_differs_from_prompt(
 ):
     """
     Default CLI auto-deps writes to ``<basename>_<language>_with_deps.prompt``.
-    The original canonical prompt is unchanged, so neither the fingerprint
-    nor the run report must be touched.
+    The fingerprint is saved under the canonical ``(child, python)`` identity
+    but hashes the mutated output file, and ``clear_run_report`` is invoked
+    with the canonical identity (not the bogus ``(child_python_with, deps)``
+    that would come from inferring identity off the output stem).
     """
     prompt_file = str(tmp_path / "child_python.prompt")
     output_path = str(tmp_path / "child_python_with_deps.prompt")
@@ -794,11 +798,18 @@ def test_auto_deps_metadata_skipped_when_output_differs_from_prompt(
         force_scan=False,
     )
 
-    # Output is a different file than the input prompt → finalization is
-    # skipped entirely; identity inference is also unnecessary.
-    mock_infer_identity.assert_not_called()
-    mock_clear_run_report.assert_not_called()
-    mock_save_fingerprint.assert_not_called()
+    # Identity must be inferred from the *input* prompt, not the output.
+    mock_infer_identity.assert_called_once_with(Path(prompt_file))
+    # Stale per-module run report cleared with the canonical identity.
+    mock_clear_run_report.assert_called_once_with("child", "python")
+    # Fingerprint persisted under canonical identity with the mutated
+    # output path so include_deps reflect the new content.
+    mock_save_fingerprint.assert_called_once()
+    fp_kwargs = mock_save_fingerprint.call_args.kwargs
+    assert fp_kwargs["basename"] == "child"
+    assert fp_kwargs["language"] == "python"
+    assert fp_kwargs["operation"] == "auto-deps"
+    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
 
 
 # ---------------------------------------------------------------------------
@@ -887,8 +898,7 @@ def test_auto_deps_metadata_skipped_on_unknown_identity(
     ``infer_module_identity`` returns ``(None, None)`` (a tuple, not None)
     for unrecognized prompt names. The finalization block must handle that
     explicitly and skip both ``clear_run_report`` and ``save_fingerprint``
-    rather than crash. Use an in-place overwrite so finalization is actually
-    attempted (otherwise the differing-output guard would short-circuit it).
+    rather than crash.
     """
     prompt_file = str(tmp_path / "weird_name_no_language.prompt")
     Path(prompt_file).write_text("orig", encoding="utf-8")
@@ -936,12 +946,7 @@ def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
     mock_ctx,
     tmp_path: Path,
 ):
-    """If clearing the stale run report fails, the fingerprint must still be saved.
-
-    Uses an in-place overwrite (``output == prompt_file``) so finalization
-    is actually attempted — the differing-output guard would otherwise skip
-    both calls regardless of ``clear_run_report``'s behavior.
-    """
+    """If clearing the stale run report fails, the fingerprint must still be saved."""
     prompt_file = str(tmp_path / "child_python.prompt")
     Path(prompt_file).write_text("orig", encoding="utf-8")
     output_path = prompt_file  # in-place overwrite
