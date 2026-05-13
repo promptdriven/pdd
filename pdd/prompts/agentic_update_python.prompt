@@ -41,7 +41,14 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
     - Detect changed files (created, modified, or deleted).
     - Re-discover test files after the run to catch any newly created tests.
 9. **Success Criterion**: The operation is considered successful if the `prompt_file` itself was modified, regardless of the agent's internal success report.
-10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common` where `allowed = {prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}`. Import it alongside the other agentic_common imports. This prevents the agent from accidentally deleting or modifying unrelated files.
+10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common`. Import `_revert_out_of_scope_changes` alongside the other agentic_common imports. The `allowed` set MUST align with the permissions documented in `prompts/agentic_update_LLM.prompt`: the prompt file, the code file, the selected test files, **any documents referenced by `<include>` tags in the prompt being updated**, and **new shared include files under the `context/` directory tree**. Construct `allowed` as follows:
+    - Start with `allowed = {prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}`.
+    - Use `compute_user_intent_paths` from `pdd/preprocess.py` to parse `<include>`-style paths from the **original** prompt text (read once before the agent runs). Compute it on both the raw text and a `${VAR}`-expanded variant (substituting `os.environ`) so paths derived from environment variables are also captured. This reuses the same include parsing semantics as PDD preprocessing/fingerprinting (acceptance criterion 5).
+    - For each parsed path string, resolve it against `PROJECT_ROOT` (treat relative paths as relative to `PROJECT_ROOT`). Only add the resolved path to `allowed` if it exists OR its parent directory is contained within `PROJECT_ROOT`. Skip non-string or empty entries silently.
+    - Add a directory-prefix allowance: any file whose resolved path is contained under `PROJECT_ROOT / "context"` (recursively) is considered in-scope. Implement this by passing a pre-existing helper if available, or by extending `allowed` to include `(PROJECT_ROOT / "context").resolve()` as a sentinel and checking with `_revert_out_of_scope_changes`'s exact-path semantics. Since `_revert_out_of_scope_changes` compares resolved paths, do the directory-prefix check yourself: after running the agent, enumerate any files git reports as added/modified beneath `PROJECT_ROOT / "context"` and add their resolved paths into `allowed` before calling `_revert_out_of_scope_changes`.
+    - Enforce `PROJECT_ROOT` containment on every entry added beyond the prompt/code/tests baseline: drop any resolved path whose `str(path).startswith(str(PROJECT_ROOT.resolve()))` check fails.
+    - On any IO or parser failure while expanding the allowlist (e.g., the prompt text cannot be re-read, `compute_user_intent_paths` raises, or git enumeration fails), fall back to the legacy baseline `{prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}` and emit a non-fatal warning when `verbose=True and not quiet`.
+    - This widening preserves intentional edits the agent makes to included docs (e.g., `docs/prompting_guide.md`) and to newly created shared includes under `context/`, while still reverting unrelated mutations elsewhere in the tree.
 
 % Dependencies
 <pdd.agentic_common>
@@ -51,6 +58,9 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
 <pdd.load_prompt_template>
     <include>context/load_prompt_template_example.py</include>
 </pdd.load_prompt_template>
+<pdd.preprocess>
+    <include select="def:compute_user_intent_paths">pdd/preprocess.py</include>
+</pdd.preprocess>
 <pdd.prompt.agentic_update_LLM>
     <include>prompts/agentic_update_LLM.prompt</include>
 </pdd.prompt.agentic_update_LLM>
