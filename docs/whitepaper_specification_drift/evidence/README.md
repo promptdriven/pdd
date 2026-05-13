@@ -1,19 +1,23 @@
 # Publication-Safe Evidence Logs
 
-This folder is a reviewed copy of the local whitepaper evidence logs, prepared for external inspection and replication review.
+This folder contains the publication-safe evidence bundle for the specification drift whitepaper.
+
+The prompt files preserve the developer's original typed wording from the `Context:` field of an intermediate export. Generated instruction scaffolding added during that export has been removed so the prompts read as the original user prompts rather than rewritten task templates.
 
 ## Included
 
-- `prompts_vibe.md` and `prompts_vibe.jsonl`: recovered developer-typed prompt history from the vibe-coding period.
-- `prompts_pdd.md` and `prompts_pdd.jsonl`: recovered developer-typed prompt history from the PDD period.
-- `quote_map.md`: Appendix quote mapping to timestamped prompt-history entries.
-- `_session_classification.tsv`: session-level classification audit trail.
+- `prompts_vibe.md` and `prompts_vibe.jsonl`: 2,435 vibe-coding prompt records.
+- `prompts_pdd.md` and `prompts_pdd.jsonl`: 1,003 PDD prompt records.
+- `quote_map.md`: paper quote mapping to timestamped prompt-history entries.
+- `_session_classification.tsv`: session-level classification audit table.
+- `SHA256SUMS.txt`: checksums for the evidence files.
 
 ## Excluded
 
-- Surviving subagent transcripts from `_subagents_REVIEW_BEFORE_PUBLISHING/`; they contained residual credentials, emails, infrastructure identifiers, and unrelated assistant-side research traces.
-- Old whitepaper drafts with raw prompt quotes; they are not needed to inspect the study evidence and can create version confusion.
-- Original main-session Claude Code JSONL logs; they no longer survived when the evidence bundle was assembled.
+- Raw subagent transcripts and assistant-side tool traces.
+- Old whitepaper drafts.
+- Local private logs and operational material not needed to inspect the case study.
+- `.DS_Store` and other local machine metadata.
 
 ## Redactions Applied
 
@@ -22,8 +26,4 @@ This folder is a reviewed copy of the local whitepaper evidence logs, prepared f
 - Local machine paths.
 - GCP project identifiers, cloud-console URLs, Firebase web-app URLs, and Firestore user document paths.
 
-This copy still preserves timestamps, session IDs, prompt ordering, GitHub issue/PR URLs, and the distinction between the vibe-coding and PDD periods.
-
-## Integrity Check
-
-`SHA256SUMS.txt` records checksums for the files in this bundle.
+This copy preserves timestamps, session IDs, prompt ordering, GitHub issue/PR URLs, and the distinction between the vibe-coding and PDD periods.
