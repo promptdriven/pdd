@@ -1593,12 +1593,24 @@ def run_agentic_bug_orchestrator(
     #   without confusing them with legacy outputs.
     # - Normalize `step_comments` shape: a stale list / non-dict entry / non-
     #   boolean `posted` would otherwise crash with AttributeError here.
-    if state.get("step_outputs"):
+    # - Codex review #6 of PR #966: gate the sweep to the contiguous trusted
+    #   range. The validator above corrects `last_completed_step` down when
+    #   `step_outputs` has gaps (e.g. cached 1 and 3 but no 2). Iterating
+    #   every saved key would then publish a visible comment for stale
+    #   downstream step 3 before step 2 is rerun — leaking progress the
+    #   orchestrator has already decided is not valid. Walk `ordered_steps`
+    #   only up to `last_completed_step` (post-validation) instead.
+    if state.get("step_outputs") and last_completed_step > 0:
         raw_sc = state.get("step_comments")
         if not isinstance(raw_sc, dict):
             raw_sc = {}
         state["step_comments"] = raw_sc
-        for s_key, s_out in list(state["step_outputs"].items()):
+        step_outputs_map = state["step_outputs"]
+        for s_num in ordered_steps:
+            if s_num > last_completed_step:
+                break
+            s_key = str(s_num)
+            s_out = step_outputs_map.get(s_key)
             if not isinstance(s_out, str) or s_out.startswith("FAILED:"):
                 continue
             entry = raw_sc.get(s_key)
@@ -1610,16 +1622,16 @@ def run_agentic_bug_orchestrator(
             if _extract_step_report(s_out) is None and not fallback_pending:
                 continue
             try:
-                s_num = int(float(s_key))
+                s_num_int = int(float(s_key))
             except (TypeError, ValueError):
                 continue
             desc = next(
-                (d for (n, _name, d) in steps_config if n == s_num),
+                (d for (n, _name, d) in steps_config if n == s_num_int),
                 str(s_key),
             )
             github_comment_id = _maybe_post_step_comment(
                 step_success=True,
-                step_num=s_num,
+                step_num=s_num_int,
                 description=desc,
                 step_output=s_out,
                 state=state,

@@ -925,3 +925,75 @@ def test_bug_orchestrator_backfill_skips_fast_track_skipped_outputs(
     assert 5 not in posted_step_nums
     # Step 3 already posted previously.
     assert 3 not in posted_step_nums
+
+
+def test_bug_orchestrator_backfill_skips_non_contiguous_downstream_steps(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """Non-contiguous cached step outputs must not leak stale downstream comments.
+
+    Regression for codex review #6 of PR #966 — the resume validator corrects
+    `last_completed_step` down when `step_outputs` has gaps (e.g. cached 1 and
+    3 but missing 2). The backfill sweep was previously iterating every saved
+    key and posting visible comments for stale downstream entries the
+    orchestrator had already decided were not valid completed progress.
+
+    Here: cached steps 1 and 3 with no entry for step 2 → validator corrects
+    `last_completed_step` to 1. The sweep must only post step 1 (and skip the
+    stale step 3 entry). Step 2 then runs fresh through the main loop.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>## Step 1: R1</step_report>",
+                # Gap at "2" — non-contiguous cached progress.
+                "3": "<step_report>## Step 3: STALE R3</step_report>",
+            },
+            # Caller claimed 3, but the validator must correct this to 1.
+            "last_completed_step": 3,
+            "total_cost": 0.1,
+            "model_used": "claude",
+            # Step 1 not yet posted — sweep should retry it.
+            "step_comments": {},
+        },
+        None,
+    )
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: t.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(**bug_default_args)
+    assert success is True
+
+    post_calls = bug_orchestrator_mocks["post_step_comment"].call_args_list
+    # Identify backfill-sweep calls for step 3: any call posting the STALE
+    # cached body. The main loop reruns step 3 with a fresh "## Step step3"
+    # body, so the stale body is a unique signature for the sweep.
+    stale_step3_calls = [
+        c for c in post_calls
+        if c.kwargs.get("step_num") == 3
+        and "STALE R3" in (c.kwargs.get("body") or "")
+    ]
+    assert not stale_step3_calls, (
+        "Backfill sweep posted a comment for stale downstream step 3 even "
+        "though the validator corrected last_completed_step down to 1. "
+        f"Calls: {post_calls!r}"
+    )
+
+    # Step 1's saved comment must still be backfilled (it's within the
+    # contiguous trusted range).
+    step1_calls = [c for c in post_calls if c.kwargs.get("step_num") == 1]
+    assert step1_calls, "Step 1 should be backfilled — it's within the contiguous range."
+    assert "R1" in (step1_calls[0].kwargs.get("body") or "")
