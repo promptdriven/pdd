@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.235",
   "timestamp": "2026-05-13T02:44:43.481731+00:00",
-  "command": "manual-review-fix",
+  "command": "test",
   "prompt_hash": "938420bcb5e9484a73dfab466968b3e458383daca97b5f20ba3f30d6f3f453f7",
   "code_hash": "fb384bea9b715b74dd9460c94e560be219410243569c6776827a702b6f6556b3",
   "example_hash": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
-  "test_hash": "80c57d2dae279973f070bcfa232c4eb23559193c6c44ea53fd2f5c9c8bbe2aef",
+  "test_hash": "6d1c3d5d1c87eafaa30153055478244d4302dfc8ac45e9a07b09e3fa80e95576",
   "test_files": {
-    "test_agentic_common.py": "80c57d2dae279973f070bcfa232c4eb23559193c6c44ea53fd2f5c9c8bbe2aef",
+    "test_agentic_common.py": "6d1c3d5d1c87eafaa30153055478244d4302dfc8ac45e9a07b09e3fa80e95576",
     "test_agentic_common_issue_813_anthropic_api_key_oauth_shadow.py": "1988f9b022bd4071f95aef13ba6a6a6681279711ad6f718744195b8e0b9dac9e",
     "test_agentic_common_worktree.py": "b726b24513865a7e3c23700b192bac001ab09190d7371b6d6714f0cf076c58e2"
   },

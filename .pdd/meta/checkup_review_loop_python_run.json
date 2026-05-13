@@ -1,0 +1,11 @@
+{
+  "timestamp": "2026-05-13T17:32:24+00:00",
+  "exit_code": 0,
+  "tests_passed": 75,
+  "tests_failed": 0,
+  "coverage": 100.0,
+  "test_hash": "13fce0325ccf6df64fdb5d947289466d7b3b8305c24306070d0396d1bf1bd29a",
+  "test_files": {
+    "test_checkup_review_loop.py": "13fce0325ccf6df64fdb5d947289466d7b3b8305c24306070d0396d1bf1bd29a"
+  }
+}

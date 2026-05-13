@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.235",
   "timestamp": "2026-05-13T02:44:43.607658+00:00",
-  "command": "manual-review-fix",
+  "command": "test",
   "prompt_hash": "abe879a0353e1c8dfa36ec576a201bbc2763933f7225101a796e58f30f3f03e0",
   "code_hash": "eebb7dd39f7e4e69dc3d4dae32c943da2c8390db94863d39d57662db6162c66b",
   "example_hash": "3de20bfd0d4f8b22aabf1738f905d6bfa8873a7537be20eece44353b02c23c0a",
-  "test_hash": "33f58ba9f6ac2855e71e7db4daa9f39f0e297deca8114cf5072c7ec1f911a11b",
+  "test_hash": "28d87de3753266e180fc07ce7baca5ffbaf59916e5701ef4e37725759e1e2332",
   "test_files": {
-    "test_agentic_e2e_fix_orchestrator.py": "33f58ba9f6ac2855e71e7db4daa9f39f0e297deca8114cf5072c7ec1f911a11b"
+    "test_agentic_e2e_fix_orchestrator.py": "28d87de3753266e180fc07ce7baca5ffbaf59916e5701ef4e37725759e1e2332"
   },
   "include_deps": {
     "context/ci_validation_example.py": "06b910b216f68af58862e76712ccf82bae1bdf87f3fa95b043408fb079f45ce0",
