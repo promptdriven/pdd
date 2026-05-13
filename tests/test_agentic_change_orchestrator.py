@@ -29,6 +29,10 @@ from unittest.mock import MagicMock, patch, mock_open
 import pytest
 from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(450)
+
 # Adjust import path to ensure we can import the module under test
 from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
 
