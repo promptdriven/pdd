@@ -450,10 +450,6 @@ def run_checkup_review_loop(
             )
             break
 
-        if _budget_exhausted(config, state, deadline):
-            _mark_budget_exhausted(config, state, deadline)
-            break
-
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
             pr_metadata,
@@ -1373,6 +1369,13 @@ does not open more holes; fully address it until nothing actionable remains or
 the review loop reaches its round limit."
 
 Use this manual PR-review standard:
+- Complete these independent sweeps before returning: issue-contract and
+  user-workflow behavior; state/resume/idempotency and side-effect ordering;
+  security, redaction, auth, logging, and fallback paths; prompt/example/
+  architecture/generated-metadata source-of-truth drift; and
+  caller/test/CLI compatibility. Report separately actionable findings from
+  different sweeps. Do not stop after finding only prompt/source-of-truth
+  drift.
 - Review the PR as a user-workflow reviewer first. Trace how a real CLI/API
   user would experience the changed behavior, including edge cases, stale
   flags, failure paths, retries, caching, auth, billing/cost, and generated
@@ -1814,8 +1817,10 @@ def _extract_bracket_findings(
     findings: List[ReviewFinding] = []
     priority_pattern = re.compile(
         r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
+        r"(?:(?:Finding|Findings)\s*:\s*)?"
         r"\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
         r"(?P<body>.*?)(?=^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
+        r"(?:(?:Finding|Findings)\s*:\s*)?"
         r"(?:\[?P[0-3]\]?|blocking|blocker|critical|high|medium|low|nit|info)"
         r"\s*:|^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -1978,7 +1983,7 @@ def _finding_evidence(title: str, body: str) -> str:
 
 def _strip_review_trailing_sections(text: str) -> str:
     return re.split(
-        r"(?:^|\n)\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*",
+        r"(?:^|\n)\s*(?:\*\*)?(?:Checks|Checks Run|Verification|Regression Checks)(?:\*\*)?\s*:?",
         text or "",
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -2458,7 +2463,87 @@ def _commit_and_push_if_changed(
     )
     if success:
         return True, "Pushed fixes to PR branch."
+    if _is_remote_advanced_push_error(error):
+        rebased, rebase_message = _rebase_onto_updated_pr_head(
+            worktree,
+            clone_url=clone_url,
+            head_ref=head_ref,
+        )
+        if not rebased:
+            return False, rebase_message
+        success, error = push_with_retry(
+            worktree,
+            repo_owner=head_owner,
+            repo_name=head_repo,
+            remote=clone_url,
+            refspec=f"HEAD:{head_ref}",
+            set_upstream=False,
+        )
+        if success:
+            return True, "Pushed fixes to PR branch after rebasing onto updated PR head."
     return False, f"Failed to push fixes to PR branch: {error.strip()}"
+
+
+def _is_remote_advanced_push_error(error: str) -> bool:
+    text = (error or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "(fetch first)",
+            "fetch first",
+            "remote contains work that you do not have locally",
+            "updates were rejected because the remote contains work",
+            "tip of your current branch is behind",
+        )
+    )
+
+
+def _rebase_onto_updated_pr_head(
+    worktree: Path,
+    *,
+    clone_url: str,
+    head_ref: str,
+) -> Tuple[bool, str]:
+    """Fetch the updated PR head and replay the local fix commit on top.
+
+    Review-loop fixes can race with auto-heal or a maintainer push to the same
+    PR branch. Force-pushing over those commits would discard remote work, so
+    recover by rebasing before retrying the push. ``-X theirs`` is intentional:
+    during rebase, "theirs" is the fix commit being replayed. Non-conflicting
+    remote changes are preserved, while conflicting hunks keep the fixer output
+    that the verifier will review next.
+    """
+    fetch = subprocess.run(
+        ["git", "fetch", "--no-tags", clone_url, head_ref],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if fetch.returncode != 0:
+        return False, (
+            "Failed to refresh PR branch before retrying push: "
+            f"{fetch.stderr.strip()}"
+        )
+
+    rebase = subprocess.run(
+        ["git", "rebase", "-X", "theirs", "FETCH_HEAD"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if rebase.returncode == 0:
+        return True, "Rebased fixes onto updated PR head."
+
+    subprocess.run(
+        ["git", "rebase", "--abort"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    return False, (
+        "Failed to rebase fixes onto updated PR branch before retrying push: "
+        f"{rebase.stderr.strip() or rebase.stdout.strip()}"
+    )
 
 
 def _git_changed_files(worktree: Path) -> List[str]:
