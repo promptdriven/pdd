@@ -299,6 +299,7 @@ def test_post_step_comment_without_body_kwarg_preserves_failed_template(tmp_path
     """Backwards compatibility: body=None ⇒ old FAILED fallback template."""
     from pdd.agentic_common import post_step_comment
 
+    secret = "ghp_" + "A" * 36
     with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
          patch("pdd.agentic_common.subprocess.run") as mock_run:
         mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
@@ -310,7 +311,7 @@ def test_post_step_comment_without_body_kwarg_preserves_failed_template(tmp_path
             step_num=3,
             total_steps=12,
             description="Reproduce",
-            output="All agent providers failed: exit 1",
+            output=f"All agent providers failed: exit 1 {secret}",
             cwd=tmp_path,
         )
 
@@ -321,6 +322,8 @@ def test_post_step_comment_without_body_kwarg_preserves_failed_template(tmp_path
     assert "**Status:** FAILED" in final_body
     assert "### Error Details" in final_body
     assert "Automated fallback comment" in final_body
+    assert secret not in final_body
+    assert "[REDACTED_GITHUB_TOKEN]" in final_body
 
 
 def test_post_step_comment_no_gh_returns_false_with_body(tmp_path):
@@ -434,6 +437,204 @@ def test_bug_orchestrator_posts_step_comment_on_success(bug_orchestrator_mocks, 
     assert step1_body is not None
     assert "Duplicate Check" in step1_body
     assert "No duplicates found" in step1_body
+
+
+def test_bug_orchestrator_posts_failed_step_fallback(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """Soft failed steps should still get a visible FAILED fallback comment."""
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    captured_states: list = []
+
+    def save_side_effect(cwd, issue_number, workflow_type, state, *args, **kwargs):
+        captured_states.append(copy.deepcopy(state))
+        return None
+
+    bug_orchestrator_mocks["save_state"].side_effect = save_side_effect
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step6":
+            return (False, "Provider timeout during root cause", 0.1, "claude")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: test_x.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+    assert success is True
+
+    step6_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 6
+    ]
+    assert step6_calls
+    assert step6_calls[0].kwargs.get("body") is None
+    assert "Provider timeout" in step6_calls[0].kwargs.get("output", "")
+
+    step6_comment_states = [
+        s.get("step_comments", {}).get("6", {}) for s in captured_states
+        if s.get("step_comments", {}).get("6")
+    ]
+    assert step6_comment_states
+    assert step6_comment_states[-1].get("failed_posted") is True
+    assert step6_comment_states[-1].get("posted") is not True
+
+
+def test_bug_orchestrator_posts_fallback_before_provider_failure_abort(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """The third consecutive provider failure abort still needs a visible comment."""
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    bug_orchestrator_mocks["run_agentic_task"].return_value = (
+        False,
+        "All agent providers failed: timed out",
+        0.1,
+        "claude",
+    )
+
+    success, msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+
+    assert success is False
+    assert "3 consecutive" in msg
+    posted_steps = [
+        c.kwargs.get("step_num")
+        for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+    ]
+    assert posted_steps == [1, 2, 3]
+
+
+def test_bug_orchestrator_step12_failure_returns_failure(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """A failed final PR step must not report a successful investigation."""
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: test_x.py",
+                0.1,
+                "claude",
+            )
+        if label == "step12":
+            return (False, "All agent providers failed: timed out", 0.1, "claude")
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+
+    assert success is False
+    assert "step 12" in msg.lower()
+    assert "timed out" in msg
+
+    step12_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 12
+    ]
+    assert step12_calls
+    assert step12_calls[0].kwargs.get("body") is None
+
+
+def test_bug_orchestrator_e2e_gate_ignores_report_body_marker(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """Only the E2E_NEEDED marker outside <step_report> controls Step 11."""
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: test_x.py",
+                0.1,
+                "claude",
+            )
+        if label == "step10":
+            return (
+                True,
+                "<step_report>Report body mentions E2E_NEEDED: no as an example.</step_report>\n"
+                "E2E_NEEDED: yes - integration path still needs coverage",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+
+    assert success is True
+    executed_labels = [
+        c.kwargs.get("label")
+        for c in bug_orchestrator_mocks["run_agentic_task"].call_args_list
+    ]
+    assert "step11" in executed_labels
+
+
+def test_bug_orchestrator_redacts_secrets_before_state_save(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """Step output stored in workflow state may sync to GitHub, so redact it."""
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    secret = "ghp_" + "A" * 36
+    captured_states: list = []
+
+    def save_side_effect(cwd, issue_number, workflow_type, state, *args, **kwargs):
+        captured_states.append(copy.deepcopy(state))
+        return None
+
+    bug_orchestrator_mocks["save_state"].side_effect = save_side_effect
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step1":
+            return (
+                True,
+                f"<step_report>Secret leaked: {secret}</step_report>",
+                0.1,
+                "claude",
+            )
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: test_x.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+
+    assert success is True
+    saved = repr(captured_states)
+    assert secret not in saved
+    assert "[REDACTED_GITHUB_TOKEN]" in saved
 
 
 def test_bug_orchestrator_does_not_repost_on_resume(bug_orchestrator_mocks, bug_default_args):

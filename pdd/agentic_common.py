@@ -3505,7 +3505,7 @@ def post_step_comment(
 
     if body is None:
         # Backwards-compatible fallback for agent-execution failures.
-        error_detail = output[:1000] if output and len(output) > 1000 else (output or "")
+        error_detail = _sanitize_comment_body(output or "", max_chars=1000)
         final_body = (
             f"## Step {step_num}/{total_steps}: {description}\n\n"
             f"**Status:** FAILED\n\n"

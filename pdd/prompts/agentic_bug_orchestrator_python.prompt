@@ -57,7 +57,7 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 11 (E2E) and Step 12 (PR) via `files_to_stage` context variable for explicit git staging
 9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment
-10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). Soft failures (`step_success=False` without a hard-stop trigger) are skipped — the workflow logs the warning and continues without posting. Persist `state["step_comments"][str(step_num)] = {"posted": True}` so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry.
+10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal `posted: True` flag so a later successful retry can still post its report. Persist `state["step_comments"][str(step_num)] = {"posted": True}` only for successful reports so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
 
 % Step Execution
 For each step (1-12):
@@ -134,7 +134,15 @@ The orchestrator must parse step output to detect stop conditions:
 **Soft failures (continue):**
 - If `run_agentic_task()` returns `(False, ...)` but does NOT match a hard stop condition: log warning and continue
 - This applies to all steps - only the specific hard stop patterns above terminate the workflow
-- The orchestrator still attempts to post the model's `<step_report>` block on success; the legacy FAILED template path (`body=None`) is retained for hard-stop callers in `agentic_change_orchestrator` only.
+- The orchestrator posts the legacy FAILED template (`body=None`) for the failed step, tracking it with `failed_posted` instead of `posted` so a future successful retry is not suppressed.
+- The third consecutive `All agent providers failed` abort still posts the failed-step fallback before returning failure.
+- If Step 12 fails, the workflow returns `(False, "Investigation failed at step 12: ...", ...)` after posting the fallback comment; there is no later step that can recover PR creation.
+
+% E2E Gate
+
+- Parse `E2E_NEEDED:` only from raw output outside any `<step_report>...</step_report>` block.
+- Use the last outside marker line matching `E2E_NEEDED: yes|no`.
+- Skip Step 11 only when that parsed marker is `no`; if missing or `yes`, run Step 11.
 
 % Git Worktree Isolation
 
