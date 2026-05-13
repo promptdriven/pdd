@@ -1,3 +1,10 @@
+## Unreleased
+
+### Fix
+
+- **agentic_e2e_fix_orchestrator**: resume from `last_completed_step=9` with `ALL_TESTS_PASS` now routes into post-Step-9 cleanup/CI validation instead of restarting a new fix cycle from Step 1 (#1001)
+- **agentic_e2e_fix_orchestrator**: `_commit_and_push` filters `.gh-wrapper/**` executor wrapper artifacts in both hash-diff and fallback staging paths (#1001)
+
 ## v0.0.239 (2026-05-15)
 
 ### Feat
