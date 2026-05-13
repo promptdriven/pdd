@@ -950,7 +950,7 @@ def _run_metadata_sync_safe(prompt_path: Optional[str], code_path: Optional[str]
     return ok
 
 
-def _resolve_prompt_after_update(drift: DriftInfo) -> Optional[str]:
+def _resolve_prompt_path_after_update(drift: DriftInfo) -> Optional[str]:
     """Lazily resolve prompt_path after pdd update."""
     if drift.prompt_path:
         return drift.prompt_path
@@ -996,7 +996,7 @@ def heal_module(drift: DriftInfo, env: Dict[str, str]) -> Optional[bool]:
         if not _run_pdd_command(update_cmd, env, f"update {drift.basename}"):
             return False
 
-        resolved_prompt = _resolve_prompt_after_update(drift)
+        resolved_prompt = _resolve_prompt_path_after_update(drift)
         if not resolved_prompt:
             console.print(
                 f"[red]update heal aborted: prompt_path still unresolved for "

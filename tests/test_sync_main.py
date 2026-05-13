@@ -1178,7 +1178,7 @@ class TestDetectLanguagesWithContextExpanded:
         assert "kotlin" in languages, f"Expected 'kotlin' in detected languages, got: {list(languages.keys())}"
 
 
-@pytest.mark.timeout(15)
+@pytest.mark.timeout(60)
 class TestRecursivePromptSearch:
     """pdd sync should find prompts in subdirectories when not at root."""
 

@@ -9,6 +9,10 @@ from unittest.mock import patch, MagicMock, Mock, call, ANY
 import os
 import click
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(450)
+
 from pdd.sync_orchestration import sync_orchestration, _execute_tests_and_create_run_report, _try_auto_fix_env_var_error
 from pdd.sync_determine_operation import SyncDecision, get_pdd_file_paths
 

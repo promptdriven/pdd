@@ -17,6 +17,10 @@ import pytest
 from unittest.mock import patch, MagicMock
 from pathlib import Path
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(600)
+
 from pdd.load_prompt_template import load_prompt_template
 from pdd.agentic_e2e_fix_orchestrator import _extract_test_files, _verify_tests_independently, _classify_verification_failure, _handle_verification_failure
 
