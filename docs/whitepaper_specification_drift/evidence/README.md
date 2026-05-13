@@ -25,7 +25,9 @@ This bundle supports inspection of the prompt history, quoted process signals, a
 
 - Email addresses.
 - API-key, token, JWT, and private-key patterns.
-- Local machine paths.
+- Local machine paths, shell prompts, and temporary log paths.
+- Private-key filenames.
+- Credit balances/top-up amounts and incidental personal notes not needed to inspect the case study.
 - GCP project identifiers, cloud-console URLs, Firebase web-app URLs, and Firestore user document paths.
 
 This copy preserves timestamps, session IDs, prompt ordering, GitHub issue/PR URLs, and the distinction between the vibe-coding and PDD periods.

@@ -350,7 +350,7 @@ _163 prompts across 9 sessions_
 >     can you give me command to run test-cloud on staging 2 so i can run it
 
 **13:09:52** _(sid `3652561b`)_
->     (base) serhanasad@Serhans-Laptop bug-issue-764 % cd <LOCAL_WORKSPACE>/pdd_cloud/.pdd/worktrees/bug-issue-764 && STAGING_PROJECT=[REDACTED-GCP-PROJECT] PYTHONUNBUFFERED=1 python3 -m scripts.cloud_batch.run_cloud_tests /Library/Frameworks/Python.framework/Versions/3.13/bin/python3: Error while finding module specification for 'scripts.cloud_batch.run_cloud_tests' (ModuleNotFoundError: No module named 'scripts') (base) serhanasad@Serhans-Laptop bug-issue-764 %
+>     (base) <LOCAL_SHELL_PROMPT> % cd <LOCAL_WORKSPACE>/pdd_cloud/.pdd/worktrees/bug-issue-764 && STAGING_PROJECT=[REDACTED-GCP-PROJECT] PYTHONUNBUFFERED=1 python3 -m scripts.cloud_batch.run_cloud_tests <LOCAL_PYTHON>: Error while finding module specification for 'scripts.cloud_batch.run_cloud_tests' (ModuleNotFoundError: No module named 'scripts') (base) <LOCAL_SHELL_PROMPT> %
 
 **13:12:46** _(sid `1131900c`)_
 >     can you check if we deleted any tests from upstream and also any tests we modified from upstream
@@ -510,12 +510,12 @@ _163 prompts across 9 sessions_
 >     https://github.com/promptdriven/test_repo/issues/1026 check this it says insufficent credits, check how many credits i have
 
 **17:01:27** _(sid `fcaec6ae`)_
->     top up my credits by 100000
+>     top up my credits by <REDACTED-CREDIT-AMOUNT>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:03:18** _(sid `fcaec6ae`)_
->     i want you to keep monitoring it, and if the run fails you have to fix it in TDD style and update prompts and keep iterating until we get it 100% pass, this test has to pass for both scripts Gemini and sonnet, thats the only way i can send for review this pdd-issue, make sure you do not find a way to cheat, it has to be honest, pdd-issue feature that passes all tests, and is 100% ready, my job lies on this else i get fired, we need to get this done
+>     i want you to keep monitoring it, and if the run fails you have to fix it in TDD style and update prompts and keep iterating until we get it 100% pass, this test has to pass for both scripts Gemini and sonnet, thats the only way i can send for review this pdd-issue, make sure you do not find a way to cheat, it has to be honest, pdd-issue feature that passes all tests, and is 100% ready, [REDACTED-PERSONAL-NOTE], we need to get this done
 
 **17:31:14** _(sid `fcaec6ae`)_
 >     wiat why it failed
@@ -570,7 +570,7 @@ _163 prompts across 9 sessions_
 >     then why we went with this approach
 
 **20:35:05** _(sid `fcaec6ae`)_
->     i want you to keep iterating and fixing stuff monitoring, we need to get this whole regression test pass, possibly without any verification fail, also keep in mind all the changes we doing, as we might have to revert such as the docker one, i want 2-3 successful run of regression test, and possibly under 30 minutes for PDD sonnet, and Gemini script as well, keep doing it, just do not mess anything with prod, you are only allowed to touch staging stuff, but keep track of everything, do not break anything, i do not want to get fired, so make changes that do not mess big things, keep it relevant, especially be careful when deleting stuff, good luck ill check on you after a 2 hours
+>     i want you to keep iterating and fixing stuff monitoring, we need to get this whole regression test pass, possibly without any verification fail, also keep in mind all the changes we doing, as we might have to revert such as the docker one, i want 2-3 successful run of regression test, and possibly under 30 minutes for PDD sonnet, and Gemini script as well, keep doing it, just do not mess anything with prod, you are only allowed to touch staging stuff, but keep track of everything, do not break anything, [REDACTED-PERSONAL-NOTE], so make changes that do not mess big things, keep it relevant, especially be careful when deleting stuff, good luck ill check on you after a 2 hours
 
 **20:36:06** _(sid `fcaec6ae`)_
 >     also are you rebase with origin main and synced with GitHub for this brnach, also you can commit and push, but no merge at all cost
@@ -644,7 +644,7 @@ _2 prompts across 1 sessions_
 _202 prompts across 18 sessions_
 
 **00:19:24** _(sid `fcaec6ae`)_
->     given, you might want to deploy again as someone else was using staging, it is free not, you can top credits to 70000, and monitor the runs, fix the code in TDD and update prompts, i want 3 successful 100% runs
+>     given, you might want to deploy again as someone else was using staging, it is free not, you can top credits to <REDACTED-CREDIT-AMOUNT>, and monitor the runs, fix the code in TDD and update prompts, i want 3 successful 100% runs
 
 **09:02:55** _(sid `fcaec6ae`)_
 >     did you run Gemini script as well
@@ -1827,7 +1827,7 @@ _189 prompts across 34 sessions_
 >     [Pasted text #2 +4 lines] cp make file so it runs
 
 **16:45:12** _(sid `1764ac52`)_
->     should i not do this cp -f ~/Desktop/SF/pdd-gltanaka/Makefile ~/Desktop/SF/pdd-gltanaka/.pdd/worktrees/fix-953/Makefile
+>     should i not do this cp -f <LOCAL_WORKSPACE> <LOCAL_WORKSPACE>
 
 **16:45:45** _(sid `1764ac52`)_
 >     [Pasted text #3 +17 lines] it is not running
@@ -1942,7 +1942,7 @@ _189 prompts across 34 sessions_
 >     it failed again 7 failures <LOCAL_WORKSPACE>/pdd-gltanaka/.pdd/worktrees/test-PR-955/test-results/cloud-batch-results.md i want you to fix all and get me 100% on it
 
 **17:57:17** _(sid `9b76d6ea`)_
->     see all failure details /tmp/cloud-test-failures-test-change-issue-523-9569b45-20260325-003420.log fix them, and run make test-cloud and keep iterating until we get 100% pass on it
+>     see all failure details <LOCAL_LOG_FILE> fix them, and run make test-cloud and keep iterating until we get 100% pass on it
 
 **17:59:09** _(sid `2e9875f9`)_
 >     fix stuff you think are needed commit and push
@@ -2664,7 +2664,7 @@ _168 prompts across 21 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:47:00** _(sid `3f82fdc6`)_
->     top up my credits by 25000
+>     top up my credits by <REDACTED-CREDIT-AMOUNT>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -2737,7 +2737,7 @@ _168 prompts across 21 sessions_
 >     i want before and after for 798 as well you can use staging 2 for this if you want, do both before and after on staging 2 and give me the result for it
 
 **11:38:54** _(sid `7e148dfb`)_
->     top up my credits by 30000
+>     top up my credits by <REDACTED-CREDIT-AMOUNT>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
