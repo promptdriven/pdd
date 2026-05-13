@@ -92,11 +92,16 @@ PY
 
 # Pytest config contract: confirm pyproject.toml [tool.pytest.ini_options]
 # parses cleanly and all markers we use are registered (strict-markers).
-python -m pytest --collect-only --quiet --strict-markers --strict-config tests/ -k __nonexistent__ >/dev/null 2>&1 || {
-    echo "FATAL: pytest config or marker registration is broken"
+# Exit 5 ("no tests collected") is the expected success case here: the
+# -k __nonexistent__ filter selects zero tests on purpose, so collection
+# exercises config parsing and marker registration without running anything.
+PREFLIGHT_EXIT=0
+python -m pytest --collect-only --quiet --strict-markers --strict-config tests/ -k __nonexistent__ >/dev/null 2>&1 || PREFLIGHT_EXIT=$?
+if [ "$PREFLIGHT_EXIT" -ne 0 ] && [ "$PREFLIGHT_EXIT" -ne 5 ]; then
+    echo "FATAL: pytest config or marker registration is broken (exit=$PREFLIGHT_EXIT)"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "pytest config invalid"
     exit 1
-}
+fi
 
 # ── Vertex AI auth via ADC (service account attached to VM) ───────────────
 export VERTEX_PROJECT="${VERTEX_PROJECT:-prompt-driven-development-stg}"
