@@ -315,6 +315,17 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     CHUNK_INDEX="${TASK_INDEX}"
     DURATIONS_FILE="${WORK_DIR}/ci/cloud-batch/test-durations.json"
 
+    # CI model cap: restrict real-LLM pytest tests to Google Vertex AI gemini
+    # rows. The selector at strength=1.0 (e.g. test_generate_test_maximum_values)
+    # otherwise escalates to the highest-ELO row in the full CSV (claude-opus-4-7),
+    # which is too slow to be a reliable CI dependency. After this filter the
+    # highest ELO is a Gemini Pro variant — fast, cheap, and stable. PDD prefers
+    # <cwd>/.pdd/llm_model.csv when present (see pdd/llm_invoke.py:778-781).
+    mkdir -p "${WORK_DIR}/.pdd"
+    head -1 "${WORK_DIR}/pdd/data/llm_model.csv" > "${WORK_DIR}/.pdd/llm_model.csv"
+    grep -E '^Google Vertex AI,[^,]*gemini' "${WORK_DIR}/pdd/data/llm_model.csv" >> "${WORK_DIR}/.pdd/llm_model.csv"
+    echo "=== CI-restricted llm_model.csv ($(( $(wc -l < "${WORK_DIR}/.pdd/llm_model.csv") - 1 )) gemini rows) ==="
+
     if [ -f "${DURATIONS_FILE}" ]; then
         # Duration-based bin packing for balanced chunks
         echo "=== Using duration-based chunk balancing ==="
