@@ -26,6 +26,27 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 7. **Progress Reporting**: Use `set_agentic_progress` to provide real-time updates on step completion and `rich` for console output.
 8. **Resilience**: Implement timeouts per step (mapped in `TEST_STEP_TIMEOUTS`) and utilize a retry mechanism for agentic tasks.
 
+# Trusted Step Report Comments (Issue #972, sub of #968)
+
+The orchestrator owns posting per-step status comments to the GitHub issue using trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` directly for successful step progress; instead each step emits a `<step_report>...</step_report>` block in its agent output. The orchestrator extracts that block and posts it once per step. Legacy hard-stop / failure comments (duplicate detection, stop conditions, fallback failure summaries) are preserved unchanged.
+
+1. Import the shared helpers from `pdd.agentic_common`:
+   - `extract_step_report(step_output: str) -> Optional[str]` — returns the trimmed contents of the first `<step_report>` block, or `None` if absent/malformed. Missing or malformed report MUST NOT fail the run; the raw step output is preserved in workflow state regardless.
+   - `post_step_comment_once(*, repo_owner, repo_name, issue_number, step_num, body, posted_steps: Set[int], cwd) -> bool` — redacts secrets, truncates to GitHub's comment cap, posts via `gh issue comment`, and mutates `posted_steps` to add `step_num` on success. No-op when `step_num` is already in `posted_steps`.
+   - `normalize_step_comments_state(raw) -> Set[int]` — coerces the persisted `step_comments` value (list/set/None/malformed) into a `Set[int]` of integer step indices for in-memory use.
+
+2. State shape additions:
+   - `state["step_comments"]` is a sorted `List[int]` of step indices whose comment was successfully posted. Hydrated to `Set[int]` via `normalize_step_comments_state` on resume; persisted back as a sorted list before every `save_workflow_state` call (including the hard-stop early-return save).
+
+3. Posting protocol inside the per-step loop (applies to all 18 steps, including fractional steps like 5.5 — use the same integer/string key the orchestrator already uses for `step_outputs`):
+   - Compute `report_body = extract_step_report(step_output)`. If `None`, skip posting and continue (do not fail the run).
+   - Otherwise build the comment body as `f"## Step {step_num}/{total_steps}: {description}\n\n{report_body}"` and call `post_step_comment_once(...)`.
+   - Post BEFORE the hard-stop check (duplicate detection at Step 1, `STOP_CONDITION` at Step 3, etc.) so hard-stop steps still emit their user-visible comment. The legacy hard-stop / failure-fallback comment behavior MUST remain intact for steps that did not emit a `<step_report>` block.
+   - Persist `state["step_comments"] = sorted(posted_step_comments)` in BOTH the normal step-completion save AND the hard-stop / failure early-return save.
+
+4. Resume replay loop (before the main step loop):
+   - Iterate completed-step indices in order. For each completed step whose index is missing from `posted_step_comments`, run `extract_step_report` on its cached output and call `post_step_comment_once`. The helper is a no-op for already-posted indices, so the loop is safe to run unconditionally on every resume. Persist `step_comments` if any new indices were posted. This restores the contract that failed posts (transient `gh` errors, missing CLI) are retried on the next resume rather than silently lost.
+
 # Dependencies
 <agentic_common>
     <include>context/agentic_common_example.py</include>
