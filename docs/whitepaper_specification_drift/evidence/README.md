@@ -4,6 +4,8 @@ This folder contains the publication-safe evidence bundle for the specification 
 
 The prompt files preserve the developer's original typed wording from the `Context:` field of an intermediate export. Generated instruction scaffolding added during that export has been removed so the prompts read as the original user prompts rather than rewritten task templates.
 
+This bundle supports inspection of the prompt history, quoted process signals, and session classification used by the paper. It does not contain the raw private Claude Code JSONLs, assistant-side tool traces, private branch metadata, or private cloud CI logs, so it should not be treated as a complete reproduction package for every local quantitative observation in the narrative.
+
 ## Included
 
 - `prompts_vibe.md` and `prompts_vibe.jsonl`: 2,435 vibe-coding prompt records.

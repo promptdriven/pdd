@@ -44,24 +44,23 @@ Beyond this, the system also had to handle operational edge cases: oversized iss
 
 This was not a script. It was a stateful, distributed, integration-heavy workflow with at least five live subsystems — webhook handling, credential management, state machine, issue analyzer, verifier — plus the glue code that held them together. That shape matters. For isolated features, vibe coding is often a quick path to working code. This feature had enough interacting parts that a fix in one subsystem could break another elsewhere.
 
-The quantitative evidence comes from three artifact classes: the git history for the feature branch, Claude Code session logs, and the final pull request's CI results. Table 1 summarizes the main measures. Appendix B describes the counting rules.
+The evidence comes from three artifact classes: the git history for the feature branch, Claude Code session logs, and the final pull request's CI results. The public evidence bundle in this PR is intentionally narrower: it contains publication-safe prompt history, a quote map, and a session-classification audit trail, but not raw private session JSONLs, assistant-side tool traces, or private CI logs. Table 1 therefore reports only the high-level comparison and the public prompt-record counts; Appendix B describes the scope and limits of the local counting work.
 
 | Metric | Vibe coding | PDD |
 |---|---:|---:|
 | Attempt duration (calendar) | 15 days | 9 days |
 | Feature-relevant session-log days | 9 | 9 |
-| Feature commits | 116 | 67 |
-| Fix commits | 75 | 57 |
-| Opus 4.6 developer messages | 5,553 | 1,504 |
-| Reverts | 7 | 1 |
-| Test functions | 67 | 371 |
+| Public prompt records in evidence bundle | 2,435 | 1,003 |
+| Commit pattern from local analysis | More commits, repeated reverts, hard reset | Fewer commits, one revert, merged |
+| Fix-work pattern from local analysis | Repair work became dominant and did not converge | Review and regression fixes converged |
+| Test-suite pattern from local analysis | Smaller, implementation-adjacent suite | Larger, behavior/specification-anchored suite |
 | First end-to-end staging success | Not reached | Day 5 |
 | Merged to production | Not reached | Day 9 |
 | Final disposition | Hard reset | Merged, all cloud CI checks passed |
 
 **Table 1.** Outcomes of the two attempts.
 
-> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. A later reconstruction from `~/.claude/history.jsonl` recovered a developer-typed subset; the publication-safe evidence bundle includes the feature-filtered original prompt wording used for review (2,435 vibe / 1,003 PDD prompts), plus a quote map and session classification audit trail, in [`evidence/`](evidence/).*
+> *Auditability note: earlier drafts included exact local-analysis counts for commits, fix commits, assistant-message volume, test functions, lint errors, and CI jobs. I removed those exact figures from the main comparison because the raw artifacts needed to independently reproduce every count are not all published in this PR. The checked-in evidence supports inspection of the prompt history and quoted process signals; the remaining quantitative statements are framed as local analysis rather than independently auditable project metrics.*
 
 ### 3.1 What I Held Constant
 
@@ -81,43 +80,43 @@ The two attempts ran in sequence — vibe coding first, then PDD from a clean br
 
 The first attempt ran for 15 days, with feature-relevant Claude Code sessions logged on 9 of them and commits spread across the window. The workflow was straightforward: describe the change to Claude Opus 4.6, review the diff, run tests, fix any bugs and ship it. The workflow optimized for rapid iteration.
 
-Vibe days 1-2 produced real progress. Eleven commits were made on vibe day 1, four on vibe day 2. The orchestrator — the core state-machine file — started at 1,146 lines and grew at a controlled pace. The early bug fix ratio averaged 38%. Features outnumbered reverts.
+Vibe days 1-2 produced real progress. Commit activity was front-loaded, the orchestrator — the core state-machine file — grew at a controlled pace, and feature work still outnumbered repair work.
 
 ### 4.1 Crossing the Threshold
 
-On vibe day 6, the orchestrator had become hard to navigate. I asked Claude to clean it up — refactor the module into clearer pieces. Rather than make a series of targeted edits, Claude rewrote the entire file in a single pass. The new code came back with 357 lint errors. The file had been clean before that rewrite; now it would not even build. I pushed an emergency fix 58 minutes later just to get the code compiling again. That commit was the turning point. Before it, most of what I did was add features; after it, most of what I did was repair the output of the last AI pass. By vibe day 8, the fix ratio crossed 50% — more fix commits than feature commits on the average day — and it stayed above that line for the rest of the attempt.
+On vibe day 6, the orchestrator had become hard to navigate. I asked Claude to clean it up — refactor the module into clearer pieces. Rather than make a series of targeted edits, Claude rewrote the entire file in a single pass. The new code came back with hundreds of lint errors. The file had been clean before that rewrite; now it would not even build. I pushed an emergency fix soon after just to get the code compiling again. That commit was the turning point. Before it, most of what I did was add features; after it, most of what I did was repair the output of the last AI pass. By vibe day 8, repair work had become the dominant pattern, and it stayed that way for the rest of the attempt.
 
-| Period | Fix ratio | Reverts | Signal |
+| Period | Repair pattern | Reverts | Signal |
 |---|---|---|---|
-| Vibe days 1-5 | 35–46% | 1 | Features outpaced fixes |
-| Vibe days 6-7 | 41–45% | 2 | 357-error rewrite; 8 new issues in one day |
-| Vibe days 8-15 | 52–80% | 4 | Fix ratio never below 50% |
+| Vibe days 1-5 | Feature work still led | Low | Features outpaced fixes |
+| Vibe days 6-7 | Repair pressure rose | Rising | Large rewrite produced a lint-error burst |
+| Vibe days 8-15 | Repair work dominated | Repeated | Fixes stopped adding up to convergence |
 
-**Table 2.** Fix-ratio inflection during the vibe coding phase.
+**Table 2.** Repair-work inflection during the vibe coding phase.
 
-By vibe day 7, the orchestrator had reached 2,188 lines. Five subsystems — webhook handler, credential manager, state machine, analyzer, verifier — were all live at once. This threshold is descriptive, not universal: in this case, it marks the point at which coupling became dense enough that a fix in one subsystem reliably broke another.
+By vibe day 7, the orchestrator had become large enough to make navigation difficult. Five subsystems — webhook handler, credential manager, state machine, analyzer, verifier — were all live at once. This threshold is descriptive, not universal: in this case, it marks the point at which coupling became dense enough that a fix in one subsystem reliably broke another.
 
 ### 4.2 The Convergence Loop
 
-By the end, 75 of 116 commits (65%) were fixes. The fixes were going in circles: each one solved the bug in front of me, but the system as a whole was no closer to shipping.
+By the end, local commit classification showed fixes going in circles: each one solved the bug in front of me, but the system as a whole was no closer to shipping.
 
 ![The convergence loop](images/loop.png)
 
 **Figure 2.** Fix orchestrator → breaks webhook → fix webhook → breaks credentials → fix credentials → re-breaks orchestrator. The convergence loop was visible at every scale.
 
-The peak came on vibe day 11: 30 commits in eight hours. Six consecutive commits targeted multi-provider LLM support — letting the system fall back to a different AI provider when the current one ran out of capacity — and oscillated through add, fix, revert, and alternate approaches.
+The peak came on vibe day 11: a dense commit burst in a single working session. Several consecutive commits targeted multi-provider LLM support — letting the system fall back to a different AI provider when the current one ran out of capacity — and oscillated through add, fix, revert, and alternate approaches.
 
 ![Multi-provider oscillation](images/oscillation.png)
 
-**Figure 3.** Six consecutive commits on multi-provider LLM support. The peak produced 30 commits with no net progress.
+**Figure 3.** Consecutive commits on multi-provider LLM support. The peak produced heavy activity with no net progress.
 
-Across many days, the same shape showed up in a single bug that would not stay fixed. There was a defect in the system's *stop condition* — the logic that decides when the issue solver is done with a task and is safe to open a pull request. The bug caused the solver to keep running past the point it should have stopped. Over five days I opened five different branches trying to fix it: `fix-659`, `fix-659-clean`, `fix-659-perfect`, `fix-659-perfect-local`, `fix/issue-659-stop-condition-ignored`. The branch names read as diminishing confidence — and none of them resolved the issue cleanly.
+Across many days, the same shape showed up in a single bug that would not stay fixed. There was a defect in the system's *stop condition* — the logic that decides when the issue solver is done with a task and is safe to open a pull request. The bug caused the solver to keep running past the point it should have stopped. Over five days I opened five different local branches carrying the same private shorthand: `fix-659`, `fix-659-clean`, `fix-659-perfect`, `fix-659-perfect-local`, `fix/issue-659-stop-condition-ignored`. The `659` label here was an internal branch label from the private working context, not a reference to public `promptdriven/pdd#659`. The branch names read as diminishing confidence — and none of them resolved the issue cleanly.
 
 Other signals from the commit log point to the same loss of control:
 
 - `"re-apply architectural fixes lost"` — fixes I had already made, lost during fixing new bugs, now being redone by hand. The same work, twice.
 - `"temp: all changes"` — a single commit dumping every uncommitted edit into the repository at once. The kind of commit a developer writes when they have lost track of what is and isn't saved.
-- Two consecutive commits each claiming "100% pass rate" — when the pass rate was not, in fact, 100%. By that point I was running tests fast enough to misread the output.
+- Back-to-back commits each claiming "100% pass rate" — when the pass rate was not, in fact, 100%. By that point I was running tests fast enough to misread the output.
 
 ### 4.3 The Reset
 
@@ -133,7 +132,7 @@ By vibe day 13, the log captures the same frustration in different words:
 
 > *"Do a full end-to-end analysis. We had been stuck in the same debugging loop for three hours."*
 
-On vibe day 15, I finally gave up and hard-reset the branch. 16,894 lines across 23 files disappeared in one command.
+On vibe day 15, I finally gave up and hard-reset the branch. A large local diff disappeared in one command.
 
 The feature worked only in the narrowest case but was not working fully and missing a lot of additional operational safeguards: no recovery for stuck jobs, no credential rotation when a provider ran out, and no secret redaction in logs. It looked like progress, but the implementation did not yet understand the failure modes of the system it was trying to automate.
 
@@ -145,9 +144,9 @@ Two weeks of work had produced the visible part of the feature. The parts that w
 
 The simplest explanation for a non-converging project is that I did not try hard enough: too few tests, too little structure, fixes driven by impatience rather than process. The session-log evidence makes that explanation insufficient for this case.
 
-### 5.1 Test-Driven Development Was Requested 38 Times
+### 5.1 Test-Driven Development Was Requested Repeatedly
 
-Across the 15 days I asked Claude to do test-driven development 38 times. Vibe day 1 alone had three separate TDD instructions. Normalized for readability, those requests were:
+Across the 15 days I repeatedly asked Claude to do test-driven development. Vibe day 1 alone had multiple TDD instructions. Normalized for readability, those requests were:
 
 ```
 Vibe day 1  Work in test-driven development: create the test first, then make the fix.
@@ -155,17 +154,17 @@ Vibe day 1  Use a TDD workflow.
 Vibe day 1  Write the test before the implementation.
 ```
 
-Tests were added and run with `pytest` and the project's cloud integration suite. By the end of the 15 days, the suite contained 67 test functions.
+Tests were added and run with `pytest` and the project's cloud integration suite. By the end of the 15 days, the suite existed but had not become a durable behavioral ratchet.
 
 ### 5.2 Test-First Behavior Was Also Observed
 
-Asking an AI to "do TDD" is not the same as observing test-first behavior, so I reconstructed the per-task order of file-write operations from the raw Claude Code session logs (n=87 feature-relevant vibe coding sessions). A task is the span between two consecutive human messages. Three increasingly strict definitions produced three numbers:
+Asking an AI to "do TDD" is not the same as observing test-first behavior, so I reconstructed the per-task order of file-write operations from the local Claude Code session logs. A task is the span between two consecutive human messages. Three increasingly strict definitions produced three signals:
 
 | Test | What it measures | Vibe coding |
 |---|---|---|
-| Did I *ask* for TDD? | How many times I typed a TDD request in chat | 38 times |
-| Did I show test-first behavior? | The first file Claude edited after asking for TDD was a test file | ~4 in 5 sessions |
-| Did I follow *strict* TDD? | A brand-new test file was created before a brand-new source file in the same session | 1 in 10 sessions |
+| Did I *ask* for TDD? | Whether TDD was explicitly requested in chat | Frequent |
+| Did I show test-first behavior? | Whether the first file Claude edited after asking for TDD was a test file | Common in local reconstruction |
+| Did I follow *strict* TDD? | Whether a brand-new test file was created before a brand-new source file in the same session | Rare in local reconstruction |
 
 **Table 3.** Three increasingly strict tests of whether TDD instructions translated into test-first behavior.
 
@@ -218,7 +217,7 @@ This is where the **complexity threshold** comes in. Below it — a few componen
 
 This failure mode accounts for three observations from the vibe coding attempt that an effort-based explanation cannot:
 
-1. **Effort alone did not help.** 30 commits in 8 hours with zero net progress is consistent with a regime in which regression rate matches fix rate. Adding more hours does not change the ratio.
+1. **Effort alone did not help.** A dense commit burst with zero net progress is consistent with a regime in which regression rate matches fix rate. Adding more hours does not change the ratio.
 2. **The convergence loop was invisible from within a single commit.** Each fix succeeded locally. The regression was elsewhere, at a different time, in a coupled component. Only the aggregate commit pattern revealed the non-convergence.
 3. **Code-level tests could not stop it.** Tests anchored to implementation details reduce regressions locally but cannot prevent drift. Durable tests anchored to specification-level behavior can survive regeneration and constrain the system globally.
 
@@ -262,7 +261,7 @@ A second example exposed a bug that ordinary code-level tests would not have cau
 
 PDD did not eliminate regressions. On PDD day 7, a test suite that had been passing started failing. What differed from vibe coding was not the absence of regressions but their containment. Each regression was detected by the test suite, traced to a root cause, and fixed with a new test that prevented recurrence. The system maintained forward progress despite setbacks.
 
-The PDD attempt reached first end-to-end success on PDD day 5. The repository owner reviewed the pull request on PDD day 6 and identified 8 issues; all 8 were resolved with TDD over the next two days. On PDD day 9, the PR cleared every automated cloud test — a 64-job CI matrix spanning the platforms, runtimes, and integrations the system deploys on — and merged. The final PR touched 120 files across 25,056 net lines, including infrastructure, configuration, and modifications to existing platform code.
+The PDD attempt reached first end-to-end success on PDD day 5. The repository owner reviewed the pull request on PDD day 6 and identified multiple issues; those were resolved with TDD over the next two days. On PDD day 9, the PR cleared the automated cloud CI matrix spanning the platforms, runtimes, and integrations the system deploys on, and merged. The final PR was large enough to include infrastructure, configuration, and modifications to existing platform code.
 
 ---
 
@@ -286,19 +285,19 @@ Three properties of PDD reinforce each other:
 
 **Specification over implementation.** Reviewing 549 lines of prompts is a smaller problem than reviewing 3,904 lines of generated code. The search space is smaller; fixes are easier to review. Each prompt fix survives regeneration; a code-level fix may not.
 
-**Tests as a ratchet.** The PDD phase had 371 test functions; the vibe coding phase had 67. The count is not the point. The anchoring is. The durable PDD tests were coupled to behavioral invariants derived from the specification, so they survived regeneration. Each passing durable test further constrained the system. Over time, the system became more constrained, not more fragile. This is the mechanism by which regression rate can be pulled below fix rate.
+**Tests as a ratchet.** Local analysis showed that the PDD phase ended with a larger and more behaviorally anchored test suite than the vibe coding phase. The exact count is not the point. The anchoring is. The durable PDD tests were coupled to behavioral invariants derived from the specification, so they survived regeneration. Each passing durable test further constrained the system. Over time, the system became more constrained, not more fragile. This is the mechanism by which regression rate can be pulled below fix rate.
 
 **Regeneration over patching.** Prompts survive; code is disposable. When the specification is right and the tests are strong, generated code can be replaced at will. Regeneration reduces the accumulation of interdependent patches — the primary mechanism by which drift accumulated in the first attempt.
 
 ### 8.1 Fix Ratio Is Not the Signal
 
-A surface reading of the commits produces a paradox: PDD's fix ratio (57 of 67 commits, 85%) was higher than vibe coding's (75 of 116, 65%). Fix ratio alone makes PDD look worse. Three commit-level signals separate the phases:
+A surface reading of the commits produces a paradox: local commit classification showed a high fix share in both phases, and PDD's fix share was not lower. Fix ratio alone can therefore make PDD look worse even though it shipped. Three commit-level signals separate the phases:
 
-- **Reverts:** 7 (vibe coding) vs. 1 (PDD).
-- **Branches per bug:** 5 branches on issue #659 in vibe coding; PDD maintained a 1:1 issue-to-branch mapping.
+- **Reverts:** repeated in vibe coding, rare in PDD.
+- **Branches per bug:** multiple local branches with the private `659` shorthand in vibe coding; PDD maintained a one-issue-to-one-branch working pattern.
 - **Convergence to shipment:** vibe coding never reached a shippable state; PDD reached end-to-end success on PDD day 5 and cleared every cloud CI check on PDD day 9.
 
-Fix ratio measures activity. Convergence measures whether activity adds up. Vibe coding's 65% did not converge. PDD's 85% converged.
+Fix ratio measures activity. Convergence measures whether activity adds up. Vibe coding's fix-heavy work did not converge. PDD's fix-heavy work converged.
 
 ### 8.2 The Perception Gap
 
@@ -318,7 +317,7 @@ This is one case study, not a controlled experiment. Four design confounds and o
 
 **Accumulated knowledge.** I had 15 days of system knowledge before PDD began. Two observations bound this confound. First, knowledge did not prevent the convergence loop during vibe coding: by vibe day 15, with the most system knowledge I had, it was still running. Second, the PDD phase converged quickly on problem classes vibe coding had never touched — zombie recovery, credential exhaustion, secret redaction — as well as on problems I had already wrestled with. Knowledge is necessary but not sufficient.
 
-**Owner review intensity.** The repository owner was significantly more involved during the PDD phase, enforcing test requirements and catching 8 issues in a single review. PDD days 6-7 produced 36 of the phase's 67 commits — more than half. Heavy review alone does not fully explain convergence: during vibe coding the owner had already advised adding regression tests and the convergence loop still did not break. But this case cannot quantify how much of the outcome difference is the review versus the methodology.
+**Owner review intensity.** The repository owner was significantly more involved during the PDD phase, enforcing test requirements and catching multiple issues in a single review. A large share of PDD-phase repair work happened immediately after that review. Heavy review alone does not fully explain convergence: during vibe coding the owner had already advised adding regression tests and the convergence loop still did not break. But this case cannot quantify how much of the outcome difference is the review versus the methodology.
 
 **Conflict of interest.** I built the PDD tooling analyzed here. Familiarity can inflate apparent effectiveness, and I had a stronger incentive to apply rigor during the PDD phase. The commit data and session logs are more objective than memory or self-report, but the decision of when to apply discipline is not objective. Independent replication with developers who have no stake in either methodology is what would address this limitation.
 
@@ -362,43 +361,43 @@ It was the abstraction layer.
 
 ## Appendix A — Phase Anchors
 
-The exact daily commit distribution is less important than the transition points. These are the phase anchors used in the analysis above.
+The exact daily commit distribution is less important than the transition points. These are the phase anchors used in the analysis above; count-heavy rows are described qualitatively because the full raw audit trail is not published in this PR.
 
 | Phase | Event | Why it matters |
 |---|---|---|
-| Vibe days 1-2 | Initial implementation; first TDD instructions; first 15 feature commits | Early progress before the convergence loop was obvious |
+| Vibe days 1-2 | Initial implementation; first TDD instructions; first feature commits | Early progress before the convergence loop was obvious |
 | Vibe day 4 | Regression sweep requested; "prompt space" versus "code space" articulated in session log | The failure mode was visible before the reset |
 | Vibe day 5 | Session log says vibe coding was stuck in a loop | Explicit recognition of non-convergence |
-| Vibe day 6 | Large AI rewrite of the orchestrator produced 357 lint errors; emergency repair followed | Inflection point from feature-building to repair |
-| Vibe day 7 | Orchestrator reached 2,188 lines; five subsystems were live | Integration surface had become dense |
-| Vibe day 8 | Fix ratio crossed 50% and did not recover | Repair work became dominant |
-| Vibe day 11 | 30 commits in eight hours; six consecutive multi-provider LLM commits oscillated through add/fix/revert | Peak local activity with no net convergence |
+| Vibe day 6 | Large AI rewrite of the orchestrator produced hundreds of lint errors; emergency repair followed | Inflection point from feature-building to repair |
+| Vibe day 7 | Orchestrator had become large; five subsystems were live | Integration surface had become dense |
+| Vibe day 8 | Repair work became dominant and did not recover | Repair work became dominant |
+| Vibe day 11 | Dense eight-hour commit burst; consecutive multi-provider LLM commits oscillated through add/fix/revert | Peak local activity with no net convergence |
 | Vibe day 13 | Session log asks for full end-to-end analysis after three hours in the same loop | The convergence loop persisted despite more knowledge |
-| Vibe day 15 | Branch hard-reset after 116 feature commits and no successful staging run | Vibe coding attempt ended with 0 lines shipped |
+| Vibe day 15 | Branch hard-reset after a large local commit series and no successful staging run | Vibe coding attempt ended with 0 lines shipped |
 | PDD day 1 | PDD attempt began from a clean branch | Methodology changed after reset |
 | PDD day 5 | First end-to-end staging success | PDD reached the first shippable workflow |
-| PDD day 6 | Owner review identified 8 issues | Heavier review became a major PDD-phase factor |
+| PDD day 6 | Owner review identified multiple issues | Heavier review became a major PDD-phase factor |
 | PDD day 7 | Regressions were caught and converted into tests | Tests acted as a ratchet rather than a treadmill |
-| PDD day 9 | PR merged after all 64 cloud CI jobs passed | PDD attempt shipped after 67 feature commits |
+| PDD day 9 | PR merged after the cloud CI matrix passed | PDD attempt shipped |
 
-Aggregate result: vibe coding produced 116 feature commits and was reset; PDD produced 67 feature commits and merged with 25,056 net lines in the final PR.
+Aggregate result: vibe coding produced a larger local commit series and was reset; PDD produced a smaller convergent series and merged.
 
 ---
 
-## Appendix B — Counting Rules and Method
+## Appendix B — Evidence Scope, Counting Rules, and Method
 
-The counts in Table 1 use the following rules.
+The publication-safe evidence bundle in this PR contains reconstructed prompt history, quote mappings, session classification, and checksums. It does not contain raw Claude Code JSONLs, assistant-side tool traces, private branch metadata, or private cloud CI logs. The rules below describe the local analysis that informed the narrative, but they should not be read as fully reproducible from the checked-in evidence bundle alone.
 
 - **Feature commits** are commits whose primary purpose was the autonomous issue solver, its prompts, tests, infrastructure, or CI hardening. Unrelated repository maintenance was excluded.
 - **Fix commits** are commits whose message or diff primarily repaired a defect, regression, test failure, CI failure, revert fallout, or integration breakage. Ambiguous commits were classified by dominant intent rather than by prefix alone.
 - **Reverts** include explicit `revert` commits and commits whose dominant purpose was to undo a preceding approach.
 - **Test functions** are feature-scoped pytest functions or methods present in each phase's terminal snapshot: the reset snapshot for vibe coding and the merged PR for PDD.
 - **Net lines** are the final pull-request diff size, using added lines minus deleted lines.
-- **Opus 4.6 developer messages** count developer-authored messages in feature-relevant Claude Code sessions using Claude Opus 4.6. They do not count every automated subagent session spawned by `pdd sync` or other tooling.
+- **Prompt records** in the public evidence bundle count feature-filtered, developer-authored prompt-history entries recovered from local Claude history. They do not include raw assistant traces or automated subagent transcripts.
 - **Feature-relevant session-log days** are distinct days with Claude Code sessions that changed, analyzed, or debugged the feature.
 - **TDD ordering** was measured per task window, where a task window is the span after a human message requesting TDD and before the next human message. The test-first measure asks whether the first subsequent feature-scoped file edit targeted a test file. The stricter measure asks whether a brand-new test file was created before a brand-new source file in the same window.
 
-These rules are not a substitute for a controlled experiment, but they make the case study's measurements auditable and separate activity measures from convergence measures.
+These rules are not a substitute for a controlled experiment, and not every local count is independently auditable from the public bundle. Their purpose is to separate activity measures from convergence measures and to make the limits of the case study explicit.
 
 ---
 
