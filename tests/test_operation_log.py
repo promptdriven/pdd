@@ -231,6 +231,41 @@ def test_load_operation_log_compatibility(temp_pdd_env):
     assert entries[1]["op"] == "new"
     assert entries[1]["invocation_mode"] == "manual"
 
+def test_save_fingerprint_swallows_write_errors_by_default(temp_pdd_env):
+    """Default ``raise_on_error=False`` keeps historical sync-orchestration
+    behavior: write failures log a warning but do not propagate."""
+    basename, lang = "state", "go"
+    paths = {"prompt": Path("prompts/state_go.prompt")}
+
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    # Replace the target path with a directory so open(..., 'w') fails.
+    if fp_path.exists():
+        fp_path.unlink()
+    fp_path.mkdir()
+
+    # Must not raise — backward compatible default.
+    operation_log.save_fingerprint(basename, lang, "op1", paths, 0.5, "gpt-4")
+
+
+def test_save_fingerprint_raise_on_error_propagates(temp_pdd_env):
+    """Issue #988: when ``raise_on_error=True`` a real write failure must
+    propagate so callers (e.g. ``run_metadata_sync``) can mark the stage
+    as failed instead of silently reporting success."""
+    basename, lang = "state2", "go"
+    paths = {"prompt": Path("prompts/state2_go.prompt")}
+
+    fp_path = operation_log.get_fingerprint_path(basename, lang)
+    if fp_path.exists():
+        fp_path.unlink()
+    fp_path.mkdir()
+
+    with pytest.raises(OSError):
+        operation_log.save_fingerprint(
+            basename, lang, "op1", paths, 0.5, "gpt-4",
+            raise_on_error=True,
+        )
+
+
 def test_save_fingerprint(temp_pdd_env):
     """Test saving fingerprint state in Fingerprint dataclass format."""
     basename, lang = "state", "go"

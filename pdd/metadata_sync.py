@@ -491,6 +491,7 @@ def run_metadata_sync(
                     paths=paths,
                     cost=0.0,
                     model="metadata_sync",
+                    raise_on_error=True,
                 )
                 result.stages["fingerprint"] = StageStatus(
                     status="ok", detail=f"saved fingerprint for {detail}"

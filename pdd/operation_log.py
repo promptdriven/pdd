@@ -246,7 +246,8 @@ def save_fingerprint(
     operation: str,
     paths: Optional[Dict[str, Path]] = None,
     cost: float = 0.0,
-    model: str = "unknown"
+    model: str = "unknown",
+    raise_on_error: bool = False,
 ) -> None:
     """
     Save the current fingerprint/state to the state file.
@@ -254,6 +255,14 @@ def save_fingerprint(
     Writes the full Fingerprint dataclass format compatible with read_fingerprint()
     in sync_determine_operation.py. This ensures manual commands (generate, example)
     don't break sync's fingerprint tracking.
+
+    When ``raise_on_error`` is False (the default), write failures are logged
+    as a warning and the function returns normally — historical behavior used
+    by sync orchestration which has its own stage-level reporting. Callers
+    that need to surface fingerprint-write failures to their own callers
+    (e.g. :func:`pdd.metadata_sync.run_metadata_sync`) must pass
+    ``raise_on_error=True`` so a failed write propagates instead of silently
+    being reported as success (Issue #988 acceptance criterion).
     """
     from dataclasses import asdict
     from datetime import timezone
@@ -291,6 +300,8 @@ def save_fingerprint(
         with open(path, 'w', encoding='utf-8') as f:
             json.dump(asdict(fingerprint), f, indent=2)
     except Exception as e:
+        if raise_on_error:
+            raise
         console = Console()
         console.print(f"[yellow]Warning: Failed to save fingerprint to {path}: {e}[/yellow]")
 

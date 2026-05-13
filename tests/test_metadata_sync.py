@@ -628,6 +628,38 @@ def test_fingerprint_dry_run_does_not_persist(tmp_path: Path) -> None:
     assert result.stages["fingerprint"].status == "dry_run"
 
 
+def test_fingerprint_real_write_failure_marks_stage_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for Issue #988: a real .pdd/meta write failure must surface
+    as a `failed` fingerprint stage (so `_run_single_file_metadata_sync` can
+    report it on stderr and exit non-zero), not be silently swallowed inside
+    ``save_fingerprint`` and reported as ``ok``.
+
+    We force a real ``open(..., 'w')`` failure by pre-creating the target
+    fingerprint file path as a directory, so the underlying write raises
+    ``IsADirectoryError`` instead of succeeding.
+    """
+    ws = _make_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    # `save_fingerprint` writes to `<cwd>/.pdd/meta/<basename>_<lang>.json`.
+    # For prompt `demo_python.prompt` -> basename "demo", language "python".
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    blocker = meta_dir / "demo_python.json"
+    blocker.mkdir()  # opening this path with mode 'w' will raise
+
+    with patch.object(ms, "clear_run_report"):
+        result = run_metadata_sync(ws["prompt_path"], dry_run=False)
+
+    fp = result.stages["fingerprint"]
+    assert fp.status == "failed", fp
+    assert fp.reason  # carries the underlying OSError message
+    assert result.failing_stage == "fingerprint"
+    assert not result.ok
+
+
 # ---------------------------------------------------------------------------
 # Regression: architecture stage must be gated when tags fails so the
 # `update_architecture_from_prompt` write does not land on disk while the
