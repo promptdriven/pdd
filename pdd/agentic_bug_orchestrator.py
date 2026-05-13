@@ -963,7 +963,8 @@ def _maybe_post_step_comment(
     if isinstance(entry, dict) and entry.get("posted") is True:
         return github_comment_id
     extracted = _extract_step_report(step_output)
-    if extracted is None:
+    is_fallback = extracted is None
+    if is_fallback:
         body_to_post = (
             f"_Step {step_num} completed; no `<step_report>` block "
             f"returned by agent. Raw output retained in workflow state._"
@@ -982,8 +983,31 @@ def _maybe_post_step_comment(
         cwd=cwd,
         body=body_to_post,
     )
+    # Persist outcome regardless of success so the resume backfill can
+    # distinguish PR-era no-report fallback attempts (retryable) from legacy
+    # pre-PR outputs (where the agent posted comments itself and we must NOT
+    # repost). For no-report outputs the saved state is the only signal —
+    # `_extract_step_report` will return None on resume too.
     if posted:
-        state["step_comments"][str(step_num)] = {"posted": True}
+        entry: Dict[str, object] = {"posted": True}
+        if is_fallback:
+            entry["fallback"] = True
+        state["step_comments"][str(step_num)] = entry
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+    elif is_fallback:
+        # Transient GitHub posting failure on a no-report step: mark it so
+        # the resume backfill knows to retry. Without this marker the backfill
+        # at the top of the orchestrator would skip the saved output (no
+        # `<step_report>` to extract) and the comment would be lost forever.
+        state["step_comments"][str(step_num)] = {
+            "posted": False,
+            "fallback_pending": True,
+        }
         save_result = save_workflow_state(
             cwd, issue_number, "bug", state, state_dir,
             repo_owner, repo_name, use_github_state, github_comment_id,
@@ -1558,11 +1582,15 @@ def run_agentic_bug_orchestrator(
     # idempotent — successful resumes are gated by step_comments[n].posted.
     #
     # Gating (codex review #4 of PR #966):
-    # - Require the saved output to contain a `<step_report>` block.
-    #   Legacy pre-PR states (where models posted comments themselves) and the
-    #   synthetic skipped-step outputs from FAST_TRACK (lines 1796-1797 below)
-    #   both lack this marker, so they're skipped — preventing duplicate or
-    #   bogus comments on resume.
+    # - Require the saved output to contain a `<step_report>` block, OR a
+    #   prior fallback attempt that failed (`fallback_pending`). Legacy pre-PR
+    #   states (where models posted comments themselves) and the synthetic
+    #   skipped-step outputs from FAST_TRACK (lines 1796-1797 below) both
+    #   lack this marker AND have no `step_comments` entry, so they're skipped
+    #   — preventing duplicate or bogus comments on resume.
+    # - Codex review #5 of PR #966: persist `fallback_pending` for no-report
+    #   outputs whose initial post failed, so we can safely retry them here
+    #   without confusing them with legacy outputs.
     # - Normalize `step_comments` shape: a stale list / non-dict entry / non-
     #   boolean `posted` would otherwise crash with AttributeError here.
     if state.get("step_outputs"):
@@ -1576,7 +1604,10 @@ def run_agentic_bug_orchestrator(
             entry = raw_sc.get(s_key)
             if isinstance(entry, dict) and entry.get("posted") is True:
                 continue
-            if _extract_step_report(s_out) is None:
+            fallback_pending = (
+                isinstance(entry, dict) and entry.get("fallback_pending") is True
+            )
+            if _extract_step_report(s_out) is None and not fallback_pending:
                 continue
             try:
                 s_num = int(float(s_key))
