@@ -1,3 +1,77 @@
+## v0.0.236 (2026-05-12)
+
+### Fix
+
+- **ci**: relax timeouts for two real-LLM cases that flaked in the post-PR-962 release gate (#982)
+- **ci**: entrypoint preflight — replace broken heredoc with python -c (all 77 Cloud Batch tasks were failing exit 2) (#981)
+- **ci**: drop :latest from AR_IMAGE so cloudbuild.yaml's :$BUILD_ID tag doesn't double up (#980)
+- **ci_drift_heal**: revert prompt/arch changes per Greg's P1 review
+- **ci_detect**: collapse prompt to bare path and add example to satisfy auto-heal skip
+- **ci_detect**: exclude path-qualified basename for self prompt
+- **ci_detect,arch**: address PR #930 review — newline include-many, prompt drift, ci_drift_heal arch deps
+- **tests**: align test_ci_drift_heal with main impl after merge
+- **ci**: skip untouched clean-ci auto-deps drift
+- **ci**: scope reverse dependency detection to changed include defs
+- **ci_drift_heal**: code-only phantom crash → update drift, not example
+- **ci_drift_heal**: fail closed on phantom crash with unknown touch state
+- **ci_drift_heal**: pin git-lookup failure semantics + PR/push example shape
+- **ci_drift_heal,docs**: return None on git failure + require --diff-base in CI
+- **ci_drift_heal**: scope phantom-crash filter to actually-untouched modules
+- **prompts,docs**: pin phantom-crash detect filter, caveat sync-arch validation
+- **prompts**: drop steer_timeout from global-sync forward list, add init metadata
+- **architecture**: drop unmatched deps on commands/__init__ entry
+- **architecture**: backfill commands/__init__ entry
+- **ci_drift_heal**: filter phantom run-report crash at detection
+- **ci_drift_heal**: skip phantom crash drift from missing run_report on clean CI
+- **prompts**: pin sync option types/tri-state + match __init__ order
+- **prompts**: complete maintenance drift backfill
+- **prompts**: backfill commands/maintenance and commands/__init__ drift
+- classify Anthropic billing errors as permanent
+- refuse device-flow auth in CI
+- parse codex finding priority prefix
+- **checkup**: address PR #932 Greg review — dedupe completions, portable adapter test
+- **checkup**: address PR #932 review — contract drift, fingerprints, example
+- **checkup**: align contract example with live ReviewLoopConfig (#922)
+- **checkup**: preserve diagnostics across parse-repair + lock positional order (#922)
+- **checkup**: scrub github_pat_ + discover cloud adapter portably (#922)
+- **checkup**: scrub provider envvar dumps and bare AIza/xai/gsk tokens (#922)
+- **checkup**: example sys.path, zsh/fish completion artifacts, signature ordering (#922)
+- **checkup**: defang every pipe-prefixed diagnostics line (#922)
+- **checkup**: defang pipe-table findings + fallback mode docs (#922)
+- **checkup**: expand diagnostics defang to every adapter trip-wire (#922)
+- **checkup**: address PR #932 review — scrubber, prompt drift, examples (#922)
+- **checkup**: defang line-leading 'Error:' to keep cloud adapter from downgrading verdict (#922 round 4)
+- **checkup**: defang severity tags + budget guard + verifier docstring + final-state diagnostics (#922 round 3)
+- **checkup**: keep verdict adapter from short-circuiting on fallback success (#922 follow-up)
+- **checkup**: surface reviewer diagnostics and add opt-in fallback reviewer (#922)
+
+## v0.0.235 (2026-05-12)
+
+### Feat
+
+- **checkup**: reviewer fallback + broader transient-failure classification (#923)
+
+### Fix
+
+- emit metadata_sync skip reason on single line so substring checks work (#951)
+- **#926**: preserve comments and docstrings during regen
+- strip trailing blank line at EOF on completion examples (#923)
+- **prompts**: reconcile stale <pdd-interface> declarations with code (#928)
+- **code-gen**: include ParamSpec alias in regen prompt + dedup drift symbols (#928)
+- **code-gen**: strict default-drift + sync prompts/architecture/README docs (#928)
+- **code-gen**: type/default drift + missing-method directive + docs (#928)
+- **sync**: targeted repair directives + type:command + dotted method grouping (#928)
+- **code-gen**: pdd-interface check resolves dotted methods + missing funcs (#928)
+- **sync**: document new conformance parser shape + drop raw tags from prose (#928)
+- **sync**: teach _parse_conformance_failure new <pdd-interface> shape (#928)
+- **code-gen**: enforce <pdd-interface> signature in architecture conformance (#928)
+- correct bash completion architecture path
+- **checkup**: add checkup to fish help-subcommand completion list
+- **checkup**: share transient-failure markers + add checkup completion to fish/zsh
+- **checkup**: annotate superseded primary as `optional` for verdict adapter
+- complete reviewer fallback verdict flow
+- **checkup**: normalize reviewer_fallback against role aliases
+
 ## v0.0.234 (2026-05-11)
 
 ### Feat
@@ -6,6 +80,7 @@
 - **tests: provider-env isolation fixture (#902, #1405 Fix C)**: autouse fixture in `tests/conftest.py` clears every key from `_opencode_provider_env_keys()` (45 keys from `llm_model.csv`, not the 26-key fallback) before each test, so developer env (`XAI_API_KEY`, `GOOGLE_APPLICATION_CREDENTIALS`, …) can't leak into OpenCode credential detection. Tests opt back in via `monkeypatch.setenv` / `patch.dict`.
 - **tests: CLI-binary isolation fixture (#903, #1405 Fix A-prime)**: autouse `_isolate_cli_binary_presence` defaults `claude`/`codex`/`gemini`/`opencode` to "not installed" and OpenCode filesystem credential signals to "absent", sourcing CLI names from `pdd.cli_detector.CLI_PREFERENCE`. Opt-out via `@pytest.mark.uses_real_cli_detector`.
 - **ci: public PR auto-heal gate (#904)**: new `.github/workflows/auto-heal.yml` required check that dispatches the auto-heal Cloud Build in `prompt-driven-development-stg` via WIF — no LLM/App secrets on the public runner. Collaborator auth verified server-side through a read-only GitHub App; external PRs need a standalone `/heal` first-line token; fork PRs short-circuit with `neutral` before token mint. SHA-pinned actions, env-routed event strings, CRLF-tolerant `/heal` parsing, async `gcloud builds submit` + poll.
+- **metadata sync orchestrator (partial #871, blocked-on #870)**: new `pdd update --sync-metadata` opt-in flag plus shared `pdd/metadata_sync.py::run_metadata_sync` orchestrator (prompt → tags → architecture → run-report cleanup → fingerprint-last, with `MetadataSyncResult` per-stage status). CI auto-heal `update` branch and preflight drift-heal call the same orchestrator. **Failure semantics**: a stage reporting `failed` blocks every later write-bearing stage (architecture, run_report, fingerprint are all gated symmetrically), so a half-synced state never lands on disk; `skipped` (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) is intentional and passes through — surfaced as `partial:<stage>` in the summary table so operators can tell an intentional skip from a clean `synced`. **CLI exit**: `pdd update --sync-metadata` exits non-zero when any per-pair `MetadataSyncResult.ok` is False (single-file and repo modes both raise `click.exceptions.Exit(1)`), so CI auto-heal does not key off a false-green return code. `architecture_sync.update_architecture_from_prompt` takes an optional `prompt_content_override` so freshly-generated tags flow through without a disk race. PRD sync still runs after the orchestrator (kept in `update_main`, not the orchestrator) when at least one architecture entry changed. `metadata_sync` passes the prompts-dir-relative path (e.g. `commands/foo_python.prompt`) to the architecture stage and delegates `_load_arch_entry_for_prompt` to `get_architecture_entry_for_prompt` so subdirectory-organized prompts (Issue #617) resolve correctly. The preflight drift-heal subprocess (`agentic_change_orchestrator._preflight_drift_heal`) passes `--sync-metadata` so its finalization path matches CLI auto-heal. **Scope caveat**: the `tags` stage preserves existing PDD tags and seeds tags from `architecture.json` when a prompt has none — LLM-first *refresh* of stale-but-present tags is tracked at issue #870 and is NOT invoked by this orchestrator; until #870 lands, the `tags` stage reports `skipped` (not `ok`) when a prompt has zero PDD tags AND no architecture entry, so operators see honest status.
 
 ### Fix
 

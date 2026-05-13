@@ -1,0 +1,78 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Shared orchestrator that finalizes prompt metadata (tags, architecture, run report, fingerprint) in a fixed order so update/auto-heal/preflight workflows leave no half-synced state.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_metadata_sync",
+        "signature": "(prompt_path: Path, code_path: Optional[Path] = None, *, dry_run: bool = False, repo_root: Optional[Path] = None, architecture_path: Optional[Path] = None) -> MetadataSyncResult",
+        "returns": "MetadataSyncResult with per-stage status"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
+
+% Goal
+Write `pdd/metadata_sync.py` — a single-function orchestrator that runs prompt metadata finalization stages in a fixed order and returns a structured result.
+
+% Role & Scope
+This module provides the shared `run_metadata_sync` entry point used by `pdd update --sync-metadata`, the CI auto-heal `update` branch in `ci_drift_heal`, and the preflight drift-heal path. Its purpose is to remove the "did the user remember to also run sync-architecture / refresh fingerprint?" trap by sequencing the metadata layers behind one call. It does NOT regenerate code, regenerate examples, run tests, or push commits — those remain the caller's responsibility.
+
+% Requirements
+1. **Single entry point** `run_metadata_sync(prompt_path, code_path=None, *, dry_run=False, repo_root=None, architecture_path=None) -> MetadataSyncResult`. All callers (CLI, CI, preflight) use this function.
+2. **Fixed stage pipeline (in order)**:
+   1. `prompt`: confirm the prompt file exists and is non-empty; record current on-disk content for the next stage.
+   2. `tags`: **preserve existing PDD metadata tags, or seed tags from the architecture entry when the prompt has none.** Uses `pdd.architecture_sync.generate_tags_from_architecture` (multi-language compatible, no language-specific AST dependency) to render the seed block. Writes the seeded prompt back to disk unless `dry_run=True`. When the prompt has zero PDD tags AND no architecture entry exists to seed from, report `skipped` with a reason naming #870 — never `ok` (claiming `ok with 0 tag(s)` would mislead operators). **LLM-first tag refresh (rewriting existing-but-stale tags) is out of scope for this orchestrator and tracked at #870**; downstream callers that need refresh should invoke that primitive directly.
+   3. `architecture`: call `update_architecture_from_prompt(prompt_filename, prompts_dir, architecture_path, dry_run, prompt_content_override=<refreshed prompt content from stage 2>)` so architecture.json picks up the freshly-generated tags without a disk race. `prompt_filename` MUST be the prompts-dir-relative path (e.g. `commands/foo_python.prompt`), not just the basename — `update_architecture_from_prompt` matches architecture entries by their `filename` field which is path-aware per Issue #617. Fall back to the basename only when the prompt sits outside any `prompts/` ancestor. When the architecture lookup returns "No architecture entry found for: …", treat that as `skipped` (unregistered module is a normal state for tools/scripts), NOT as `failed`, so the fingerprint stage is not gated off. **Gated symmetrically with `run_report` and `fingerprint`**: if `prompt` or `tags` reported `failed`, mark `architecture` as `skipped` with the failing stage as the reason and do NOT invoke `update_architecture_from_prompt` — that call writes architecture.json on success, and running it after an earlier hard failure means the architecture entry can be modified on disk before the overall result reports `failed`, which on the push-to-main auto-heal path can land via `git add -A` even though downstream stages correctly stop.
+   4. `run_report`: clear or refresh stale run reports tied to this prompt/code pair (only the entries this sync invalidates — do not wipe unrelated entries). **Gated symmetrically with `fingerprint`**: if `prompt`, `tags`, or `architecture` reported `failed`, mark `run_report` as `skipped` with the failing stage as the reason and do NOT invoke `clear_run_report` — the deletion is an on-disk side effect that, left to run after an earlier hard failure, would create partial `.pdd/meta` state that auto-heal's `git add -A` could pick up on the push-to-main path.
+   5. `fingerprint`: finalize fingerprint state LAST via the fingerprint primitives from `pdd.sync_determine_operation` / `pdd.operation_log`. Gated on no prior stage reporting `failed` — `skipped` and `dry_run` are acceptable upstream statuses (matches `MetadataSyncResult.ok`). If any earlier stage failed, mark fingerprint as `skipped` with the failing stage as the reason. This prevents storing a fingerprint that records "in sync" when an earlier metadata layer is broken.
+3. **Result type** `MetadataSyncResult` — a Pydantic v2 model with:
+   - `prompt_path: Path`
+   - `code_path: Optional[Path]`
+   - `dry_run: bool`
+   - `stages: Dict[str, StageStatus]` where each `StageStatus` has `status: Literal["ok", "skipped", "failed", "dry_run"]`, `reason: Optional[str]`, `detail: Optional[str]` (e.g., counts, file paths touched). Stage names are exactly: `prompt`, `tags`, `architecture`, `run_report`, `fingerprint`.
+   - `ok: bool` property — True iff every stage status is `ok`, `dry_run`, or `skipped` (no `failed` stages). `skipped` is intentional for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag generation pending #870) and must not be conflated with failure. When a prompt has zero PDD tags AND no architecture entry to seed from, the `tags` stage reports `skipped` (with a reason naming #870), never `ok` — claiming `ok` with `0 tag(s)` would mislead operators into thinking metadata is in sync when it is provably absent.
+   - `failing_stage: Optional[str]` property — first stage whose status is `failed`, else None.
+4. **Fail-soft per stage**: Catch exceptions per stage. Convert to `failed` with `reason=str(exc)` and continue to the next stage UNLESS the failed stage is `prompt` (cannot proceed without a valid prompt file) — in that case, short-circuit and mark the remaining stages as `skipped` with the original failure reason.
+5. **Idempotent**: Calling `run_metadata_sync` twice with the same inputs must produce equivalent on-disk state on the second call. Tag generation must be stable (do not append duplicate tag blocks); architecture sync's existing `dry_run`/diff logic handles its own idempotency. Fingerprint finalization is naturally idempotent via content hashing.
+6. **`dry_run=True`**: No file writes, no fingerprint commits. Each stage runs its read-only logic (parsing, diffing, computing what *would* change) and reports `dry_run` with a `detail` summarizing the planned action. `ok` property treats `dry_run` as success so callers can preview cleanly.
+7. **`repo_root` resolution**: When `None`, infer from `prompt_path` by walking up to the nearest `.git` / `.pddrc` / `pyproject.toml`. Pass the resolved root to downstream stages.
+8. **`architecture_path` resolution**: When `None`, use `find_architecture_for_project(repo_root)` from `pdd.architecture_registry`. If no architecture file exists, mark the `architecture` stage as `skipped` with reason `"no architecture.json found"` and continue — this is a normal state for projects that don't use architecture sync.
+9. **Multi-language compatibility**: Tag seeding must work for every language PDD supports — use the architecture-derived primitive `generate_tags_from_architecture` (no language-specific AST or tree-sitter parsers). LLM-first tag refresh (rewriting stale tags) is deferred to issue #870 and is not invoked by this orchestrator; when it lands there it must apply deterministic post-validation (reject tag blocks that don't parse, reject duplicate tag blocks, enforce `<pdd-reason>` length budget).
+10. **Logging**: Use Rich Console (module-level, custom theme: `info=cyan`, `warning=yellow`, `error=bold red`, `success=green`). Emit one line per stage on entry (`info`) and one on exit (`success`/`warning`/`error` per status). When a stage fails, the error line MUST name the stage so operators can immediately see which metadata layer is incomplete.
+11. **No regeneration side effects**: `run_metadata_sync` MUST NOT call `pdd generate`, `pdd example`, `pdd test`, `pdd sync`, or any code-regenerating primitive. It also MUST NOT push commits, write to the network, or shell out except via the primitives listed in Dependencies.
+12. **Per-stage atomicity, NOT pipeline rollback**: Each individual stage either completes its on-disk effect fully or leaves the on-disk state unchanged (tag refresh writes to a temp file and atomically renames; architecture sync delegates to the existing module which already handles atomic writes; fingerprint finalization is a single atomic op). The orchestrator gates *later* write-bearing stages (architecture, run_report, fingerprint) on no earlier stage reporting `failed`, so a tags failure cannot drag architecture or fingerprint state out of sync. **However the orchestrator is NOT transactional across stages**: if tags + architecture succeed and fingerprint then fails, the tags write to the prompt file and the architecture.json write have already landed on disk and `run_metadata_sync` itself does not roll them back. End-to-end rollback for the failing module is the caller's responsibility — see `pdd.ci_drift_heal._snapshot_metadata_state_for(drift)` (taken pre-sync, capturing this module's `architecture.json` bytes and `.pdd/meta/<basename>_<language>.json`) paired with `_restore_metadata_state_for(snapshot)` on failure, plus `_revert_prompt_file` for the prompt itself. The snapshot/restore pair is **module-scoped by bytes** — do NOT use a repo-scoped `git restore -- .pdd` / `git restore -- architecture.json`, which in a multi-module push-to-main heal would wipe earlier successful modules' writes from the same run back to HEAD. The legacy `_cleanup_metadata_artifacts` symbol is preserved as a no-op shim solely for backward import compatibility; new code MUST use the snapshot/restore primitives so `git add -A` on push-to-main cannot publish a failed module's partial metadata alongside another module's successful heal.
+
+% Error Handling
+- Module-level Rich Console with custom theme.
+- Every public path returns a `MetadataSyncResult` — never raise to the caller. Callers inspect `result.ok` and per-stage `status`.
+- Re-raise `KeyboardInterrupt` and `SystemExit` only.
+
+% Dependencies
+<module_dependencies>
+  <pdd.architecture_sync>
+    <include select="def:update_architecture_from_prompt,def:generate_tags_from_architecture,def:has_pdd_tags,def:parse_prompt_tags" mode="interface">pdd/architecture_sync.py</include>
+  </pdd.architecture_sync>
+  <pdd.architecture_registry>
+    <include select="def:find_architecture_for_project" mode="interface">pdd/architecture_registry.py</include>
+  </pdd.architecture_registry>
+  <pdd.sync_determine_operation>
+    <include select="def:sync_determine_operation" mode="interface">pdd/sync_determine_operation.py</include>
+  </pdd.sync_determine_operation>
+  <pdd.operation_log>
+    <include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report" mode="interface">pdd/operation_log.py</include>
+  </pdd.operation_log>
+</module_dependencies>
+
+% Deliverables
+- Code: `pdd/metadata_sync.py`
+- Public API: `run_metadata_sync`, `MetadataSyncResult`, `StageStatus`

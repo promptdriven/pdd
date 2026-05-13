@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.234"
+version = "0.0.236"
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -100,6 +100,7 @@ dev = [
     "pytest-xdist",
     "pytest-mock",
     "pytest-asyncio",
+    "pytest-timeout",
     "build",
     "twine",
     "httpx==0.28.1"
@@ -109,11 +110,15 @@ dev = [
 asyncio_mode = "strict"
 asyncio_default_fixture_loop_scope = "function"
 testpaths = ["tests"]
+timeout = 300
+addopts = "--strict-markers --strict-config"
 markers = [
     "real: mark a test as requiring real resources (e.g. API calls)",
     "integration: mark a test as an integration test (makes real API calls, costs money)",
     "slow: mark a test as slow-running",
     "e2e: mark a test as E2E test (uses real LLM calls, costs money, runs slowly)",
+    "private_prompt: mark a test as exercising a private prompt fixture not shipped in the public repo",
+    "uses_real_cli_detector: mark a test that exercises the real CLI detector instead of a stub",
 ]
 filterwarnings = [
     "ignore:.*Pydantic V1 style.*deprecated.*",
@@ -121,17 +126,15 @@ filterwarnings = [
     "ignore:datetime\\.datetime\\.utcnow\\(\\) is deprecated:DeprecationWarning:botocore\\.auth.*",
     "ignore::UserWarning:pydantic.main",
     "ignore:Use 'content=<\\.\\.\\.>' to upload raw bytes/text content:DeprecationWarning:httpx._models",
-    "ignore:Unknown config option.*:pytest.PytestConfigWarning",
     "ignore:Support for class-based.*config.*is deprecated:DeprecationWarning",
 ]
 
 [tool.commitizen]
 name = "cz_conventional_commits"
-version = "0.0.234"
+version = "0.0.236"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
-    "pdd/setup.py:version=\"(.*?)\"",
     "README.md:Current version: (.*?)$",
     "README.md:https://img.shields.io/badge/pdd--cli-v(.*?)-blue",
     "pdd/pdd_completion.sh:# Version: (.*?)",

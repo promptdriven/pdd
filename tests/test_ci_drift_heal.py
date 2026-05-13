@@ -1798,12 +1798,13 @@ class TestParseCostFromCsv:
 
 class TestBuildCiEnv:
     def test_sets_required_env_vars(self):
-        """Sets PDD_FORCE, CI, NO_COLOR, PDD_OUTPUT_COST_PATH."""
+        """Sets required non-interactive CI subprocess environment."""
         from pdd.ci_drift_heal import _build_ci_env
 
         env = _build_ci_env("/tmp/cost.csv")
         assert env["PDD_FORCE"] == "1"
         assert env["CI"] == "1"
+        assert env["PDD_NO_INTERACTIVE"] == "1"
         assert env["NO_COLOR"] == "1"
         assert env["PDD_OUTPUT_COST_PATH"] == "/tmp/cost.csv"
         assert env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] == "1"
@@ -2324,3 +2325,290 @@ class TestStructuralInvariants:
              patch("pdd.ci_drift_heal.subprocess.run") as mock_run:
             mock_run.return_value = subprocess.CompletedProcess([], 0, "", "")
             assert _enforce_structural_invariants(self._make_drift()) is False
+
+
+# --------------------------------------------------------------------------- #
+# Tests for metadata-sync integration (PR #920)                                #
+# --------------------------------------------------------------------------- #
+
+
+class TestRunMetadataSyncSafe:
+    """`_run_metadata_sync_safe` wraps `run_metadata_sync` for the update heal path."""
+
+    def test_returns_false_when_prompt_path_none(self, capsys):
+        # Fails closed: missing prompt_path means sync did not run, and
+        # treating that as "ok" would let auto-heal silently checkpoint a
+        # module whose metadata was never finalized — exactly the bug-class
+        # #871 was wired up to prevent.
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        assert _run_metadata_sync_safe(None, None) is False
+        assert "prompt_path is unset" in capsys.readouterr().out
+
+    def test_returns_false_when_prompt_path_empty_string(self, capsys):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        assert _run_metadata_sync_safe("", None) is False
+        assert "prompt_path is unset" in capsys.readouterr().out
+
+    def test_returns_false_when_prompt_file_does_not_exist(self, tmp_path, capsys):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        missing = tmp_path / "nope.prompt"
+        assert _run_metadata_sync_safe(str(missing), None) is False
+        assert "does not exist" in capsys.readouterr().out
+
+    def test_returns_false_when_metadata_sync_module_import_fails(self, tmp_path, capsys):
+        # Fail-closed on ImportError: a missing orchestrator must not be
+        # confused with a successful no-op. Was silently returning True
+        # pre-fix, which let the heal path checkpoint as if sync ran.
+        import sys as _sys
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        # Force `from pdd.metadata_sync import run_metadata_sync` to raise.
+        with patch.dict(_sys.modules, {"pdd.metadata_sync": None}):
+            assert _run_metadata_sync_safe(str(prompt), None) is False
+        assert "metadata_sync unavailable" in capsys.readouterr().out
+
+    def test_returns_false_and_logs_when_orchestrator_raises(self, tmp_path, capsys):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        with patch("pdd.metadata_sync.run_metadata_sync",
+                   side_effect=RuntimeError("orchestrator exploded")):
+            assert _run_metadata_sync_safe(str(prompt), None) is False
+        out = capsys.readouterr().out
+        assert "orchestrator exploded" in out
+
+    def test_returns_false_and_logs_when_result_not_ok(self, tmp_path, capsys):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        from pdd.metadata_sync import MetadataSyncResult, StageStatus
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        bad = MetadataSyncResult(
+            prompt_path=prompt,
+            stages={
+                "prompt": StageStatus(status="ok"),
+                "tags": StageStatus(status="failed", reason="bad tags"),
+            },
+        )
+        with patch("pdd.metadata_sync.run_metadata_sync", return_value=bad):
+            assert _run_metadata_sync_safe(str(prompt), None) is False
+        out = capsys.readouterr().out
+        assert "tags" in out
+
+    def test_returns_true_when_result_ok(self, tmp_path):
+        from pdd.ci_drift_heal import _run_metadata_sync_safe
+        from pdd.metadata_sync import MetadataSyncResult, StageStatus
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("body")
+        good = MetadataSyncResult(
+            prompt_path=prompt,
+            stages={s: StageStatus(status="ok") for s in
+                    ("prompt", "tags", "architecture", "run_report", "fingerprint")},
+        )
+        with patch("pdd.metadata_sync.run_metadata_sync", return_value=good):
+            assert _run_metadata_sync_safe(str(prompt), None) is True
+
+
+class TestHealModuleInvokesMetadataSync:
+    """`heal_module(op='update')` must invoke `_run_metadata_sync_safe`
+    after churn + invariants gates and revert+fail if it returns False.
+    """
+
+    def _make_update_drift(self, tmp_path):
+        from pdd.ci_drift_heal import DriftInfo
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text("Prompt body for foo.\n")
+        code = tmp_path / "foo.py"
+        code.write_text("def foo(): return 1\n")
+        return DriftInfo(
+            basename="foo",
+            language="python",
+            operation="update",
+            reason="code drift",
+            code_path=str(code),
+            prompt_path=str(prompt),
+        )
+
+    def test_invokes_metadata_sync_on_successful_update(self, tmp_path):
+        from pdd.ci_drift_heal import heal_module
+        drift = self._make_update_drift(tmp_path)
+        env = {}
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_structural_invariants", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True) as mock_sync:
+            result = heal_module(drift, env)
+        assert mock_sync.called, "metadata_sync was not invoked on update heal"
+        assert mock_sync.call_args.args[0] == drift.prompt_path
+        assert result is not False
+
+    def test_reverts_and_fails_when_metadata_sync_fails(self, tmp_path):
+        from pdd.ci_drift_heal import heal_module
+        drift = self._make_update_drift(tmp_path)
+        env = {}
+        captured_snapshot = {"arch": b"pre-sync arch bytes"}
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_structural_invariants", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False), \
+             patch("pdd.ci_drift_heal._revert_prompt_file") as mock_revert, \
+             patch("pdd.ci_drift_heal._snapshot_metadata_state_for",
+                   return_value=captured_snapshot) as mock_snap, \
+             patch("pdd.ci_drift_heal._restore_metadata_state_for") as mock_restore:
+            result = heal_module(drift, env)
+        assert result is False
+        assert mock_revert.called, "prompt was not reverted on metadata_sync failure"
+        # The pre-sync snapshot MUST be taken before run_metadata_sync runs
+        # so the per-module rollback has bytes to restore from.
+        assert mock_snap.called, (
+            "_snapshot_metadata_state_for must run before metadata_sync so "
+            "a per-module rollback is possible"
+        )
+        # And restore MUST receive the captured snapshot (NOT a global
+        # git restore that would wipe other modules' successful writes).
+        assert mock_restore.called, (
+            "_restore_metadata_state_for must run on sync failure to revert "
+            "this module's architecture/fingerprint writes without touching "
+            "other modules' state"
+        )
+        assert mock_restore.call_args.args[0] is captured_snapshot
+
+    def test_per_module_snapshot_preserves_other_modules_state(self, tmp_path):
+        """Regression for the global-rollback bug: when module B's sync
+        fails after module A heals successfully, restoring B must NOT
+        wipe A's architecture.json / .pdd/meta writes.
+
+        Verifies via the snapshot/restore primitives directly: the
+        snapshot for module B captures architecture.json bytes AT B's
+        snapshot time (which already include A's earlier writes), so
+        restoring from that snapshot preserves A's state.
+        """
+        from pdd.ci_drift_heal import (
+            _snapshot_metadata_state_for,
+            _restore_metadata_state_for,
+        )
+
+        repo = tmp_path
+        (repo / ".pdd" / "meta").mkdir(parents=True)
+        # State at the moment we're about to heal module B:
+        # architecture.json already contains module A's healed writes.
+        arch = repo / "architecture.json"
+        arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}')
+
+        drift_b = MagicMock()
+        drift_b.basename = "b"
+        drift_b.language = "python"
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=repo):
+            snapshot_b = _snapshot_metadata_state_for(drift_b)
+
+            # Simulate B's run_metadata_sync writing partial state before
+            # failing: corrupt architecture.json (overwriting A) and
+            # create a partial fingerprint for B.
+            arch.write_bytes(b'{"modules":[{"name":"a","fingerprint":"WIPED"},'
+                             b'{"name":"b","fingerprint":"PARTIAL"}]}')
+            (repo / ".pdd" / "meta" / "b_python.json").write_bytes(b"partial")
+
+            _restore_metadata_state_for(snapshot_b)
+
+        # After restore: architecture.json is back to its pre-B-sync state,
+        # which CONTAINS module A's NEW_A write. The repo-wide
+        # `git restore architecture.json` approach (the previous fix)
+        # would have wiped NEW_A back to HEAD.
+        assert arch.read_bytes() == b'{"modules":[{"name":"a","fingerprint":"NEW_A"}]}', (
+            "Module-scoped restore must preserve other modules' successful "
+            "writes (here, module A's NEW_A fingerprint must survive)."
+        )
+        # B's partial fingerprint must be removed (it did not exist
+        # pre-snapshot, so restore deletes the file).
+        assert not (repo / ".pdd" / "meta" / "b_python.json").exists()
+
+    def test_per_module_snapshot_uses_subdir_safe_metadata_paths(self, tmp_path):
+        """Subdirectory basenames must snapshot operation_log metadata paths."""
+        from pdd.ci_drift_heal import (
+            _snapshot_metadata_state_for,
+            _restore_metadata_state_for,
+        )
+
+        repo = tmp_path
+        meta_dir = repo / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        (repo / "architecture.json").write_bytes(b'{"modules":[]}')
+
+        drift = MagicMock()
+        drift.basename = "commands/foo"
+        drift.language = "python"
+
+        fingerprint_path = meta_dir / "commands_foo_python.json"
+        run_report_path = meta_dir / "commands_foo_python_run.json"
+        unsanitized_path = meta_dir / "commands" / "foo_python.json"
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=repo):
+            snapshot = _snapshot_metadata_state_for(drift)
+
+            fingerprint_path.write_bytes(b"partial fingerprint")
+            run_report_path.write_bytes(b"partial run report")
+            _restore_metadata_state_for(snapshot)
+
+        assert ".pdd/meta/commands_foo_python.json" in snapshot
+        assert ".pdd/meta/commands_foo_python_run.json" in snapshot
+        assert ".pdd/meta/commands/foo_python.json" not in snapshot
+        assert not fingerprint_path.exists()
+        assert not run_report_path.exists()
+        assert not unsanitized_path.exists()
+
+    def test_example_failure_restores_subdir_metadata_after_sync(self, tmp_path):
+        """If example regen fails, rollback restores subdir metadata files."""
+        from pdd.ci_drift_heal import DriftInfo, heal_module
+
+        repo = tmp_path
+        meta_dir = repo / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        prompts_dir = repo / "prompts" / "commands"
+        code_dir = repo / "pdd" / "commands"
+        prompts_dir.mkdir(parents=True)
+        code_dir.mkdir(parents=True)
+
+        prompt = prompts_dir / "foo_python.prompt"
+        code = code_dir / "foo.py"
+        prompt.write_text("Prompt body for commands/foo.\n")
+        code.write_text("def foo(): return 1\n")
+
+        arch = repo / "architecture.json"
+        fingerprint = meta_dir / "commands_foo_python.json"
+        run_report = meta_dir / "commands_foo_python_run.json"
+        arch.write_bytes(b'{"modules":[{"name":"commands/foo","state":"old"}]}')
+        fingerprint.write_bytes(b"old fingerprint")
+        run_report.write_bytes(b"old run report")
+
+        drift = DriftInfo(
+            basename="commands/foo",
+            language="python",
+            operation="update",
+            reason="code drift",
+            code_path=str(code),
+            prompt_path=str(prompt),
+        )
+
+        def fake_metadata_sync(_prompt_path, _code_path):
+            arch.write_bytes(b'{"modules":[{"name":"commands/foo","state":"new"}]}')
+            fingerprint.write_bytes(b"new fingerprint")
+            run_report.unlink()
+            return True
+
+        with patch("pdd.ci_drift_heal._repo_root", return_value=repo), \
+             patch("pdd.ci_drift_heal._run_pdd_command",
+                   side_effect=[True, False]), \
+             patch("pdd.ci_drift_heal._enforce_prompt_churn_gate",
+                   return_value=True), \
+             patch("pdd.ci_drift_heal._enforce_structural_invariants",
+                   return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe",
+                   side_effect=fake_metadata_sync), \
+             patch("pdd.ci_drift_heal._revert_prompt_file"):
+            result = heal_module(drift, {})
+
+        assert result is False
+        assert arch.read_bytes() == b'{"modules":[{"name":"commands/foo","state":"old"}]}'
+        assert fingerprint.read_bytes() == b"old fingerprint"
+        assert run_report.read_bytes() == b"old run report"

@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.234-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.236-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -362,7 +362,7 @@ For proper model identifiers to use in your custom configuration, refer to the [
 
 ## Version
 
-Current version: 0.0.234
+Current version: 0.0.236
 
 To check your installed version, run:
 ```
@@ -620,6 +620,7 @@ graph TB
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
+- **[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from prompt metadata tags
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
@@ -1058,6 +1059,32 @@ Options (agentic mode):
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
+
+### 1a. sync-architecture
+
+Sync `architecture.json` from prompt metadata tags (`<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`). This is useful after editing prompt metadata directly, or after backfilling prompt tags, so the architecture graph and command metadata stay aligned with the prompts.
+
+```bash
+# Preview architecture updates for all prompts
+pdd sync-architecture --dry-run
+
+# Update architecture.json from all prompt metadata tags
+pdd sync-architecture
+
+# Update architecture.json from specific prompt entries
+pdd sync-architecture commands/maintenance_python.prompt
+```
+
+Arguments:
+- No argument: Scan all prompt files known to the current project.
+- `FILENAMES`: Optional prompt filenames as they appear in `architecture.json` or under the configured prompts directory.
+
+Options:
+- `--dry-run`: Report which architecture entries would change without writing `architecture.json`.
+
+The command prints updated prompt entries and validation errors or warnings. It exits non-zero when validation fails, even if it was able to write requested metadata updates before validation.
+
+> Note: Validation is repo-wide and runs even when you target a single prompt. If your `architecture.json` already has unrelated missing-dependency errors elsewhere, the exit code stays non-zero on `--dry-run` even for an otherwise-clean target prompt. Fix the repo-wide errors (or scope your check) before relying on the exit code in scripts.
 
 ### 2. generate
 
@@ -2385,6 +2412,27 @@ Options:
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 - `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
+- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt PDD tags, `architecture.json` entries, run reports, and fingerprint state are reconciled in one step. Works in single-file, regeneration, and repo modes. Without this flag, behavior is unchanged and metadata layers must be reconciled with separate commands. **Scope note:** the `tags` stage currently *preserves* existing PDD tags and only *seeds* tags from the matching `architecture.json` entry when a prompt has none — LLM-first **refresh** of stale-but-present tags is tracked at issue [#870](https://github.com/promptdriven/pdd/issues/870) and is not invoked by this orchestrator. When a prompt has zero PDD tags AND no architecture entry, the `tags` stage reports `skipped` (never `ok`) so operators see honest status. On any stage `failed`, `pdd update --sync-metadata` exits non-zero so CI auto-heal does not treat a half-finalized update as healed.
+
+Example (Metadata Sync):
+```bash
+# Update a single prompt and reconcile metadata (preserve/seed tags,
+# architecture entry, run reports, fingerprint) in one step
+pdd update --sync-metadata src/my_module.py
+
+# Repo-wide update with metadata sync — each updated pair is finalized via the shared orchestrator
+pdd update --sync-metadata
+```
+
+When `--sync-metadata` is enabled, the summary table shows a `metadata` column with one of:
+
+- `synced` — every metadata stage wrote successfully.
+- `partial:<stage>` — orchestration succeeded but one or more stages were skipped (for example, the prompt is not registered in `architecture.json`); the first skipped stage is named.
+- `failed:<stage>` — a stage hit a hard failure; the failing stage is named.
+- `skipped` — the orchestrator did not run for this pair (e.g. the pair was unchanged or the per-pair call returned no result).
+- `dry-run` — the call was made with `dry_run=True`; no on-disk state was written.
+
+If any layer is incomplete, the relevant stage is named explicitly so it is obvious whether tags, architecture, run reports, or the fingerprint is the unresolved gap.
 
 Example (overwrite original prompt - default behavior):
 ```
@@ -2700,6 +2748,7 @@ Options:
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
 - `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
 - `--continue-on-reviewer-limit`: Report provider, rate, context-window, timeout, auth, network, sandbox, permission, and non-zero-exit reviewer failures as `degraded` instead of `failed`. Degraded reviewers are still not clean unless a configured fallback reviewer completes successfully and takes over as the active reviewer.
+- `--fallback-reviewer-on-failure`: When the primary reviewer ends in `failed` or `missing` (not `degraded`), run a second review pass using the fixer's identity as a fallback reviewer. On a clean fallback the rendered `reviewer-status:` line shows the primary as `clean` so the cloud verdict adapter's real-reviewer-clean rule can fire, while the primary's original failure detail is preserved in the `### Reviewer Diagnostics` subsection of the final report with a `superseded_by_fallback` marker. Off by default to preserve existing CI expectations.
 
 **How it works (8-step workflow with iterative fix-verify loop):**
 
@@ -3456,25 +3505,32 @@ PDD can be integrated into various development workflows. Here are the conceptua
 
 **Process**:
 1. Scan modules for drift using `sync_determine_operation` (no LLM calls)
-2. For stale prompts: run `pdd update` to sync code changes back to prompts
+2. For stale prompts: run `pdd update` to sync code changes back to prompts, then invoke the shared metadata-sync orchestrator to finalize prompt tags, architecture entries, run reports, and the fingerprint atomically before any follow-up example refresh
 3. For stale examples: run `pdd sync` with example+verify operations
-4. Stage and commit healed files with a descriptive message
+4. Stage and commit healed files with a descriptive message — partial metadata state (any stage reporting `failed`) blocks the commit/checkpoint in PR mode. `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag generation pending #870) and does not block.
 5. Push changes to the current branch
+
+**Metadata Finalization**: The CI auto-heal `update` branch and the preflight drift-heal path both call the same `run_metadata_sync` orchestrator that `pdd update --sync-metadata` uses, so all three workflows share one finalization surface. The orchestrator runs in a fixed order — prompt → tags → architecture → run-report cleanup → fingerprint last. **Within `run_metadata_sync`** a `failed` upstream stage gates every later write-bearing stage (architecture, run_report, fingerprint), so a tags failure cannot drag architecture or fingerprint state out of sync. `skipped` upstream (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) is acceptable and does not gate later stages. **The orchestrator is not transactional across stages**: if e.g. tags + architecture succeed and fingerprint then fails, the prompt and `architecture.json` writes have already landed on disk and `run_metadata_sync` itself does not roll them back. End-to-end rollback for a failing module is handled by the CI auto-heal layer — on a sync failure, `pdd.ci_drift_heal` calls `_revert_prompt_file` and the module-scoped `_snapshot_metadata_state_for(drift)` / `_restore_metadata_state_for(snapshot)` pair (which captures this module's `architecture.json` bytes + `.pdd/meta/<basename>_<language>.json` pre-sync and writes them back on failure, never touching other modules' state). A repo-scoped `git restore -- .pdd` / `git restore -- architecture.json` is explicitly NOT used because in a multi-module push-to-main heal it would wipe earlier successful modules' writes from the same run; the legacy `_cleanup_metadata_artifacts` symbol is kept only as a no-op import shim. The combined invariant: `git add -A` on push-to-main cannot publish a failed module's partial metadata alongside another module's successful heal. The combined invariant: auto-heal never commits a half-synced state, and preflight never leaves stale fingerprints after a successful update.
 
 **Usage:**
 ```bash
 # Scan all modules (main branch trigger)
-python -m pdd.ci_drift_heal
+python -m pdd.ci_drift_heal --diff-base HEAD~1
 
-# Scan specific modules (PR trigger)
-python -m pdd.ci_drift_heal --modules module_a module_b
+# Scan specific modules (PR trigger) — pass --diff-base so clean-CI
+# reclassification and the phantom-crash filter can run
+python -m pdd.ci_drift_heal \
+    --modules module_a module_b \
+    --diff-base origin/main...HEAD
 
 # With budget cap and skip-ci flag
-python -m pdd.ci_drift_heal --budget-cap 5.00 --skip-ci
+python -m pdd.ci_drift_heal \
+    --budget-cap 5.00 --skip-ci --diff-base HEAD~1
 ```
 
 **Key Options:**
 - `--modules`: Limit detection to specific modules (for PR-scoped checks)
+- `--diff-base`: Git diff base (e.g. `origin/main...HEAD` on PR builds, `HEAD~1` on push-to-main). **Required in CI.** Without it (or if the git lookup returns `None`, e.g. shallow checkout / missing ref), the phantom "no run_report" crash filter cannot determine whether a touched module is genuinely untouched, and the `heal_module` guard fails closed — the affected module is recorded as **failed** and the heal exits non-zero. Always provide a resolvable `--diff-base` so the touched/untouched split can run inside `detect_drift`.
 - `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
 - `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
 
@@ -3495,19 +3551,21 @@ For detailed command examples for each workflow, see the respective command docu
 
 ### CI Auto-Heal
 
-**Workflow File**: `.github/workflows/auto-heal-drift.yml`
+**Workflow File**: `.github/workflows/auto-heal.yml`. It only dispatches the heal — the heal itself runs in pdd_cloud's Google Cloud Build pipeline, which checks out the PR branch and invokes `python -m pdd.ci_drift_heal` from an installed pdd-cli wheel.
 
-**Purpose**: Automatically detect and fix prompt-code drift in CI.
+**Purpose**: Automatically detect and fix prompt-code drift on pull requests.
 
 **Triggers**:
-- **Pull requests**: Heals only modules changed by the PR, commits fixes to the PR branch
-- **Push to main**: Heals all modules, commits fixes directly to main
+- `pull_request_target` (opened / synchronize / reopened / ready_for_review): heals only modules changed by the PR and pushes a `chore: auto-heal …` commit back to the PR branch.
+- `issue_comment` with a `/heal` command on a PR by an authorized collaborator: same as above, on demand.
 
-**Loop prevention**: Commits from auto-heal use `chore: auto-heal [skip ci]` message; the workflow skips runs triggered by this pattern.
+There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
 
-**Configuration**: Set `PDD_BUDGET_CAP` repository variable to control LLM spend per run (default: `5.00`).
+**Loop prevention**: Auto-heal commits start with `chore: auto-heal …`; the Cloud Build step short-circuits when the triggering commit subject matches that prefix, so the heal cannot retrigger itself.
 
-For full details, see [docs/ci-auto-heal.md](docs/ci-auto-heal.md).
+**Metadata Finalization**: The auto-heal `update` path invokes the same `run_metadata_sync` orchestrator as `pdd update --sync-metadata` and preflight drift-heal, so prompt tags, architecture entries, run reports, and fingerprint state are always reconciled together. **Any stage reporting `failed`** blocks the auto-heal checkpoint commit so a PR cannot land a half-synced state; `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) and does not block — matching the contract documented in the CI Drift Detection section above.
+
+**Configuration**: Heal budget is controlled by the `_PDD_BUDGET_CAP` substitution on the pdd_cloud auto-heal Cloud Build trigger (see `cloudbuild-pdd-cli-auto-heal-pr.yaml` in the `pdd_cloud` repo); the GHA workflow does not read a repo variable.
 
 ## Integrations
 
