@@ -2654,6 +2654,8 @@ The command uses a two-stage retrieval pipeline when candidates exceed 50:
 
 After inserting `<include>` directives, the command performs a **deduplication pass** that identifies and removes inline content in the prompt that semantically duplicates what the included documents already provide.
 
+**Metadata finalization (on success):** After a successful `auto-deps` run, the command writes/updates the fingerprint for the mutated prompt in `.pdd/meta/` (with `operation="auto-deps"` and the current include-dependency hashes) and clears any stale per-module `_run.json` report, so downstream sync commands see a consistent view. The fingerprint write and the include-dependency metadata update are committed together (atomic from the caller's perspective) and use hash-based, language-agnostic helpers from `pdd.operation_log`. Finalization errors are surfaced as warnings and do not mask a successful `auto-deps` result.
+
 The command maintains a CSV file with the following columns:
 - `full_path`: The full path to the dependency file
 - `file_summary`: A one-sentence summary of the file's content and purpose

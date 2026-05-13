@@ -14,6 +14,7 @@
 <pdd-dependency>construct_paths_python.prompt</pdd-dependency>
 <pdd-dependency>insert_includes_python.prompt</pdd-dependency>
 <pdd-dependency>validate_prompt_includes_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `auto_deps_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `auto-deps` command.
 
@@ -80,6 +81,23 @@
     - Error handling:
         • On `click.Abort` exception: re-raise to allow the orchestrator to stop the sync loop.
         • On any other exception: print a red error message (unless `quiet`) and return an error tuple `("", 0.0, f"Error: {exc}")` instead of calling `sys.exit(1)`. This allows the orchestrator to handle failures gracefully.
+    - Metadata finalization (on successful runs only — skip on the error path above):
+        • After the modified prompt and any CSV output have been written successfully, finalize fingerprint and include-dependency state for the mutated prompt file so downstream commands see a consistent view.
+        • Use the existing helpers from `pdd.operation_log` (`infer_module_identity`, `save_fingerprint`, `clear_run_report`). Behavior must be language-agnostic (hash-based).
+        • For the mutated prompt file at `output_file_paths["output"]`:
+            - Resolve `(basename, language)` via `infer_module_identity(Path(output_file_paths["output"]))`. If identity inference returns `None` or raises, skip finalization for that file (logged as a warning below) rather than guessing.
+            - Clear any stale per-module run report via `clear_run_report(basename, language)` because the prompt content changed.
+            - Write/update the fingerprint via `save_fingerprint(...)` with `operation="auto-deps"`, recording the new prompt hash and the current include-dependency hashes so the fingerprint write and the include-dependency metadata update are committed together (atomic from the caller's perspective).
+        • Architecture file updates (architecture.json) are merged by `merge_auto_deps_includes_from_cwd` and are not finalized here — that file is not a `(basename, language)`-keyed module and has its own atomicity guarantees inside the merge helper.
+        • Finalization errors must not mask a successful `auto-deps` result: log a warning (unless `quiet`) and continue; do not raise.
+
+<operation_log_interface>
+<include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report" mode="interface">pdd/operation_log.py</include>
+</operation_log_interface>
+
+<operation_log_usage_example>
+<include>context/operation_log_example.py</include>
+</operation_log_usage_example>
 
 <examples>
    % Here are examples of how to use internal modules:
