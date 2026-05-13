@@ -81,7 +81,7 @@
           },
           {
             "name": "_sanitize_comment_body",
-            "signature": "(body: Optional[str], max_chars: int = 25000) -> str",
+            "signature": "(body: Optional[str], max_chars: int = 25_000) -> str",
             "returns": "str"
           },
           {
@@ -5791,18 +5791,8 @@
         "functions": [
           {
             "name": "run_agentic_change_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]",
-            "sideEffects": [
-              "Calls pdd.ci_drift_heal.detect_drift and subprocess pdd update per stale module (Step 8.5)",
-              "Writes .pdd/worktrees/change-issue-{N}/ worktree + branch change/issue-{N}",
-              "Calls pdd.sync_order.discover_associated_documents before Step 10 using files_created, files_modified, files_to_stage, and changed_files so Step 9 fallback-detected prompt changes are included",
-              "Verifies ASSOCIATED_DOCS_MODIFIED/CONFLICTS/UNCHANGED contract after Step 10 (Step 10.5)",
-              "Aborts with success=False when PDD_STRICT_DOC_SYNC=1 and doc-sync violations exist",
-              "Appends ORCHESTRATOR_POSTCHECK_WARNINGS with DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers to step_output on violations",
-              "Persists state (local + GitHub) with preflight_drift_healed, preflight_healed_worktree, preflight_healed_modules, preflight_failed_heal_modules, preflight_healed_prompt_paths flags",
-              "Creates GitHub PR and progress comments via gh CLI"
-            ]
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
       }
@@ -6185,10 +6175,10 @@
           },
           {
             "name": "push_with_retry",
-            "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True) -> Tuple[bool, str]",
+            "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True, force_with_lease_on_non_fast_forward: bool = True) -> Tuple[bool, str]",
             "returns": "Tuple[bool, str]",
             "sideEffects": [
-              "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward",
+              "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true",
               "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"
             ]
           }
@@ -7505,7 +7495,9 @@
               "Runs primary-reviewer/fixer/verifier CLI agents against that worktree",
               "Can invoke one normalized reviewer_fallback if the primary reviewer cannot complete; the fallback becomes active for subsequent review/fix/verify gating",
               "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
-              "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper (refuses to leave tokenized URL in git config)",
+              "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper with force_with_lease_on_non_fast_forward disabled (refuses to leave tokenized URL in git config)",
+              "If the PR head advances remotely during the fixer turn, fetches refs/heads/<head_ref> from the updated head repo with token auth fallback, runs a plain git rebase --onto FETCH_HEAD HEAD~1 HEAD to replay only the fixer commit, and retries the push instead of force-pushing over remote work; rebase conflicts abort before verifier",
+              "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/",
               "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"

@@ -160,7 +160,7 @@ Shared infrastructure for agentic CLI invocations (Claude Code, Gemini, Codex, O
 Instruction: `"Read the file {prompt_file.name} for instructions. You have full file access to explore and modify files as needed."`
 - Anthropic: `[cli_path, "-p", "-", "--dangerously-skip-permissions", "--output-format", "json"]` (pipe via stdin).
 - Google: `[cli_path, "<instruction>", "--yolo", "--output-format", "json"]`.
-- OpenAI: `[cli_path, "exec", "--sandbox", <mode>, "--json", <path>]`. Mode default: `danger-full-access`.
+- OpenAI: `[cli_path, "exec", "--sandbox", <mode>, "--json", "-"]` and pipe the full prompt body via stdin. Mode default: `danger-full-access`.
 - OpenCode: write the full prompt/instruction body to the same temporary prompt file used by the other providers, then pass only a short directive such as `"Read the file {prompt_file.name} for your full instructions and execute them."` as the trailing message: `[cli_path, "run", "--dir", str(cwd), "--format", "json", "--dangerously-skip-permissions", "--model", <resolved provider/model>, "--", <short read-file directive>]`. Append `--agent <OPENCODE_AGENT>` and `--variant <OPENCODE_VARIANT>` only when those env vars are set. The full generated prompt MUST NOT be passed as a single argv element because large issue prompts can exceed OS argv limits before OpenCode starts. Output is JSONL (one JSON object per line), so parsing must handle JSONL in addition to single-object JSON.
 
 % Playwright Mode (`use_playwright=True`)

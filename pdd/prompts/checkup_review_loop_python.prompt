@@ -25,7 +25,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 % Worktree, cwd, and checkout ownership
 4. The loop owns the worktree lifecycle for the entire session.
    - Create exactly one worktree via `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False)` before any reviewer runs.
-   - Never re-fetch or re-create the worktree mid-loop.
+   - Never re-create the worktree mid-loop. Fetch only the PR head for the bounded push-retry recovery path after a remote-advanced push rejection.
    - Reviewer, fixer, and verifier roles all run with this worktree as their `cwd`. They never operate on the user's primary checkout.
 5. Each reviewer/fixer/verifier role MUST be invoked with `cwd=worktree`. Document this in code comments and ensure no role escapes the worktree by computing paths via `_get_git_root` or by falling back to the current process cwd.
 6. The fixer mutates files in the worktree, then `_commit_and_push_if_changed` commits and pushes. The verifier MUST run only after a successful push, against the same worktree the fixer wrote. A failed push aborts the loop with `state.stop_reason` set; no verifier runs against unpushed local commits, and the failed reviewer's status remains non-clean.
@@ -39,13 +39,14 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 
 % Authenticated push contract
 9. Pushing fixes back to the PR head branch reuses the shared token-refresh helper from `agentic_e2e_fix_orchestrator` (`_push_with_retry_remote`, exposed as `pdd.agentic_e2e_fix_orchestrator.push_with_retry` or equivalent). The helper MUST:
-   - Accept `(cwd, remote, repo_owner, repo_name, refspec)` so it can target the PR head repo's clone URL and the PR head ref instead of `origin HEAD`.
-   - Run `git push <remote> <refspec>` first; on `non-fast-forward`, retry with `--force-with-lease`.
+   - Accept `(cwd, remote, repo_owner, repo_name, refspec, force_with_lease_on_non_fast_forward=True)` so it can target the PR head repo's clone URL and the PR head ref instead of `origin HEAD`, while letting shared-branch callers disable force-with-lease.
+   - Run `git push <remote> <refspec>` first; on `non-fast-forward`, retry with `--force-with-lease` only when `force_with_lease_on_non_fast_forward=True`.
    - On auth failure (`Authentication failed`, `HTTP 401`, `could not read Username`, `HTTP Basic: Access denied`), first read a non-empty `PDD_GH_TOKEN_FILE`; if no token file token is available, fall back to `GH_TOKEN`, `GITHUB_TOKEN`, then `PDD_GITHUB_TOKEN`. Rewrite the remote URL to `https://x-access-token:{quote(token, safe='')}@github.com/{owner}/{repo}.git`, retry the push, and then restore the original URL in a `finally` block. Never leave a tokenized URL in git config.
 10. `_commit_and_push_if_changed` MUST:
    - Stage with `git add -A`, then commit with the explicit bot identity `PDD Bot <pdd-bot@users.noreply.github.com>` only when `git status --porcelain` is non-empty.
    - Resolve `(clone_url, head_ref)` from `gh api repos/{pr_owner}/{pr_repo}/pulls/{pr_number}` via `_fetch_pr_metadata`. Missing values abort with a clear message.
-   - Delegate the push itself to the shared retry helper, passing the head repo's `clone_url` and `HEAD:{head_ref}` as the refspec.
+   - Delegate the push itself to the shared retry helper, passing the head repo's `clone_url`, `HEAD:{head_ref}` as the refspec, and `force_with_lease_on_non_fast_forward=False`.
+   - If the first push fails because the PR branch advanced remotely (`fetch first`, `non-fast-forward`, remote contains work, or branch-behind wording), MUST NOT force-push over the remote commit. Instead fetch the exact PR branch ref as `refs/heads/{head_ref}` into `FETCH_HEAD` (retrying fetch with the same token sources as push auth if needed), then rebase only the newly-created fixer commit onto the fetched head using plain `git rebase --onto FETCH_HEAD HEAD~1 HEAD`. This prevents a force-pushed PR head from resurrecting old commits that the remote intentionally dropped. Retry the same non-force push after rebase. If fetch or rebase fails, abort before verifier because the PR still does not contain the local fix.
 
 % Configurable reviewer status gates
 11. `ReviewLoopConfig` exposes the gate knobs (also surfaced through CLI flags):
@@ -74,12 +75,14 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 12l. Put the manual-review standard before the large issue/PR/architecture context in the prompt so the reviewer sees the task frame before reading source material.
 12m. `ReviewLoopContext` must include PR title/body/head/base context plus changed-file inventory, PR conversation comments, and submitted PR reviews fetched from GitHub. The reviewer prompt must include that PR context, not only the PR URL. Direction changes are often explained in the PR body/comments/reviews; hiding that context causes the reviewer to over-enforce stale issue mechanics or miss reviewer-requested checks.
 12n. In `mode="verify"`, the reviewer prompt MUST explicitly say the verifier pass is not a narrow checkbox verification. It must first verify every previous finding and fixer response, then perform a fresh full PR review again using the same manual-review standard. It must look for newly visible issues, missed issues, regressions from the fix, and prompt/example/architecture/docs/test drift, and it must explain that the loop repeats until the reviewer reports no actionable findings or `max_rounds` is reached.
+12o. The reviewer prompt MUST require these independent sweeps before returning: issue-contract and user-workflow behavior; state/resume/idempotency and side-effect ordering; security, redaction, auth, logging, and fallback paths; prompt/example/architecture/generated-metadata source-of-truth drift; and caller/test/CLI compatibility. It must tell the reviewer to report separately actionable findings from different sweeps and not stop after finding only prompt/source-of-truth drift.
 
 % Findings model
 13. Normalize reviewer output into `ReviewFinding(severity, reviewer, area, evidence, finding, required_fix, location, status, round_number)`.
     - Accept JSON in fenced ```json blocks, fenced ``` blocks, or first/last brace fallback.
     - Fall back to `[severity] message` bracket parsing for free-text reviewers.
     - Also parse Codex PR-review priority bullets like `- [P1] [file](path:line) message`, mapping `P0->blocker`, `P1->critical`, `P2->medium`, and `P3->low`.
+    - Also parse Codex one-line priority findings prefixed with `Finding:` or `Findings:`, such as `Finding: [P2] [file](path:line) message`.
     - For markdown priority headings followed by explanatory paragraphs, preserve that paragraph in `evidence` and extract the first linked `path:line` from the paragraph when the heading itself has no location.
     - Also parse manual Codex review lines like `1. Blocking: ...`, `2. High: ...`, and `- Medium: ...`, mapping `Blocking->blocker` and `High->critical`.
     - Also parse numbered markdown finding headings with no explicit severity, such as `1. **Finding title.**`, defaulting severity to `medium` and extracting the first linked `path:line` from the following paragraph when present.
@@ -106,6 +109,7 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
     - `max_cost` (float USD, > 0)
     - `max_minutes` (float wall clock, > 0)
     Crossing any cap stops the loop, sets the relevant `*_reached` flag on state, and renders a final report whose reviewer-status reflects the unfinished round.
+20a. If a cap is crossed during a successful fixer call, the loop MUST still commit and push the completed fixer changes before stopping. Push/commit is local git/GitHub plumbing, not another LLM spend. Stop before verifier/fresh-review when the cap is reached after push, so the final report correctly marks the fix as unverified but does not strand completed changes only in the local worktree.
 
 % Persisted artifacts
 21. Artifacts live under `<git_root>/.pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/`. The directory is created before the first reviewer runs.
