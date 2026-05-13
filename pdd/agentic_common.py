@@ -14,7 +14,7 @@ import re
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any, Union
+from typing import List, Optional, Tuple, Dict, Any, Set, Union
 from dataclasses import dataclass
 
 from rich.console import Console
@@ -326,6 +326,16 @@ MAX_ERROR_SNIPPET_LENGTH: int = 2000  # Truncation length for provider error mes
 # newlines — this gate prevents demoting substantive docs that happen to start
 # with "Error:" while preserving the long-single-line error case from #902.
 MAX_ERROR_RESPONSE_NEWLINES: int = 3
+
+# Issue #969: GitHub's hard cap on issue-comment bodies is 65536 chars; use a
+# safety margin so the inserted truncation marker still fits even if the
+# downstream tool appends a few characters.
+MAX_STEP_COMMENT_BODY: int = 60000
+
+# Issue #969: sentinel tags wrapping the agent-authored step report block in
+# raw stdout.
+STEP_REPORT_OPEN_TAG: str = "<step_report>"
+STEP_REPORT_CLOSE_TAG: str = "</step_report>"
 
 
 def _is_rate_limited(error_message: str) -> bool:
@@ -3550,3 +3560,279 @@ def post_final_comment(
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post final comment: {e}[/yellow]")
         return False
+
+
+# ---------------------------------------------------------------------------
+# Issue #969: trusted step-comment helpers shared across agentic orchestrators
+# ---------------------------------------------------------------------------
+
+
+def extract_step_report(output: Any) -> Optional[str]:
+    """Extract the first ``<step_report>...</step_report>`` block from ``output``.
+
+    The helper is read-only; it does not log, redact, or truncate. It returns
+    the inner content with leading/trailing whitespace stripped, or ``None``
+    when the input is empty, not a string, or has no balanced sentinel pair.
+    Callers MUST be able to invoke this on every step's raw output without a
+    try/except — never raises.
+    """
+    if not isinstance(output, str) or not output:
+        return None
+    try:
+        open_idx = output.find(STEP_REPORT_OPEN_TAG)
+        if open_idx < 0:
+            return None
+        body_start = open_idx + len(STEP_REPORT_OPEN_TAG)
+        close_idx = output.find(STEP_REPORT_CLOSE_TAG, body_start)
+        if close_idx < 0:
+            return None
+        return output[body_start:close_idx].strip()
+    except Exception:
+        return None
+
+
+# Precompiled redaction patterns (Issue #969).
+# Each entry is (compiled_pattern, replacement). Patterns that preserve a
+# legible prefix (``Bearer``, ``Authorization:``, ``ENV_VAR=``) use a capturing
+# group and reference it in the replacement; pure secrets are replaced wholesale.
+_REDACT_PLACEHOLDER = "[REDACTED]"
+_REDACTION_PATTERNS: List[Tuple[Any, str]] = []
+
+
+def _build_redaction_patterns() -> List[Tuple[Any, str]]:
+    patterns: List[Tuple[str, str, int]] = [
+        # Anthropic API keys
+        (r"sk-ant-[A-Za-z0-9_\-]{20,}", _REDACT_PLACEHOLDER, 0),
+        # GitHub fine-grained PATs (must precede the shorter ghX_ rule)
+        (r"github_pat_[A-Za-z0-9_]{20,}", _REDACT_PLACEHOLDER, 0),
+        # GitHub tokens: ghp_, gho_, ghs_, ghu_, ghr_
+        (r"gh[pousr]_[A-Za-z0-9]{20,}", _REDACT_PLACEHOLDER, 0),
+        # Google API keys
+        (r"AIza[0-9A-Za-z_\-]{20,}", _REDACT_PLACEHOLDER, 0),
+        # AWS access key IDs
+        (r"AKIA[0-9A-Z]{16}", _REDACT_PLACEHOLDER, 0),
+        # Generic sk- keys (OpenAI / Codex / OpenRouter style). Must run AFTER
+        # sk-ant- so the more specific Anthropic match takes precedence.
+        (r"sk-[A-Za-z0-9_\-]{20,}", _REDACT_PLACEHOLDER, 0),
+        # JWT-shaped tokens: three dot-separated base64url segments, with the
+        # 2nd and 3rd segments at least 8 chars so we don't eat ordinary
+        # ``a.b.c`` identifiers.
+        (
+            r"\b[A-Za-z0-9_\-]{4,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b",
+            _REDACT_PLACEHOLDER,
+            0,
+        ),
+        # Authorization: <scheme> <token> — preserve the prefix and scheme word
+        (
+            r"(Authorization:\s*(?:Bearer|Token|Basic)\s+)\S+",
+            r"\1" + _REDACT_PLACEHOLDER,
+            re.IGNORECASE,
+        ),
+        # Bearer <token> (no Authorization: prefix)
+        (r"(Bearer\s+)\S+", r"\1" + _REDACT_PLACEHOLDER, re.IGNORECASE),
+        # Environment-variable assignment patterns: keep KEY=, redact value
+        (
+            r"((?:ANTHROPIC|OPENAI|OPENCODE|GEMINI|GOOGLE|CODEX|GITHUB)_(?:API_KEY|TOKEN|AUTH_TOKEN)\s*=\s*)\S+",
+            r"\1" + _REDACT_PLACEHOLDER,
+            0,
+        ),
+    ]
+    compiled: List[Tuple[Any, str]] = []
+    for pat, repl, flags in patterns:
+        try:
+            compiled.append((re.compile(pat, flags), repl))
+        except re.error:
+            # Skip any pattern that fails to compile rather than blowing up
+            # the whole module import.
+            continue
+    return compiled
+
+
+_REDACTION_PATTERNS = _build_redaction_patterns()
+
+
+def redact_secrets(text: Any) -> str:
+    """Return ``text`` with high-confidence secrets replaced by ``[REDACTED]``.
+
+    Coerces non-string input via ``str(...)``. Never raises: on any internal
+    regex error, falls back to returning the original (coerced) text.
+    """
+    if text is None:
+        return ""
+    if not isinstance(text, str):
+        try:
+            text = str(text)
+        except Exception:
+            return ""
+    if not text:
+        return text
+    result = text
+    for pattern, replacement in _REDACTION_PATTERNS:
+        try:
+            result = pattern.sub(replacement, result)
+        except Exception:
+            # Be conservative — return whatever was redacted up to this point
+            # rather than blowing up the caller.
+            return result
+    return result
+
+
+def truncate_for_github_comment(text: Any, max_length: int = MAX_STEP_COMMENT_BODY) -> str:
+    """Truncate ``text`` so it fits under GitHub's issue-comment size cap.
+
+    When ``len(text) <= max_length`` returns the (coerced) text unchanged.
+    Otherwise returns ``text[:max_length - len(suffix)] + suffix`` where
+    ``suffix = "\\n\\n…[truncated]"``. Pure: no I/O, no mutation.
+    """
+    if text is None:
+        text = ""
+    if not isinstance(text, str):
+        try:
+            text = str(text)
+        except Exception:
+            text = ""
+    suffix = "\n\n…[truncated]"
+    try:
+        cap = int(max_length)
+    except (TypeError, ValueError):
+        cap = MAX_STEP_COMMENT_BODY
+    if cap <= 0:
+        return suffix
+    if len(text) <= cap:
+        return text
+    if cap <= len(suffix):
+        return suffix[:cap]
+    return text[: cap - len(suffix)] + suffix
+
+
+def post_step_comment_once(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    step_num: int,
+    body: str,
+    posted_steps: Set[int],
+    cwd: Path,
+) -> bool:
+    """Post ``body`` as an issue comment exactly once per ``step_num``.
+
+    Contract (Issue #969 Requirement 24):
+        * If ``step_num`` is already in ``posted_steps``, return ``True`` immediately
+          without invoking ``gh`` — re-posting would duplicate user-visible content
+          on workflow resume.
+        * Otherwise apply ``redact_secrets`` then ``truncate_for_github_comment`` to
+          ``body``, shell out via ``gh issue comment``, and on success add
+          ``step_num`` to ``posted_steps`` (mutating in place) and return ``True``.
+        * On ``gh`` failure or missing CLI, return ``False`` and do NOT add
+          ``step_num`` to ``posted_steps`` — the caller may retry on the next
+          resume.
+
+    The function MUST NOT persist anything: the orchestrator owns persistence.
+    """
+    # Coerce step_num to int for set-membership comparisons (persisted state
+    # might serialize as str).
+    try:
+        step_key = int(step_num)
+    except (TypeError, ValueError):
+        step_key = step_num  # fall through; treat as never-posted
+
+    if posted_steps is not None and step_key in posted_steps:
+        return True
+
+    if not _find_cli_binary("gh"):
+        return False
+
+    safe_body = truncate_for_github_comment(redact_secrets(body))
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "comment", str(issue_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", safe_body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(
+                f"[yellow]Warning: Failed to post step {step_num} comment: "
+                f"{result.stderr}[/yellow]"
+            )
+            return False
+    except Exception as e:
+        console.print(
+            f"[yellow]Warning: Failed to post step {step_num} comment: {e}[/yellow]"
+        )
+        return False
+
+    if posted_steps is not None:
+        try:
+            posted_steps.add(step_key)
+        except AttributeError:
+            # Caller passed a frozen/immutable container — return True so the
+            # network side effect is acknowledged, but skip mutation.
+            pass
+    return True
+
+
+def normalize_step_comments_state(raw: Any) -> Set[int]:
+    """Convert any persisted-state shape for ``step_comments`` into ``Set[int]``.
+
+    Accepted inputs (Issue #969 Requirement 25):
+        * ``None`` → ``set()``
+        * ``list[int]`` / ``list[str digits]`` → coerced ints
+        * ``set`` / ``tuple`` / ``frozenset`` → coerced ints
+        * JSON string serialization (e.g. ``"[1, 2, 3]"``) → parsed and renormalized
+        * ``dict`` with truthy values (older shape ``{"1": true, ...}``) → keys-as-ints
+
+    Silently drops any element that cannot be coerced to a non-negative int.
+    Never raises — the only sanctioned way to read ``step_comments`` from
+    persisted state.
+    """
+    if raw is None:
+        return set()
+
+    # JSON-string shape: parse and re-normalize.
+    if isinstance(raw, str):
+        text = raw.strip()
+        if not text:
+            return set()
+        try:
+            parsed = json.loads(text)
+        except (json.JSONDecodeError, ValueError):
+            return set()
+        return normalize_step_comments_state(parsed)
+
+    result: Set[int] = set()
+
+    def _add_int(value: Any) -> None:
+        try:
+            n = int(value)
+        except (TypeError, ValueError):
+            return
+        if n < 0:
+            return
+        result.add(n)
+
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            if not value:
+                # Older shape {"1": true} — only include keys with truthy values.
+                continue
+            _add_int(key)
+        return result
+
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        for item in raw:
+            _add_int(item)
+        return result
+
+    # Last-ditch attempt: anything iterable.
+    try:
+        for item in raw:
+            _add_int(item)
+    except TypeError:
+        return set()
+    return result

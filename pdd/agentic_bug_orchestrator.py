@@ -21,6 +21,9 @@ from .agentic_common import (
     set_agentic_progress,
     clear_agentic_progress,
     DEFAULT_MAX_RETRIES,
+    extract_step_report,
+    normalize_step_comments_state,
+    post_step_comment_once,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1354,6 +1357,10 @@ def run_agentic_bug_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+        # Issue #969: persisted step_comments may be in any shape (list, set, or
+        # legacy dict) — funnel through normalize_step_comments_state so resume
+        # idempotency works regardless of on-disk representation.
+        posted_step_comments = normalize_step_comments_state(state.get("step_comments"))
     else:
         state = {"step_outputs": {}}
         last_completed_step = 0
@@ -1362,6 +1369,7 @@ def run_agentic_bug_orchestrator(
         model_used = "unknown"
         github_comment_id = None
         worktree_path = None
+        posted_step_comments = set()
 
     context = {
         "issue_url": issue_url,
@@ -1507,6 +1515,46 @@ def run_agentic_bug_orchestrator(
                 context["files_to_stage"] = ", ".join(changed_files)
                 if not quiet:
                     console.print(f"[blue]Copied {len(repro_copied)} Step 5 reproduction test(s) to worktree[/blue]")
+
+    # Issue #969: replay cached step reports whose comment did not post in a
+    # prior run (e.g. transient `gh` failure, missing CLI). The orchestrator
+    # advances ``last_completed_step`` independently of comment-post success,
+    # so on resume any completed step whose index is absent from
+    # ``posted_step_comments`` may still owe a comment. post_step_comment_once
+    # is a no-op when ``step_num`` is already in ``posted_step_comments``,
+    # so this loop is safe to run unconditionally on every resume.
+    replay_count_before = len(posted_step_comments)
+    for _step_num, _name, _description in steps_config:
+        s_key = str(_step_num)
+        cached = step_outputs.get(s_key)
+        if not cached or cached.startswith("FAILED:"):
+            continue
+        if _step_num in posted_step_comments:
+            continue
+        report_body = extract_step_report(cached)
+        if not report_body:
+            continue
+        replay_body = (
+            f"## Step {_step_num}/{total_steps}: {_description}\n\n"
+            f"{report_body}"
+        )
+        post_step_comment_once(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=_step_num,
+            body=replay_body,
+            posted_steps=posted_step_comments,
+            cwd=cwd,
+        )
+    if len(posted_step_comments) != replay_count_before:
+        state["step_comments"] = sorted(posted_step_comments)
+        replay_save = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if replay_save:
+            github_comment_id = replay_save
 
     for step_index, (step_num, name, description) in enumerate(steps_config, 1):
         if step_num < start_step:
@@ -1697,12 +1745,38 @@ def run_agentic_bug_orchestrator(
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
             context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            # Cache Step 3 output so resume can replay the trusted step-comment
+            # post via the replay loop if posting fails here.
+            state["step_outputs"]["3"] = step_output
             state["step_outputs"]["4"] = context["step4_output"]
             state["step_outputs"]["5"] = context["step5_output"]
             state["last_completed_step"] = 5
             last_completed_step = 5
             # Recalculate start_step so the loop skips 4 and 5
             start_step = 6
+            # Issue #969: post Step 3's trusted step-report comment BEFORE the
+            # `continue` so the fast-track path does not lose the user-visible
+            # report. The common posting block at the bottom of the loop is
+            # bypassed by this `continue`, so post inline. extract_step_report
+            # returns None when no <step_report> block is present, in which
+            # case post_step_comment_once is skipped (no-op).
+            report_body = extract_step_report(step_output)
+            if report_body:
+                step_comment_body = (
+                    f"## Step {step_num}/{total_steps}: {description}\n\n"
+                    f"{report_body}"
+                )
+                post_step_comment_once(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=step_num,
+                    body=step_comment_body,
+                    posted_steps=posted_step_comments,
+                    cwd=current_work_dir,
+                )
+            # Persist posted-step indices so resume does not re-post.
+            state["step_comments"] = sorted(posted_step_comments)
             save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if not quiet:
                 console.print(f"[cyan]  → Fast-track: skipping Steps 4-5 (issue pre-diagnosed)[/cyan]")
@@ -2294,6 +2368,33 @@ def run_agentic_bug_orchestrator(
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
 
+        # Issue #969: post a trusted per-step report comment exactly once. The
+        # helper redacts secrets, truncates under GitHub's 65k cap, and skips
+        # the network call on resume when step_num is already in
+        # posted_step_comments. Posted BEFORE the hard-stop check so that
+        # hard-stop steps (e.g. duplicate detection, "Needs More Info") still
+        # emit their user-visible step comment — the step prompts no longer
+        # call `gh issue comment` directly, so this is the only path that
+        # writes the comment for the hard-stop case. Gated on presence of a
+        # <step_report> block rather than step_success: extract_step_report
+        # returns None when no block is present, so this is a no-op for
+        # crashes/timeouts that produce no report.
+        report_body = extract_step_report(step_output)
+        if report_body:
+            step_comment_body = (
+                f"## Step {step_num}/{total_steps}: {description}\n\n"
+                f"{report_body}"
+            )
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=step_num,
+                body=step_comment_body,
+                posted_steps=posted_step_comments,
+                cwd=current_work_dir,
+            )
+
         # Check for hard stops
         stop_reason = _check_hard_stop(step_num, step_output, files_extracted)
         if stop_reason:
@@ -2301,6 +2402,10 @@ def run_agentic_bug_orchestrator(
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = step_output
+            # Persist posted-step indices so resume does not re-post the
+            # hard-stop comment (post_step_comment_once is idempotent
+            # in-process but a fresh resume would have an empty set).
+            state["step_comments"] = sorted(posted_step_comments)
             save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
@@ -2315,6 +2420,11 @@ def run_agentic_bug_orchestrator(
             last_completed_step = step_num
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+
+        # Persist posted-step indices so resume can skip already-posted comments.
+        # Serialize as a sorted list for stable JSON output; in-memory shape
+        # stays Set[int] for fast membership checks.
+        state["step_comments"] = sorted(posted_step_comments)
 
         save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:

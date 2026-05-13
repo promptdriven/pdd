@@ -103,13 +103,13 @@ You are working on step 10 of 12 in an agentic bug investigation workflow. Previ
 
 % Output
 
-After completing verification, use `gh issue comment` to post your final report to issue #{issue_number}:
+Return your findings as a `<step_report>` block — the PDD orchestrator will post the
+comment to issue #{issue_number} using trusted credentials. Do NOT call
+`gh issue comment` yourself for this step report.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Wrap the markdown body shown below inside `<step_report>` and `</step_report>` tags
+(on their own lines) so the orchestrator can extract and post it. Your report should
+follow this format:
 
 ```markdown
 ## Step 10: Verification Complete
@@ -161,7 +161,7 @@ E2E_NEEDED: [yes|no] — [one-line justification]
 - The test must actually fail when run (verify this)
 - If the test doesn't fail, go back and fix the test
 - The comment should serve as documentation for anyone fixing the bug
-- Always post your findings as a GitHub comment before completing
+- Always emit your findings inside a `<step_report>...</step_report>` block — the PDD orchestrator posts the comment via trusted credentials
 - **MANDATORY E2E CLASSIFICATION:** Your GitHub comment MUST include the "### E2E Classification" section with exactly one of:
   - `E2E_NEEDED: yes — [justification]` — if the bug has user-facing symptoms that the unit test cannot verify because it mocks the integration boundary
   - `E2E_NEEDED: no — [justification]` — if the unit test already covers the behavioral fix end-to-end, or if the bug is purely internal with no distinct integration path
