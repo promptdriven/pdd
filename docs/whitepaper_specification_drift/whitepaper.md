@@ -61,7 +61,7 @@ The quantitative evidence comes from three artifact classes: the git history for
 
 **Table 1.** Outcomes of the two attempts.
 
-> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. A later reconstruction from `~/.claude/history.jsonl` recovered the developer-typed subset (3,048 vibe / 1,237 PDD prompts); this is a strict lower bound on the figures above. The raw reconstructed prompt logs are retained privately rather than published as a public evidence dump.*
+> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. A later reconstruction from `~/.claude/history.jsonl` recovered the developer-typed subset (3,048 vibe / 1,237 PDD prompts); this is a strict lower bound on the figures above. A publication-safe evidence bundle with the reconstructed prompt history, quote map, and session classification audit trail is included in [`evidence/`](evidence/).*
 
 ### 3.1 What I Held Constant
 
@@ -404,7 +404,7 @@ These rules are not a substitute for a controlled experiment, but they make the 
 
 ## Appendix C — Selected Session-Log Evidence
 
-The entries below summarize timestamped Claude Code prompt history. They are normalized for readability rather than presented as verbatim transcript quotes. The raw prompt history is retained privately for audit rather than published as a public prompt dump.
+The entries below summarize timestamped Claude Code prompt history. They are normalized for readability rather than presented as verbatim transcript quotes. The supporting reconstructed prompt history, quote map, and session classification audit trail are published in [`evidence/`](evidence/). The evidence bundle excludes raw subagent transcripts and private operational logs; see the evidence README for redaction details and limitations.
 
 Selected process signals from the vibe coding phase:
 
