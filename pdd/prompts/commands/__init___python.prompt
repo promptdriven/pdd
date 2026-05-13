@@ -1,3 +1,16 @@
+<pdd-reason>Registers all PDD subcommands with the main CLI group in canonical order, determining `pdd --help` command listing.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "register_commands", "description": "Register all subcommands with the main CLI group in canonical order"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write the command registration module `pdd/commands/__init__.py`.
 
 % Role & Scope
@@ -8,21 +21,23 @@
 % Requirements
   - Import all command functions and groups from the sibling modules in `pdd/commands/`.
   - Define a `register_commands(cli: click.Group) -> None` function.
-  - In `register_commands`, use `cli.add_command()` to register:
+  - In `register_commands`, use `cli.add_command()` to register in EXACTLY this order (the order matches the current `pdd/commands/__init__.py` and determines `pdd --help` command listing — do not reorder):
     - `generate`, `test`, `example` (from `.generate`)
     - `fix` (from `.fix`)
     - `split`, `change`, `update` (from `.modify`)
-    - `sync`, `auto_deps`, `setup`, `sync_code` (from `.maintenance`)
+    - `sync`, `sync_architecture` (from `.maintenance`)
     - `checkup` (from `.checkup`)
+    - `auto_deps`, `setup` (from `.maintenance`)
     - `detect_change`, `conflicts`, `bug`, `crash`, `trace` (from `.analysis`)
+    - `preprocess` (from `.misc`)
+    - `extracts` (from `.extracts`)
+    - `report_core` (from `.report`)
+    - `install_completion_cmd` (as `name="install_completion"`), `verify` (from `.utility`)
+    - `which` (from `.which`)
+    - `templates_group` (from `.templates`)
     - `connect` (from `.connect`)
     - `auth_group` (from `.auth`)
-    - `preprocess` (from `.misc`)
     - `sessions` (from `.sessions`)
-    - `report_core` (from `.report`)
-    - `templates_group` (from `.templates`)
-    - `install_completion_cmd` (as name="install_completion"), `verify` (from `.utility`)
-    - `which` (from `.which`)
     - `firecrawl_cache` (from `.firecrawl`)
 
 % Deliverables
