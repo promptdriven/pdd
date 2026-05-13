@@ -6192,8 +6192,8 @@
     }
   },
   {
-    "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
-    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
+    "reason": "Orchestrates the 11-step agentic E2E fix workflow with trusted per-step GitHub comments and CI validation.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification. Posts trusted per-step GitHub comments via shared agentic_common helpers.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt"
     ],

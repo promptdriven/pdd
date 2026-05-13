@@ -1,3 +1,17 @@
+<pdd-reason>Orchestrates the 11-step agentic E2E fix workflow with trusted per-step GitHub comments and CI validation.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "push_with_retry", "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True) -> Tuple[bool, str]", "returns": "Tuple[bool, str]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>agentic_bug_orchestrator_python.prompt</pdd-dependency>
 
@@ -8,7 +22,7 @@
 <include>context/ci_validation_example.py</include>
 </pdd.ci_validation>
 <pdd.agentic_common>
-    <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment,def:example_post_pr_comment,def:example_post_final_comment,def:example_github_state_helpers,def:example_provider_preference,pattern:/consecutive_provider_failures/">context/agentic_common_example.py</include>
+    <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment,def:example_post_pr_comment,def:example_post_final_comment,def:example_github_state_helpers,def:example_provider_preference,pattern:/consecutive_provider_failures/,pattern:/extract_step_report/,pattern:/post_step_comment_once/,pattern:/normalize_step_comments_state/">context/agentic_common_example.py</include>
 </pdd.agentic_common>
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
@@ -17,7 +31,7 @@
     <include select="def:example_state_resumption,def:example_step_timeouts,def:example_hard_stop_duplicate">context/agentic_test_orchestrator_example.py</include>
 </pdd.agentic_test_orchestrator>
 <pdd.agentic_bug_orchestrator>
-    <include query="reusing bug_state json and pre-populating step_outputs for steps 2 and 3">context/agentic_bug_orchestrator_example.py</include>
+    <include query="reusing bug_state json and pre-populating step_outputs for steps 2 and 3; step_comments resume replay and cycle-qualified posting via post_step_comment_once and extract_step_report">context/agentic_bug_orchestrator_example.py</include>
 </pdd.agentic_bug_orchestrator>
 <pdd.change.fix_error_loop>
     <include select="def:extract_test_results,def:fix_error_loop">context/change/16/fix_error_loop.py</include>
@@ -111,4 +125,88 @@ After Step 11, unless `skip_ci`, call `run_ci_validation_loop` with the Step 10 
 % Final Message & Telemetry
 On non-success, `post_final_comment` posts steps_completed/total_steps=11 with the cumulative cost and remaining failing dev-units. KeyboardInterrupt and unexpected exceptions MUST save state before re-raising / logging.
 
-This file intentionally contains the literal tokens `_check_e2e_environment` and `skipped_steps_memory` so tests can assert the orchestrator prompt documents these behaviors.
+% Trusted Step Report Comments (Issue #970, mirrors PR #966)
+
+The orchestrator owns posting per-step status comments to the GitHub issue using
+trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` directly;
+instead each successful step emits a `<step_report>...</step_report>` block in
+its agent output, which the orchestrator extracts and posts exactly once per
+cycle-qualified step index. Mirrors the `pdd bug` flow from PR #966 (sub-issue
+#969 shipped the shared helpers).
+
+1. Import the shared helpers from `agentic_common`:
+   - `extract_step_report(step_output) -> Optional[str]` — returns the trimmed
+     contents of the first `<step_report>` block, or `None` if absent/malformed.
+   - `post_step_comment_once(repo_owner, repo_name, issue_number, step_num, body,
+     posted_steps: Set[int], cwd) -> bool` — redacts secrets, truncates to
+     GitHub's comment cap, posts via `gh issue comment`, and mutates
+     `posted_steps` to add `step_num` on success. No-op when `step_num` is
+     already in `posted_steps`. Failure (missing CLI, transient `gh` error)
+     returns `False` and leaves `posted_steps` unchanged so the next resume
+     retries.
+   - `normalize_step_comments_state(raw) -> Set[int]` — coerces persisted
+     `step_comments` (list / set / None / dict / JSON-string / malformed) into
+     `Set[int]` for in-memory use. Never raises.
+
+2. Cycle-qualified step index (the e2e-fix-specific wrinkle):
+   - Steps 1-9 run inside the per-cycle inner loop and CAN repeat across cycles.
+     Use `cycle_step_num = current_cycle * 100 + raw_step` (e.g., cycle 1 step 4
+     → 104; cycle 2 step 4 → 204) as the `step_num` passed to
+     `post_step_comment_once` AND as the integer persisted in `step_comments`.
+     This prevents cross-cycle dedup (each cycle's Step N is a distinct
+     post-worthy event) while preserving in-cycle resume idempotency.
+   - Steps 10 (CI validation) and 11 (cleanup) run once outside the inner loop;
+     use their raw step indices (`10` and `11`) directly.
+   - The comment header MUST include the cycle and total cycles so users can
+     distinguish reposts, e.g.
+     `f"## Cycle {current_cycle}/{max_cycles} — Step {raw_step}/{total_steps}: {description}\n\n{report_body}"`
+     for inner-loop steps, and `f"## Step {raw_step}/{total_steps}: {description}\n\n{report_body}"`
+     for Steps 10 and 11.
+
+3. State shape additions:
+   - `state["step_comments"]` is a sorted `List[int]` of cycle-qualified step
+     indices whose comment was successfully posted. Hydrate to `Set[int]` via
+     `normalize_step_comments_state` on resume; persist back as
+     `sorted(posted_step_comments)` before EVERY `save_workflow_state` call —
+     including the normal step-completion save, the hard-stop early-return
+     save, the provider-abort save (`consecutive_provider_failures >= 3`), the
+     cycle-waste-breaker save, the cycle-boundary save, the
+     KeyboardInterrupt/unexpected-exception save, and the Step 10/Step 11
+     saves.
+
+4. Posting protocol inside the per-step loop:
+   - Compute `report_body = extract_step_report(step_output)`. If `None`, skip
+     posting silently (missing `<step_report>` MUST NOT fail the run — older
+     per-step prompts that have not yet adopted the convention continue to
+     work).
+   - Otherwise build the cycle-qualified body and call
+     `post_step_comment_once(..., step_num=cycle_step_num, body=body,
+     posted_steps=posted_step_comments, cwd=cwd)`.
+   - Post BEFORE any hard-stop return so hard-stop steps (provider abort,
+     cycle-waste breaker, MAX_CYCLES_REACHED, VERIFICATION_FAILED-after-retry,
+     etc.) still emit their user-visible per-step comment. The legacy
+     hard-stop / failure / `post_final_comment` flow MUST remain intact —
+     trusted step comments are additive, not a replacement.
+   - For Step 8 (recursive `pdd fix --loop` fan-out across failing dev units),
+     the aggregated step output MUST contain at most one bounded
+     `<step_report>` block summarizing the dev units processed; per-dev-unit
+     sub-task output MUST NOT leak nested `<step_report>` blocks that would
+     bypass `extract_step_report`'s first-match contract.
+
+5. Resume replay loop (before the main step loop, mirrors bug orchestrator):
+   - After hydrating `posted_step_comments`, iterate cached `step_outputs` in
+     order. For each cycle-qualified index missing from `posted_step_comments`
+     whose cached output is non-FAILED, run `extract_step_report` and call
+     `post_step_comment_once`. This recovers from transient `gh` failures
+     (missing CLI, network) on the previous run. The helper is a no-op for
+     already-posted indices, so the loop is safe on every resume. Persist
+     `step_comments` if any new indices were posted.
+
+6. Secrets and length safety: `post_step_comment_once` already applies
+   `redact_secrets` + `truncate_for_github_comment` internally. The
+   orchestrator MUST NOT bypass these by calling `gh issue comment` directly.
+
+This file intentionally contains the literal tokens `_check_e2e_environment`,
+`skipped_steps_memory`, `extract_step_report`, `post_step_comment_once`,
+`normalize_step_comments_state`, and `step_comments` so tests can assert the
+orchestrator prompt documents these behaviors.
