@@ -1,3 +1,50 @@
+## v0.0.236 (2026-05-12)
+
+### Fix
+
+- **ci**: relax timeouts for two real-LLM cases that flaked in the post-PR-962 release gate (#982)
+- **ci**: entrypoint preflight — replace broken heredoc with python -c (all 77 Cloud Batch tasks were failing exit 2) (#981)
+- **ci**: drop :latest from AR_IMAGE so cloudbuild.yaml's :$BUILD_ID tag doesn't double up (#980)
+- **ci_drift_heal**: revert prompt/arch changes per Greg's P1 review
+- **ci_detect**: collapse prompt to bare path and add example to satisfy auto-heal skip
+- **ci_detect**: exclude path-qualified basename for self prompt
+- **ci_detect,arch**: address PR #930 review — newline include-many, prompt drift, ci_drift_heal arch deps
+- **tests**: align test_ci_drift_heal with main impl after merge
+- **ci**: skip untouched clean-ci auto-deps drift
+- **ci**: scope reverse dependency detection to changed include defs
+- **ci_drift_heal**: code-only phantom crash → update drift, not example
+- **ci_drift_heal**: fail closed on phantom crash with unknown touch state
+- **ci_drift_heal**: pin git-lookup failure semantics + PR/push example shape
+- **ci_drift_heal,docs**: return None on git failure + require --diff-base in CI
+- **ci_drift_heal**: scope phantom-crash filter to actually-untouched modules
+- **prompts,docs**: pin phantom-crash detect filter, caveat sync-arch validation
+- **prompts**: drop steer_timeout from global-sync forward list, add init metadata
+- **architecture**: drop unmatched deps on commands/__init__ entry
+- **architecture**: backfill commands/__init__ entry
+- **ci_drift_heal**: filter phantom run-report crash at detection
+- **ci_drift_heal**: skip phantom crash drift from missing run_report on clean CI
+- **prompts**: pin sync option types/tri-state + match __init__ order
+- **prompts**: complete maintenance drift backfill
+- **prompts**: backfill commands/maintenance and commands/__init__ drift
+- classify Anthropic billing errors as permanent
+- refuse device-flow auth in CI
+- parse codex finding priority prefix
+- **checkup**: address PR #932 Greg review — dedupe completions, portable adapter test
+- **checkup**: address PR #932 review — contract drift, fingerprints, example
+- **checkup**: align contract example with live ReviewLoopConfig (#922)
+- **checkup**: preserve diagnostics across parse-repair + lock positional order (#922)
+- **checkup**: scrub github_pat_ + discover cloud adapter portably (#922)
+- **checkup**: scrub provider envvar dumps and bare AIza/xai/gsk tokens (#922)
+- **checkup**: example sys.path, zsh/fish completion artifacts, signature ordering (#922)
+- **checkup**: defang every pipe-prefixed diagnostics line (#922)
+- **checkup**: defang pipe-table findings + fallback mode docs (#922)
+- **checkup**: expand diagnostics defang to every adapter trip-wire (#922)
+- **checkup**: address PR #932 review — scrubber, prompt drift, examples (#922)
+- **checkup**: defang line-leading 'Error:' to keep cloud adapter from downgrading verdict (#922 round 4)
+- **checkup**: defang severity tags + budget guard + verifier docstring + final-state diagnostics (#922 round 3)
+- **checkup**: keep verdict adapter from short-circuiting on fallback success (#922 follow-up)
+- **checkup**: surface reviewer diagnostics and add opt-in fallback reviewer (#922)
+
 ## v0.0.235 (2026-05-12)
 
 ### Feat
