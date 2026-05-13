@@ -668,7 +668,8 @@ check-release-remote:
 	echo "Release remote verified: $$PUSH_URL"
 
 check-release-branch:
-	@BRANCH=$$(git branch --show-current); \
+	@set -e; \
+	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "Error: release must run from branch main, not '$$BRANCH'."; \
 		exit 1; \
@@ -694,7 +695,12 @@ check-release-clean:
 bump: check-release-clean
 	@echo "Bumping version with commitizen (commit only — no tag, no push)"
 	@set -e; \
-	BRANCH=$$(git branch --show-current); \
+	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
+	if [ -z "$$BRANCH" ]; then \
+		echo "Error: detached HEAD detected. 'make bump' requires a feature branch."; \
+		echo "Create a branch (e.g. 'git switch -c feat/your-work') and rerun."; \
+		exit 1; \
+	fi; \
 	if [ "$$BRANCH" = "main" ]; then \
 		echo "Error: do not run 'make bump' on main."; \
 		echo "Create a feature branch first; commit the bump there; merge via PR."; \
@@ -718,11 +724,11 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	@set -e; \
 	CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
 	CURRENT_TAG="v$$CURRENT_VERSION"; \
+	HEAD_SHA=$$(git rev-parse HEAD); \
 	if git rev-parse --verify --quiet "refs/tags/$$CURRENT_TAG" >/dev/null; then \
-		LOCAL_TAG_SHA=$$(git rev-parse "refs/tags/$$CURRENT_TAG"); \
-		HEAD_SHA=$$(git rev-parse HEAD); \
-		if [ "$$LOCAL_TAG_SHA" != "$$HEAD_SHA" ]; then \
-			echo "Error: tag $$CURRENT_TAG already exists locally but points at $$LOCAL_TAG_SHA, not HEAD ($$HEAD_SHA)."; \
+		LOCAL_TAG_COMMIT=$$(git rev-parse "$$CURRENT_TAG^{commit}"); \
+		if [ "$$LOCAL_TAG_COMMIT" != "$$HEAD_SHA" ]; then \
+			echo "Error: tag $$CURRENT_TAG already exists locally but points at commit $$LOCAL_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			echo "Either delete the stale local tag or move HEAD to the right commit."; \
 			exit 1; \
 		fi; \
@@ -731,11 +737,13 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 		echo "Tagging HEAD as $$CURRENT_TAG"; \
 		git tag -a "$$CURRENT_TAG" -m "Release $$CURRENT_TAG"; \
 	fi; \
-	if git ls-remote --tags origin "refs/tags/$$CURRENT_TAG" | grep -q "$$CURRENT_TAG"; then \
-		REMOTE_TAG_SHA=$$(git ls-remote --tags origin "refs/tags/$$CURRENT_TAG" | awk '{print $$1}'); \
-		HEAD_SHA=$$(git rev-parse HEAD); \
-		if [ "$$REMOTE_TAG_SHA" != "$$HEAD_SHA" ]; then \
-			echo "Error: tag $$CURRENT_TAG already exists on origin but points at $$REMOTE_TAG_SHA, not HEAD ($$HEAD_SHA)."; \
+	REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$CURRENT_TAG^{}" "refs/tags/$$CURRENT_TAG" | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$CURRENT_TAG" | awk 'NR==1 {print $$1}'); \
+	fi; \
+	if [ -n "$$REMOTE_TAG_COMMIT" ]; then \
+		if [ "$$REMOTE_TAG_COMMIT" != "$$HEAD_SHA" ]; then \
+			echo "Error: tag $$CURRENT_TAG already exists on origin but points at commit $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			echo "PyPI version $$CURRENT_VERSION may already be published; bump the version on a feature branch with 'make bump' first."; \
 			exit 1; \
 		fi; \
