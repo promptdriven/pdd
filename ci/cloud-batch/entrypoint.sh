@@ -82,13 +82,11 @@ SETUP_SECONDS=$((SETUP_END - SETUP_START))
 # Image plugin contract: confirm pytest plugins required by markers in tests/
 # are actually importable. Catches a stale image, or someone bumping
 # requirements.txt without updating Dockerfile's explicit plugin install.
-python - <<'PY' || {
+python -c "import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon" || {
     echo "FATAL: image missing expected pytest plugins"
     write_result "failed" "${SETUP_SECONDS}" "preflight" "missing pytest plugins"
     exit 1
 }
-import pytest_timeout, xdist, pytest_mock, pytest_asyncio, pytest_cov, testmon
-PY
 
 # Pytest config contract: confirm pyproject.toml [tool.pytest.ini_options]
 # parses cleanly and all markers we use are registered (strict-markers).
@@ -317,6 +315,17 @@ if [ "${TASK_INDEX}" -ge "${PYTEST_START}" ] && [ "${TASK_INDEX}" -le "${PYTEST_
     CHUNK_INDEX="${TASK_INDEX}"
     DURATIONS_FILE="${WORK_DIR}/ci/cloud-batch/test-durations.json"
 
+    # CI model cap: restrict real-LLM pytest tests to Google Vertex AI gemini
+    # rows. The selector at strength=1.0 (e.g. test_generate_test_maximum_values)
+    # otherwise escalates to the highest-ELO row in the full CSV (claude-opus-4-7),
+    # which is too slow to be a reliable CI dependency. After this filter the
+    # highest ELO is a Gemini Pro variant — fast, cheap, and stable. PDD prefers
+    # <cwd>/.pdd/llm_model.csv when present (see pdd/llm_invoke.py:778-781).
+    mkdir -p "${WORK_DIR}/.pdd"
+    head -1 "${WORK_DIR}/pdd/data/llm_model.csv" > "${WORK_DIR}/.pdd/llm_model.csv"
+    grep -E '^Google Vertex AI,[^,]*gemini' "${WORK_DIR}/pdd/data/llm_model.csv" >> "${WORK_DIR}/.pdd/llm_model.csv"
+    echo "=== CI-restricted llm_model.csv ($(( $(wc -l < "${WORK_DIR}/.pdd/llm_model.csv") - 1 )) gemini rows) ==="
+
     if [ -f "${DURATIONS_FILE}" ]; then
         # Duration-based bin packing for balanced chunks
         echo "=== Using duration-based chunk balancing ==="
@@ -374,7 +383,10 @@ elif [ "${TASK_INDEX}" -ge "${SYNC_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le
     # ── Sync regression test ──────────────────────────────────────────
     SYNC_OFFSET=$((TASK_INDEX - SYNC_REGRESSION_START))
     CASE_NUM="${SYNC_CASE_IDS[$SYNC_OFFSET]}"
-    export PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-600}"
+    # 10 min was tight for case_7 (complex sync data_processor — strength 0.3,
+    # 1 attempt, $5 budget; legit LLM completion + scaffold can run 8-10 min).
+    # 15 min gives realistic headroom without weakening fail-fast for hangs.
+    export PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-900}"
     run_test "sync_regression" "case_${CASE_NUM}" \
         bash tests/sync_regression.sh "${CASE_NUM}"
 
