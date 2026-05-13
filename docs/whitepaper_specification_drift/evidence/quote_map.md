@@ -90,7 +90,7 @@ Every quoted Claude Code session line in the paper, mapped to its prompt entry.
 - **Computed vibe day from timestamp:** 13 (matches)
 - **`history.jsonl` line index:** 10234
 - **Session ID:** `6dd375cf-988c-413f-949a-a8ddcd407126`
-- **Project path at the time:** `<LOCAL_WORKSPACE>/pdd_cloud/.pdd/worktrees/change-issue-523`
+- **Project path at the time:** `<LOCAL_WORKSPACE>/<PRIVATE_REPO>/.pdd/worktrees/change-issue-523`
 
 - **Full prompt:**
 

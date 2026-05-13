@@ -136,7 +136,7 @@ _216 prompts across 13 sessions_
 >     many teams create multiple PRs, we do not have to worry about, like we can make it that there are multiple PRs we do not have to combine everything on one, i think it would be easy that way also as PDD bug and PDD fix already work on one PR, so if it decides to run another PDD bug PDD fix it will create separate PR for that one, basically it might be like this, PDD bug PDD fix, oh it did not fix it, lets think, should i break it or run it again, oh lets break it, run PDD bug PDD fix, oh this one fix it, now verify parent and put refernce of each PR on it, and after verification it decides which PRs to keep and which one to close, so in end human only has to view the good PRs for the issue
 
 **10:32:32** _(sid `fdf3d1f0`)_
->     i think PDD has lot of problem where it references wrong api endpoints wrong stuff, find me all issues create on my fork, gltanaka, PDD cloud on this give me full list and explain it
+>     i think PDD has lot of problem where it references wrong api endpoints wrong stuff, find me all issues create on my fork, gltanaka, <PRIVATE_REPO> on this give me full list and explain it
 
 **10:33:19** _(sid `d1904aeb`)_
 >     read through the issue and see if anything wrong or missing, what you think of it
@@ -172,7 +172,7 @@ _216 prompts across 13 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:50:36** _(sid `33030537`)_
->     can you look at PDD-cloud-hackthon, how the backend functions, are i want to fix the path structure of it, see firebase from where to the calls happens, i think there are lot of duplicates so i want to ensure that we have clean stuff, move to proper position and also for tests i want that when we run make test-cloud it should run the all of hackthon tests, the owenr told me they should be in cloud runner help me with this
+>     can you look at <PRIVATE_REPO>, how the backend functions, are i want to fix the path structure of it, see firebase from where to the calls happens, i think there are lot of duplicates so i want to ensure that we have clean stuff, move to proper position and also for tests i want that when we run make test-cloud it should run the all of hackthon tests, the owenr told me they should be in cloud runner help me with this
 
 **10:53:10** _(sid `fdf3d1f0`)_
 >     explain it which one should we add, and explain it in terms of which will be best, explain it is pros and cons of all, because we want to ensure PDD works well,
@@ -183,7 +183,7 @@ _216 prompts across 13 sessions_
 >     got moving the files yesterday i had a problem wehre i removed duplicates the calls stopped working, all of my app was broken so i want the place from where it works, where they should be where the backend calls happens properly
 
 **10:57:47** _(sid `fdf3d1f0`)_
->     we want this to work on large projects, because right now what happens is that if i give it a prd like the one in pdd_cloud/extensions hackathon it made all of these mistakes, and for large projects it might work even worse annd also PDD is something fully auto, requires very less human intervention mostly to update prompts and run PDD commands or make issues on GitHub, now tell me whats the best appraoch for this
+>     we want this to work on large projects, because right now what happens is that if i give it a prd like the one in <PRIVATE_REPO>/extensions hackathon it made all of these mistakes, and for large projects it might work even worse annd also PDD is something fully auto, requires very less human intervention mostly to update prompts and run PDD commands or make issues on GitHub, now tell me whats the best appraoch for this
 
 **11:01:58** _(sid `fdf3d1f0`)_
 >     should we add to archtecture.json or make a separate one? what you suggest
@@ -191,7 +191,7 @@ _216 prompts across 13 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:03:09** _(sid `fdf3d1f0`)_
->     we have to create issue first, create a good comprehensive issue draft for me and tell me where it should go gltanka, or pdd_cloud
+>     we have to create issue first, create a good comprehensive issue draft for me and tell me where it should go gltanka, or <PRIVATE_REPO>
 >
 >     Write the output as a product-level request, not an implementation plan. Include:
 >     1. The user-visible behavior we want.
@@ -210,7 +210,7 @@ _216 prompts across 13 sessions_
 >     what PDD command i should be running on the issue now
 
 **11:18:19** _(sid `5ebce295`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 what happened
+>     <PRIVATE_REPO_URL>/issues/523 what happened
 
 **11:18:32** _(sid `5ebce295`)_
 >     look at gcloud logs and see why it failed
@@ -221,16 +221,16 @@ _216 prompts across 13 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **12:01:01** _(sid `01fd813b`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 check progress on this using gcloud logs
+>     <PRIVATE_REPO_URL>/issues/523 check progress on this using gcloud logs
 
 **12:05:20** _(sid `d1904aeb`)_
->     ok PDD change created the prompt changes and other stuff https://github.com/promptdriven/pdd_cloud/pull/524 fully review it end to end what it did, if it is good enough or we need to make changes in it
+>     ok PDD change created the prompt changes and other stuff <PRIVATE_REPO_URL>/pull/524 fully review it end to end what it did, if it is good enough or we need to make changes in it
 
 **12:05:44** _(sid `92b717df`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 look at the issue and fully understan it
+>     <PRIVATE_REPO_URL>/issues/523 look at the issue and fully understan it
 
 **12:06:51** _(sid `92b717df`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 now fully review the PR it made and see if it is good enough or where it needs improvemnt, and explain both issue and PR, if there is something, before i began writing code for it
+>     <PRIVATE_REPO_URL>/issues/523 now fully review the PR it made and see if it is good enough or where it needs improvemnt, and explain both issue and PR, if there is something, before i began writing code for it
 
 **12:08:31** _(sid `d1904aeb`)_
 >     why you think PDD change did not cover these
@@ -248,22 +248,22 @@ _216 prompts across 13 sessions_
 >     can you also check if these are actual concerns or false stuff [Pasted text #3 +54 lines]
 
 **12:14:33** _(sid `c70607ad`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 look at the issue and fully understan it and go through whole PDD and understand it fully
+>     <PRIVATE_REPO_URL>/issues/523 look at the issue and fully understan it and go through whole PDD and understand it fully
 
 **13:02:03** _(sid `d1904aeb`)_
 >     [Pasted text #4 +8 lines] see if these are issues or not or false alarm
 
 **13:06:10** _(sid `17a88476`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 look at this issue and fully understand PDD workflow
+>     <PRIVATE_REPO_URL>/issues/523 look at this issue and fully understand PDD workflow
 
 **13:12:25** _(sid `17a88476`)_
->     https://github.com/promptdriven/pdd_cloud/pull/524 this is the PR i created review it, before i start coding
+>     <PRIVATE_REPO_URL>/pull/524 this is the PR i created review it, before i start coding
 
 **13:13:57** _(sid `d1904aeb`)_
 >     look at these issues [Pasted text #5 +46 lines] anything to fix or false alarm
 
 **13:20:22** _(sid `108969ad`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 what caused the PDD change to retrigger? i just had label it completed, but PDD change retrigger
+>     <PRIVATE_REPO_URL>/issues/523 what caused the PDD change to retrigger? i just had label it completed, but PDD change retrigger
 
 **13:20:41** _(sid `d1904aeb`)_
 >     anything else before i start coding
@@ -292,7 +292,7 @@ _216 prompts across 13 sessions_
 >     PDD change ran look at what it did and see how good it is, anyweher you think there is problem https://github.com/gltanaka/pdd/issues/721
 
 **14:15:50** _(sid `d1904aeb`)_
->     https://github.com/promptdriven/pdd_cloud/pull/524 review the code made by PDD, and see how good it did, for the feature, and fully analysis it end to end for me, if anything is wrong or needs change
+>     <PRIVATE_REPO_URL>/pull/524 review the code made by PDD, and see how good it did, for the feature, and fully analysis it end to end for me, if anything is wrong or needs change
 
 **14:18:37** _(sid `fdf3d1f0`)_
 >     i understood 1,3,4 but i do not get 2 explain it
@@ -311,7 +311,7 @@ _216 prompts across 13 sessions_
 >     so it did not trigger PDD change again
 
 **14:22:07** _(sid `108969ad`)_
->     ok lets run on pdd_cloud to test
+>     ok lets run on <PRIVATE_REPO> to test
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -365,7 +365,7 @@ _216 prompts across 13 sessions_
 >     can you carefully anaylse why this happened, does this happen only for PDD change, or all PDD labels?
 
 **15:20:23** _(sid `d1904aeb`)_
->     it errored can you look into it https://github.com/promptdriven/pdd_cloud/issues/529
+>     it errored can you look into it <PRIVATE_REPO_URL>/issues/529
 
 **15:21:33** _(sid `d1904aeb`)_
 >     update the issue
@@ -387,7 +387,7 @@ _216 prompts across 13 sessions_
 >     but how PDD change using my keys, it is GitHub app, so it should not be using my keys
 
 **15:32:07** _(sid `d1904aeb`)_
->     https://github.com/promptdriven/pdd_cloud/issues/529 it failed again
+>     <PRIVATE_REPO_URL>/issues/529 it failed again
 
 **15:32:31** _(sid `d1904aeb`)_
 >     i want to use PDD credits locally and opus model
@@ -444,7 +444,7 @@ _216 prompts across 13 sessions_
 >     create an issue so we can fix it
 
 **15:47:49** _(sid `108969ad`)_
->     do we have to make change in pdd_cloud or gltanaka
+>     do we have to make change in <PRIVATE_REPO> or gltanaka
 
 **15:48:19** _(sid `108969ad`)_
 >     what if it fails to make the PR
@@ -465,10 +465,10 @@ _216 prompts across 13 sessions_
 >     no check why it failed we should have let it run fully
 
 **15:55:21** _(sid `37b4643c`)_
->     PDD cloud incremental cost deduction for PDD credits can yo ufind this PR which has body it has duplicate
+>     <PRIVATE_REPO> incremental cost deduction for PDD credits can yo ufind this PR which has body it has duplicate
 
 **15:56:39** _(sid `37b4643c`)_
->     no it should PDD cloud incremental cost deduction for PDD credits
+>     no it should <PRIVATE_REPO> incremental cost deduction for PDD credits
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -479,7 +479,7 @@ _216 prompts across 13 sessions_
 >     can you find PR associated with it
 
 **16:05:03** _(sid `37b4643c`)_
->     it is 504 on pdd_cloud
+>     it is 504 on <PRIVATE_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -505,7 +505,7 @@ _216 prompts across 13 sessions_
 >     can you find it is work and lets just manually push it works
 
 **16:19:37** _(sid `d1904aeb`)_
->     https://github.com/promptdriven/pdd_cloud/pull/524/changes can you fully review this PR end to end and see if it fully resolves the issue https://github.com/promptdriven/pdd_cloud/issues/523 and is there anything it is doing wrong
+>     <PRIVATE_REPO_URL>/pull/524/changes can you fully review this PR end to end and see if it fully resolves the issue <PRIVATE_REPO_URL>/issues/523 and is there anything it is doing wrong
 
 **16:20:18** _(sid `37b4643c`)_
 >     can you move to separate worktree, i was using main repo, and from there we can commit and push
@@ -543,7 +543,7 @@ _216 prompts across 13 sessions_
 >     did you push and commit
 
 **17:08:47** _(sid `528e6f50`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 review this issue fully and the PDD, and also see the PR associated with it
+>     <PRIVATE_REPO_URL>/issues/523 review this issue fully and the PDD, and also see the PR associated with it
 
 **17:10:12** _(sid `37b4643c`)_
 >     we have two staging I can use satging 2 for it
@@ -591,7 +591,7 @@ _216 prompts across 13 sessions_
 >     ok can you run make test-cloud
 
 **17:39:33** _(sid `841f0792`)_
->     https://github.com/promptdriven/pdd_cloud/issues/523 review this issue and the PR associated with it and fully understand the PDD, and see if we have any problems
+>     <PRIVATE_REPO_URL>/issues/523 review this issue and the PR associated with it and fully understand the PDD, and see if we have any problems
 
 **17:44:06** _(sid `e604aaf8`)_
 >     https://github.com/gltanaka/pdd/pull/711 can you see if this requires writing code for this PR or no,
@@ -671,10 +671,10 @@ _216 prompts across 13 sessions_
 >     can you see i feel like when i label PDD change for an issue, it retriggers it if i do not remove it, can you check on that, did i mess something or is this tru
 
 **19:19:24** _(sid `e604aaf8`)_
->     how about we test it make an issue on pdd_Cloud small minor feature, and we run PDD chagnge on it and you monitor it
+>     how about we test it make an issue on <PRIVATE_REPO> small minor feature, and we run PDD chagnge on it and you monitor it
 
 **19:19:49** _(sid `e604aaf8`)_
->     pdd_cloud and label it PDD-change
+>     <PRIVATE_REPO> and label it PDD-change
 
 **19:29:57** _(sid `fdf3d1f0`)_
 >     fully review the PR end to end, is there anythign wrong or missing, we should address
@@ -738,7 +738,7 @@ _216 prompts across 13 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **19:50:39** _(sid `37b4643c`)_
->     for staging one homepage url is this https://github.com/promptdriven
+>     for staging one homepage url is this <GITHUB_ORG_URL>
 
 **19:50:58** _(sid `37b4643c`)_
 >     do i need to add call back url?
@@ -769,7 +769,7 @@ _216 prompts across 13 sessions_
 >     would this apply automatically for everyone, and can it be changed later if needed
 
 **20:06:19** _(sid `37b4643c`)_
->     pdd_cloud has prod one
+>     <PRIVATE_REPO> has prod one
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -780,7 +780,7 @@ _216 prompts across 13 sessions_
 >     chcek for staging 1 i think we were using different repo for it
 
 **20:10:26** _(sid `37b4643c`)_
->     create menew one and name it as test_repo_2, we should make test_repo_2 like we have test_repo
+>     create menew one and name it as <TEST_REPO>, we should make <TEST_REPO> like we have <TEST_REPO>
 
 **20:12:11** _(sid `37b4643c`)_
 >     done i did on test repo 2 can you confirm
@@ -860,7 +860,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **09:41:58** _(sid `fdf3d1f0`)_
->     i want you to give you a test example look at the hackathon stuff in PDD-cloud-hackathon and see if our approach will be able to handle that
+>     i want you to give you a test example look at the hackathon stuff in <PRIVATE_REPO>-hackathon and see if our approach will be able to handle that
 
 **09:44:25** _(sid `37b4643c`)_
 >     i am not able to add the label
@@ -902,7 +902,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:01:36** _(sid `37b4643c`)_
->     https://github.com/promptdriven/test_repo_2/settings/access if this is enabled i can add label and stuff?
+>     <TEST_REPO_URL>/settings/access if this is enabled i can add label and stuff?
 
 **10:02:48** _(sid `fdf3d1f0`)_
 >     review it fully, anythig else need to consider, fully review it end to end, before we begin testint
@@ -949,7 +949,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:18:02** _(sid `52b27bc6`)_
->     https://github.com/promptdriven/pdd_cloud/pull/539 can you commit to this branch and push, i want to test something, just add anything this is test PR
+>     <PRIVATE_REPO_URL>/pull/539 can you commit to this branch and push, i want to test something, just add anything this is test PR
 
 **10:19:59** _(sid `52b27bc6`)_
 >     can you look at this issue and also the gcloud logs for it, did PDD change retrigger multiple times and why
@@ -984,7 +984,7 @@ _359 prompts across 8 sessions_
 >     yes but do it in TDD format
 
 **10:47:18** _(sid `52b27bc6`)_
->     can you confirm me this Because the PDD change agentic workflow uses Claude Code (via CLAUDE_CODE_OAUTH_TOKEN) for orchestration, the LLM costs are billed through the OAuth subscription, not through llm_invoke(). So the executor sees $0 LLM cost and no completed steps (the agentic steps aren't tracked the same way as PDD sync steps), and incorrectly treats the successful run as an auth failure, rotating to the next credential and running the entire workflow again. where did you see this,
+>     can you confirm me this Because the PDD change agentic workflow uses Claude Code (via <REDACTED_ENV_NAME>) for orchestration, the LLM costs are billed through the OAuth subscription, not through llm_invoke(). So the executor sees $0 LLM cost and no completed steps (the agentic steps aren't tracked the same way as PDD sync steps), and incorrectly treats the successful run as an auth failure, rotating to the next credential and running the entire workflow again. where did you see this,
 
 **10:47:25** _(sid `52b27bc6`)_
 >     also do not fix it right now, revert
@@ -1100,7 +1100,7 @@ _359 prompts across 8 sessions_
 >     no link for the original issue
 
 **12:03:02** _(sid `a0453d11`)_
->     give me the issue link associated with it pdd_cloud
+>     give me the issue link associated with it <PRIVATE_REPO>
 
 **12:19:05** _(sid `0587d425`)_
 >     [Pasted text #1 +3 lines] how it passed on my machine and why it failed on other machine
@@ -1133,16 +1133,16 @@ _359 prompts across 8 sessions_
 >     but when i commit, this will commit this change to cloud test as well?
 
 **12:32:27** _(sid `0587d425`)_
->     ok now i want to try on this https://github.com/promptdriven/pdd_cloud/pull/526 tell me how to do it
+>     ok now i want to try on this <PRIVATE_REPO_URL>/pull/526 tell me how to do it
 
 **12:32:55** _(sid `0587d425`)_
->     i want to run make test-cloud on this from right area as this is in pdd_cloud
+>     i want to run make test-cloud on this from right area as this is in <PRIVATE_REPO>
 
 **12:34:12** _(sid `0587d425`)_
 >     no tell me how to do it, and why error
 
 **12:35:00** _(sid `0587d425`)_
->     can you rebase it with main first, and put maybe in pdd_cloud/.pdd/worktrees so i think that will fix it, what you think
+>     can you rebase it with main first, and put maybe in <PRIVATE_REPO>/.pdd/worktrees so i think that will fix it, what you think
 
 **12:36:10** _(sid `0587d425`)_
 >     PYTHONPATH=. why we need this, will not this run the main again
@@ -1200,7 +1200,7 @@ _359 prompts across 8 sessions_
 >     can you give me branch and worktree where we worked on this
 
 **13:39:34** _(sid `0587d425`)_
->     Branch: fix/issue-504 - Worktree: <LOCAL_WORKSPACE>/pdd_cloud/.Claude/worktrees/fix-issue-504 - PR: https://github.com/promptdriven/pdd_cloud/pull/505 now i want to run make test-cloud on this as well, will it conflict or can i run make cloud-test on separate branches in separate worktrees in parallel
+>     Branch: fix/issue-504 - Worktree: <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.Claude/worktrees/fix-issue-504 - PR: <PRIVATE_REPO_URL>/pull/505 now i want to run make test-cloud on this as well, will it conflict or can i run make cloud-test on separate branches in separate worktrees in parallel
 
 **13:41:23** _(sid `fdf3d1f0`)_
 >     how can i use my PDD credits for it
@@ -1267,7 +1267,7 @@ _359 prompts across 8 sessions_
 >     what you mean they are preexisting cannot we fix them
 
 **14:08:46** _(sid `0bb69cbb`)_
->     https://github.com/promptdriven/pdd_cloud/issues/568 do you think this issue will resolve it or no?
+>     <PRIVATE_REPO_URL>/issues/568 do you think this issue will resolve it or no?
 
 **14:11:32** _(sid `a0453d11`)_
 >     also make sure we did not mess up pre existing code or anything
@@ -1327,10 +1327,10 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **14:28:22** _(sid `0587d425`)_
->     i want to run on this also ⏺ https://github.com/promptdriven/pdd_cloud/pull/524 is this in separate <LOCAL_WORKSPACE>/pdd_cloud/.Claude/worktrees/fix-524/extensions/github_pdd_app/
+>     i want to run on this also ⏺ <PRIVATE_REPO_URL>/pull/524 is this in separate <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.Claude/worktrees/fix-524/extensions/github_pdd_app/
 
 **14:29:06** _(sid `0587d425`)_
->     https://github.com/promptdriven/pdd_cloud/pull/524 i want to test on this
+>     <PRIVATE_REPO_URL>/pull/524 i want to test on this
 
 **14:29:25** _(sid `fdf3d1f0`)_
 >     [Pasted text #12 +61 lines] it failed why
@@ -1389,7 +1389,7 @@ _359 prompts across 8 sessions_
 >     will it pick up the new fixed stuff?
 
 **14:49:57** _(sid `37b4643c`)_
->     what if i did this cd <LOCAL_WORKSPACE>/pdd_cloud/.Claude/worktrees/fix-issue-504 ln -s <LOCAL_WORKSPACE> backend/functions/venv PYTHONPATH=$(pwd) make test-cloud
+>     what if i did this cd <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.Claude/worktrees/fix-issue-504 ln -s <LOCAL_WORKSPACE> backend/functions/venv PYTHONPATH=$(pwd) make test-cloud
 
 **14:50:26** _(sid `37b4643c`)_
 >     but i want to use worktree, i am using main repo
@@ -1568,7 +1568,7 @@ _359 prompts across 8 sessions_
 >     package.json, shard_timing.json) these are not on PR right?
 
 **16:48:07** _(sid `fdf3d1f0`)_
->     by the way how well do you think this will perform if i give it a full hackathon prd which is in extensions of pdd_cloud can you analysis
+>     by the way how well do you think this will perform if i give it a full hackathon prd which is in extensions of <PRIVATE_REPO> can you analysis
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -1683,7 +1683,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:22:15** _(sid `0587d425`)_
->     Done. Worktree is at <LOCAL_WORKSPACE>/pdd-gltanaka-737 on the fix/issue-737 branch. i want to run on this make cloud-test
+>     Done. Worktree is at <LOCAL_WORKSPACE>/<PRIVATE_REPO>-737 on the fix/issue-737 branch. i want to run on this make cloud-test
 
 **17:24:17** _(sid `0587d425`)_
 >     how to verify we ran from right branch and stuff
@@ -1733,7 +1733,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:36:21** _(sid `0bb69cbb`)_
->     and also i can use test_repo_2
+>     and also i can use <TEST_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -1741,10 +1741,10 @@ _359 prompts across 8 sessions_
 >     what happens to repo and staging, i do not want to mess up something
 
 **17:37:33** _(sid `0bb69cbb`)_
->     i do not want to touch prod and pdd_cloud, i am allowed to use staging 2 and test_repo_2
+>     i do not want to touch prod and <PRIVATE_REPO>, i am allowed to use staging 2 and <TEST_REPO>
 
 **17:38:01** _(sid `0bb69cbb`)_
->     yes, as long as it does not touch prod or pdd_cloud
+>     yes, as long as it does not touch prod or <PRIVATE_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -1765,7 +1765,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:41:56** _(sid `0bb69cbb`)_
->     this will not affect gltanak, pdd_cloud or prod right?
+>     this will not affect gltanak, <PRIVATE_REPO> or prod right?
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -1832,7 +1832,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:57:00** _(sid `0bb69cbb`)_
->     promptdriven/test_repo_2 PDD-change any simple feature
+>     <TEST_REPO> PDD-change any simple feature
 
 **17:58:45** _(sid `fdf3d1f0`)_
 >     the other way i was thinking was have separate files for each like endpoints, enums, and everything, do you think that works better or still the dependency approach
@@ -1881,7 +1881,7 @@ _359 prompts across 8 sessions_
 >     [Pasted text #22 +158 lines] it failed check core dump why
 
 **18:16:30** _(sid `37b4643c`)_
->     can you tell me if any is cause dby this PR i made https://github.com/promptdriven/pdd_cloud/pull/526 or the one we made
+>     can you tell me if any is cause dby this PR i made <PRIVATE_REPO_URL>/pull/526 or the one we made
 
 **18:17:31** _(sid `fdf3d1f0`)_
 >     set me up so i can test it
@@ -1913,7 +1913,7 @@ _359 prompts across 8 sessions_
 >     can you check maybe somehow our changes caused these
 
 **18:24:45** _(sid `0bb69cbb`)_
->     create another test issue on test_repo_2 and monitor it end-to-end without stopping
+>     create another test issue on <TEST_REPO> and monitor it end-to-end without stopping
 
 **18:25:44** _(sid `37b4643c`)_
 >     cannot you test these tests locally?
@@ -2021,7 +2021,7 @@ _359 prompts across 8 sessions_
 >     look at this PR and separate the issues we can solve by doing this
 
 **19:58:26** _(sid `a0453d11`)_
->     test_repo_2
+>     <TEST_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -2109,7 +2109,7 @@ _359 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **21:03:51** _(sid `a0453d11`)_
->     [Pasted text #25 +7 lines] i want like this the first step with link to view live progress, which links to https://promptdriven.ai/jobs/PUsZZ5dkiiXxerHLDrRQ and triggered by and label model this is right way
+>     [Pasted text #25 +7 lines] i want like this the first step with link to view live progress, which links to <JOB_URL> and triggered by and label model this is right way
 
 **21:04:00** _(sid `a0453d11`)_
 >     and also get the key from infisical oauth one
@@ -2295,7 +2295,7 @@ _225 prompts across 13 sessions_
 >     can you see why i keep getting spammed by device activation
 
 **11:08:09** _(sid `0587d425`)_
->     We're in <LOCAL_WORKSPACE>/pdd-gltanaka/.Claude/worktrees/issue-742 — the worktree for the change/issue-742 branch. Main repo at pdd-gltanaka/ is clean on main. i want to run make cloud-test on it give me the command
+>     We're in <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.Claude/worktrees/issue-742 — the worktree for the change/issue-742 branch. Main repo at <PRIVATE_REPO>/ is clean on main. i want to run make cloud-test on it give me the command
 
 **11:08:33** _(sid `25b28d1b`)_
 >     i am getting spammed by this
@@ -2306,7 +2306,7 @@ _225 prompts across 13 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:40:42** _(sid `0587d425`)_
->     i want to rebase this and run tests on it from proper branch https://github.com/promptdriven/pdd_cloud/pull/526
+>     i want to rebase this and run tests on it from proper branch <PRIVATE_REPO_URL>/pull/526
 
 **11:58:37** _(sid `25b28d1b`)_
 >     can you compare this with agentic PDD commands how they are doing all of this
@@ -2326,7 +2326,7 @@ _225 prompts across 13 sessions_
 >     [Pasted text #2 +5 lines] link to this PR and see if this local and upstream are on same commit
 
 **12:40:23** _(sid `b3a3851c`)_
->     do it for me, create me three issues on test_repo_2, label them as pdd-issue and a cheap model like haiku, do it for three issues, one which is a bug, one which is feature change, and one which is ambigious so it needs clarification
+>     do it for me, create me three issues on <TEST_REPO>, label them as pdd-issue and a cheap model like haiku, do it for three issues, one which is a bug, one which is feature change, and one which is ambigious so it needs clarification
 
 **13:36:48** _(sid `0587d425`)_
 >     so we ran on reabse to main right?
@@ -2362,21 +2362,21 @@ _225 prompts across 13 sessions_
 >     can you implement that it resumes from same place, like if it was in middle of a PDD command it knows which command it was and can run from same place
 
 **14:05:53** _(sid `0d915642`)_
->     look at this if you see PDD change failed, why did it ran PDD sync https://github.com/promptdriven/test_repo_2/issues/73 and also https://github.com/promptdriven/test_repo_2/issues/74 for this it asked for clairfication, then we stopped pdd-issue but when we added it started from step 4
+>     look at this if you see PDD change failed, why did it ran PDD sync <TEST_REPO_URL>/issues/73 and also <TEST_REPO_URL>/issues/74 for this it asked for clairfication, then we stopped pdd-issue but when we added it started from step 4
 
 **14:06:28** _(sid `0d915642`)_
->     https://github.com/promptdriven/test_repo_2/issues/72 also how is this doing verification it why it failed
+>     <TEST_REPO_URL>/issues/72 also how is this doing verification it why it failed
 
 **14:09:08** _(sid `0587d425`)_
 >     [Pasted text #1 +31 lines] can you pull from main and update it
 
 **14:09:25** _(sid `ca9dad7a`)_
->     can you pull from main for pdd_cloud upstream
+>     can you pull from main for <PRIVATE_REPO> upstream
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **14:11:39** _(sid `0587d425`)_
->     can you check in pdd_cloud we put test_cloud as gitignore right?
+>     can you check in <PRIVATE_REPO> we put test_cloud as gitignore right?
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -2510,7 +2510,7 @@ _225 prompts across 13 sessions_
 >     https://github.com/promptdriven/pdd/pull/645/changes can you check if this PR is good for it?
 
 **16:18:08** _(sid `578825ba`)_
->     this problem is on pdd_cloud or gltanaka
+>     this problem is on <PRIVATE_REPO> or gltanaka
 
 **16:18:37** _(sid `578825ba`)_
 >     can you check if PDD bug ask for clairfication or no
@@ -2573,7 +2573,7 @@ _225 prompts across 13 sessions_
 >     can you check whats happnening investigate firebase, glcoud
 
 **16:45:45** _(sid `12996d83`)_
->     look at PR https://github.com/promptdriven/test_repo_2/issues/98 it said failed bug even though it looks like it did not, can you verify what happened you can look at gcloud logs
+>     look at PR <TEST_REPO_URL>/issues/98 it said failed bug even though it looks like it did not, can you verify what happened you can look at gcloud logs
 
 **16:46:57** _(sid `12996d83`)_
 >     cannot we make that even though it fails PR, it can still run PDD fix, as it has the stuff for it
@@ -2649,7 +2649,7 @@ _225 prompts across 13 sessions_
 >     is it necessary or i can merge is it safe to merge
 
 **17:51:06** _(sid `0587d425`)_
->     i do not get it do i need it or no, the merge is for pdd_cloud
+>     i do not get it do i need it or no, the merge is for <PRIVATE_REPO>
 
 **17:52:17** _(sid `0587d425`)_
 >     it is going for prod, do i even need staging stuff
@@ -2713,7 +2713,7 @@ _225 prompts across 13 sessions_
 >     5. Verification steps that prove the feature works end to end.
 
 **18:06:46** _(sid `6c971e92`)_
->     https://github.com/promptdriven/pdd_cloud/issues/586 why it failing
+>     <PRIVATE_REPO_URL>/issues/586 why it failing
 
 **18:07:39** _(sid `6c971e92`)_
 >     but we have 3 keys it should auto rotate which keys it is using can you tell me the name
@@ -2724,7 +2724,7 @@ _225 prompts across 13 sessions_
 >     can you pull from main i think we updated it
 
 **18:13:05** _(sid `6c971e92`)_
->     and also pdd_cloud update that laso
+>     and also <PRIVATE_REPO> update that laso
 
 **18:14:42** _(sid `8702ca0f`)_
 >     ok try to understand what we have for our pdd-issue functionality right now, once PDD is done, we can take it is as well, and see which stuff to get from both, so we get best of both world
@@ -2792,7 +2792,7 @@ _225 prompts across 13 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:53:18** _(sid `6c971e92`)_
->     why error https://github.com/promptdriven/pdd_cloud/issues/586 even though keys are working
+>     why error <PRIVATE_REPO_URL>/issues/586 even though keys are working
 
 **18:54:49** _(sid `6c971e92`)_
 >     check progress of 773
@@ -2859,7 +2859,7 @@ _225 prompts across 13 sessions_
 >     setup staging for me
 
 **19:44:04** _(sid `6c971e92`)_
->     i am allowed to use test_repo_2, staging 2 all of it is stuff, i cannot mess with prod, pdd_cloud or gltanka, as long as it does not mess those, you are free to set up
+>     i am allowed to use <TEST_REPO>, staging 2 all of it is stuff, i cannot mess with prod, <PRIVATE_REPO> or gltanka, as long as it does not mess those, you are free to set up
 
 **19:45:13** _(sid `0587d425`)_
 >     can you check if it is running from right place [Pasted text #4 +69 lines] not from main but the branch with our changes
@@ -2897,7 +2897,7 @@ _225 prompts across 13 sessions_
 >     i cannot send PR until all test pass, thats merge rule
 
 **20:04:00** _(sid `6c971e92`)_
->     https://github.com/promptdriven/test_repo_2/issues/104 it did not work see comments it just ran the command again
+>     <TEST_REPO_URL>/issues/104 it did not work see comments it just ran the command again
 
 **20:06:33** _(sid `8702ca0f`)_
 >     check PR 589 PDD completed thats the PR it made
@@ -3069,7 +3069,7 @@ _66 prompts across 4 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **09:44:43** _(sid `ad90ab7a`)_
->     test_repo_2 is for staging 2
+>     <TEST_REPO> is for staging 2
 
 **09:45:05** _(sid `ad90ab7a`)_
 >     once deployed and it is ready creaet a bug and label it pdd-issue PDD-sonnet to test it out
@@ -3196,7 +3196,7 @@ _66 prompts across 4 sessions_
 >     [Pasted text #9 +87 lines]can you check if it is running from right place
 
 **11:56:48** _(sid `ad90ab7a`)_
->     how can i open this path in <LOCAL_WORKSPACE>/pdd_cloud/.Claude/worktrees/fix-524/ on a new window on anti gravity
+>     how can i open this path in <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.Claude/worktrees/fix-524/ on a new window on anti gravity
 
 **11:58:54** _(sid `0587d425`)_
 >     give me make file copy path also
@@ -3213,7 +3213,7 @@ _66 prompts across 4 sessions_
 >     lets work on one prompt at a time, lets begin with one, because we want to depend more on prompt, and work in prompt space, rather than using code as llm can steer, what you think, before we do this pick a command like PDD bug see how is prompt to code ratio, and what stuff is being handled in prompt and what stuff is in code
 
 **12:16:06** _(sid `0587d425`)_
->     - Path: <LOCAL_WORKSPACE>/pdd-gltanaka - Branch: fix/issue-769 i want to run on this as well
+>     - Path: <LOCAL_WORKSPACE>/<PRIVATE_REPO> - Branch: fix/issue-769 i want to run on this as well
 
 **12:19:24** _(sid `ad90ab7a`)_
 >     as PDD bug properly works unlike our pdd-issue we want to have same kind of stuff so it works also what you suggest how should we do this
@@ -3227,7 +3227,7 @@ _66 prompts across 4 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **12:25:38** _(sid `0587d425`)_
->     pwd: <LOCAL_WORKSPACE>/pdd-gltanaka branch: fix/issue-769 check PR associated with it and i want to run make cloud-test on it and check if this and PR on same commit
+>     pwd: <LOCAL_WORKSPACE>/<PRIVATE_REPO> branch: fix/issue-769 check PR associated with it and i want to run make cloud-test on it and check if this and PR on same commit
 
 **12:36:58** _(sid `0587d425`)_
 >     [Pasted text #11 +179 lines] from where did this ran and give me link to PR for this and see if both commits are on same leve
@@ -3239,7 +3239,7 @@ _66 prompts across 4 sessions_
 >     push the commit to existing branch for me
 
 **12:41:40** _(sid `0587d425`)_
->     pwd: <LOCAL_WORKSPACE>/pdd-gltanaka branch: fix/issue-769 check commit of this and PR associated with it are they on same
+>     pwd: <LOCAL_WORKSPACE>/<PRIVATE_REPO> branch: fix/issue-769 check commit of this and PR associated with it are they on same
 
 **12:41:52** _(sid `0587d425`)_
 >     i want to run cloud-test on it
@@ -3443,7 +3443,7 @@ _112 prompts across 2 sessions_
 >     [Pasted text #6 +33 lines] give me pwd of these
 
 **19:48:33** _(sid `7af61cc1`)_
->     how to open them in anti gravity this <LOCAL_WORKSPACE>/pdd_cloud/.Claude/worktrees/pdd-issue-clean/extensions/github_pdd_app/prompts
+>     how to open them in anti gravity this <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.Claude/worktrees/pdd-issue-clean/extensions/github_pdd_app/prompts
 
 **19:49:12** _(sid `7af61cc1`)_
 >     also in mean time tell me how to make regression sweep
@@ -3478,7 +3478,7 @@ _112 prompts across 2 sessions_
 >     Are you thinking we should handle this case differently? Like if bug succeeded but fix failed, skip back to EXECUTING with just ["fix"] instead of going all the way back to ANALYZING? this is what i am thinking same for PDD change and PDD sync and PDD test and PDD fix, hat you think, also the thing is sometimes, PDD fix works but verify fails, then it can run PDD bug and PDD fix again, i thik thats the workflow what you think
 
 **20:08:42** _(sid `7af61cc1`)_
->     do a final review of the prompts and see the issues i created on the pdd_cloud there might be 3 or more in total for this, and see if there is drift anywhere or anything, we missing or a bug, or something wrong, so we fix that in prompt before i run PDD sync
+>     do a final review of the prompts and see the issues i created on the <PRIVATE_REPO> there might be 3 or more in total for this, and see if there is drift anywhere or anything, we missing or a bug, or something wrong, so we fix that in prompt before i run PDD sync
 
 **20:14:47** _(sid `7af61cc1`)_
 >     [Pasted text #8 +6 lines] it should for now use the model given by the user with pdd-issue, for all of it, analysing and all other stpes, explain inconsistency 3 and the minor
@@ -3597,7 +3597,7 @@ _112 prompts across 2 sessions_
 >     can you look at my llm_model.csv and tell me whats elo in there
 
 **22:34:45** _(sid `7af61cc1`)_
->     PDD_FORCE_LOCAL=1 remove this i want to use PDD cloud for this
+>     PDD_FORCE_LOCAL=1 remove this i want to use <PRIVATE_REPO> for this
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -3675,16 +3675,16 @@ _3 prompts across 1 sessions_
 _363 prompts across 8 sessions_
 
 **04:51:26** _(sid `f2bcc755`)_
->     go through the all three issues i created on pdd_cloud related to autnomous solving, pdd-issue fully understand it, this worktree and branch 523 is where i implemented it go through it as well and create a flow diagram using the prompts, code, and tests and show me, also see if there is any drift between prompt and code
+>     go through the all three issues i created on <PRIVATE_REPO> related to autnomous solving, pdd-issue fully understand it, this worktree and branch 523 is where i implemented it go through it as well and create a flow diagram using the prompts, code, and tests and show me, also see if there is any drift between prompt and code
 
 **04:52:55** _(sid `aef2f3b1`)_
->     go through the all three issues i created on pdd_cloud related to autnomous solving, pdd-issue fully understand it, i want to test in staging, i have secret keys in ifnisical, go through them and also see make deploy-staging, see if any key is missing, and also do i have to deploy everything to test this feature or what, and also make sure we have everything for staging, yesterday i was having lot of problems running staging
+>     go through the all three issues i created on <PRIVATE_REPO> related to autnomous solving, pdd-issue fully understand it, i want to test in staging, i have secret keys in ifnisical, go through them and also see make deploy-staging, see if any key is missing, and also do i have to deploy everything to test this feature or what, and also make sure we have everything for staging, yesterday i was having lot of problems running staging
 
 **04:54:19** _(sid `4b188a61`)_
->     go through the all three issues i created on pdd_cloud related to autnomous solving, pdd-issue fully understand it, and create me 4 test iissues in test_repo, related to the repo, one should be a simple bug, one should be a simple feature, one should run PDD test and fix make the issue like that, last one should be ambigious but related to the repo, so it ask for clarification and one provided it should run PDD bug and PDD fix
+>     go through the all three issues i created on <PRIVATE_REPO> related to autnomous solving, pdd-issue fully understand it, and create me 4 test iissues in <TEST_REPO>, related to the repo, one should be a simple bug, one should be a simple feature, one should run PDD test and fix make the issue like that, last one should be ambigious but related to the repo, so it ask for clarification and one provided it should run PDD bug and PDD fix
 
 **04:58:18** _(sid `4b188a61`)_
->     is these issues realted to the repo, because i want it something related to the test_repo so to see the ne feature proper in working
+>     is these issues realted to the repo, because i want it something related to the <TEST_REPO> so to see the ne feature proper in working
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -3908,7 +3908,7 @@ _363 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **09:05:50** _(sid `f2bcc755`)_
->     i am getting this ❌ PDD Execution Failed Execution failed: User JjfSlO5HvDTVlRDpNjpe79qi1BW2 has insufficient credits. Required: <REDACTED-CREDIT-REQUIREMENT>, Available: <REDACTED-CREDIT-BALANCE>, top up my account with credits the one that is using this test_repo by 25000
+>     i am getting this ❌ PDD Execution Failed Execution failed: User JjfSlO5HvDTVlRDpNjpe79qi1BW2 has insufficient credits. Required: <REDACTED-CREDIT-REQUIREMENT>, Available: <REDACTED-CREDIT-BALANCE>, top up my account with credits the one that is using this <TEST_REPO> by 25000
 
 **09:10:04** _(sid `f2bcc755`)_
 >     also when a user has insufficent credtis, it should stop, remove label, user addes credit and relabels, it should kind of work same way as clarification part works, fix that also in TDD style, just fix for next time, also before you fix, explain it is this a bug in PDD bug and PDD fix or pdd-issue that it keeps going on
@@ -3923,13 +3923,13 @@ _363 prompts across 8 sessions_
 >     label it wih pdd-issue and pdd-opus once deployed
 
 **09:25:46** _(sid `93548a1b`)_
->     Fix issue #659: Respect stop conditions in PDD executor to prevent unwanted PRs look at gltanaka and pdd_cloud i made a PR, but i forgot, there might be multiple ones so i want you to find me the perfect fix one and put in a separate worktree, with the branch
+>     Fix issue #659: Respect stop conditions in PDD executor to prevent unwanted PRs look at gltanaka and <PRIVATE_REPO> i made a PR, but i forgot, there might be multiple ones so i want you to find me the perfect fix one and put in a separate worktree, with the branch
 
 **09:26:05** _(sid `6ca1709f`)_
->     GitHub app - app installed but doesn't show in settings, look at gltanaka and pdd_cloud i made a PR, but i forgot, there might be multiple ones so i want you to find me the perfect fix one and put in a separate worktree, with the branch
+>     GitHub app - app installed but doesn't show in settings, look at gltanaka and <PRIVATE_REPO> i made a PR, but i forgot, there might be multiple ones so i want you to find me the perfect fix one and put in a separate worktree, with the branch
 
 **09:26:22** _(sid `48678aed`)_
->     Cloud: purchase in settings dashboard fails with CORS violation / "Mock API" interactions (see console log) look at gltanaka and pdd_cloud i made a PR, but i forgot, there might be multiple ones so i want you to find me the perfect fix one and put in a separate worktree, with the branch
+>     Cloud: purchase in settings dashboard fails with CORS violation / "Mock API" interactions (see console log) look at gltanaka and <PRIVATE_REPO> i made a PR, but i forgot, there might be multiple ones so i want you to find me the perfect fix one and put in a separate worktree, with the branch
 
 **09:28:13** _(sid `48678aed`)_
 >     revie it end to end and see if it requires any change or missing something, or something is wrong
@@ -3961,7 +3961,7 @@ _363 prompts across 8 sessions_
 >     for two do not you think it is better to like clean if no longer useful? or was it useful, why 2 happened
 
 **09:41:31** _(sid `93548a1b`)_
->     why you made so many changes there might be lot of things in there, but we just want to resolve one issue which is for example look at this issue i ran PDD bug on it https://github.com/promptdriven/pdd_cloud/issues/688 but at step 3 it said need more clairfication, removed the PDD bug label but also created a PR and wrote PDD execution successful, which should not happen, it should comment more clarification needed, remove label and when user comments and reapply label it should continue
+>     why you made so many changes there might be lot of things in there, but we just want to resolve one issue which is for example look at this issue i ran PDD bug on it <PRIVATE_REPO_URL>/issues/688 but at step 3 it said need more clairfication, removed the PDD bug label but also created a PR and wrote PDD execution successful, which should not happen, it should comment more clarification needed, remove label and when user comments and reapply label it should continue
 
 **09:41:57** _(sid `6ca1709f`)_
 >     did you commit and push
@@ -4077,7 +4077,7 @@ _363 prompts across 8 sessions_
 >     do we need it to test this PR?
 
 **10:17:36** _(sid `f2bcc755`)_
->     look at this issue https://github.com/promptdriven/test_repo/issues/153, it is a sub issue of the parent issue, why it created two PR?
+>     look at this issue <TEST_REPO_URL>/issues/153, it is a sub issue of the parent issue, why it created two PR?
 
 **10:18:55** _(sid `f2bcc755`)_
 >     why even make one, all PDD commands make a PR, for example PDD bug makes one, and PDD fix works on that one, i do not think pdd-issue has to make one, it can just use which is made in that environment
@@ -4168,7 +4168,7 @@ _363 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:04:11** _(sid `93548a1b`)_
->     i meant pdd_cloud or gltanka
+>     i meant <PRIVATE_REPO> or gltanka
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -4214,18 +4214,18 @@ _363 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:22:45** _(sid `f2bcc755`)_
->     test_repo and we using staging 1
+>     <TEST_REPO> and we using staging 1
 
 **11:22:57** _(sid `f2bcc755`)_
 >     and we on branch 523 so make sure we running from there
 
 **11:23:31** _(sid `f2bcc755`)_
->     test_repo is not in gltanaka
+>     <TEST_REPO> is not in gltanaka
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:23:56** _(sid `f2bcc755`)_
->     https://github.com/promptdriven/test_repo/issues
+>     <TEST_REPO_URL>/issues
 
 **11:24:10** _(sid `f2bcc755`)_
 >     make it with cheap models this time
@@ -4242,7 +4242,7 @@ _363 prompts across 8 sessions_
 >     ok it works, clean up the extra mess, and then commit and push so it works for prod, also do you think there might be a cors problem in prod also, can you check on that
 
 **11:35:25** _(sid `f2bcc755`)_
->     for this sub issue https://github.com/promptdriven/test_repo/issues/162 why it is stuck on PDD bug first step
+>     for this sub issue <TEST_REPO_URL>/issues/162 why it is stuck on PDD bug first step
 
 **11:36:18** _(sid `6ca1709f`)_
 >     so ready to be merged, check and review final PR
@@ -4337,7 +4337,7 @@ _363 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **12:10:52** _(sid `93548a1b`)_
->     do it for me and give me link to the issue, we using staging 2 i think it is linked to test_repo_2 but make sure, as far as i remember
+>     do it for me and give me link to the issue, we using staging 2 i think it is linked to <TEST_REPO> but make sure, as far as i remember
 
 **12:11:29** _(sid `6ca1709f`)_
 >     also rebase it with main
@@ -4404,7 +4404,7 @@ _363 prompts across 8 sessions_
 >     check all keys in secret manager, all cannot be dead
 
 **12:28:41** _(sid `f2bcc755`)_
->     PDD fix did not run on this https://github.com/promptdriven/test_repo/issues/162
+>     PDD fix did not run on this <TEST_REPO_URL>/issues/162
 
 **12:32:16** _(sid `f2bcc755`)_
 >     i think PDD fix did not ran or something or maybe both ran
@@ -4454,7 +4454,7 @@ _363 prompts across 8 sessions_
 >     it failed the check
 
 **13:22:37** _(sid `6ca1709f`)_
->     https://github.com/promptdriven/pdd_cloud/pull/710 check on PR
+>     <PRIVATE_REPO_URL>/pull/710 check on PR
 
 **13:24:40** _(sid `f2bcc755`)_
 >     so how good you think is this new verifier and analyser? any more area of imporvement?
@@ -4654,7 +4654,7 @@ _363 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **15:26:55** _(sid `f2bcc755`)_
->     can you check https://github.com/promptdriven/test_repo/issues/168 if change is proceding whats happening
+>     can you check <TEST_REPO_URL>/issues/168 if change is proceding whats happening
 
 **15:29:54** _(sid `48678aed`)_
 >     i want to fully test it, so deploy all
@@ -4696,7 +4696,7 @@ _363 prompts across 8 sessions_
 >     what happened to test and other stuff, PDD bug and PDD fix did
 
 **15:54:36** _(sid `48678aed`)_
->     no PDD bug always create test i ran on this https://github.com/promptdriven/pdd_cloud/issues/643
+>     no PDD bug always create test i ran on this <PRIVATE_REPO_URL>/issues/643
 
 **15:55:48** _(sid `f2bcc755`)_
 >     yes do in TDD style
@@ -4705,7 +4705,7 @@ _363 prompts across 8 sessions_
 >     but before that commit and push then do zombie detector in TDD style
 
 **15:56:41** _(sid `48678aed`)_
->     yes, this is the PR made by PDD bug and PDD fix https://github.com/promptdriven/pdd_cloud/pull/645 use it to make a final good PR, make sure it works though
+>     yes, this is the PR made by PDD bug and PDD fix <PRIVATE_REPO_URL>/pull/645 use it to make a final good PR, make sure it works though
 
 **15:57:05** _(sid `f2bcc755`)_
 >     do not deploy we already running the previosu run
@@ -4723,7 +4723,7 @@ _363 prompts across 8 sessions_
 >     why you have to do this, because it passes for all my other stuff
 
 **16:17:56** _(sid `93548a1b`)_
->     can you see if this got reverted https://github.com/promptdriven/pdd_cloud/pull/710
+>     can you see if this got reverted <PRIVATE_REPO_URL>/pull/710
 
 **16:20:46** _(sid `48678aed`)_
 >     how to test the bug
@@ -4860,7 +4860,7 @@ _363 prompts across 8 sessions_
 >     commit and push and give me link to PR
 
 **17:42:13** _(sid `f2bcc755`)_
->     https://github.com/promptdriven/pdd_cloud/pull/524 for this new feature change PR, do not you think we changing too many files, kind of messing up the whole repo to our feature, i see a lot of junk and also changes in lot of file, do deep investigation take your time, it will take one hour for issue to run pdd-issue anyway which we are running, so in mean time i want you to ddeply analysis it and see whats neeed and whats not out of these 110 files
+>     <PRIVATE_REPO_URL>/pull/524 for this new feature change PR, do not you think we changing too many files, kind of messing up the whole repo to our feature, i see a lot of junk and also changes in lot of file, do deep investigation take your time, it will take one hour for issue to run pdd-issue anyway which we are running, so in mean time i want you to ddeply analysis it and see whats neeed and whats not out of these 110 files
 
 **17:48:46** _(sid `f2bcc755`)_
 >     take your time and see if they really junk then remove them
@@ -4869,7 +4869,7 @@ _363 prompts across 8 sessions_
 >     what was the issue we ran pdd-issue on
 
 **17:54:48** _(sid `f2bcc755`)_
->     https://github.com/promptdriven/pdd_cloud/pull/524 take a deeper dive on this and see if any junk files still left
+>     <PRIVATE_REPO_URL>/pull/524 take a deeper dive on this and see if any junk files still left
 
 **17:59:52** _(sid `f2bcc755`)_
 >     why we have this extensions/github_pdd_app/prompts/Dockerfile_solving_worker_Dockerfile.prompt, why we have this ‎frontend/src/app/settings/billing/page.tsx‎frontend/src/app/settings/security/page.tsx frontend/src/app/analytics/page.tsx
@@ -4888,7 +4888,7 @@ _363 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:06:32** _(sid `f2bcc755`)_
->     https://github.com/promptdriven/test_repo/issues/178 it says insufficent credits, what should i do
+>     <TEST_REPO_URL>/issues/178 it says insufficent credits, what should i do
 
 **18:08:11** _(sid `f2bcc755`)_
 >     it is running PDD change again why?
@@ -4943,16 +4943,16 @@ _363 prompts across 8 sessions_
 >     by the way, what about all thee docker and yaml files in the PR, i just want to ensure we not diverting the natural way of PDD, like we changing the whole env, docker and stuff to fit this feature
 
 **19:54:57** _(sid `f2bcc755`)_
->     also it did not create the PR https://github.com/promptdriven/test_repo/issues/185 in end, can you create it for me, and also why it did not create a final PR for the parent itself, if it is a single issue, no decompsoing, PDD commands create but for this decomposing, as it is decomposed there is no final PR
+>     also it did not create the PR <TEST_REPO_URL>/issues/185 in end, can you create it for me, and also why it did not create a final PR for the parent itself, if it is a single issue, no decompsoing, PDD commands create but for this decomposing, as it is decomposed there is no final PR
 
 **20:05:04** _(sid `6dd375cf`)_
->     yes we ran pdd-issue https://github.com/promptdriven/test_repo/issues/185 it worked wonderfully, but in end it did not create the PR for the parent, if it is a single issue PDD command usually create PR themselves, but for this parent one it joins them up, resolves conflict, and make a branch but it did not make PR, it should make PR, and link to the issue how other PDD command do it, fix the prompt and fix code in TDD style so we have final version, also for this https://github.com/promptdriven/test_repo/issues/185 just manually create the PR for now
+>     yes we ran pdd-issue <TEST_REPO_URL>/issues/185 it worked wonderfully, but in end it did not create the PR for the parent, if it is a single issue PDD command usually create PR themselves, but for this parent one it joins them up, resolves conflict, and make a branch but it did not make PR, it should make PR, and link to the issue how other PDD command do it, fix the prompt and fix code in TDD style so we have final version, also for this <TEST_REPO_URL>/issues/185 just manually create the PR for now
 
 **20:08:34** _(sid `a109c7d4`)_
 >     fix-659-perfect give me link to this PR
 
 **20:10:03** _(sid `a109c7d4`)_
->     can you revie this PR https://github.com/promptdriven/test_repo/pull/190 compared to the issue and see how good it solved the issue
+>     can you revie this PR <TEST_REPO_URL>/pull/190 compared to the issue and see how good it solved the issue
 
 **20:20:05** _(sid `6dd375cf`)_
 >     ok as for the final PR of the 523 can you give me link
@@ -4961,7 +4961,7 @@ _363 prompts across 8 sessions_
 >     [Pasted text #1 +37 lines] what happened did something went wrong with pdd-issue can you do deep dive and see the gcloud logs, what went wrong
 
 **20:22:12** _(sid `a109c7d4`)_
->     see the PRs made by this https://github.com/promptdriven/test_repo/issues/186 and https://github.com/promptdriven/test_repo/issues/187 is a combined version of 190
+>     see the PRs made by this <TEST_REPO_URL>/issues/186 and <TEST_REPO_URL>/issues/187 is a combined version of 190
 
 **20:24:53** _(sid `a109c7d4`)_
 >     which ones are valid and should be implementdd
@@ -4993,7 +4993,7 @@ _363 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **20:51:34** _(sid `6dd375cf`)_
->     should we remove this ANTHROPIC_API_KEY_SECRET: "ANTHROPIC_API_KEY_2" i added for my testing
+>     should we remove this <REDACTED_ENV_NAME>: "<REDACTED_ENV_NAME>" i added for my testing
 
 **20:52:00** _(sid `6dd375cf`)_
 >     also change this CLAUDE_MODEL: "Claude-sonnet-4-6" back to what it was
@@ -5089,7 +5089,7 @@ _250 prompts across 3 sessions_
 >     lets discuss test cases for staging while deploying is in background
 
 **11:08:29** _(sid `6dd375cf`)_
->     find me a bug, feature, and one where it should run test and fix, for decompostion we can use https://github.com/promptdriven/test_repo/issues/185 and one where clarification requires https://github.com/promptdriven/test_repo/issues/139 so 5 in total, discuss what you will make, make it according to test_repo, if test_repo has stuff related to hackathon, make simple ones according to it, as i know about hackathon as i made it, so it would be easy to verify
+>     find me a bug, feature, and one where it should run test and fix, for decompostion we can use <TEST_REPO_URL>/issues/185 and one where clarification requires <TEST_REPO_URL>/issues/139 so 5 in total, discuss what you will make, make it according to <TEST_REPO>, if <TEST_REPO> has stuff related to hackathon, make simple ones according to it, as i know about hackathon as i made it, so it would be easy to verify
 
 **11:09:51** _(sid `6dd375cf`)_
 >     the 1 one is legit bug?
@@ -5097,13 +5097,13 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:11:49** _(sid `6dd375cf`)_
->     i think lets do ones you made, topup my credit we using on test_repo with 30000, and for simple bug, simple feature let use haiku, for decomposition lets use sonnet, for clarification sonnet, and test see if it is simple use haiku or sonnet. basically label all with pdd-issue and thier respective model PDD-haiku or PDD-sonnet
+>     i think lets do ones you made, topup my credit we using on <TEST_REPO> with 30000, and for simple bug, simple feature let use haiku, for decomposition lets use sonnet, for clarification sonnet, and test see if it is simple use haiku or sonnet. basically label all with pdd-issue and thier respective model PDD-haiku or PDD-sonnet
 
 **11:13:38** _(sid `6dd375cf`)_
 >     stg use infisical, if any key missing from infisical let me know
 
 **11:14:01** _(sid `6dd375cf`)_
->     for user id i do not remember cannot you find it somehow i was running it on stg test_repo yesterday you can see logs maybe
+>     for user id i do not remember cannot you find it somehow i was running it on stg <TEST_REPO> yesterday you can see logs maybe
 
 **11:17:30** _(sid `6dd375cf`)_
 >     wait make duplicate of these ones [Pasted text #5 +3 lines] new
@@ -5149,7 +5149,7 @@ _250 prompts across 3 sessions_
 >     how about PDD bug, PDD fix, PDD test, they are GitHub app commands how it handles that
 
 **11:47:05** _(sid `6dd375cf`)_
->     can you look at this one https://github.com/promptdriven/test_repo/issues/193 and see it ran PDD test what it did?
+>     can you look at this one <TEST_REPO_URL>/issues/193 and see it ran PDD test what it did?
 
 **11:47:35** _(sid `6dd375cf`)_
 >     i mean in general what does PDD test do?
@@ -5176,7 +5176,7 @@ _250 prompts across 3 sessions_
 >     make test-cloud should verify this path so it does not regress
 
 **11:56:06** _(sid `6dd375cf`)_
->     for this why verification https://github.com/promptdriven/test_repo/issues/195 failed
+>     for this why verification <TEST_REPO_URL>/issues/195 failed
 
 **11:57:23** _(sid `6dd375cf`)_
 >     i am confused, PDD bug only create tests, PDD fix the stuff, thats the flow
@@ -5191,7 +5191,7 @@ _250 prompts across 3 sessions_
 >     add that, do it in TDD style, and any prompt needs updating update that also
 
 **12:07:32** _(sid `6dd375cf`)_
->     also for this https://github.com/promptdriven/test_repo/issues/194 decomposition, why it closed sub-issues?
+>     also for this <TEST_REPO_URL>/issues/194 decomposition, why it closed sub-issues?
 
 **12:08:05** _(sid `6dd375cf`)_
 >     yea i removed but why it closed subossues?
@@ -5246,7 +5246,7 @@ _250 prompts across 3 sessions_
 >     [Pasted text #9 +144 lines] why we failed this, whats happening, is something wrong with our worktree
 
 **12:48:06** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/209 verification failed again
+>     <TEST_REPO_URL>/issues/209 verification failed again
 
 **12:49:07** _(sid `6dd375cf`)_
 >     no verification failed why?
@@ -5265,7 +5265,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **12:52:39** _(sid `6dd375cf`)_
->     find the user that is for test_repo
+>     find the user that is for <TEST_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -5310,7 +5310,7 @@ _250 prompts across 3 sessions_
 >     once done deploy, duplicate all 5 run them again, also give me <REDACTED-CREDIT-AMOUNT> credits and relabel so we test it fully end to end
 
 **13:36:06** _(sid `eada1eed`)_
->     https://github.com/promptdriven/test_repo/issues can you rremove all labels from all issues in this repo and close all
+>     <TEST_REPO_URL>/issues can you rremove all labels from all issues in this repo and close all
 
 **13:36:27** _(sid `6dd375cf`)_
 >     check if all are deployed from new image, nothing is old, kill all old ones so it does not use old ones
@@ -5385,7 +5385,7 @@ _250 prompts across 3 sessions_
 >     what make test-cloud runs does it run cloud_regression.sh, I expected it to run everything
 
 **14:12:39** _(sid `6dd375cf`)_
->     wait look upstream issues, in pdd_cloud i have ran PDD change and PDD sync, they work, nothing goes wrong
+>     wait look upstream issues, in <PRIVATE_REPO> i have ran PDD change and PDD sync, they work, nothing goes wrong
 
 **14:13:10** _(sid `f83d6958`)_
 >     so where does regression swe is, where i should built for my new agentic command
@@ -5400,10 +5400,10 @@ _250 prompts across 3 sessions_
 >     ok we come back to this can you tell me the issues we ran pdd-issue recently i want to see progress
 
 **14:22:36** _(sid `6dd375cf`)_
->     i mean on test_repo where we testing pdd-issue
+>     i mean on <TEST_REPO> where we testing pdd-issue
 
 **14:22:57** _(sid `6dd375cf`)_
->     they are pdd_cloud give me proper links
+>     they are <PRIVATE_REPO> give me proper links
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -5498,7 +5498,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **15:37:58** _(sid `6dd375cf`)_
->     i ran https://github.com/promptdriven/test_repo/issues/191 PDD fix and Gemini model on this can you see it is logs, whats happening if PDD fix it should work for our pdd-issue as well because we can just copy it is pattern
+>     i ran <TEST_REPO_URL>/issues/191 PDD fix and Gemini model on this can you see it is logs, whats happening if PDD fix it should work for our pdd-issue as well because we can just copy it is pattern
 
 **15:44:48** _(sid `6dd375cf`)_
 >     the docker stuff you changed, if that was unncesary, revert it, we do not want to change unncessary stuff
@@ -5520,7 +5520,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **15:54:32** _(sid `6dd375cf`)_
->     can you check https://github.com/promptdriven/test_repo/issues/241 whats PDD bug doing? and if it has the right model gemeini
+>     can you check <TEST_REPO_URL>/issues/241 whats PDD bug doing? and if it has the right model gemeini
 
 **15:55:52** _(sid `6dd375cf`)_
 >     but why it is so slow?
@@ -5571,7 +5571,7 @@ _250 prompts across 3 sessions_
 >     also i ran this on old version, i have new commit, but this problem i know will exist on that as well, so help me fix it
 
 **16:09:51** _(sid `6dd375cf`)_
->     check whats happening, https://github.com/promptdriven/test_repo/issues/248 for this PDD bug
+>     check whats happening, <TEST_REPO_URL>/issues/248 for this PDD bug
 
 **16:11:41** _(sid `6dd375cf`)_
 >     so do you think i should create an issue for this, for other commands? like if someone uses Gemini they are cycling thorugh the keys, longer time and stuff? what you think
@@ -5582,7 +5582,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **16:12:25** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/248 whats happening check PDD bug whats it doing
+>     <TEST_REPO_URL>/issues/248 whats happening check PDD bug whats it doing
 
 **16:13:19** _(sid `6dd375cf`)_
 >     why it is so slow compared to sonnet?
@@ -5593,7 +5593,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **16:14:16** _(sid `6dd375cf`)_
->     provide clarification for this https://github.com/promptdriven/test_repo/issues/252 and relabel
+>     provide clarification for this <TEST_REPO_URL>/issues/252 and relabel
 
 **16:15:11** _(sid `6dd375cf`)_
 >     which flash model we using
@@ -5610,7 +5610,7 @@ _250 prompts across 3 sessions_
 >     we need to make a regression sweep, i am not sure what the likely meaning is exactly but this is what i think it is[Pasted text #11 +12 lines] what you think
 
 **16:19:14** _(sid `6dd375cf`)_
->     check what happened https://github.com/promptdriven/test_repo/issues/252
+>     check what happened <TEST_REPO_URL>/issues/252
 
 **16:20:01** _(sid `6dd375cf`)_
 >     i mean check logs why it decided no change needed, it should have went whole cycle and created tests for PDD bug
@@ -5647,7 +5647,7 @@ _250 prompts across 3 sessions_
 >     just a question, what haiku did is for decompostiton it went bug, fix, change, sync, rather than decomposing do you think thats the right move?
 
 **16:37:49** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/255 why PDD-bug went so fast, with Gemini flash compared to what we had https://github.com/promptdriven/test_repo/issues/248
+>     <TEST_REPO_URL>/issues/255 why PDD-bug went so fast, with Gemini flash compared to what we had <TEST_REPO_URL>/issues/248
 
 **16:39:02** _(sid `6dd375cf`)_
 >     help me find the problem, because why it is so slow for my new feature
@@ -5696,7 +5696,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:07:39** _(sid `6dd375cf`)_
->     Gemini https://github.com/promptdriven/test_repo/issues/278 is tuck again at PDD bug see whats happening
+>     Gemini <TEST_REPO_URL>/issues/278 is tuck again at PDD bug see whats happening
 
 **17:09:24** _(sid `6dd375cf`)_
 >     go check PDD bug, it cannot be Gemini should be really fast something is wrong
@@ -5717,13 +5717,13 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:17:45** _(sid `6dd375cf`)_
->     look at this https://github.com/promptdriven/test_repo/issues/279 why it went on sync even though PDD change failed
+>     look at this <TEST_REPO_URL>/issues/279 why it went on sync even though PDD change failed
 
 **17:18:49** _(sid `6dd375cf`)_
 >     fix it in TDD style and also the prompt and also tell me why PDD change failed in first place
 
 **17:21:11** _(sid `eada1eed`)_
->     https://github.com/promptdriven/test_repo/issues/287 give clarification and relabel pdd-issue
+>     <TEST_REPO_URL>/issues/287 give clarification and relabel pdd-issue
 
 **17:22:49** _(sid `6dd375cf`)_
 >     but if Gemini needs input it should pause like how clarification does it removes label, user provides clairfication and relabels it? is this not right behavior?
@@ -5731,7 +5731,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **17:23:07** _(sid `eada1eed`)_
->     https://github.com/promptdriven/test_repo/issues/291 also why it is not movving 29 minutes have happeneed
+>     <TEST_REPO_URL>/issues/291 also why it is not movving 29 minutes have happeneed
 
 **17:23:38** _(sid `6dd375cf`)_
 >     should i make an issue for this?
@@ -5751,16 +5751,16 @@ _250 prompts across 3 sessions_
 >     check we need to fix this
 
 **17:27:06** _(sid `6dd375cf`)_
->     also look a this issue https://github.com/promptdriven/test_repo/issues/286 it is subissue PDD change is stuck see what happened
+>     also look a this issue <TEST_REPO_URL>/issues/286 it is subissue PDD change is stuck see what happened
 
 **17:30:36** _(sid `6dd375cf`)_
->     see this https://github.com/promptdriven/test_repo/issues/284 why verification failed
+>     see this <TEST_REPO_URL>/issues/284 why verification failed
 
 **17:32:10** _(sid `6dd375cf`)_
 >     can you stop everything remove everything, kill all dockers, and deploy new ones i want a final test, i do not want that oh using old ones, do it, create 5 ne issues, and run pdd-issue and PDD-sonnet on them
 
 **17:33:01** _(sid `eada1eed`)_
->     remove label from all issues in test_repo 300 and less
+>     remove label from all issues in <TEST_REPO> 300 and less
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -5792,37 +5792,37 @@ _250 prompts across 3 sessions_
 >     i ran it again check the new one if that will have the fix
 
 **17:49:01** _(sid `6dd375cf`)_
->     still same why Gemini so slow, Gemini flash should be very fast https://github.com/promptdriven/test_repo/issues/309
+>     still same why Gemini so slow, Gemini flash should be very fast <TEST_REPO_URL>/issues/309
 
 **17:50:14** _(sid `eada1eed`)_
 >     >> Task completed: ghapp-lint-unit [FAIL, 17.8s] (see failures log) this failing is it possible for you to know or we have to wait till end for it
 
 **17:52:39** _(sid `6dd375cf`)_
->     provide clairfiation for this https://github.com/promptdriven/test_repo/issues/308 and relabel
+>     provide clairfiation for this <TEST_REPO_URL>/issues/308 and relabel
 
 **17:54:30** _(sid `6dd375cf`)_
 >     can you create two duplicate of the bug we have and label one with PDD-sonnet and PDD-bug, the other one with PDD-Gemini-flash and PDD-bug to compare speed other than pdd-issue
 
 **17:57:12** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/316 why for this it ran PDD test and PDD fix, it should have run PDD change and sync do not you think?
+>     <TEST_REPO_URL>/issues/316 why for this it ran PDD test and PDD fix, it should have run PDD change and sync do not you think?
 
 **17:58:12** _(sid `6dd375cf`)_
 >     i think sonnet also picked wrong one, can you see if sonnet was running or Gemini
 
 **17:59:25** _(sid `6dd375cf`)_
->     wait see this https://github.com/promptdriven/test_repo/issues/307 which model is this using
+>     wait see this <TEST_REPO_URL>/issues/307 which model is this using
 
 **18:00:21** _(sid `6dd375cf`)_
->     it created the sub issue https://github.com/promptdriven/test_repo/issues/316, check when this was created, which model analysier ran on it? can you tell me and how we end up having PDD test on it, check logs to fully verify what went wrong
+>     it created the sub issue <TEST_REPO_URL>/issues/316, check when this was created, which model analysier ran on it? can you tell me and how we end up having PDD test on it, check logs to fully verify what went wrong
 
 **18:02:31** _(sid `6dd375cf`)_
 >     can you fix it in TDD style, and update prompts, take your time
 
 **18:06:38** _(sid `6dd375cf`)_
->     check on this as well https://github.com/promptdriven/test_repo/issues/305 i feel like PDD sync is stuck, can you see logs whats happening
+>     check on this as well <TEST_REPO_URL>/issues/305 i feel like PDD sync is stuck, can you see logs whats happening
 
 **18:07:02** _(sid `6dd375cf`)_
->     heck on this as well https://github.com/promptdriven/test_repo/issues/305 i feel like PDD sync is stuck, can you see logs whats happening
+>     heck on this as well <TEST_REPO_URL>/issues/305 i feel like PDD sync is stuck, can you see logs whats happening
 
 **18:08:01** _(sid `6dd375cf`)_
 >     cannot you see exactly wehre sync is, whats it doing?
@@ -5830,7 +5830,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:10:02** _(sid `6dd375cf`)_
->     verification failed https://github.com/promptdriven/test_repo/issues/305 why
+>     verification failed <TEST_REPO_URL>/issues/305 why
 
 **18:12:03** _(sid `6dd375cf`)_
 >     do you think your code is wrong, doing something wrong as i told you to kill all docker and do again, so why this happened
@@ -5858,7 +5858,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:17:04** _(sid `6dd375cf`)_
->     can you see logs https://github.com/promptdriven/test_repo/issues/305 i think it somehow identified PDD change was successful, can you confirm how it did that pdd-issue did that or PDD chagne?
+>     can you see logs <TEST_REPO_URL>/issues/305 i think it somehow identified PDD change was successful, can you confirm how it did that pdd-issue did that or PDD chagne?
 
 **18:17:20** _(sid `eada1eed`)_
 >     so ill pass 100%, check all errors and fix all
@@ -5870,12 +5870,12 @@ _250 prompts across 3 sessions_
 >     what if there is failure on second run of PDD change, and PR is from earlier run?
 
 **18:24:14** _(sid `eada1eed`)_
->     remove label from all issues and close them on test_repo
+>     remove label from all issues and close them on <TEST_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:25:13** _(sid `6dd375cf`)_
->     ok deploy make sure we have latest stuff and then duplicate this https://github.com/promptdriven/test_repo/issues/305 and pdd-issue and PDD-sonnet, this one only failing one so lets see
+>     ok deploy make sure we have latest stuff and then duplicate this <TEST_REPO_URL>/issues/305 and pdd-issue and PDD-sonnet, this one only failing one so lets see
 
 **18:25:55** _(sid `6dd375cf`)_
 >     did you make sure we have latest,do not say like last time, oh we were using old stuff
@@ -5888,7 +5888,7 @@ _250 prompts across 3 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:27:34** _(sid `6dd375cf`)_
->     also look at this https://github.com/promptdriven/test_repo/issues/305 i removed label and it is still going on, what happened
+>     also look at this <TEST_REPO_URL>/issues/305 i removed label and it is still going on, what happened
 
 **18:28:35** _(sid `6dd375cf`)_
 >     i think for other PDD commands if you comment it stops, would it for pdd-issue?
@@ -5903,7 +5903,7 @@ _250 prompts across 3 sessions_
 _109 prompts across 2 sessions_
 
 **18:05:38** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/361 see this, this is a subissue of one of decomposition for pdd-issue, it ran PDD change, and on PDD sync errored, a multiple times, you can use gcloud logs for this run and see what happend, is this right behavior, how to fix it, and how to make it better, what went rong
+>     <TEST_REPO_URL>/issues/361 see this, this is a subissue of one of decomposition for pdd-issue, it ran PDD change, and on PDD sync errored, a multiple times, you can use gcloud logs for this run and see what happend, is this right behavior, how to fix it, and how to make it better, what went rong
 
 **18:10:52** _(sid `6dd375cf`)_
 >     see gcloud logs for this run also, we have logs for every file, take your time and go thourugh it so we pin point exact root cause and see how to fix it
@@ -5920,10 +5920,10 @@ _109 prompts across 2 sessions_
 >     yes, and also it should remove the label it self if this happens, and stop, and user can relabel once it is fixed, what you think?
 
 **18:25:41** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/333 also see this first run PDD sync shows succesful, but verification failed, second runs, success again verification successful, see gcloud logs, and the all the PRs for this issue and their respective commits, see what PDD change did, what PDD sync did, why first verification failed, why second worked, is this problem of PDD sync, or pdd-issue could not transfer the PR properly from PDD change to PDD sync, there is PR 353 and also PR 352 why there were two PRs created for PDD change, and second one is bad PR, and then PDD sync made PR 357, where there were so many separate PRs, why not both worked on one, do deep investigation on this and figure out the problem for this
+>     <TEST_REPO_URL>/issues/333 also see this first run PDD sync shows succesful, but verification failed, second runs, success again verification successful, see gcloud logs, and the all the PRs for this issue and their respective commits, see what PDD change did, what PDD sync did, why first verification failed, why second worked, is this problem of PDD sync, or pdd-issue could not transfer the PR properly from PDD change to PDD sync, there is PR 353 and also PR 352 why there were two PRs created for PDD change, and second one is bad PR, and then PDD sync made PR 357, where there were so many separate PRs, why not both worked on one, do deep investigation on this and figure out the problem for this
 
 **18:36:24** _(sid `1af3e031`)_
->     after this we need to investigate on Gemini-pro run https://github.com/promptdriven/test_repo/issues/340, if you see our pdd-issue choose PDD change and PDD sync for this. while PDD change was running, and was on step 9, why after that it went to verirfication, help me find root cause, no code changes or anything needed, right our work is to find root cause, and the best way is to use glcoud logs for this pdd-issue run, and then go into PDD bug run, and see both run take your time and see where the issue occurred
+>     after this we need to investigate on Gemini-pro run <TEST_REPO_URL>/issues/340, if you see our pdd-issue choose PDD change and PDD sync for this. while PDD change was running, and was on step 9, why after that it went to verirfication, help me find root cause, no code changes or anything needed, right our work is to find root cause, and the best way is to use glcoud logs for this pdd-issue run, and then go into PDD bug run, and see both run take your time and see where the issue occurred
 
 **18:41:04** _(sid `6dd375cf`)_
 >     i logged in gcloud auth application-default login
@@ -5931,7 +5931,7 @@ _109 prompts across 2 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:46:50** _(sid `1af3e031`)_
->     same for this https://github.com/promptdriven/test_repo/issues/341 it is hard for me to see what happened wrong for GitHub comments it looks like not all step comments are being posted and it is just going weird, whats going wrong behind the scene, is same problem happening for both, or whats happening, and give me a final report on whats going wrong
+>     same for this <TEST_REPO_URL>/issues/341 it is hard for me to see what happened wrong for GitHub comments it looks like not all step comments are being posted and it is just going weird, whats going wrong behind the scene, is same problem happening for both, or whats happening, and give me a final report on whats going wrong
 
 **18:51:08** _(sid `6dd375cf`)_
 >     after this deploy the new images, deploy all new, i do not want that oh this one ran old one, make sure you deploy everything we need to test it, and before we label and make a run and spend money and time, make sure we have fully have the latest changes. once done let me know i tell you how to test it
@@ -5965,17 +5965,17 @@ _109 prompts across 2 sessions_
 >     for fix 1, if all agent provider fail on PDD sync, but PDD change already made a PR? what happens
 
 **19:18:35** _(sid `6dd375cf`)_
->     also top up the account i am using for test_repo with <REDACTED-CREDIT-AMOUNT> credits
+>     also top up the account i am using for <TEST_REPO> with <REDACTED-CREDIT-AMOUNT> credits
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **19:19:28** _(sid `6dd375cf`)_
->     can you check whcih user id we using for test_repo
+>     can you check whcih user id we using for <TEST_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **19:34:21** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/390 look at the issue after step 8, i see step 2, what happend, can you see gcloud logs
+>     <TEST_REPO_URL>/issues/390 look at the issue after step 8, i see step 2, what happend, can you see gcloud logs
 
 **19:36:00** _(sid `6dd375cf`)_
 >     wait explain me whats happening, why we running in loop
@@ -6118,16 +6118,16 @@ _109 prompts across 2 sessions_
 >     for zombie detector can you also, check for this [Pasted text #10 +22 lines] we had this prbolem before
 
 **20:50:18** _(sid `6dd375cf`)_
->     creatte the issue on test_repo we will come back to this
+>     creatte the issue on <TEST_REPO> we will come back to this
 
 **20:51:22** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/392 look at this first see why PDD sync failed, check gcloud logs and see those, as GitHub commnets are not comprehensive
+>     <TEST_REPO_URL>/issues/392 look at this first see why PDD sync failed, check gcloud logs and see those, as GitHub commnets are not comprehensive
 
 **20:53:59** _(sid `6dd375cf`)_
 >     can you check upstream PDD change and PDD sync how they work
 
 **20:57:36** _(sid `6dd375cf`)_
->     look at gcloud logs you can also check up stream pick an issue on pdd_cloud where PDD change and PDD sync are run seperately and see how they handle this, gcloud logs are best way to debug, they are comprehensive unlike GitHub commands
+>     look at gcloud logs you can also check up stream pick an issue on <PRIVATE_REPO> where PDD change and PDD sync are run seperately and see how they handle this, gcloud logs are best way to debug, they are comprehensive unlike GitHub commands
 
 **21:05:27** _(sid `6dd375cf`)_
 >     i want two things, we use same behavior as other commands PDD bug, PDD fix, PDD change PDD sync would follow, and secondly it should use model set by PDD-label. wether it comes from vertex ai or somewhere else, it should follow upstream how it is already done. basically we have PDD commands, pdd-issue is just sits on top of it, and runs them for the user, instead of user running them indiviually so it should follow same sturcture and everything. what you think, discuss what do you think we should do
@@ -6155,13 +6155,13 @@ _109 prompts across 2 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **21:12:49** _(sid `6dd375cf`)_
->     check a PDD sync run on pdd_cloud, and see it is gcloud logs, we save every run gcloud logs and see how it handles it, i have a feeling we change something that messed it up for this branch
+>     check a PDD sync run on <PRIVATE_REPO>, and see it is gcloud logs, we save every run gcloud logs and see how it handles it, i have a feeling we change something that messed it up for this branch
 
 **21:16:42** _(sid `6dd375cf`)_
->     check this issue gcloud logs how does this handle PDD sync https://github.com/promptdriven/pdd_cloud/issues/586 this will give you a better view
+>     check this issue gcloud logs how does this handle PDD sync <PRIVATE_REPO_URL>/issues/586 this will give you a better view
 
 **21:20:13** _(sid `6dd375cf`)_
->     did you check gcloud logs for this fully https://github.com/promptdriven/pdd_cloud/issues/586
+>     did you check gcloud logs for this fully <PRIVATE_REPO_URL>/issues/586
 
 **21:27:32** _(sid `6dd375cf`)_
 >     would this mess up prod?
@@ -6237,13 +6237,13 @@ _109 prompts across 2 sessions_
 >     by the way Sync's output gets committed and pushed via fallback PR ✅ why fallback, does not PDD sync do it automatically
 
 **22:07:46** _(sid `6dd375cf`)_
->     but how does upstream pdd_cloud does it, i have used PDD sync before, without pddissue and it used to make commits to same PR as PDD change
+>     but how does upstream <PRIVATE_REPO> does it, i have used PDD sync before, without pddissue and it used to make commits to same PR as PDD change
 
 **22:08:55** _(sid `6dd375cf`)_
 >     i am confused, how we doing it, and why we doing it differenetly from upstream
 
 **22:36:19** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/397 see this verification failed again, see gcloud logs and see what happened, what went wrong
+>     <TEST_REPO_URL>/issues/397 see this verification failed again, see gcloud logs and see what happened, what went wrong
 
 **22:38:13** _(sid `6dd375cf`)_
 >     check how if i run PDD change and PDD sync manually without pdd-issue how they handle it and how we handling it, why we occurring problem for pdd-issue while a uder manually doing PDD change and then PDD sync works
@@ -6331,7 +6331,7 @@ _327 prompts across 6 sessions_
 >     ok look at 414 it created PR 422, check again it does not have PDD change stuff in it whats happening look at upstream PDD change, our PDD change or something is wron, either PDD-change pdd-issue or PDD-sync something is wrojg
 
 **07:20:45** _(sid `6dd375cf`)_
->     why we adding multiple fall backs, will that work? look at upstream main, this repo https://github.com/promptdriven/pdd_cloud and see how is it doing it, how does it is PDD change and PDD sync handle it
+>     why we adding multiple fall backs, will that work? look at upstream main, this repo <PRIVATE_REPO_URL> and see how is it doing it, how does it is PDD change and PDD sync handle it
 
 **07:25:30** _(sid `6dd375cf`)_
 >     clarification worked as user had to put in, it is verified
@@ -6339,7 +6339,7 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **07:26:04** _(sid `6dd375cf`)_
->     did you check upstream repo pdd_cloud and see how they handling PDD change and PDD sync why their works and nout ours, and how you fixed it
+>     did you check upstream repo <PRIVATE_REPO> and see how they handling PDD change and PDD sync why their works and nout ours, and how you fixed it
 
 **07:26:54** _(sid `6dd375cf`)_
 >     is the fallback in this PDD change runs → CLI creates PR on change/issue-N → executor detects uncommitted files in main workdir → create_branch_and_pr creates second PR on enhancement/issue-N → overwrites pr_url with the enhancement PR 2. Orchestrator reads the enhancement PR URL → sets base_branch = "enhancement/issue-N" from pdd-issue
@@ -6368,13 +6368,13 @@ _327 prompts across 6 sessions_
 >     you did it wrong create two duplicate of 431 and label one with PDD-change PDD-sonnet and other with pdd-issue and PDD-sonnet. also check my credits
 
 **08:03:43** _(sid `6dd375cf`)_
->     we hit same problem for https://github.com/promptdriven/test_repo/issues/434, PDD change created the PR and instead it has main worktree diff i think and not the diff from the worktree that pdd_change worktree had we want that pdd_change worktree diff are there and nothing else and PDD sync uses same PR to make it is changes on top of it, so it is one consistent PR with both working on same worktree or sth
+>     we hit same problem for <TEST_REPO_URL>/issues/434, PDD change created the PR and instead it has main worktree diff i think and not the diff from the worktree that pdd_change worktree had we want that pdd_change worktree diff are there and nothing else and PDD sync uses same PR to make it is changes on top of it, so it is one consistent PR with both working on same worktree or sth
 
 **08:07:51** _(sid `6dd375cf`)_
->     something is wrong with pdd_change, even normal PDD change does not do it, so we messed up PDD change somehow we need to fix it using upstream pdd_cloud
+>     something is wrong with pdd_change, even normal PDD change does not do it, so we messed up PDD change somehow we need to fix it using upstream <PRIVATE_REPO>
 
 **08:17:57** _(sid `6dd375cf`)_
->     after you are done, deploy create same issue https://github.com/promptdriven/test_repo/issues/434 and label it pdd-issue and PDD-sonnet and another one with PDD-change
+>     after you are done, deploy create same issue <TEST_REPO_URL>/issues/434 and label it pdd-issue and PDD-sonnet and another one with PDD-change
 
 **08:19:59** _(sid `1af3e031`)_
 >     link to 523 PR
@@ -6415,7 +6415,7 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:01:22** _(sid `f435bcc9`)_
->     get this PR on separate worktree https://github.com/promptdriven/pdd_cloud/pull/712 and rebase it with main, and give me pwd, and do end to end analysis of it, if this is still valid right now for the codebase, it is old PR
+>     get this PR on separate worktree <PRIVATE_REPO_URL>/pull/712 and rebase it with main, and give me pwd, and do end to end analysis of it, if this is still valid right now for the codebase, it is old PR
 
 **10:02:54** _(sid `085f5b51`)_
 >     give me link to both issues
@@ -6423,10 +6423,10 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:03:49** _(sid `085f5b51`)_
->     this giving me 404 https://github.com/promptdriven/pdd-gltanaka/issues/854
+>     this giving me 404 <PRIVATE_REPO_URL>/issues/854
 
 **10:05:47** _(sid `6dd375cf`)_
->     see whats happening for this https://github.com/promptdriven/test_repo/issues/442 is it stuck or what Gemini one
+>     see whats happening for this <TEST_REPO_URL>/issues/442 is it stuck or what Gemini one
 
 **10:06:58** _(sid `085f5b51`)_
 >     check if this already got resolved https://github.com/gltanaka/pdd/issues/854 by some other PR or issue, as this was last week
@@ -6457,7 +6457,7 @@ _327 prompts across 6 sessions_
 >     sure, lets build it, is it possible i built it, and i can decide later wether to add to make test-cloud or no, or should i decide right now as later it would be difficult to do this?
 
 **10:19:06** _(sid `6dd375cf`)_
->     can you create a duplicate of this https://github.com/promptdriven/test_repo/issues/416 and label it pdd-issue and PDD-sonnet i want to test on compelx issue pdd-issue
+>     can you create a duplicate of this <TEST_REPO_URL>/issues/416 and label it pdd-issue and PDD-sonnet i want to test on compelx issue pdd-issue
 
 **10:19:49** _(sid `085f5b51`)_
 >     ok first make me assigned for these and check where they live in which repo first
@@ -6470,7 +6470,7 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:22:35** _(sid `1af3e031`)_
->     sure basically these are 5 issues https://github.com/promptdriven/test_repo/issues/334 https://github.com/promptdriven/test_repo/issues/335 https://github.com/promptdriven/test_repo/issues/336 https://github.com/promptdriven/test_repo/issues/337 https://github.com/promptdriven/test_repo/issues/338, also one requires clarification so user has to manually comment for clarification, do you think we should keep this or no. or is there a way to comment, also see pdd-issue and see what other issues you think might be good, in this i am testing PDD bug PDD fix, PDD change PDD sync PDD test PDD fix and clarification and complex break, explain the tradeoffs
+>     sure basically these are 5 issues <TEST_REPO_URL>/issues/334 <TEST_REPO_URL>/issues/335 <TEST_REPO_URL>/issues/336 <TEST_REPO_URL>/issues/337 <TEST_REPO_URL>/issues/338, also one requires clarification so user has to manually comment for clarification, do you think we should keep this or no. or is there a way to comment, also see pdd-issue and see what other issues you think might be good, in this i am testing PDD bug PDD fix, PDD change PDD sync PDD test PDD fix and clarification and complex break, explain the tradeoffs
 
 **10:24:44** _(sid `1af3e031`)_
 >     [Pasted text #4 +5 lines] for these PDD fix and PDD sync are never run alone on issue, for duplicate i think we already handling it,
@@ -6484,7 +6484,7 @@ _327 prompts across 6 sessions_
 >     can you check the existing make test-cloud to understnad the infrasutrcure of it, and also how long average it takes for them, and whats the best way to integerate this into there
 
 **10:28:15** _(sid `6dd375cf`)_
->     check on this https://github.com/promptdriven/test_repo/issues/445 what happened see gcloud logs it ran PDD bug, and right after step 1 it said completed without changes and verification failed
+>     check on this <TEST_REPO_URL>/issues/445 what happened see gcloud logs it ran PDD bug, and right after step 1 it said completed without changes and verification failed
 
 **10:31:04** _(sid `6dd375cf`)_
 >     see gcloud logs and tell me exactly why PDD bug exited early
@@ -6514,13 +6514,13 @@ _327 prompts across 6 sessions_
 >     i want to run from worktree so it picks our changes
 
 **10:46:11** _(sid `f435bcc9`)_
->     (base) <LOCAL_SHELL_PROMPT> % cd <LOCAL_WORKSPACE>/pdd_cloud/.pdd/worktrees/fix-659-clean && PYTHONUNBUFFERED=1 <LOCAL_WORKSPACE>/pdd_cloud/backend/functions/venv/bin/python3 -m scripts.cloud_batch.run_cloud_tests <LOCAL_WORKSPACE>/pdd_cloud/backend/functions/venv/bin/python3: Error while finding module specification for 'scripts.cloud_batch.run_cloud_tests' (ModuleNotFoundError: No module named 'scripts') (base) <LOCAL_SHELL_PROMPT> %
+>     (base) <LOCAL_SHELL_PROMPT> % cd <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.pdd/worktrees/fix-659-clean && PYTHONUNBUFFERED=1 <LOCAL_WORKSPACE>/<PRIVATE_REPO>/backend/functions/venv/bin/python3 -m scripts.cloud_batch.run_cloud_tests <LOCAL_WORKSPACE>/<PRIVATE_REPO>/backend/functions/venv/bin/python3: Error while finding module specification for 'scripts.cloud_batch.run_cloud_tests' (ModuleNotFoundError: No module named 'scripts') (base) <LOCAL_SHELL_PROMPT> %
 
 **10:47:17** _(sid `6dd375cf`)_
 >     sure do both and make sure we deploy latest, so we can test it out
 
 **10:48:14** _(sid `1af3e031`)_
->     for running Gemini models i get this https://github.com/promptdriven/test_repo/issues/442 see gcloud logs for proper info what happened, step 7 after that execution failed and it goes vericiation and fails
+>     for running Gemini models i get this <TEST_REPO_URL>/issues/442 see gcloud logs for proper info what happened, step 7 after that execution failed and it goes vericiation and fails
 
 **10:49:14** _(sid `085f5b51`)_
 >     give me link to all issues, so i can check progress
@@ -6567,7 +6567,7 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:12:15** _(sid `6dd375cf`)_
->     cd <LOCAL_WORKSPACE>/pdd_cloud/.pdd/worktrees/change-issue-523
+>     cd <LOCAL_WORKSPACE>/<PRIVATE_REPO>/.pdd/worktrees/change-issue-523
 
 **11:13:02** _(sid `1af3e031`)_
 >     where is script, i cannot find it
@@ -6584,16 +6584,16 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:18:06** _(sid `1af3e031`)_
->     but before, i ran the script using sonnet https://github.com/promptdriven/test_repo/issues/453 for clairfication how will it work, the script
+>     but before, i ran the script using sonnet <TEST_REPO_URL>/issues/453 for clairfication how will it work, the script
 
 **11:22:57** _(sid `f435bcc9`)_
 >     i failed these tests [Pasted text #4 +75 lines] [Pasted text #5 +27 lines]
 
 **11:30:53** _(sid `085f5b51`)_
->     https://github.com/promptdriven/pdd_cloud/issues/570 can you check why PDD change made two PRs?
+>     <PRIVATE_REPO_URL>/issues/570 can you check why PDD change made two PRs?
 
 **11:31:41** _(sid `085f5b51`)_
->     https://github.com/promptdriven/pdd_cloud/issues/570 can you see gcloud logs and see what happened to sync, why it failed did it got wrong branch
+>     <PRIVATE_REPO_URL>/issues/570 can you see gcloud logs and see what happened to sync, why it failed did it got wrong branch
 
 **11:34:36** _(sid `085f5b51`)_
 >     what about this see gcloud for this run as well
@@ -6601,13 +6601,13 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:36:14** _(sid `085f5b51`)_
->     https://github.com/promptdriven/pdd_cloud/issues/680
+>     <PRIVATE_REPO_URL>/issues/680
 
 **11:37:54** _(sid `085f5b51`)_
 >     can you see if there should be associated basename file for it, you can see arhctecture json or pddrc
 
 **11:39:17** _(sid `6dd375cf`)_
->     see what happened to this https://github.com/promptdriven/test_repo/issues/455, i have not seen anything since 8 minute mark
+>     see what happened to this <TEST_REPO_URL>/issues/455, i have not seen anything since 8 minute mark
 
 **11:39:56** _(sid `085f5b51`)_
 >     how to fix this, should PDD sync be ran on this, do we need code changes for this? if so how to fix
@@ -6619,7 +6619,7 @@ _327 prompts across 6 sessions_
 >     do a full investigation what went wrong, do not rely on my info, i want you to see what happened, where is the fix
 
 **11:42:41** _(sid `6dd375cf`)_
->     just a question why we have two PRs https://github.com/promptdriven/test_repo/issues/455
+>     just a question why we have two PRs <TEST_REPO_URL>/issues/455
 
 **11:44:52** _(sid `6dd375cf`)_
 >     i am confused what happened whats wrong
@@ -6632,22 +6632,22 @@ _327 prompts across 6 sessions_
 >     5. Any decision you need from me.
 
 **11:47:26** _(sid `6dd375cf`)_
->     check for this also https://github.com/promptdriven/test_repo/issues/458 this is a subissue when PDD change ran i did not see prompt change in the PR can you see what happened
+>     check for this also <TEST_REPO_URL>/issues/458 this is a subissue when PDD change ran i did not see prompt change in the PR can you see what happened
 
 **11:51:57** _(sid `6dd375cf`)_
->     how to test if upstream has this problem lets create a small test issue and run PDD change on pdd_cloud and see if it works or no
+>     how to test if upstream has this problem lets create a small test issue and run PDD change on <PRIVATE_REPO> and see if it works or no
 
 **11:53:27** _(sid `6dd375cf`)_
 >     how would you verify locally it added to the PR?
 
 **11:53:57** _(sid `6dd375cf`)_
->     cannot we just create an issue on pdd_cloud and label it PDD change and we can test it that way
+>     cannot we just create an issue on <PRIVATE_REPO> and label it PDD change and we can test it that way
 
 **11:54:20** _(sid `f435bcc9`)_
 >     [Pasted text #6 +18 lines][Pasted text #7 +36 lines] one failed still
 
 **12:02:38** _(sid `6dd375cf`)_
->     just a question why it did not work for this https://github.com/promptdriven/test_repo/issues/458 meaning PR did not had the prompt but for this we had it https://github.com/promptdriven/test_repo/issues/452, they weree both ran before this deployment and both had same deployment only thing is 458 is a subissue from a parent issue, what went wrong, you can use gcloud logs and fully investigate take your time
+>     just a question why it did not work for this <TEST_REPO_URL>/issues/458 meaning PR did not had the prompt but for this we had it <TEST_REPO_URL>/issues/452, they weree both ran before this deployment and both had same deployment only thing is 458 is a subissue from a parent issue, what went wrong, you can use gcloud logs and fully investigate take your time
 
 **12:17:52** _(sid `6dd375cf`)_
 >     hmm, so our fix would fix both of them, and would not cause this again right?
@@ -6664,7 +6664,7 @@ _327 prompts across 6 sessions_
 >     are you sure it never created or it created but never made to PR
 
 **12:22:33** _(sid `085f5b51`)_
->     https://github.com/promptdriven/pdd_cloud/issues/680 all sync failed can you check why
+>     <PRIVATE_REPO_URL>/issues/680 all sync failed can you check why
 
 **12:22:56** _(sid `f435bcc9`)_
 >     [Pasted text #8 +17 lines][Pasted text #9 +28 lines] one fialure
@@ -6779,7 +6779,7 @@ _327 prompts across 6 sessions_
 >     ok can you give me pwd of this so i can run test-cloud on it and also what changes you made on top of PDD bug and PDD fix
 
 **13:45:46** _(sid `f435bcc9`)_
->     but there was a PR associated with it already https://github.com/promptdriven/pdd_cloud/pull/712 for fix-659-stop-conditions cannot you commit and push to this
+>     but there was a PR associated with it already <PRIVATE_REPO_URL>/pull/712 for fix-659-stop-conditions cannot you commit and push to this
 
 **13:46:13** _(sid `085f5b51`)_
 >     ok [Pasted text #3 +8 lines]
@@ -6799,7 +6799,7 @@ _327 prompts across 6 sessions_
 >     why it only has one commit, i ran PDD bug and PDD fix on it right?
 
 **13:52:32** _(sid `6dd375cf`)_
->     check it is progress https://github.com/promptdriven/test_repo/issues/475
+>     check it is progress <TEST_REPO_URL>/issues/475
 
 **13:52:51** _(sid `085f5b51`)_
 >     lets move to A- one now same explain issue first
@@ -6847,7 +6847,7 @@ _327 prompts across 6 sessions_
 >     hmm ok remove all labels and close all issues, make sure we deployed latest and lets run script again but this time with Gemini pro, top up my credits by <REDACTED-CREDIT-AMOUNT> and also monitor it closely everything, if you want to put logs, you can put logs or anything, but any failure i want you to report exactly what happened, a lot of times we are uncertain what happened so.
 
 **14:17:08** _(sid `085f5b51`)_
->     https://github.com/promptdriven/pdd_cloud/pull/737 for this PR i do not see the stuff you merged to maiin by accident, do not you think we need that or no
+>     <PRIVATE_REPO_URL>/pull/737 for this PR i do not see the stuff you merged to maiin by accident, do not you think we need that or no
 
 **14:19:35** _(sid `6dd375cf`)_
 >     also keep monitoring if we ran out of memory
@@ -6899,7 +6899,7 @@ _327 prompts across 6 sessions_
 >     do not merge until all tests pass
 
 **14:42:36** _(sid `6dd375cf`)_
->     why it went to PDD fix straight after we resumed https://github.com/promptdriven/test_repo/issues/490
+>     why it went to PDD fix straight after we resumed <TEST_REPO_URL>/issues/490
 
 **14:43:14** _(sid `085f5b51`)_
 >     lets work on last issue
@@ -7066,7 +7066,7 @@ _327 prompts across 6 sessions_
 >     [Pasted text #20 +47 lines][Pasted text #21 +40 lines] i want to pass test for both, and also this third one i can run from any staging you want, but we need to make sure we pass all
 
 **16:19:12** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/516 look at this one, it says architecure clarification needed, and it should have stopped maybe, but it went on and ran PDD sync, this will probably fail, either we create issue that will not cause Gemini to do this or something else
+>     <TEST_REPO_URL>/issues/516 look at this one, it says architecure clarification needed, and it should have stopped maybe, but it went on and ran PDD sync, this will probably fail, either we create issue that will not cause Gemini to do this or something else
 >
 >     Write the output as a product-level request, not an implementation plan. Include:
 >     1. The user-visible behavior we want.
@@ -7090,7 +7090,7 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **16:33:24** _(sid `6dd375cf`)_
->     https://github.com/promptdriven/test_repo/issues/514 see this it is stuck after step15 see whats happening
+>     <TEST_REPO_URL>/issues/514 see this it is stuck after step15 see whats happening
 
 **16:37:18** _(sid `6dd375cf`)_
 >     why they died, if this is the case we cannot use it for regression testing, what happened, is it because it is slow, if thats the case why it is so slow
@@ -7118,10 +7118,10 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **16:48:48** _(sid `085f5b51`)_
->     just a question https://github.com/promptdriven/pdd_cloud/pull/737 look at this PR and issue and review it, see if we not doing anything extra
+>     just a question <PRIVATE_REPO_URL>/pull/737 look at this PR and issue and review it, see if we not doing anything extra
 
 **16:51:18** _(sid `085f5b51`)_
->     same for this https://github.com/promptdriven/pdd_cloud/pull/739
+>     same for this <PRIVATE_REPO_URL>/pull/739
 
 **17:05:14** _(sid `6dd375cf`)_
 >     for clairfication ones, is it waiting for me or did it conitnue without me
@@ -7176,13 +7176,13 @@ _327 prompts across 6 sessions_
 >     i see some failures though
 
 **17:38:30** _(sid `f435bcc9`)_
->     is this rebased with main https://github.com/promptdriven/pdd_cloud/pull/712
+>     is this rebased with main <PRIVATE_REPO_URL>/pull/712
 
 **17:38:53** _(sid `f435bcc9`)_
 >     same for this https://github.com/gltanaka/pdd/pull/839
 
 **17:39:39** _(sid `f435bcc9`)_
->     samee for these https://github.com/promptdriven/pdd_cloud/pull/737 https://github.com/promptdriven/pdd_cloud/pull/739
+>     samee for these <PRIVATE_REPO_URL>/pull/737 <PRIVATE_REPO_URL>/pull/739
 
 **17:40:28** _(sid `085f5b51`)_
 >     just a question if i run for other two PR now will they fail?
@@ -7281,7 +7281,7 @@ _327 prompts across 6 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:42:19** _(sid `6dd375cf`)_
->     why it asked for clariicaiton https://github.com/promptdriven/test_repo/issues/538
+>     why it asked for clariicaiton <TEST_REPO_URL>/issues/538
 
 **18:43:06** _(sid `6dd375cf`)_
 >     check to see gcloud logs what Gemini was doing
@@ -7361,10 +7361,10 @@ _327 prompts across 6 sessions_
 >     i see lot of comments that it is duplicate, can you look into it
 
 **20:04:04** _(sid `86ff835f`)_
->     review this PR and issue with it end to end https://github.com/promptdriven/pdd_cloud/pull/737, and comment on it fully review before it goes for prod
+>     review this PR and issue with it end to end <PRIVATE_REPO_URL>/pull/737, and comment on it fully review before it goes for prod
 
 **20:04:21** _(sid `01787958`)_
->     https://github.com/promptdriven/pdd_cloud/pull/739 review this PR and issue with it end to end, and comment on it fully review before it goes for prod
+>     <PRIVATE_REPO_URL>/pull/739 review this PR and issue with it end to end, and comment on it fully review before it goes for prod
 
 **20:07:00** _(sid `86ff835f`)_
 >     do full in depth review, any thing wrong
@@ -7484,7 +7484,7 @@ _327 prompts across 6 sessions_
 >     link to PR also nothig to commit and push?
 
 **20:57:14** _(sid `01787958`)_
->     https://github.com/promptdriven/pdd_cloud/pull/739 review the PR i see lot of junk files in there
+>     <PRIVATE_REPO_URL>/pull/739 review the PR i see lot of junk files in there
 
 **20:58:31** _(sid `01787958`)_
 >     no i meant this extensions/github_pdd_app/frontend/src/components/JobCard.tsx extensions/github_pdd_app/src/services/installation_service.py frontend/src/components/jobs/JobCard.tsx
@@ -7525,7 +7525,7 @@ _256 prompts across 8 sessions_
 >     5. Any decision you need from me.
 
 **10:10:53** _(sid `de3a5e41`)_
->     can you delete all of my issues on test_repo [Pasted text #1 +47 lines] other than latest 3
+>     can you delete all of my issues on <TEST_REPO> [Pasted text #1 +47 lines] other than latest 3
 
 **10:11:25** _(sid `6dd375cf`)_
 >     ok lets take care of duplicates first,
@@ -7536,7 +7536,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:12:49** _(sid `6dd375cf`)_
->     [Pasted text #19 +11 lines] can you use this to delete all issues on test_Repo
+>     [Pasted text #19 +11 lines] can you use this to delete all issues on <TEST_REPO>
 
 **10:13:09** _(sid `6dd375cf`)_
 >     why failing
@@ -7555,12 +7555,12 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:20:39** _(sid `6dd375cf`)_
->     the context mentions we can make a separate service account with permissions for test_repo, so it can do stuff only on test_repo, explain the tradeoffs what are the best way to set this up and also clean at the end
+>     the context mentions we can make a separate service account with permissions for <TEST_REPO>, so it can do stuff only on <TEST_REPO>, explain the tradeoffs what are the best way to set this up and also clean at the end
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:22:39** _(sid `6dd375cf`)_
->     what you think of 2? we have a separate GitHub app for test_repo, or is that not good way
+>     what you think of 2? we have a separate GitHub app for <TEST_REPO>, or is that not good way
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -7590,7 +7590,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **10:39:12** _(sid `6dd375cf`)_
->     can i do this Generate a fine-grained PAT scoped to test_repo only or this needs to be done
+>     can i do this Generate a fine-grained PAT scoped to <TEST_REPO> only or this needs to be done
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -7661,7 +7661,7 @@ _256 prompts across 8 sessions_
 >     5. Any decision you need from me.
 
 **11:24:09** _(sid `de3a5e41`)_
->     can you tell me best ways we made a bot account that has admin access to tet_repo and test_repo 2 and also memeber of org will that work
+>     can you tell me best ways we made a bot account that has admin access to <TEST_REPO> and <TEST_REPO> 2 and also memeber of org will that work
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -7672,7 +7672,7 @@ _256 prompts across 8 sessions_
 >     see infisical or secret manager if we have it htere
 
 **11:31:25** _(sid `de3a5e41`)_
->     thats the whole problem, we want to scope this bot to only be able to delete on test_rep and test_repo_2 and also make that members cannot delete issues, also this bot is used by other dev, so they might accidently use this bot to delete issues
+>     thats the whole problem, we want to scope this bot to only be able to delete on <TEST_REPO> and <TEST_REPO> and also make that members cannot delete issues, also this bot is used by other dev, so they might accidently use this bot to delete issues
 
 **11:32:44** _(sid `de3a5e41`)_
 >     hmm, what if we allow members to delet issues on GitHub, that means any memebr can delete?
@@ -7721,7 +7721,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:41:30** _(sid `6dd375cf`)_
->     can you try to delete all issues on test_repo now, i think we can
+>     can you try to delete all issues on <TEST_REPO> now, i think we can
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -7902,13 +7902,13 @@ _256 prompts across 8 sessions_
 >     keep noting time where it is slow, where it is failing, whats wrong, what should be fixed
 
 **14:07:58** _(sid `21d0c2e9`)_
->     can you do one thng make a test on pdd_cloud and same on on test_repo label them PDD-bug and PDD-Gemini-flash i want to see how long does it take for it to run full cycle, and keep monitoring seeing where it is slowest
+>     can you do one thng make a test on <PRIVATE_REPO> and same on on <TEST_REPO> label them PDD-bug and PDD-Gemini-flash i want to see how long does it take for it to run full cycle, and keep monitoring seeing where it is slowest
 
 **14:09:12** _(sid `21d0c2e9`)_
->     an you do one thng make a test on pdd_cloud and same on on test_repo label them PDD-bug and PDD-Gemini-flash i want to see how long does it take for it to run full cycle, and keep monitoring seeing where it is slowest
+>     an you do one thng make a test on <PRIVATE_REPO> and same on on <TEST_REPO> label them PDD-bug and PDD-Gemini-flash i want to see how long does it take for it to run full cycle, and keep monitoring seeing where it is slowest
 
 **14:14:18** _(sid `7556abd2`)_
->     https://github.com/promptdriven/test_repo/issues/618 see whats happening look at gcloud logs why it is not moving forward
+>     <TEST_REPO_URL>/issues/618 see whats happening look at gcloud logs why it is not moving forward
 
 **14:26:29** _(sid `21d0c2e9`)_
 >     can you make two more, and label them Gemini pro and PDD bug i want to test with that model as well
@@ -7916,7 +7916,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **14:33:04** _(sid `1131900c`)_
->     check why there are no PR i do not see a PR for this what happened https://github.com/promptdriven/test_repo/issues/615
+>     check why there are no PR i do not see a PR for this what happened <TEST_REPO_URL>/issues/615
 
 **14:33:26** _(sid `21d0c2e9`)_
 >     progress with their time
@@ -7949,7 +7949,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **14:53:09** _(sid `21d0c2e9`)_
->     can you check gcloud logs for this https://github.com/promptdriven/pdd_cloud/issues/747 and see whats happening
+>     can you check gcloud logs for this <PRIVATE_REPO_URL>/issues/747 and see whats happening
 
 **14:53:37** _(sid `1131900c`)_
 >     lets kill and delete all issues made by <USER>, and lets try with PDD-sonnet,
@@ -8078,7 +8078,7 @@ _256 prompts across 8 sessions_
 >     give me link to all issues that we were monitoring as part of this script
 
 **15:55:06** _(sid `1131900c`)_
->     ok look at this https://github.com/promptdriven/test_repo/issues/643 PDD bug made a PR who closed it, PDD fix ran but failed, whats happening we investigate one issue by one issue, lets first try to debug this, go check what happend, do in depth analysis
+>     ok look at this <TEST_REPO_URL>/issues/643 PDD bug made a PR who closed it, PDD fix ran but failed, whats happening we investigate one issue by one issue, lets first try to debug this, go check what happend, do in depth analysis
 
 **15:57:39** _(sid `1131900c`)_
 >     do you think this happened because someone closed the PR?
@@ -8131,7 +8131,7 @@ _256 prompts across 8 sessions_
 >     so i can run two scripts at same time now right?
 
 **16:19:06** _(sid `1131900c`)_
->     ok kill everything delete all issues by me on test_repo, and then make sure everything is up to date deployed, ill make you run PDD sonnet, and ill run another one myself
+>     ok kill everything delete all issues by me on <TEST_REPO>, and then make sure everything is up to date deployed, ill make you run PDD sonnet, and ill run another one myself
 
 **16:20:09** _(sid `1131900c`)_
 >     make sure everything is clean and updated, and all image is new before starting
@@ -8153,10 +8153,10 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **16:33:16** _(sid `1131900c`)_
->     https://github.com/promptdriven/test_repo/issues/681 look at this PDD test finsihed, why pdd-issue did not kick off PDD-fix, investigate
+>     <TEST_REPO_URL>/issues/681 look at this PDD test finsihed, why pdd-issue did not kick off PDD-fix, investigate
 
 **16:37:51** _(sid `1131900c`)_
->     look at this one https://github.com/promptdriven/test_repo/issues/681 why PDD fix did not kick off
+>     look at this one <TEST_REPO_URL>/issues/681 why PDD fix did not kick off
 
 **16:38:25** _(sid `1131900c`)_
 >     you talked to oom memory
@@ -8274,7 +8274,7 @@ _256 prompts across 8 sessions_
 >     what about the apparoch of timeout or make it resolve it faster or something cannot we do that from script
 
 **17:59:47** _(sid `21d0c2e9`)_
->     did all Gemini pro calls will take this long if i run pdd_cloud on any issue? can you check issues we ran using PDD-Gemini in pdd_cloud repo, and see how long they took
+>     did all Gemini pro calls will take this long if i run <PRIVATE_REPO> on any issue? can you check issues we ran using PDD-Gemini in <PRIVATE_REPO> repo, and see how long they took
 
 **18:02:18** _(sid `21d0c2e9`)_
 >     we can do that, lets do that
@@ -8282,7 +8282,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **18:04:28** _(sid `21d0c2e9`)_
->     did you add to test_repo right?
+>     did you add to <TEST_REPO> right?
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
@@ -8314,7 +8314,7 @@ _256 prompts across 8 sessions_
 >     why sync failed?
 
 **19:01:15** _(sid `21d0c2e9`)_
->     for this one why it trigger PDD sync without PDD change being completed https://github.com/promptdriven/test_repo/issues/723
+>     for this one why it trigger PDD sync without PDD change being completed <TEST_REPO_URL>/issues/723
 
 **19:08:26** _(sid `21d0c2e9`)_
 >     do not put a time out do it again we can take it to 45 mins, first step is to make it work, but before that lets see how to make it faster, what you found this time you had logs as well
@@ -8323,7 +8323,7 @@ _256 prompts across 8 sessions_
 >     why decompose so much time, it runs sub issue in parallel
 
 **19:12:59** _(sid `21d0c2e9`)_
->     i feel like there were other issues with this, like for this https://github.com/promptdriven/test_repo/issues/723 PDD change only ran one step and went to PDD sync, it should have not done this thats why sync failed investigate this also, i think the problem is coming from normal PDD bug PDD fix flow and PDD change PDD sync flow if we fixx that complex fixes it self
+>     i feel like there were other issues with this, like for this <TEST_REPO_URL>/issues/723 PDD change only ran one step and went to PDD sync, it should have not done this thats why sync failed investigate this also, i think the problem is coming from normal PDD bug PDD fix flow and PDD change PDD sync flow if we fixx that complex fixes it self
 
 **19:15:35** _(sid `21d0c2e9`)_
 >     so for duplicate what should have happnened, is that we run script and in end it deletes those issues no matter what it gets killed in between or no, the way we did this is when script is run it kills previous ones, right? also there might be multiple users runnnig this script, maybe even by same person on multiple branches they might be running this lets fix this first, whats your solution for this
@@ -8360,7 +8360,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **19:34:35** _(sid `21d0c2e9`)_
->     yes, make sure we using latest stuff, and kill old runs, delete all previous issues made by us, or any duplicates that is in test_repo made by me, and close all PR made by us and lets do another run
+>     yes, make sure we using latest stuff, and kill old runs, delete all previous issues made by us, or any duplicates that is in <TEST_REPO> made by me, and close all PR made by us and lets do another run
 
 **19:35:30** _(sid `21d0c2e9`)_
 >     what are these zombies, is that bad
@@ -8376,7 +8376,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **19:51:35** _(sid `21d0c2e9`)_
->     again https://github.com/promptdriven/test_repo/issues/735 this one went from step 2 of PDD change to PDD sync see gcloud logs and all logs what happened
+>     again <TEST_REPO_URL>/issues/735 this one went from step 2 of PDD change to PDD sync see gcloud logs and all logs what happened
 
 **19:52:21** _(sid `21d0c2e9`)_
 >     is it because one of the subissue is duplicate?
@@ -8388,7 +8388,7 @@ _256 prompts across 8 sessions_
 >     check on PDD bug why it is taking so long
 
 **19:58:08** _(sid `1131900c`)_
->     check why this https://github.com/promptdriven/test_repo/issues/749 did not go in verification as of yet
+>     check why this <TEST_REPO_URL>/issues/749 did not go in verification as of yet
 
 **20:03:07** _(sid `1131900c`)_
 >     just a question for subissue where does verification take place, becuase i do not see it in the child
@@ -8454,7 +8454,7 @@ _256 prompts across 8 sessions_
 >     monitor this one as well
 
 **20:34:28** _(sid `1131900c`)_
->     https://github.com/promptdriven/test_repo/issues/769
+>     <TEST_REPO_URL>/issues/769
 
 **20:46:58** _(sid `1131900c`)_
 >     wait what happeneed is process got terminated, see why it got terminated, and even if it did why it went to verification
@@ -8493,7 +8493,7 @@ _256 prompts across 8 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **21:20:16** _(sid `1131900c`)_
->     can you create same issue on pdd_cloud and run PDD change on it lets investgiate
+>     can you create same issue on <PRIVATE_REPO> and run PDD change on it lets investgiate
 
 **22:02:15** _(sid `1131900c`)_
 >     [Pasted text #4 +3 lines] this
@@ -8503,7 +8503,7 @@ _256 prompts across 8 sessions_
 _149 prompts across 7 sessions_
 
 **09:35:53** _(sid `a06d1ad5`)_
->     can you check what caused this to double trigger jobs https://github.com/promptdriven/pdd_cloud/issues/755?reload=1 what caused it to double trigger
+>     can you check what caused this to double trigger jobs <PRIVATE_REPO_URL>/issues/755?reload=1 what caused it to double trigger
 
 **10:01:49** _(sid `1131900c`)_
 >     lets test it using the script PDD sonnet, and give me <REDACTED-CREDIT-AMOUNT> credits
@@ -8560,7 +8560,7 @@ _149 prompts across 7 sessions_
 >     ok just keep in mind we must not merge this, approval is required
 
 **11:04:38** _(sid `a06d1ad5`)_
->     https://github.com/promptdriven/pdd_cloud/issues/759 check the PR i made compare it with yours
+>     <PRIVATE_REPO_URL>/issues/759 check the PR i made compare it with yours
 
 **11:06:01** _(sid `1131900c`)_
 >     do not merge this branch ever, we cannot without explicit approval, also just rebase it with main, so we have everything up to date
@@ -8614,15 +8614,15 @@ _149 prompts across 7 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:30:52** _(sid `a06d1ad5`)_
->     test_repo
+>     <TEST_REPO>
 >
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:33:09** _(sid `a06d1ad5`)_
->     https://github.com/promptdriven/test_repo/issues/825 this caused two job trigger
+>     <TEST_REPO_URL>/issues/825 this caused two job trigger
 
 **11:33:22** _(sid `a06d1ad5`)_
->     https://github.com/promptdriven/test_repo/issues/828 smae for this
+>     <TEST_REPO_URL>/issues/828 smae for this
 
 **11:38:50** _(sid `a06d1ad5`)_
 >     close and delete them, and make new ones ill test it out
@@ -8643,7 +8643,7 @@ _149 prompts across 7 sessions_
 >     ok everything works commit and push and give me pwd so i can run test on it
 
 **11:44:31** _(sid `a06d1ad5`)_
->     (base) <LOCAL_SHELL_PROMPT> % PYTHONUNBUFFERED=1 backend/functions/venv/bin/python3 -m scripts.cloud_batch.run_cloud_tests <LOCAL_WORKSPACE>/pdd_cloud/backend/functions/venv/bin/python3: Error while finding module specification for 'scripts.cloud_batch.run_cloud_tests' (ModuleNotFoundError: No module named 'scripts') (base) <LOCAL_SHELL_PROMPT> %
+>     (base) <LOCAL_SHELL_PROMPT> % PYTHONUNBUFFERED=1 backend/functions/venv/bin/python3 -m scripts.cloud_batch.run_cloud_tests <LOCAL_WORKSPACE>/<PRIVATE_REPO>/backend/functions/venv/bin/python3: Error while finding module specification for 'scripts.cloud_batch.run_cloud_tests' (ModuleNotFoundError: No module named 'scripts') (base) <LOCAL_SHELL_PROMPT> %
 
 **11:45:00** _(sid `a06d1ad5`)_
 >     i have to run from wor tree
@@ -8651,10 +8651,10 @@ _149 prompts across 7 sessions_
 >     Before making changes, identify the objective, relevant files or external links, constraints, and success criteria. Then complete the task, verify it, and report the result briefly.
 
 **11:45:34** _(sid `a06d1ad5`)_
->     https://github.com/promptdriven/test_repo/issues/835 i wrote stop, it said terminated but went to step 1 why
+>     <TEST_REPO_URL>/issues/835 i wrote stop, it said terminated but went to step 1 why
 
 **11:49:37** _(sid `a06d1ad5`)_
->     we had one did we not use this one https://github.com/promptdriven/pdd_cloud/pull/760
+>     we had one did we not use this one <PRIVATE_REPO_URL>/pull/760
 
 **11:53:55** _(sid `a06d1ad5`)_
 >     no i want you to use that one
@@ -8775,7 +8775,7 @@ _149 prompts across 7 sessions_
 >     fix these to [Pasted text #1 +3 lines]
 
 **14:41:59** _(sid `6f20b9cf`)_
->     https://github.com/promptdriven/pdd_cloud/pull/752 see this PR i made for docs, see if it is good or anything needs updating
+>     <PRIVATE_REPO_URL>/pull/752 see this PR i made for docs, see if it is good or anything needs updating
 
 **14:42:41** _(sid `1131900c`)_
 >     chekc progress and time since they executing
@@ -8951,7 +8951,7 @@ _149 prompts across 7 sessions_
 >     can you give link to PR
 
 **16:48:01** _(sid `fc66d80c`)_
->     https://github.com/promptdriven/pdd_cloud/pull/741 can you see if this is rebased with origin main and synced with GitHub
+>     <PRIVATE_REPO_URL>/pull/741 can you see if this is rebased with origin main and synced with GitHub
 
 **16:50:33** _(sid `1131900c`)_
 >     fix it locally in the branch, and we test it out, we just keep our stuff to our branch
