@@ -3,13 +3,13 @@
   "timestamp": "2026-05-12T23:54:39.399055+00:00",
   "command": "checkup",
   "prompt_hash": "6eeededa17fafb00396c11f7d6ea1fd4eb759ea796ed42ffc3b074f56b9f58a8",
-  "code_hash": "5bc45b060d560c961bbc97916a41cd0709de9f7b4e6a8821aa7b88c228ad63c9",
+  "code_hash": "2af07f762f9a0b55bf46cd1b519151048ff49577830d056855d038d21c2155f1",
   "example_hash": "97b2da07e76fb037bf663387f5647e89cd469ce6f2fdb152c089efe81259753c",
   "test_hash": "75ed5d42c484cd8f03cc52fb9f3aeb11ac602315098d0d3bf90b86a81f9aceb5",
   "test_files": {
     "test_agentic_bug_orchestrator.py": "75ed5d42c484cd8f03cc52fb9f3aeb11ac602315098d0d3bf90b86a81f9aceb5",
     "test_agentic_bug_orchestrator_1.py": "8085e2041355e53aef1709eeba3591fa0f7c512a637038b8c48d633e4cd07aa2",
-    "test_agentic_bug_orchestrator_step_comments.py": "bf3d36d45e4d303eb647e07ae6ae62276618244fa4ccd582c7549f39405b7a81"
+    "test_agentic_bug_orchestrator_step_comments.py": "da6cc07e7ed2f6b5e92a63d0eb8ecd0e548c5a288481984cb0c698c3abe21c6d"
   },
   "include_deps": {
     "context/agentic_bug_example.py": "96e35df4e8425a9173ff6a30281892c2bd8b81361cff72b732e488172ddf52f5",
