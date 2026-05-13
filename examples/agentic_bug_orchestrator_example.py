@@ -49,11 +49,52 @@ def example_happy_path() -> None:
             using trusted credentials (issue #964).
             """
             label = kwargs.get("label", "")
+            if label == "step5":
+                return (
+                    True,
+                    "<step_report>## Step 5\n\nReproduced the crash.</step_report>\n"
+                    "REPRO_FILES_CREATED: tests/test_repro.py",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step6":
+                return (
+                    True,
+                    "<step_report>## Step 6\n\nRoot cause located.</step_report>\n"
+                    "FIX_LOCATIONS: pdd/module.py\n"
+                    "EXPANSION_ITEMS: none",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step7":
+                return (
+                    True,
+                    "<step_report>## Step 7\n\nDefect classified.</step_report>\n"
+                    "DEFECT_TYPE: code",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step8":
+                return (
+                    True,
+                    "<step_report>## Step 8\n\nTest plan drafted.</step_report>\n"
+                    "PLANNED_TEST_COUNT: 1",
+                    0.10,
+                    "anthropic",
+                )
             if label == "step9":
                 return (
                     True,
                     "<step_report>## Step 9\n\nGenerated failing test.</step_report>\n"
                     "FILES_CREATED: tests/test_fix.py",
+                    0.10,
+                    "anthropic",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>## Step 10\n\nUnit tests verified.</step_report>\n"
+                    "E2E_NEEDED: no",
                     0.10,
                     "anthropic",
                 )
@@ -91,6 +132,7 @@ def example_happy_path() -> None:
              patch("pdd.agentic_bug_orchestrator._get_git_root", return_value=cwd), \
              patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(mock_worktree, None)), \
              patch("pdd.agentic_bug_orchestrator._verify_e2e_tests", return_value=(True, "all passed")), \
+             patch("pdd.agentic_bug_orchestrator._count_generated_tests", return_value=(1, 0)), \
              patch("pdd.agentic_bug_orchestrator.subprocess") as _mock_sub, \
              patch("pdd.agentic_bug_orchestrator.set_agentic_progress"), \
              patch("pdd.agentic_bug_orchestrator.clear_agentic_progress"), \

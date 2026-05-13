@@ -4,7 +4,7 @@
   "command": "checkup",
   "prompt_hash": "6eeededa17fafb00396c11f7d6ea1fd4eb759ea796ed42ffc3b074f56b9f58a8",
   "code_hash": "5bc45b060d560c961bbc97916a41cd0709de9f7b4e6a8821aa7b88c228ad63c9",
-  "example_hash": "b1c7dda7f989fc6b2b54994c5fd26eb0361a2db72961ece77356548e23b01e73",
+  "example_hash": "97b2da07e76fb037bf663387f5647e89cd469ce6f2fdb152c089efe81259753c",
   "test_hash": "75ed5d42c484cd8f03cc52fb9f3aeb11ac602315098d0d3bf90b86a81f9aceb5",
   "test_files": {
     "test_agentic_bug_orchestrator.py": "75ed5d42c484cd8f03cc52fb9f3aeb11ac602315098d0d3bf90b86a81f9aceb5",
