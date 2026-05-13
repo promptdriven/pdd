@@ -35,16 +35,41 @@ def tmp_dir():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_metadata_finalization():
+def _isolate_metadata_finalization(request):
     """
     Prevent tests in this module from writing real fingerprint/run-report
     files into the repository's ``.pdd/meta`` directory. Tests that need to
     assert on these calls explicitly patch them at the test scope, which
     overrides this fixture's stubs for the duration of that test.
+
+    A test that needs to exercise the *real* ``save_fingerprint`` and
+    ``clear_run_report`` helpers (e.g. an integration-style readback of the
+    on-disk fingerprint JSON) opts out by requesting the
+    ``use_real_finalization`` fixture, which redirects ``META_DIR`` to a
+    temp location.
     """
+    if "use_real_finalization" in request.fixturenames:
+        yield
+        return
     with patch("pdd.auto_deps_main.save_fingerprint"), \
          patch("pdd.auto_deps_main.clear_run_report"):
         yield
+
+
+@pytest.fixture
+def use_real_finalization(tmp_path, monkeypatch):
+    """
+    Opt-in fixture for tests that want to exercise the *real* metadata
+    finalization helpers. Redirects ``pdd.operation_log.META_DIR`` to a
+    temporary directory so the repository's ``.pdd/meta`` is never touched,
+    and signals the autouse fixture to skip its protective mocks.
+
+    Yields the temp META_DIR as a ``Path``.
+    """
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr("pdd.operation_log.META_DIR", str(meta_dir))
+    yield meta_dir
 
 
 def _make_construct_paths_return(output_path, csv_path, prompt_content="Prompt content"):
@@ -942,3 +967,109 @@ def test_auto_deps_clear_run_report_error_does_not_block_fingerprint(
     fp_kwargs = mock_save_fingerprint.call_args.kwargs
     assert fp_kwargs["basename"] == "child"
     assert fp_kwargs["language"] == "python"
+
+
+# ---------------------------------------------------------------------------
+# 21. Integration: with the REAL ``save_fingerprint``/``clear_run_report``
+#     helpers (autouse mocks bypassed via ``use_real_finalization``), an
+#     in-place ``auto-deps`` run on a prompt containing ``<include>`` must
+#     produce a fingerprint JSON on disk whose ``include_deps`` reflects
+#     the included file *and* must remove any pre-existing ``_run.json``.
+#     This verifies the end-to-end on-disk contract instead of merely
+#     proving the helper was called.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_finalization_writes_include_deps_and_clears_run_report(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+    monkeypatch,
+    use_real_finalization,
+):
+    meta_dir = use_real_finalization
+
+    # Resolve tmp_path so symlinked /tmp prefixes (e.g. /var → /private/var on
+    # macOS) don't break the cwd-relative include path computed by
+    # ``extract_include_deps``.
+    work_dir = tmp_path.resolve()
+    monkeypatch.chdir(work_dir)
+
+    # Original prompt with naming that yields identity ("child", "python").
+    prompt_file = work_dir / "child_python.prompt"
+    prompt_file.write_text("original prompt body\n", encoding="utf-8")
+
+    # Real dependency file referenced by an ``<include>`` directive in the
+    # modified prompt below. ``extract_include_deps`` resolves the reference
+    # against the prompt's directory and hashes the file's contents.
+    dep_file = work_dir / "parent.py"
+    dep_file.write_text("# parent helper\n", encoding="utf-8")
+
+    modified_prompt = (
+        "original prompt body\n<include>parent.py</include>\n"
+    )
+    csv_path = work_dir / "deps.csv"
+
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": prompt_file.read_text(encoding="utf-8")},
+        # In-place overwrite (``pdd sync`` write-back semantics) so the
+        # finalization branch actually runs.
+        {"output": str(prompt_file), "csv": str(csv_path)},
+        None,
+    )
+    mock_insert_includes.return_value = (
+        modified_prompt,
+        "",      # no CSV output
+        0.01,    # cost
+        "test-model",
+    )
+
+    # Pre-existing stale run report that finalization must remove.
+    run_report = meta_dir / "child_python_run.json"
+    run_report.write_text(json.dumps({"stale": True}), encoding="utf-8")
+    assert run_report.exists()
+
+    returned_prompt, total_cost, model_name = auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(prompt_file),
+        directory_path=str(work_dir),
+        auto_deps_csv_path=str(csv_path),
+        output=str(prompt_file),  # explicit in-place overwrite
+        force_scan=False,
+    )
+
+    assert returned_prompt == modified_prompt
+    assert total_cost == 0.01
+    assert model_name == "test-model"
+
+    # Fingerprint JSON was actually written to disk under the canonical
+    # ``<basename>_<language>.json`` identity.
+    fingerprint_path = meta_dir / "child_python.json"
+    assert fingerprint_path.exists(), (
+        f"fingerprint JSON missing at {fingerprint_path}"
+    )
+    fp = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+
+    assert fp["command"] == "auto-deps"
+    assert fp["prompt_hash"], "prompt_hash should be populated"
+
+    # ``include_deps`` must reflect the real ``<include>`` dependency on
+    # ``parent.py``: a non-empty mapping keyed by the cwd-relative path with
+    # a 64-char SHA-256 hex hash as the value.
+    include_deps = fp.get("include_deps")
+    assert isinstance(include_deps, dict) and include_deps, (
+        f"include_deps should be a non-empty dict, got {include_deps!r}"
+    )
+    assert "parent.py" in include_deps, (
+        f"expected 'parent.py' key in include_deps, got {list(include_deps)}"
+    )
+    assert len(include_deps["parent.py"]) == 64, (
+        "include_deps hash should be a SHA-256 hex digest"
+    )
+
+    # The stale per-module run report must have been cleared.
+    assert not run_report.exists(), (
+        "_run.json should have been removed by clear_run_report"
+    )
