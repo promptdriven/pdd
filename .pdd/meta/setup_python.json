@@ -1,10 +1,10 @@
 {
-  "pdd_version": "0.0.234",
-  "timestamp": "2026-05-12T08:00:15.594623+00:00",
+  "pdd_version": "0.0.235",
+  "timestamp": "2026-05-13T07:12:32.925101+00:00",
   "command": "example",
-  "prompt_hash": "92b9642b8ff296d99e85cb0acccd76e3d1567d15ec93068c7f3d946efab534f0",
-  "code_hash": "36ea40a24d56d6ca6a7657deb4ebee63c3188f7f47cd8cfb34d5f591d582a9c0",
-  "example_hash": "55d819707f9d6ac25101a40272066f71252b5018542a467d99f876735eb21680",
+  "prompt_hash": "946d6a949568d625d26d4a3466991ded2b45d9bddae0e90d1ec3b907cc2b04b9",
+  "code_hash": "ae5663364ee01563740c89c3c4bdf5efc46a887a109a163f3f5d194beaf9cb78",
+  "example_hash": "8bb4a58d559eee1352b0821eec3e77e837815da8616a794b91ef5de98d5473c9",
   "test_hash": null,
   "test_files": {
     "test_setup_tool.py": "d710d9ad844f4b059a38319ed968c2019fb0b7e063d81f5431e1e7a2a89006b5"
@@ -12,6 +12,6 @@
   "include_deps": {
     "context/__init__example.py": "84208a445d03a336e465709ec0687eb969c8d865e6739bf8b79f2c8a8aad351a",
     "pdd/cli.py": "3a841cf62b08ffc814f9d7e05278cc9967ecc9ad80e40c44b70ce6a72bf530fd",
-    "requirements.txt": "722ae5c0f85c4df4072c387a7fc8c5534da4cbf5dbbb1e36a3c62cdad51e9b04"
+    "requirements.txt": "4c99274ee66297352a0a14215e710b7b2e61cd50c9a6805bc8bac035b02e7094"
   }
 }
