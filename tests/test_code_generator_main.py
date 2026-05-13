@@ -10,6 +10,10 @@ import types
 import pytest
 from unittest.mock import MagicMock, patch, mock_open, AsyncMock
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(450)
+
 import click
 import requests
 from rich.panel import Panel

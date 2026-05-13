@@ -4,6 +4,11 @@ import copy
 import pytest
 import os
 import pandas as pd
+
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(600)
+
 import json # Added for Pydantic parsing tests
 import stat
 from pathlib import Path
