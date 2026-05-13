@@ -155,7 +155,6 @@ import warnings
 import time as time_module # Alias to avoid conflict with 'time' parameter
 from pdd.path_resolution import get_default_resolver
 from pdd.server.token_counter import (
-    count_tokens,
     count_tokens_for_messages,
     get_context_limit,
 )
