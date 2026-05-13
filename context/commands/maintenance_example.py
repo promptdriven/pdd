@@ -2,8 +2,9 @@
 """
 Example demonstrating how to use the maintenance commands module.
 
-This module provides three Click commands for PDD maintenance operations:
+This module provides four Click commands for PDD maintenance operations:
 - sync: Synchronize prompts with code and tests
+- sync-architecture: Sync architecture.json from prompt metadata tags
 - auto-deps: Analyze and inject dependencies into prompt files
 - setup: Run the interactive setup utility
 
@@ -19,7 +20,7 @@ import click
 from click.testing import CliRunner
 
 # Import the maintenance commands from the pdd package
-from pdd.commands.maintenance import sync, auto_deps, setup
+from pdd.commands.maintenance import sync, sync_architecture, auto_deps, setup
 
 
 def setup_output_directory() -> Path:
@@ -260,6 +261,63 @@ def example_sync_github_issue():
         print(f"Command output:\n{result.output}")
 
 
+def example_sync_architecture_command():
+    """
+    Demonstrate sync-architecture, which updates architecture.json from
+    prompt metadata tags.
+
+    Returns:
+        Optional[Tuple[dict, float, str]]:
+            - result (dict): Sync summary from architecture_sync
+            - total_cost (float): Zero for local metadata sync
+            - model_name (str): "local"
+    """
+    print("\n" + "=" * 60)
+    print("SYNC-ARCHITECTURE COMMAND EXAMPLE")
+    print("=" * 60)
+
+    runner = CliRunner()
+
+    mock_result = {
+        "success": True,
+        "updated_count": 1,
+        "skipped_count": 0,
+        "results": [
+            {
+                "filename": "commands/maintenance_python.prompt",
+                "success": True,
+                "updated": True,
+                "changes": {"reason": {"old": "old", "new": "new"}},
+                "error": None,
+            }
+        ],
+        "validation": {"valid": True, "errors": [], "warnings": []},
+        "errors": [],
+    }
+
+    with patch(
+        "pdd.commands.maintenance.sync_prompts_to_architecture",
+        return_value=mock_result,
+    ):
+
+        @click.group()
+        @click.pass_context
+        def cli(ctx):
+            ctx.ensure_object(dict)
+            ctx.obj = {"quiet": False}
+
+        cli.add_command(sync_architecture)
+
+        result = runner.invoke(
+            cli,
+            ["sync-architecture", "--dry-run", "commands/maintenance_python.prompt"],
+            catch_exceptions=False,
+        )
+
+        print(f"Command exit code: {result.exit_code}")
+        print(f"Command output:\n{result.output}")
+
+
 def example_auto_deps_command():
     """
     Demonstrate the auto-deps command.
@@ -415,6 +473,7 @@ def main():
     example_sync_command()
     example_sync_dry_run()
     example_sync_github_issue()
+    example_sync_architecture_command()
     example_auto_deps_command()
     example_setup_command()
     example_deprecated_log_flag()

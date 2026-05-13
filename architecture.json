@@ -7434,7 +7434,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7548,15 +7548,16 @@
           "require_final_fresh_review",
           "blocking_severities",
           "clean_reviewer_states",
+          "fallback_reviewer_on_failure",
           "timeout_adder",
           "reasoning_time"
         ],
         "artifacts_layout": {
           "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
           "per_round": [
-            "round-{N}-{review|verify}-{role}.prompt.txt",
-            "round-{N}-{review|verify}-{role}.output.txt",
-            "round-{N}-{review|verify}-{role}.findings.json",
+            "round-{N}-{review|verify|fallback}-{role}.prompt.txt",
+            "round-{N}-{review|verify|fallback}-{role}.output.txt",
+            "round-{N}-{review|verify|fallback}-{role}.findings.json",
             "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
             "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
             "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",
@@ -7803,9 +7804,39 @@
     }
   },
   {
-    "reason": "Registers maintenance CLI commands: sync, auto-deps, and setup with all options.",
-    "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument or explicit `architecture.json` global sync with resolved default budget, and GitHub issue sync dispatch.",
+    "reason": "Registers all PDD subcommands with the main CLI group in canonical order, determining `pdd --help` command listing.",
+    "description": "Aggregates command functions from sibling modules in pdd/commands and registers them with the Click CLI group. Keeps the main cli.py clean and pins the registration order required by `pdd --help`.",
     "dependencies": [],
+    "priority": 70,
+    "filename": "commands/__init___python.prompt",
+    "filepath": "pdd/commands/__init__.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "register_commands",
+            "description": "Register all subcommands with the main CLI group in canonical order"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 13000,
+      "y": 2000
+    }
+  },
+  {
+    "reason": "Registers maintenance CLI commands: sync, sync-architecture, auto-deps, and setup with all options.",
+    "description": "Contains maintenance and setup commands for the PDD CLI, including single-module sync, no-argument project-wide sync, GitHub issue sync dispatch, prompt-to-architecture sync, auto-deps, and setup.",
+    "dependencies": [
+      "auto_deps_main_python.prompt",
+      "architecture_sync_python.prompt"
+    ],
     "priority": 70,
     "filename": "commands/maintenance_python.prompt",
     "filepath": "pdd/commands/maintenance.py",
@@ -7819,7 +7850,11 @@
         "commands": [
           {
             "name": "sync",
-            "description": "Synchronize one prompt module, all stale architecture modules when no basename is provided, or modules affected by a GitHub issue URL"
+            "description": "Synchronize a prompt with its code, tests, and examples"
+          },
+          {
+            "name": "sync-architecture",
+            "description": "Sync architecture.json from prompt metadata tags"
           },
           {
             "name": "auto-deps",

@@ -184,6 +184,26 @@ from ..core.errors import handle_error
         "treated as not-clean regardless of this flag."
     ),
 )
+@click.option(
+    "--fallback-reviewer-on-failure",
+    is_flag=True,
+    default=False,
+    help=(
+        "Opt-in. When the primary reviewer ends in 'failed' or 'missing' "
+        "on the initial review pass of a round, run a second review pass "
+        "using the configured fixer's identity as a fallback reviewer. "
+        "On a clean fallback the rendered reviewer-status line shows the "
+        "primary as clean so downstream verdict adapters do not short-"
+        "circuit on the primary's outage; the original failure detail "
+        "is preserved in the Reviewer Diagnostics block of the final "
+        "report. NOTE: 'degraded' is intentionally NOT promoted — "
+        "degraded means reduced quality (rate limit, context window, "
+        "etc.) and must not silently lose signal. The fallback also does "
+        "NOT trigger on the post-fix verification pass: the fixer just "
+        "authored the changes being verified, so promoting it to "
+        "verifier would collapse the reviewer/fixer independence."
+    ),
+)
 @click.pass_context
 @track_cost
 def checkup(
@@ -211,6 +231,7 @@ def checkup(
     require_final_fresh_review: bool,
     blocking_severities: Optional[str],
     clean_reviewer_states: Optional[str],
+    fallback_reviewer_on_failure: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Run agentic health checkup from a GitHub issue, or local diagnostics.
@@ -353,6 +374,7 @@ def checkup(
             require_final_fresh_review=require_final_fresh_review,
             blocking_severities=blocking_severities,
             clean_reviewer_states=clean_reviewer_states,
+            fallback_reviewer_on_failure=fallback_reviewer_on_failure,
         )
 
         if not quiet:

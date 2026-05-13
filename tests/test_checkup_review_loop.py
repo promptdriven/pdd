@@ -1015,6 +1015,263 @@ class TestCheckupReviewLoopRuntime:
         assert final_state["active_reviewer"] == "codex"
         assert "findings" in final_state
 
+    def test_reviewer_diagnostics_are_surfaced_in_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A failed reviewer's stderr/exit-code must reach the final report."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        codex_stderr = (
+            "rate limit exceeded\n"
+            "error: openai responded with 429\n"
+            "exit code 7"
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, codex_stderr, 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "### Reviewer Diagnostics" in report
+        assert "rate-limit" in report
+        assert "exit code: 7" in report
+        assert "rate limit exceeded" in report
+        assert "openai responded with 429" in report
+
+    def test_fallback_reviewer_promotes_fixer_when_primary_fails_and_flag_set(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Fallback success must render clean adapter-facing reviewer statuses."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        labels: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            labels.append(kwargs["label"])
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed", 0.0, ""
+            return True, _json("clean"), 0.2, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert any(
+            "fallback-claude" in label or "review-claude" in label
+            for label in labels
+        ), labels
+        assert (
+            "reviewer-status: codex=clean claude=clean fresh-final=clean"
+            in report
+        ), report
+        assert "reviewer-status: codex=failed" not in report
+        assert "claude=clean" in report
+        assert "claude=fixer" not in report
+        assert "fallback" in report.lower()
+        assert "### Reviewer Diagnostics" in report
+        assert "status overridden by fallback" in report
+        assert "original=failed" in report
+        assert "Primary reviewer codex could not complete" not in report
+        assert "fresh-final: clean" in report or "fresh-final=clean" in report
+
+    def test_fallback_does_not_trigger_on_degraded_status(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        roles_called: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            roles_called.append(role)
+            if role == "codex":
+                return False, "rate limit exceeded", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                fallback_reviewer_on_failure=True,
+                continue_on_reviewer_limit=True,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "claude" not in roles_called, roles_called
+        assert "codex=degraded" in report
+        assert "claude=fixer" in report
+
+    def test_fallback_disabled_preserves_legacy_failed_unknown_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        roles_called: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            roles_called.append(role)
+            if role == "codex":
+                return False, "rate limit exceeded", 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "claude" not in roles_called, roles_called
+        assert "reviewer-status: codex=failed claude=fixer fresh-final=missing" in report
+        assert "Primary reviewer codex could not complete" in report
+        assert "issue_aligned: unknown" in report
+        assert "Required review did not complete" in report
+
+    def test_fallback_success_yields_ship_verdict_via_cloud_adapter(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import os
+        import sys
+
+        # Discover the pdd_cloud `checkup_verdict_adapter` portably so this
+        # contract test runs on any developer checkout and on CI:
+        #   1. `PDD_CLOUD_ROOT` env var (CI sets this explicitly when the
+        #      sibling repo is checked out under a non-default name/path).
+        #   2. Sibling repo: `<parent-of-pdd>/pdd_cloud/...` — the layout we
+        #      use in both `~/Desktop/SF/{pdd,pdd_cloud}` and
+        #      `~/Documents/{pdd,pdd_cloud}` checkouts.
+        #   3. `~/pdd_cloud/...` as a final fallback for flat home layouts.
+        # Each candidate is added to `sys.path` so `importorskip` resolves
+        # against the first directory that actually contains the module.
+        # When no candidate is present, `importorskip` skips cleanly.
+        candidates: list[Path] = []
+        env_root = os.environ.get("PDD_CLOUD_ROOT")
+        if env_root:
+            candidates.append(
+                Path(env_root) / "extensions" / "github_pdd_app" / "src" / "services"
+            )
+        repo_root = Path(__file__).resolve().parents[1]
+        candidates.append(
+            repo_root.parent
+            / "pdd_cloud"
+            / "extensions"
+            / "github_pdd_app"
+            / "src"
+            / "services"
+        )
+        candidates.append(
+            Path.home()
+            / "pdd_cloud"
+            / "extensions"
+            / "github_pdd_app"
+            / "src"
+            / "services"
+        )
+        for candidate in candidates:
+            candidate_str = str(candidate)
+            if candidate.is_dir() and candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+        adapter = pytest.importorskip("checkup_verdict_adapter")
+
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, "exit code 1\nauthentication failed", 0.0, ""
+            return True, _json("clean"), 0.2, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fallback_reviewer_on_failure=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+        assert success is True
+
+        verdict = adapter.parse_checkup_report(report, exit_code=0)
+        assert verdict.verdict == "ship", (verdict.verdict, verdict.reason)
+        assert verdict.per_reviewer_status.get("codex") == "clean"
+        assert verdict.per_reviewer_status.get("claude") == "clean"
+
+    def test_diagnostics_tail_scrubs_secrets(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        leaky_output = (
+            "exit code 7\n"
+            "rate limit exceeded\n"
+            "Authorization: Bearer sk-proj-AbCdEf1234567890XYZqwerty\n"
+            "header X-API-Key: ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345\n"
+            "fatal: openai responded with 429"
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if role == "codex":
+                return False, leaky_output, 0.0, ""
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "rate limit exceeded" in report
+        assert "openai responded with 429" in report
+        assert "sk-proj-AbCdEf1234567890XYZqwerty" not in report
+        assert "ghp_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345" not in report
+        assert "Bearer sk-proj-AbCdEf1234567890XYZqwerty" not in report
+        assert "[REDACTED]" in report
+
     def test_reviewer_fallback_used_when_primary_fails(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -1780,6 +2037,23 @@ Local tests passed.
         assert result.findings[0].severity == "critical"
         assert result.findings[0].location == "pdd/generate_model_catalog.py:873"
         assert "does not fetch scores" in result.findings[0].finding
+
+    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+        """Codex exec can emit `Finding: [P2] ...` instead of JSON."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """Finding: [P2] The prompt/architecture contract was not updated for the new step-comment API. `post_step_comment` now accepts `body`, but [agentic_common_python.prompt](/tmp/w/pdd/prompts/agentic_common_python.prompt:18) and [architecture.json](/tmp/w/architecture.json:73) still publish the old signature.
+
+Checks: targeted tests passed.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        assert result.findings[0].severity == "medium"
+        assert result.findings[0].location == "agentic_common_python.prompt:18"
+        assert "step-comment API" in result.findings[0].finding
+        assert "targeted tests" not in result.findings[0].evidence
 
     def test_priority_finding_stops_before_verification_section(self) -> None:
         """Verification summaries are not part of the preceding finding body."""

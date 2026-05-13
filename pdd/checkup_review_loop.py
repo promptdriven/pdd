@@ -107,10 +107,390 @@ EXTERNAL_STATUS_AREAS: Tuple[str, ...] = (
     "status",
     "workflow",
 )
+REVIEW_TRAILING_SECTION_NAMES = r"(?:Checks|Checks Run|Verification|Regression Checks)"
+REVIEW_TRAILING_SECTION_LOOKAHEAD = (
+    r"\n\s*(?:\*\*)?"
+    + REVIEW_TRAILING_SECTION_NAMES
+    + r"(?:\*\*)?\s*:?[^\n]*(?=\n|\Z)"
+)
+REVIEW_TRAILING_SECTION_SPLIT_RE = (
+    r"(?:^|\n)\s*(?:\*\*)?"
+    + REVIEW_TRAILING_SECTION_NAMES
+    + r"(?:\*\*)?\s*:?[^\n]*"
+)
 
 # Statuses that always mean "not clean" regardless of how a caller widens
 # `clean_reviewer_states` — provider-side outages must never silently ship.
 HARD_NOT_CLEAN_STATES: frozenset[str] = frozenset({"failed", "degraded", "missing"})
+
+
+# Best-effort secret patterns scrubbed before the reviewer's stderr tail
+# is rendered into the issue/PR comment. Each pattern matches a secret-
+# bearing token; the matching substring is replaced with ``[REDACTED]``
+# so an operator can still see the surrounding error context without
+# leaking credentials.
+_SECRET_SCRUB_PATTERNS: Tuple[re.Pattern[str], ...] = (
+    # OpenAI-style API keys (sk-..., sk-proj-..., sk-ant-..., etc.)
+    re.compile(r"sk-(?:proj-|ant-|[A-Za-z0-9_-]{0,32})?[A-Za-z0-9_-]{12,}"),
+    # GitHub personal access tokens and OAuth tokens. ``ghp_/gho_/
+    # ghu_/ghs_/ghr_`` are classic / OAuth / user / server / refresh
+    # token prefixes; ``github_pat_`` is the fine-grained PAT prefix
+    # GitHub documents at
+    # https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/about-authentication-to-github
+    # — leaving it out leaks fine-grained PATs into public comments.
+    re.compile(r"\bghp_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgho_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bghu_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bghs_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bghr_[A-Za-z0-9]{20,}\b"),
+    re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b"),
+    # Bearer tokens — must cover the full base64/JWT alphabet (``+``, ``/``,
+    # ``=`` are legal). The prior ``[A-Za-z0-9._-]+`` would only redact the
+    # leading run before ``+`` or ``/`` and leak the rest into the public
+    # comment. ``Bearer\s+`` keeps the match anchored to a real header so
+    # hyphen-joined words like ``bearer-token-rotation-policy`` still pass.
+    re.compile(r"Bearer\s+\S+", re.IGNORECASE),
+    # Authorization header value — match the entire value to end of line so
+    # non-Bearer schemes (``Token``, ``Basic``, etc.) and tokens containing
+    # ``+``/``/``/``=`` are fully redacted. Prior pattern only consumed one
+    # non-space token after ``Authorization:`` and left ``<scheme> <token>``
+    # values with the credential exposed.
+    re.compile(r"Authorization\s*:\s*[^\r\n]+", re.IGNORECASE),
+    # Anthropic-style keys.
+    re.compile(r"\bclaude[_-]?api[_-]?key[\"'\s:=]+[A-Za-z0-9_\-]{16,}", re.IGNORECASE),
+    # Generic ``<PROVIDER>_API_KEY`` / ``<PROVIDER>_API_TOKEN`` envvar
+    # assignment lines. Reviewer subprocesses routinely dump their
+    # config when they crash, exposing keys for every supported
+    # provider (Anthropic, OpenAI, Gemini/Google, xAI, Groq, Mistral,
+    # DeepSeek, Cohere, Perplexity, OpenRouter, Azure, Fireworks,
+    # TogetherAI, Moonshot, …). Match the envvar name + ``=`` or
+    # ``:`` separator + the rest of the line; the surrounding line
+    # context (provider name, ``fatal: …``) still renders.
+    re.compile(
+        r"\b[A-Z][A-Z0-9_]*_(?:API_KEY|API_TOKEN|SECRET|TOKEN)\s*[:=]\s*[^\r\n]+",
+        re.IGNORECASE,
+    ),
+    # Bare Google / Firebase / Gemini API keys: ``AIza`` + 35 chars
+    # of base64url alphabet. These appear in ``litellm`` provider
+    # error tails even without the ``GEMINI_API_KEY=`` envvar prefix,
+    # so the generic envvar pattern above is not enough.
+    re.compile(r"\bAIza[0-9A-Za-z_\-]{35}\b"),
+    # xAI bare tokens (``xai-…``).
+    re.compile(r"\bxai-[A-Za-z0-9]{20,}\b", re.IGNORECASE),
+    # Groq bare tokens (``gsk_…``).
+    re.compile(r"\bgsk_[A-Za-z0-9]{20,}\b"),
+    # AWS access key IDs (``AKIA…`` / ``ASIA…`` / ``ABIA…``); litellm
+    # / Bedrock error trails sometimes echo them.
+    re.compile(r"\b(?:AKIA|ASIA|ABIA)[A-Z0-9]{16}\b"),
+    # Slack tokens — diagnostics tools occasionally include them.
+    re.compile(r"\bxox[abprs]-[A-Za-z0-9-]{10,}\b"),
+)
+
+
+def _scrub_secrets(text: str) -> str:
+    """Best-effort replacement of secret-bearing tokens with ``[REDACTED]``.
+
+    Reviewer stderr can include the raw HTTP request log (Authorization
+    header) or a bare API key when a provider rejects a malformed request.
+    The diagnostics block lands in a public PR/issue comment, so we
+    scrub before render.  Patterns are deliberately tight — over-broad
+    redaction would mask the surrounding context an operator needs.
+    """
+    if not text:
+        return text
+    scrubbed = text
+    for pattern in _SECRET_SCRUB_PATTERNS:
+        scrubbed = pattern.sub("[REDACTED]", scrubbed)
+    return scrubbed
+
+
+# Severity tokens the downstream cloud verdict adapter
+# (``checkup_verdict_adapter._BRACKET_TAG_RE``) recognizes as ``[SEV]``
+# finding markers when scanning the full report text. The first six are
+# the load-bearing set the adapter actually consumes — leaking any of
+# those into the rendered reviewer-stderr tail would turn log output
+# into synthetic findings and flip the verdict (a ``[CRITICAL]`` log
+# line would block ship). ``HIGH``/``ERROR``/``WARNING``/``DEBUG`` are
+# defense-in-depth: common Python logging-formatter labels that the
+# adapter ignores today but may grow to recognize.
+_ADAPTER_SEVERITY_TOKENS: Tuple[str, ...] = (
+    "BLOCKER",
+    "CRITICAL",
+    "MEDIUM",
+    "LOW",
+    "NIT",
+    "INFO",
+    "HIGH",
+    "ERROR",
+    "WARNING",
+    "DEBUG",
+)
+_DEFANG_SEVERITY_RE: re.Pattern[str] = re.compile(
+    r"\[(" + "|".join(_ADAPTER_SEVERITY_TOKENS) + r")\]",
+    re.IGNORECASE,
+)
+
+
+def _defang_severity_tags(text: str) -> str:
+    """Rewrite ``[SEV]`` tokens to ``[SEV*]`` for safe rendering.
+
+    Reviewer stderr (notably from log formatters configured with
+    ``[%(levelname)s]``) routinely contains tokens like ``[CRITICAL]``
+    or ``[ERROR]``. The downstream cloud verdict adapter scans the
+    entire report with a multiline regex and converts those tokens
+    into synthetic findings — a ``[CRITICAL]`` log line would flip
+    ``verdict`` away from ``ship``. We rewrite at the render boundary
+    only (the on-disk ``final-state.json`` reason field stays truthful)
+    so humans can still see what the reviewer said while the adapter
+    sees nothing it would misinterpret.
+    """
+    if not text:
+        return text
+    return _DEFANG_SEVERITY_RE.sub(r"[\1*]", text)
+
+
+# Line-leading ``Error:`` (any case) is the second adapter trip-wire
+# from the same family. The adapter's ``_TOP_LEVEL_ERROR_RE`` is
+# ``re.compile(r"^\s*error:", re.IGNORECASE | re.MULTILINE)`` and a
+# single match anywhere in the rendered report downgrades the verdict
+# to ``unknown`` ("Checkup report indicates timeout or error."). Both
+# the codex CLI (``Error: codex authentication failed (401)``) and the
+# claude CLI (``Error: failed to load credentials...``) emit this exact
+# shape on routine outages, so without this defang the round-3 fallback
+# promise — "if codex goes down, claude ships the PR" — does not hold
+# for the most common real-world failure modes (3/20 e2e cases pre-fix).
+#
+# NOTE TO FUTURE MAINTAINERS: This defang family mirrors the cloud
+# adapter's full-report-scan regexes. If a new global regex is added
+# to ``checkup_verdict_adapter`` (anything that scans the entire report
+# without fence/section awareness), a matching defang MUST be added
+# here. The current trip-wires are:
+#   - ``_BRACKET_TAG_RE`` (``[SEV]`` tokens) → ``_defang_severity_tags``
+#   - ``_TOP_LEVEL_ERROR_RE`` (line-leading ``error:``) → ``_defang_top_level_errors``
+#   - ``_ERROR_MARKERS`` substrings (``checkup failed``, ``checkup timed
+#     out``, ``error running checkup``) → ``_defang_error_markers``
+#   - ``_ISSUE_ALIGNED_RE`` (``issue_aligned: true|false``) → ``_defang_issue_aligned``
+#   - ``_REVIEWER_STATUS_INLINE_RE`` (``reviewer-status:``) → ``_defang_reviewer_status_inline``
+#   - ``_FRESH_FINAL_INLINE_RE`` (``fresh-final-review:``) → ``_defang_fresh_final_inline``
+#   - ``_BUDGET_EXHAUSTED_RE`` (``max-*-reached: true``) → ``_defang_budget_reached``
+#   - ``_REVIEWER_SECTION_RE`` / ``_FRESH_FINAL_SECTION_RE`` (markdown
+#     heading scanners) → ``_defang_section_headings``
+#   - ``_extract_findings`` pipe-table parser (any line starting with
+#     ``|``, including markdown-wrapped severity cells like
+#     ``| **critical** |`` / ``| `critical` |`` / ``| *critical* |``
+#     and empty-leading-cell shapes like ``| | critical |``) →
+#     ``_defang_pipe_table_lines``
+# Defang at the RENDER boundary only — ``state.reviewer_status_details``
+# and ``final-state.json`` keep the original text so on-disk audit and
+# diagnostic forwarding stay truthful. The adapter's regexes scan the
+# raw report bytes regardless of fenced code blocks, so wrapping reason
+# text in ``` is NOT sufficient protection on its own.
+_DEFANG_TOP_LEVEL_ERROR_RE: re.Pattern[str] = re.compile(
+    r"^(\s*)(error):",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# ``checkup failed`` / ``checkup timed out`` / ``error running checkup``
+# are the adapter's ``_ERROR_MARKERS`` substring set. They are matched
+# against the LOWERCASED full report text, so the defang has to break
+# the literal substring in a case-insensitive way. Inserting ``*``
+# between the load-bearing token pair is enough.
+_DEFANG_ERROR_MARKER_CHECKUP_RE: re.Pattern[str] = re.compile(
+    r"\b(checkup)(\s+)(failed|timed\s+out)\b",
+    re.IGNORECASE,
+)
+_DEFANG_ERROR_RUNNING_CHECKUP_RE: re.Pattern[str] = re.compile(
+    r"\b(error)(\s+running\s+checkup)\b",
+    re.IGNORECASE,
+)
+
+# ``issue_aligned`` / ``"issue_aligned"`` / ``'issue_aligned'`` followed
+# by ``:`` or ``=``. The adapter takes the LAST match, so a single
+# stray ``"issue_aligned": false`` in reviewer stderr flips the verdict
+# even when the real header says ``issue_aligned: true``.
+_DEFANG_ISSUE_ALIGNED_RE: re.Pattern[str] = re.compile(
+    r"(?P<lead>[\"']?)(?P<key>issue_aligned)(?P<close>[\"']?)(?P<sep>\s*[:=])",
+    re.IGNORECASE,
+)
+
+# Inline ``reviewer-status:`` and ``fresh-final-review:`` markers.
+_DEFANG_REVIEWER_STATUS_INLINE_RE: re.Pattern[str] = re.compile(
+    r"\b(reviewer-status)(\s*:)",
+    re.IGNORECASE,
+)
+_DEFANG_FRESH_FINAL_INLINE_RE: re.Pattern[str] = re.compile(
+    r"\b(fresh[-_ ]?final(?:[-_ ]?review)?)(\s*[:=])",
+    re.IGNORECASE,
+)
+
+# ``max-rounds-reached: true`` / ``max-cost-reached: true`` /
+# ``max-duration-reached: true`` / ``max-minutes-reached: true`` —
+# any of these in reviewer stderr makes the adapter think the loop
+# exhausted its budget.
+_DEFANG_BUDGET_REACHED_RE: re.Pattern[str] = re.compile(
+    r"\b(max-(?:review-)?(?:rounds|cost|duration|minutes)-reached)(\s*:)",
+    re.IGNORECASE,
+)
+
+# Markdown section headings the adapter consumes as authoritative
+# reviewer-status / fresh-final-review tables. A line that starts with
+# ``### Per-Reviewer Status`` (or the fresh-final variant) inside
+# reviewer stderr would inject a synthetic table.
+_DEFANG_SECTION_HEADING_RE: re.Pattern[str] = re.compile(
+    r"^(?P<lead>\s*#{2,6}\s*)(?P<title>per[- ]reviewer status|reviewer status|fresh final review)(?P<trail>\s*)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Markdown pipe-table rows are parsed by the adapter's
+# ``_extract_findings`` as real findings whenever the first non-empty
+# cell (after ``_strip_markdown_cell`` peels ``**bold**``, ``*italic*``,
+# and `` `code` `` wrappers) is a severity token. A reviewer that
+# echoes a prior report's ``### Findings`` table — or a malicious
+# stderr line like ``| **critical** | … |``, ``| `critical` | … |``,
+# ``| *critical* | … |``, or even ``| | critical | … |`` with an
+# empty leading cell — would inject a synthetic critical finding and
+# flip the verdict to ``fail``. Trying to match every wrapper / empty-
+# cell variant in a regex is brittle, so the defang neutralizes EVERY
+# pipe-prefixed line in the diagnostics reason: prefix the leading
+# ``|`` with ``*``, breaking the adapter's ``stripped.startswith("|")``
+# anchor while keeping the row readable to a human. The defang is
+# only applied to ``reviewer_status_details[*]["reason"]`` text —
+# legitimate ``### Per-Reviewer Status`` / ``### Findings`` tables
+# emitted by ``_render_final_report`` never pass through this filter
+# and remain untouched.
+_DEFANG_PIPE_TABLE_LINE_RE: re.Pattern[str] = re.compile(
+    r"^(?P<indent>\s*)\|",
+    re.MULTILINE,
+)
+
+
+def _defang_top_level_errors(text: str) -> str:
+    """Neutralize line-leading ``Error:``/``error:``/``ERROR:`` tokens.
+
+    The cloud verdict adapter's ``_TOP_LEVEL_ERROR_RE`` searches the
+    entire report for ``^\\s*error:`` (case-insensitive, multiline)
+    and downgrades any match to ``verdict=unknown``. We rewrite the
+    colon to ``*:`` so the line still reads naturally to a human
+    (e.g., ``Error*: codex authentication failed (401)``) while the
+    adapter's regex no longer matches.
+    """
+    if not text:
+        return text
+    return _DEFANG_TOP_LEVEL_ERROR_RE.sub(r"\1\2*:", text)
+
+
+def _defang_error_markers(text: str) -> str:
+    """Neutralize ``_ERROR_MARKERS`` substrings the adapter would treat
+    as a checkup-level error verdict.
+
+    Replaces ``checkup failed`` → ``checkup* failed``, ``checkup timed
+    out`` → ``checkup* timed out``, ``error running checkup`` → ``error*
+    running checkup``. The starred form still reads naturally to a
+    human but breaks the adapter's literal substring match.
+    """
+    if not text:
+        return text
+    text = _DEFANG_ERROR_MARKER_CHECKUP_RE.sub(r"\1*\2\3", text)
+    text = _DEFANG_ERROR_RUNNING_CHECKUP_RE.sub(r"\1*\2", text)
+    return text
+
+
+def _defang_issue_aligned(text: str) -> str:
+    """Neutralize ``issue_aligned: true|false`` so a stray value in
+    reviewer stderr cannot override the real header.
+
+    ``issue_aligned:`` → ``issue_aligned*:`` (and ``=`` variant). The
+    adapter takes the LAST regex match in the whole report, so even
+    one occurrence inside a code fence is enough to flip the verdict.
+    """
+    if not text:
+        return text
+    return _DEFANG_ISSUE_ALIGNED_RE.sub(
+        lambda m: f"{m.group('lead')}{m.group('key')}*{m.group('close')}{m.group('sep')}",
+        text,
+    )
+
+
+def _defang_reviewer_status_inline(text: str) -> str:
+    """Neutralize inline ``reviewer-status:`` markers."""
+    if not text:
+        return text
+    return _DEFANG_REVIEWER_STATUS_INLINE_RE.sub(r"\1*\2", text)
+
+
+def _defang_fresh_final_inline(text: str) -> str:
+    """Neutralize inline ``fresh-final-review:`` markers."""
+    if not text:
+        return text
+    return _DEFANG_FRESH_FINAL_INLINE_RE.sub(r"\1*\2", text)
+
+
+def _defang_budget_reached(text: str) -> str:
+    """Neutralize ``max-*-reached: true`` budget markers."""
+    if not text:
+        return text
+    return _DEFANG_BUDGET_REACHED_RE.sub(r"\1*\2", text)
+
+
+def _defang_section_headings(text: str) -> str:
+    """Neutralize markdown headings the adapter parses as authoritative
+    reviewer-status / fresh-final tables.
+
+    Suffixes the heading title with ``*`` so the line still reads as
+    a heading to a human reader but no longer matches the adapter's
+    anchored regex (``^\\s*#{2,6}\\s*per[- ]reviewer status\\s*$`` and
+    siblings).
+    """
+    if not text:
+        return text
+    return _DEFANG_SECTION_HEADING_RE.sub(
+        lambda m: f"{m.group('lead')}{m.group('title')}*{m.group('trail')}",
+        text,
+    )
+
+
+def _defang_pipe_table_lines(text: str) -> str:
+    """Neutralize EVERY markdown pipe-table line in the diagnostics
+    reason text. The adapter's ``_extract_findings`` strips markdown
+    wrappers (``**bold**``, ``*italic*``, `` `code` ``) and skips
+    empty leading cells before checking the first cell's severity, so
+    matching only the bare ``|<severity>|`` shape leaves real bypasses:
+    ``| **critical** | … |``, ``| `critical` | … |``,
+    ``| *critical* | … |``, and ``| | critical | … |`` all become
+    synthetic findings.
+
+    Rather than enumerate every wrapper / empty-cell permutation,
+    defang every line that starts (after optional whitespace) with
+    ``|``. Prefix the leading ``|`` with ``*`` so the adapter's
+    ``stripped.startswith("|")`` anchor no longer holds. Legitimate
+    finding/status tables emitted by ``_render_final_report`` are
+    built outside the diagnostics path and never pass through this
+    filter, so this is safe to apply broadly.
+    """
+    if not text:
+        return text
+    return _DEFANG_PIPE_TABLE_LINE_RE.sub(r"\g<indent>*|", text)
+
+
+def _defang_adapter_trip_wires(text: str) -> str:
+    """Apply every render-boundary defang in one place.
+
+    Single entry point so any code path that emits subprocess stderr
+    into the rendered report stays consistent. Keep this routine the
+    only caller of the individual ``_defang_*`` helpers from inside
+    ``_render_final_report`` so adding a future defang only touches
+    one site.
+    """
+    text = _defang_severity_tags(text)
+    text = _defang_top_level_errors(text)
+    text = _defang_error_markers(text)
+    text = _defang_issue_aligned(text)
+    text = _defang_reviewer_status_inline(text)
+    text = _defang_fresh_final_inline(text)
+    text = _defang_budget_reached(text)
+    text = _defang_section_headings(text)
+    text = _defang_pipe_table_lines(text)
+    return text
 
 
 @dataclass
@@ -165,6 +545,16 @@ class ReviewResult:
     findings: List[ReviewFinding] = field(default_factory=list)
     summary: str = ""
     raw_output: str = ""
+    # Diagnostics surfaced on the final report when the reviewer fails or
+    # degrades. ``status_classification`` is a short best-effort tag
+    # (``auth``/``network``/``timeout``/``rate-limit``/``crash``/``unknown``).
+    # ``status_exit_code`` is parsed out of ``raw_output`` best-effort
+    # (``"no exit code"`` if absent). ``status_reason`` is the last ~20
+    # lines of stderr/stdout so an operator can paste it into a support
+    # ticket.
+    status_classification: str = ""
+    status_exit_code: str = ""
+    status_reason: str = ""
 
 
 @dataclass
@@ -206,6 +596,18 @@ class ReviewLoopConfig:
     reasoning_time: Optional[float] = None
     blocking_severities: Tuple[str, ...] = DEFAULT_BLOCKING_SEVERITIES
     clean_reviewer_states: Tuple[str, ...] = DEFAULT_CLEAN_REVIEWER_STATES
+    # APPENDED — when enabled, and the primary reviewer ends in
+    # ``failed`` or ``missing`` status (NOT ``degraded`` — degraded
+    # means reduced quality and must not silently lose signal), run a
+    # second review pass using the configured fixer's identity as a
+    # fallback reviewer. The fallback's result is recorded as a real
+    # reviewer row so the downstream verdict adapter sees a clean
+    # real-reviewer entry rather than the legacy ``fixer`` sentinel.
+    # MUST stay at the end of the field list so positional callers
+    # ``ReviewLoopConfig(reviewers, reviewer, fixer, …, clean_reviewer_states)``
+    # keep working unchanged. Off by default to preserve existing CI
+    # expectations.
+    fallback_reviewer_on_failure: bool = False
 
 
 @dataclass
@@ -248,6 +650,12 @@ class ReviewLoopState:
     fix_attempts_by_key: Dict[str, int] = field(default_factory=dict)
     dispute_notes_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_feedback_by_key: Dict[str, str] = field(default_factory=dict)
+    # Captured diagnostics for each reviewer invocation that ended in a
+    # failed/degraded/missing status. Keyed by reviewer role name; the
+    # most recent attempt wins. Each value is a dict with keys
+    # ``classification``, ``exit_code``, ``reason`` (last ~20 lines of
+    # stderr/stdout), and ``status``.
+    reviewer_status_details: Dict[str, Dict[str, str]] = field(default_factory=dict)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -396,10 +804,56 @@ def run_checkup_review_loop(
                     reviewer = fallback
                     state.active_reviewer = fallback
                 else:
-                    state.stop_reason = (
-                        f"Primary reviewer {reviewer} could not complete: "
-                        f"{review.status}."
-                    )
+                    fallback_result = None
+                    if not fallback_used:
+                        fallback_result = _maybe_run_fallback_reviewer(
+                            primary_reviewer=reviewer,
+                            primary_status=review.status,
+                            fixer=fixer,
+                            context=context,
+                            worktree=worktree,
+                            round_number=round_number,
+                            state=state,
+                            config=config,
+                            verbose=verbose,
+                            quiet=quiet,
+                            artifacts_dir=artifacts_dir,
+                            pr_metadata=pr_metadata,
+                            deadline=deadline,
+                        )
+                    if fallback_result is not None:
+                        fallback_used = True
+                        _mark_non_required_findings_advisory(state, config)
+                        _write_dedup_snapshot(artifacts_dir, round_number, state)
+                        if _budget_exhausted(config, state, deadline):
+                            _mark_budget_exhausted(config, state, deadline)
+                            break
+                        state.active_reviewer = fallback_result.reviewer
+                        if fallback_result.status == "clean":
+                            state.fresh_final_status = "clean"
+                            state.stop_reason = (
+                                f"Primary reviewer {reviewer} unavailable "
+                                f"({review.status}); secondary reviewer {fixer} "
+                                "clean (fallback)."
+                            )
+                            break
+                        if fallback_result.status == "findings":
+                            state.stop_reason = (
+                                f"Primary reviewer {reviewer} unavailable "
+                                f"({review.status}); secondary reviewer {fixer} "
+                                "reported findings (fallback)."
+                            )
+                            break
+                        state.stop_reason = (
+                            f"Reviewer fallback {fixer} could not complete: "
+                            f"{fallback_result.status}."
+                        )
+                        break
+                    if not state.stop_reason:
+                        state.stop_reason = (
+                            f"Primary reviewer {reviewer} could not complete: "
+                            f"{review.status}."
+                        )
                     break
 
             fix_findings = _actionable_findings(state, review.findings)
@@ -491,6 +945,17 @@ def run_checkup_review_loop(
         if verify.status in HARD_NOT_CLEAN_STATES:
             # A failed/degraded verifier cannot confirm that fixes landed.
             # Keep the findings open and stop with an unknown/not-ready report.
+            #
+            # NOTE: ``_maybe_run_fallback_reviewer`` is intentionally NOT
+            # invoked on the verify path. On the verify pass the fixer's
+            # role has just authored the changes being verified —
+            # promoting the fixer to act as verifier of its own work
+            # collapses the reviewer/fixer independence the loop exists
+            # to enforce. The round-start fallback does not have this
+            # problem because no fix has been applied yet. If a
+            # verifier-side outage becomes a recurring operational pain
+            # point, the right answer is a third independent role, not
+            # self-verification.
             state.reviewer_status[reviewer] = verify.status
             state.stop_reason = (
                 f"Primary reviewer {reviewer} could not verify fixes: "
@@ -930,6 +1395,210 @@ def _collect_static_analysis_candidate_findings(
     return candidates
 
 
+def _maybe_run_fallback_reviewer(
+    *,
+    primary_reviewer: str,
+    primary_status: str,
+    fixer: str,
+    context: ReviewLoopContext,
+    worktree: Path,
+    round_number: int,
+    state: ReviewLoopState,
+    config: ReviewLoopConfig,
+    verbose: bool,
+    quiet: bool,
+    artifacts_dir: Path,
+    pr_metadata: Optional[Dict[str, Any]],
+    deadline: float,
+) -> Optional[ReviewResult]:
+    """Run the fixer's role as a fallback reviewer when the primary fails.
+
+    Triggers only when:
+    * ``config.fallback_reviewer_on_failure`` is True (opt-in).
+    * The loop is not in review-only mode (a fixer is configured).
+    * ``primary_status`` is ``failed`` or ``missing`` (NOT ``degraded`` —
+      degraded means reduced quality and must not silently lose signal).
+    * ``primary_reviewer`` and ``fixer`` are distinct roles.
+
+    On a clean fallback, ``_record_review`` overwrites the ``"fixer"``
+    sentinel in ``state.reviewer_status`` with the fallback's clean status
+    AND we override the primary reviewer's not-clean status with
+    ``"clean"`` so the downstream verdict adapter's rule r1 (every real
+    reviewer must be clean) does not short-circuit before r1.5 (at least
+    one clean real reviewer) is evaluated. The original primary failure
+    detail is preserved in ``state.reviewer_status_details`` with a
+    ``superseded_by_fallback`` marker so the rendered Reviewer
+    Diagnostics subsection still surfaces what really happened — humans
+    see the truth, the adapter sees a shippable status pair.
+
+    Returns the ``ReviewResult`` from the fallback pass, or ``None`` if no
+    fallback was attempted.
+    """
+    if not config.fallback_reviewer_on_failure:
+        return None
+    if config.review_only:
+        return None
+    if primary_status not in {"failed", "missing"}:
+        # Degraded never promotes — preserves the existing
+        # "degraded cannot ship" semantics.
+        return None
+    if not fixer or fixer == primary_reviewer:
+        return None
+
+    # Budget guard. The primary reviewer's failed invocation may have
+    # already consumed the cost/duration budget; ``_run_review`` would
+    # otherwise push us past it. Surface a precise stop reason so the
+    # final report explains why the fallback didn't run instead of
+    # claiming the primary "could not complete".
+    if _budget_exhausted(config, state, deadline):
+        _mark_budget_exhausted(config, state, deadline)
+        state.stop_reason = (
+            f"Primary reviewer {primary_reviewer} {primary_status}; "
+            f"budget exhausted before fallback reviewer {fixer} could run."
+        )
+        return None
+
+    if not quiet:
+        console.print(
+            f"[yellow]Primary reviewer {primary_reviewer} returned "
+            f"{primary_status}; running fallback reviewer {fixer}.[/yellow]"
+        )
+    fallback = _run_review(
+        reviewer=fixer,
+        context=context,
+        worktree=worktree,
+        round_number=round_number,
+        state=state,
+        config=config,
+        verbose=verbose,
+        quiet=quiet,
+        artifacts_dir=artifacts_dir,
+        mode="fallback",
+        pr_metadata=pr_metadata,
+    )
+    _record_review(state, fallback)
+
+    if fallback.status == "clean":
+        # Stash the primary's original failure detail (already populated
+        # in ``reviewer_status_details`` by the earlier ``_record_review``
+        # call), tag it as superseded, then flip the rendered status to
+        # ``"clean"`` so adapter rule r1 lets r1.5 fire.
+        original_detail = dict(
+            state.reviewer_status_details.get(primary_reviewer, {})
+        )
+        original_detail.setdefault("status", primary_status)
+        original_detail.setdefault("classification", "unknown")
+        original_detail.setdefault("exit_code", "no exit code")
+        original_detail.setdefault("reason", "")
+        original_detail["superseded_by_fallback"] = "true"
+        original_detail["fallback_reviewer"] = fixer
+        state.reviewer_status_details[primary_reviewer] = original_detail
+        state.reviewer_status[primary_reviewer] = "clean"
+    return fallback
+
+
+def _extract_failure_diagnostics(
+    output: str,
+    *,
+    success: bool,
+) -> Tuple[str, str, str]:
+    """Pull a best-effort exit code, classification, and stderr tail from a
+    failed/degraded reviewer invocation.
+
+    ``_run_role_task`` only returns ``(success, output, cost, model)`` — there
+    is no separate stderr channel — so ``output`` is the diagnostic text in
+    the failure path. The classification regex is intentionally simple and
+    best-effort; unknown failures fall through to ``"unknown"``.
+    """
+    text = output or ""
+    lowered = text.lower()
+
+    if not success and not text.strip():
+        return "no exit code", "unknown", "(no output captured from reviewer role)"
+
+    # Best-effort exit code extraction.
+    exit_code = "no exit code"
+    match = re.search(r"exit code[:\s]+(-?\d+)", lowered)
+    if match:
+        exit_code = match.group(1)
+
+    # Classification: order matters — most specific first.
+    classification = "unknown"
+    if any(
+        marker in lowered
+        for marker in (
+            "rate limit",
+            "rate-limit",
+            "quota exceeded",
+            "quota exhausted",
+            "429",
+            "too many requests",
+        )
+    ):
+        classification = "rate-limit"
+    elif any(
+        marker in lowered
+        for marker in (
+            "timed out",
+            "timeout expired",
+            "timeout:",
+            "deadline exceeded",
+        )
+    ):
+        classification = "timeout"
+    elif any(
+        marker in lowered
+        for marker in (
+            "authentication failed",
+            "not logged in",
+            "unauthorized",
+            "invalid api key",
+            "access token could not be refreshed",
+            "401",
+            "403",
+        )
+    ):
+        classification = "auth"
+    elif any(
+        marker in lowered
+        for marker in (
+            "connection refused",
+            "connection reset",
+            "network is unreachable",
+            "dns",
+            "could not resolve",
+            "socket",
+            "no route to host",
+            "ssl",
+        )
+    ):
+        classification = "network"
+    elif any(
+        marker in lowered
+        for marker in (
+            "traceback",
+            "segmentation fault",
+            "core dumped",
+            "panic:",
+            "fatal error:",
+            "killed",
+        )
+    ):
+        classification = "crash"
+
+    # Last ~20 lines of stderr/stdout — enough for an operator to paste
+    # into an upstream provider's support ticket without flooding the
+    # GitHub issue comment. Secrets are scrubbed before render: the tail
+    # lands in a public PR comment, so bearer tokens and provider API
+    # keys must not leak through.
+    tail_lines = [line for line in text.splitlines() if line.strip()]
+    tail = "\n".join(tail_lines[-20:]).strip()
+    if not tail:
+        tail = "(no output captured from reviewer role)"
+    tail = _scrub_secrets(tail)
+    return exit_code, classification, tail
+
+
 def _run_review(
     *,
     reviewer: str,
@@ -983,6 +1652,9 @@ def _run_review(
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
 
     if not success:
+        exit_code, classification, reason = _extract_failure_diagnostics(
+            output, success=success
+        )
         result = ReviewResult(
             reviewer=reviewer,
             status=_failure_status(
@@ -993,6 +1665,9 @@ def _run_review(
             findings=[],
             summary=output[:1000],
             raw_output=output,
+            status_classification=classification,
+            status_exit_code=exit_code,
+            status_reason=reason,
         )
     else:
         result = _parse_review_output(
@@ -1001,6 +1676,19 @@ def _run_review(
             round_number,
             allow_degraded=config.continue_on_reviewer_limit,
         )
+        # The parsed output may still classify as failed/degraded (e.g.,
+        # a model that produced text but no parseable JSON, or a rate
+        # limit marker embedded in the output). Surface diagnostics in
+        # that case too.
+        if result.status in HARD_NOT_CLEAN_STATES:
+            exit_code, classification, reason = _extract_failure_diagnostics(
+                output, success=True
+            )
+            result.status_classification = (
+                result.status_classification or classification
+            )
+            result.status_exit_code = result.status_exit_code or exit_code
+            result.status_reason = result.status_reason or reason
         if _should_attempt_parse_repair(output, result):
             repaired = _run_review_parse_repair(
                 reviewer=reviewer,
@@ -1016,6 +1704,51 @@ def _run_review(
                 mode=mode,
             )
             if repaired is not None:
+                # Parse-repair returns a fresh ``ReviewResult`` derived
+                # purely from the JSON the repair role produced; it has
+                # no diagnostic fields. When repair lands on
+                # failed/degraded/missing (e.g., the repair role
+                # honestly reported ``{"status":"failed"}`` because the
+                # original output was a crash dump), we still need the
+                # ``classification`` / ``exit_code`` / ``reason``
+                # captured from the original raw output so the
+                # ``### Reviewer Diagnostics`` subsection actually
+                # renders. Carry those fields forward from the
+                # pre-repair result so swapping in ``repaired`` does
+                # not silently drop the traceback tail.
+                if repaired.status in HARD_NOT_CLEAN_STATES:
+                    repaired.status_classification = (
+                        repaired.status_classification
+                        or result.status_classification
+                    )
+                    repaired.status_exit_code = (
+                        repaired.status_exit_code or result.status_exit_code
+                    )
+                    repaired.status_reason = (
+                        repaired.status_reason or result.status_reason
+                    )
+                    # If the original was not previously classified
+                    # (e.g., success=True path where the raw output
+                    # looked parseable enough to skip the diagnostics
+                    # branch above), re-extract from the raw output now
+                    # that we know the verdict is hard-not-clean.
+                    if not (
+                        repaired.status_classification
+                        and repaired.status_exit_code
+                        and repaired.status_reason
+                    ):
+                        exit_code, classification, reason = (
+                            _extract_failure_diagnostics(output, success=True)
+                        )
+                        repaired.status_classification = (
+                            repaired.status_classification or classification
+                        )
+                        repaired.status_exit_code = (
+                            repaired.status_exit_code or exit_code
+                        )
+                        repaired.status_reason = (
+                            repaired.status_reason or reason
+                        )
                 result = repaired
     _write_artifact(
         artifacts_dir / f"{base}.findings.json",
@@ -1814,10 +2547,12 @@ def _extract_bracket_findings(
     findings: List[ReviewFinding] = []
     priority_pattern = re.compile(
         r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
-        r"\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
+        r"(?:Finding\s*:\s*)?\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
         r"(?P<body>.*?)(?=^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
         r"(?:\[?P[0-3]\]?|blocking|blocker|critical|high|medium|low|nit|info)"
-        r"\s*:|^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
+        r"\s*:|^\s*\d+[.)]\s+|"
+        + REVIEW_TRAILING_SECTION_LOOKAHEAD
+        + r"|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
     )
     for match in priority_pattern.finditer(output or ""):
@@ -1882,7 +2617,9 @@ def _extract_bracket_findings(
         )
     numbered_heading_pattern = re.compile(
         r"^\s*\d+[.)]\s+(?P<title>[^\n]+?)\s*$\n?"
-        r"(?P<body>.*?)(?=^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
+        r"(?P<body>.*?)(?=^\s*\d+[.)]\s+|"
+        + REVIEW_TRAILING_SECTION_LOOKAHEAD
+        + r"|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
     )
     for match in numbered_heading_pattern.finditer(output or ""):
@@ -1978,7 +2715,7 @@ def _finding_evidence(title: str, body: str) -> str:
 
 def _strip_review_trailing_sections(text: str) -> str:
     return re.split(
-        r"(?:^|\n)\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*",
+        REVIEW_TRAILING_SECTION_SPLIT_RE,
         text or "",
         maxsplit=1,
         flags=re.IGNORECASE,
@@ -2112,6 +2849,20 @@ def _record_review(
         state.issue_aligned = result.issue_aligned
     if track_reviewer_status:
         state.reviewer_status[result.reviewer] = result.status
+        # When the reviewer ended in a non-clean state and we captured any
+        # diagnostic detail, persist it so the final report can surface
+        # what actually happened. The most recent attempt wins.
+        if result.status in HARD_NOT_CLEAN_STATES and (
+            result.status_classification
+            or result.status_exit_code
+            or result.status_reason
+        ):
+            state.reviewer_status_details[result.reviewer] = {
+                "status": result.status,
+                "classification": result.status_classification or "unknown",
+                "exit_code": result.status_exit_code or "no exit code",
+                "reason": result.status_reason or "",
+            }
     for finding in result.findings:
         existing = state.findings_by_key.get(finding.key)
         if existing is None:
@@ -2509,6 +3260,20 @@ def _write_final_state(
     payload = {
         "reviewer_status": dict(state.reviewer_status),
         "active_reviewer": state.active_reviewer,
+        "reviewer_status_details": {
+            # Per-reviewer diagnostic detail captured for any reviewer
+            # that ended in failed/degraded/missing. When a fallback
+            # promotes the primary's rendered status to ``clean``, the
+            # entry here keeps the original failure (status,
+            # classification, exit_code, reason) plus a
+            # ``superseded_by_fallback`` marker so downstream tooling
+            # can audit what really happened. The ``reason`` field is
+            # the unscrubbed-of-defang-tags stderr tail (secrets are
+            # still scrubbed); the markdown report defangs ``[SEV]``
+            # tokens at render time only.
+            name: dict(detail)
+            for name, detail in state.reviewer_status_details.items()
+        },
         "fresh_final_status": state.fresh_final_status,
         "issue_aligned": issue_aligned,
         "stop_reason": state.stop_reason,
@@ -2650,8 +3415,62 @@ def _render_final_report(
         else:
             cell = status
         lines.append(f"| {reviewer} | {cell} |")
+    lines.append(f"| fresh-final | {state.fresh_final_status} |")
+
+    # Reviewer Diagnostics — only render when at least one reviewer
+    # ended in a non-clean state with captured detail. This keeps the
+    # existing report shape intact for happy-path runs so substring
+    # assertions in older tests continue to match.
+    if state.reviewer_status_details:
+        lines.extend(["", "### Reviewer Diagnostics", ""])
+
+        def _render_diag_line(name: str, detail: Dict[str, str]) -> None:
+            original_status = detail.get("status", "unknown")
+            superseded = detail.get("superseded_by_fallback") == "true"
+            fallback_name = detail.get("fallback_reviewer", "")
+            if superseded and fallback_name:
+                lines.append(
+                    f"- {name}: status overridden by fallback "
+                    f"(original={original_status}, fallback={fallback_name}); "
+                    f"classification={detail.get('classification', 'unknown')}, "
+                    f"exit code: {detail.get('exit_code', 'no exit code')}"
+                )
+            else:
+                lines.append(
+                    f"- {name} ({original_status}): "
+                    f"classification={detail.get('classification', 'unknown')}, "
+                    f"exit code: {detail.get('exit_code', 'no exit code')}"
+                )
+            reason = (detail.get("reason") or "").strip()
+            if reason:
+                # Defang adapter trip-wires at render only — state is
+                # truthful for ``final-state.json``. Two known trip-
+                # wires today: ``[SEV]`` finding tokens (would inject
+                # synthetic findings and flip the verdict away from
+                # ``ship``) and line-leading ``Error:`` (would
+                # downgrade the verdict to ``unknown`` regardless of
+                # reviewer-status). See ``_defang_adapter_trip_wires``.
+                safe_reason = _defang_adapter_trip_wires(reason)
+                lines.append("")
+                lines.append("```")
+                lines.extend(safe_reason.splitlines())
+                lines.append("```")
+                lines.append("")
+
+        for reviewer_name in reviewers:
+            detail = state.reviewer_status_details.get(reviewer_name)
+            if not detail:
+                continue
+            _render_diag_line(reviewer_name, detail)
+        # Render any reviewer keys that aren't in the role order (e.g.,
+        # a reviewer that ran but isn't in the configured roles list)
+        # so nothing gets silently dropped.
+        for reviewer_name, detail in state.reviewer_status_details.items():
+            if reviewer_name in reviewers:
+                continue
+            _render_diag_line(reviewer_name, detail)
+
     lines.extend([
-        f"| fresh-final | {state.fresh_final_status} |",
         "",
         "### Findings",
         "",
