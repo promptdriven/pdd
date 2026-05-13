@@ -332,7 +332,7 @@ def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_di
     # Extract the filename without extension and directory
     code_filename = os.path.basename(code_file_path)
     base_name, _ = os.path.splitext(code_filename)
-    
+
     code_file_abs_path = os.path.abspath(code_file_path)
     code_dir = os.path.dirname(code_file_abs_path)
 
@@ -503,11 +503,11 @@ def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: 
             f for f in code_files
             if os.path.splitext(f)[1].lower() in allowed_extensions
         ]
-    
+
     for file_path in code_files:
         prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet, output_dir, create_missing=False)
         pairs.append((prompt_path, code_path))
-        
+
     return pairs
 
 def get_git_changed_files(repo_root: str, base_branch: str = "main") -> Set[str]:
@@ -1068,7 +1068,8 @@ def update_main(
     :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
     :param sync_metadata: If True, orchestrate prompt metadata finalization via run_metadata_sync
         after the update writes the prompt. In repo mode, replaces the legacy per-pair fingerprint
-        and post-loop architecture/PRD sync with a per-pair run_metadata_sync call.
+        and architecture sync with a per-pair run_metadata_sync call; PRD sync remains in this
+        wrapper and runs once after the batch when architecture entries changed.
     :return: Tuple containing the updated prompt, total cost, and model name.
     """
     quiet = ctx.obj.get("quiet", False)
@@ -1324,7 +1325,7 @@ def update_main(
                         "If no update is needed, output: NO_UPDATE_NEEDED"
                     )
 
-                    llm_output = run_agentic_task(
+                    llm_success, llm_output, llm_cost, _llm_model = run_agentic_task(
                         instruction=instruction,
                         cwd=Path(repo_root),
                         verbose=ctx.obj.get("verbose", False),
@@ -1332,8 +1333,12 @@ def update_main(
                         label="prd-sync",
                     )
 
-                    if llm_output and "<updated-prd>" in llm_output:
-                        import re
+                    if llm_cost:
+                        total_repo_cost += llm_cost
+
+                    if not llm_success:
+                        prd_status = f"error: {llm_output}"
+                    elif llm_output and "<updated-prd>" in llm_output:
                         match = re.search(
                             r"<updated-prd>(.*?)</updated-prd>",
                             llm_output,

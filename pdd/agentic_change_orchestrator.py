@@ -1212,8 +1212,12 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
         example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
 
-        # Derive ext from language
-        ext = get_extension(language) if language else defaults["ext"]
+        # Derive ext from language; preserve .pddrc dirs even if package data
+        # resolution is unavailable in a minimal test/runtime environment.
+        try:
+            ext = get_extension(language) if language else defaults["ext"]
+        except Exception:
+            ext = defaults["ext"]
         if ext.startswith("."):
             ext = ext[1:]  # Remove leading dot if present
 
