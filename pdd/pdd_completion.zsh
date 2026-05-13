@@ -474,7 +474,9 @@ _pdd_checkup() {
     '--require-final-fresh-review[Require a final fresh review]' \
     '--no-require-final-fresh-review[Skip final fresh review]' \
     '--blocking-severities[Comma-separated blocking severities]:severities:' \
-    '--clean-reviewer-states[Comma-separated reviewer states treated as clean]:states:'
+    '--clean-reviewer-states[Comma-separated reviewer states treated as clean]:states:' \
+    '--fallback-reviewer-on-failure[Promote the fixer to a fallback reviewer when the primary ends failed/missing (off by default)]' \
+    '1:github-issue-url:'
 }
 
 ##

@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.235",
-  "timestamp": "2026-05-13T02:45:44.024359+00:00",
-  "command": "manual-review-fix",
-  "prompt_hash": "66ffe2fcca9f4446b67cc3771f29936bbd47cd8f328163ccadb8e6a5b4a01710",
-  "code_hash": "02cff3a8314634a3ea92f4e7fef5aa161ef066211c9dba46b3155ba219628411",
-  "example_hash": "dd2fcce23eaf91ee69847eff0e47eed0d3ab45c3bc5aaa2cd29298a8e37f9d5e",
-  "test_hash": "1be7651f85d544852693df489a8bfef21050fb85f3b833b29f258d5d715f1454",
+  "timestamp": "2026-05-13T05:14:03.683031+00:00",
+  "command": "metadata_sync",
+  "prompt_hash": "9cadaef26bbe7bd8d2800b53ed6f676a24fcd1611dc3e22f3c1286caa1a67ca5",
+  "code_hash": "a4200b04ed961dd522c4dc450f803528355f1d012578c6d68e0fd6cdcc784bec",
+  "example_hash": "1b64e9fc214df7739ed2e6ceddf160944ebc82da7760bc72bc8bda95c5e9697c",
+  "test_hash": "13fce0325ccf6df64fdb5d947289466d7b3b8305c24306070d0396d1bf1bd29a",
   "test_files": {
-    "test_checkup_review_loop.py": "1be7651f85d544852693df489a8bfef21050fb85f3b833b29f258d5d715f1454"
+    "test_checkup_review_loop.py": "13fce0325ccf6df64fdb5d947289466d7b3b8305c24306070d0396d1bf1bd29a"
   },
   "include_deps": {
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
