@@ -49,8 +49,16 @@ _STEP_BODIES = {
 }
 
 _STEP_TRAILERS = {
+    5: "\nREPRO_FILES_CREATED: tests/test_calculator_repro.py",
+    6: (
+        "\nFIX_LOCATIONS: pdd/calculator.py"
+        "\nEXPANSION_ITEMS: none"
+    ),
+    7: "\nDEFECT_TYPE: code",
+    8: "\nPLANNED_TEST_COUNT: 1",
     9: "\nFILES_CREATED: tests/test_calculator_bug.py",
-    11: "\nE2E_FILES_CREATED: tests/e2e/test_calculator_e2e.py",
+    10: "\nE2E_NEEDED: no",
+    11: "\nE2E_SKIP: not required (E2E_NEEDED: no)",
 }
 
 
@@ -126,6 +134,13 @@ def main() -> None:
         patch("pdd.agentic_bug_orchestrator._setup_worktree", return_value=(worktree, None)),
         patch("pdd.agentic_bug_orchestrator.clear_agentic_progress", return_value=None),
         patch("pdd.agentic_bug_orchestrator.set_agentic_progress", return_value=None),
+        # `_verify_e2e_tests` ultimately invokes pytest on real files in the
+        # worktree. Replace it with a no-op success so the hermetic example
+        # does not error on missing test files for steps 9/11.
+        patch(
+            "pdd.agentic_bug_orchestrator._verify_e2e_tests",
+            return_value=(True, "mocked: all tests passed"),
+        ),
         patch("pdd.agentic_bug_orchestrator.subprocess.run", side_effect=mock_subprocess_run),
     ]
 
