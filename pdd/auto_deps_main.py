@@ -1,15 +1,22 @@
 from __future__ import annotations
-import json
+
 import sys
 from pathlib import Path
-from typing import Optional, Tuple, Callable
+from typing import Callable, Optional, Tuple
+
 import click
-from rich import print as rprint
+from rich.console import Console
 
 from . import DEFAULT_STRENGTH, DEFAULT_TIME
 from .construct_paths import construct_paths
 from .insert_includes import insert_includes
 from .validate_prompt_includes import sanitize_prompt_output
+from .operation_log import (
+    infer_module_identity,
+    save_fingerprint,
+    clear_run_report,
+)
+from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
 
 
 def auto_deps_main(
@@ -25,73 +32,92 @@ def auto_deps_main(
     concurrency: int = 1,
 ) -> Tuple[str, float, str]:
     """
-    Main function to analyze a prompt file and insert dependencies found in a directory.
+    CLI entry point for the `auto-deps` command.
 
-    :param ctx: Click context containing command-line parameters.
-    :param prompt_file: Path to the input prompt file.
-    :param directory_path: Path to the directory or glob pattern containing potential dependency files.
-    :param auto_deps_csv_path: Preferred CSV file path for dependency info (may be overridden by resolved paths).
-    :param output: File path (or directory) to save the modified prompt file.
-    :param force_scan: Flag to force a rescan by deleting the existing CSV cache.
-    :param progress_callback: Optional callback for progress updates (current, total).
-    :param include_docs: Flag to include documentation files (.md, .txt, .rst) in dependency discovery.
-    :param no_dedup: Flag to disable redundant inline content removal.
-    :param concurrency: Number of parallel workers for file summarization.
-    :return: A tuple containing the modified prompt, total cost, and model name used.
+    Analyzes a prompt file to discover and insert relevant dependencies
+    (code examples and optionally documentation), with deduplication and
+    parallelization support. Holds an exclusive file lock on the CSV path
+    to prevent redundant LLM calls when multiple processes target the
+    same cache.
     """
-    from filelock import FileLock
+    console = Console()
+    quiet = ctx.obj.get("quiet", False) if ctx.obj else False
 
     try:
-        # Construct file paths
-        input_file_paths = {
-            "prompt_file": prompt_file
-        }
+        # Build path-construction inputs.
+        input_file_paths = {"prompt_file": prompt_file}
         command_options = {
             "output": output,
-            "csv": auto_deps_csv_path
+            "csv": auto_deps_csv_path,
         }
-        
-        resolved_config, input_strings, output_file_paths, _ = construct_paths(
+
+        # Resolve paths via the shared path constructor.
+        resolved = construct_paths(
             input_file_paths=input_file_paths,
-            force=ctx.obj.get('force', False),
-            quiet=ctx.obj.get('quiet', False),
+            force=ctx.obj.get("force", False) if ctx.obj else False,
+            quiet=quiet,
             command="auto-deps",
             command_options=command_options,
-            context_override=ctx.obj.get('context'),
-            confirm_callback=ctx.obj.get('confirm_callback')
+            context_override=ctx.obj.get("context") if ctx.obj else None,
+            confirm_callback=ctx.obj.get("confirm_callback") if ctx.obj else None,
         )
+        # construct_paths returns (resolved_config, input_strings, output_file_paths, language)
+        _resolved_config, input_strings, output_file_paths, _ = resolved
 
-        # Resolve CSV path
+        # Resolve CSV path with safe default.
         csv_path = output_file_paths.get("csv", "project_dependencies.csv")
 
-        # Acquire lock to prevent concurrent access to the CSV cache.
-        # The lock is held for the entire operation (from CSV read through CSV write).
-        lock_path = f"{csv_path}.lock"
-        lock = FileLock(lock_path)
-        
-        with lock:
-            # Handle force scan option
-            if force_scan and Path(csv_path).exists():
-                if not ctx.obj.get('quiet', False):
-                    rprint(f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]")
-                try:
-                    Path(csv_path).unlink()
-                except OSError as e:
-                    if not ctx.obj.get('quiet', False):
-                        rprint(f"[yellow]Warning: Could not delete CSV file: {e}[/yellow]")
+        # Honor --force-scan by removing existing CSV so it gets rebuilt.
+        if force_scan and Path(csv_path).exists():
+            if not quiet:
+                console.print(
+                    f"[yellow]Removing existing CSV file due to --force-scan option: {csv_path}[/yellow]"
+                )
+            try:
+                Path(csv_path).unlink()
+            except OSError as exc:
+                if not quiet:
+                    console.print(
+                        f"[yellow]Warning: failed to remove CSV file {csv_path}: {exc}[/yellow]"
+                    )
 
-            # Load input file
-            prompt_content = input_strings["prompt_file"]
+        # Pull LLM parameters from the Click context with sensible defaults.
+        strength = ctx.obj.get("strength", DEFAULT_STRENGTH) if ctx.obj else DEFAULT_STRENGTH
+        temperature = ctx.obj.get("temperature", 0) if ctx.obj else 0
+        time_budget = ctx.obj.get("time", DEFAULT_TIME) if ctx.obj else DEFAULT_TIME
+        verbose = not quiet
 
-            # Get LLM parameters
-            strength = ctx.obj.get('strength', DEFAULT_STRENGTH)
-            temperature = ctx.obj.get('temperature', 0.0)
-            time_budget = ctx.obj.get('time', DEFAULT_TIME)
-            verbose = not ctx.obj.get('quiet', False)
+        # Acquire an exclusive lock on the CSV path to serialize concurrent
+        # auto-deps invocations targeting the same cache. The lock is held
+        # for the entire operation so the CSV read/write cycle is atomic
+        # from the caller's perspective.
+        lock_path = Path(f"{csv_path}.lock")
+        try:
+            lock_path.parent.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            # If we can't create the parent (unlikely if csv_path is valid),
+            # fall through and let file open report a clear error.
+            pass
 
-            # Run the dependency analysis and insertion
+        # Use function-scope import for the optional `filelock` dependency,
+        # falling back to a no-op lock if it isn't installed.
+        try:
+            from filelock import FileLock  # type: ignore
+            file_lock = FileLock(str(lock_path))
+        except ImportError:
+            class _NullLock:
+                def __enter__(self):  # noqa: D401
+                    return self
+
+                def __exit__(self, exc_type, exc, tb):
+                    return False
+
+            file_lock = _NullLock()
+
+        with file_lock:
+            # Run the dependency insertion pipeline.
             modified_prompt, csv_output, total_cost, model_name = insert_includes(
-                input_prompt=prompt_content,
+                input_prompt=input_strings["prompt_file"],
                 directory_path=directory_path,
                 csv_filename=csv_path,
                 prompt_filename=prompt_file,
@@ -105,59 +131,105 @@ def auto_deps_main(
                 max_workers=concurrency,
             )
 
-            # Save the modified prompt
+            # Sanitize the modified prompt before persisting so missing or
+            # invalid `<include select=...>` tags don't survive to a later
+            # `pdd sync` failure.
             output_path = output_file_paths["output"]
-            if output_path:
-                modified_prompt, invalid_includes = sanitize_prompt_output(
-                    modified_prompt,
-                    output_path,
-                )
-                if invalid_includes and not ctx.obj.get("quiet", False):
-                    rprint(
-                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
-                        f"before saving {output_path}.[/yellow]"
-                    )
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(modified_prompt)
-                try:
-                    from .auto_deps_architecture import merge_auto_deps_includes_from_cwd
+            cleaned_prompt, _warnings = sanitize_prompt_output(
+                modified_prompt, output_path
+            )
 
-                    arch_report = merge_auto_deps_includes_from_cwd(
-                        Path(output_path).resolve(),
-                        prompt_content,
-                        modified_prompt,
+            # Write the cleaned modified prompt.
+            output_path_obj = Path(output_path)
+            output_path_obj.parent.mkdir(parents=True, exist_ok=True)
+            output_path_obj.write_text(cleaned_prompt, encoding="utf-8")
+
+            # Write the CSV cache only if non-empty.
+            if csv_output:
+                csv_path_obj = Path(csv_path)
+                csv_path_obj.parent.mkdir(parents=True, exist_ok=True)
+                csv_path_obj.write_text(csv_output, encoding="utf-8")
+
+            # Merge any new <include> dependencies from the mutated prompt
+            # into architecture.json. This helper has its own atomicity
+            # guarantees and is intentionally outside the fingerprint
+            # finalization block per the spec.
+            try:
+                merge_auto_deps_includes_from_cwd(
+                    Path(output_path),
+                    input_strings["prompt_file"],
+                    cleaned_prompt,
+                )
+            except Exception as exc:  # noqa: BLE001
+                if not quiet:
+                    console.print(
+                        f"[yellow]Warning: architecture.json merge skipped due to error: {exc}[/yellow]"
                     )
-                    if arch_report.get("messages") and not ctx.obj.get("quiet", False):
-                        for line in arch_report["messages"]:
-                            rprint(f"[dim]{line}[/dim]")
-                except (OSError, json.JSONDecodeError, ValueError) as arch_exc:
-                    if not ctx.obj.get("quiet", False):
-                        rprint(
-                            f"[yellow]Warning: Could not update architecture.json after auto-deps: "
-                            f"{arch_exc}[/yellow]"
+
+        # Console output (unless quiet).
+        if not quiet:
+            console.print(
+                "[bold green]Successfully analyzed and inserted dependencies![/bold green]"
+            )
+            console.print(f"[bold]Model used:[/bold] {model_name}")
+            console.print(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
+            console.print(
+                f"[bold]Modified prompt saved to:[/bold] {output_path}"
+            )
+            console.print(
+                f"[bold]Dependency information saved to:[/bold] {csv_path}"
+            )
+
+        # Metadata finalization for the mutated prompt file. Errors here must
+        # not mask the successful auto-deps result — log a warning and continue.
+        try:
+            identity = infer_module_identity(Path(output_path))
+            if identity is None:
+                if not quiet:
+                    console.print(
+                        f"[yellow]Warning: could not infer module identity for "
+                        f"{output_path}; skipping metadata finalization.[/yellow]"
+                    )
+            else:
+                basename, language = identity
+                # Clear stale per-module run report because the prompt changed.
+                try:
+                    clear_run_report(basename, language)
+                except Exception as exc:  # noqa: BLE001
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Warning: failed to clear run report for "
+                            f"{basename}/{language}: {exc}[/yellow]"
                         )
 
-            # Save the CSV output if content exists
-            if csv_output:
-                with open(csv_path, 'w', encoding='utf-8') as f:
-                    f.write(csv_output)
+                # Persist the new fingerprint with current include-dependency hashes.
+                try:
+                    save_fingerprint(
+                        basename=basename,
+                        language=language,
+                        operation="auto-deps",
+                        paths={"prompt": Path(output_path)},
+                        cost=total_cost,
+                        model=model_name,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Warning: failed to save fingerprint for "
+                            f"{basename}/{language}: {exc}[/yellow]"
+                        )
+        except Exception as exc:  # noqa: BLE001
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: metadata finalization skipped due to error: {exc}[/yellow]"
+                )
 
-        # Provide user feedback
-        if not ctx.obj.get('quiet', False):
-            rprint("[bold green]Successfully analyzed and inserted dependencies![/bold green]")
-            rprint(f"[bold]Model used:[/bold] {model_name}")
-            rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-            if output_path:
-                rprint(f"[bold]Modified prompt saved to:[/bold] {output_path}")
-            rprint(f"[bold]Dependency information saved to:[/bold] {csv_path}")
-
-        return modified_prompt, total_cost, model_name
+        return cleaned_prompt, total_cost, model_name
 
     except click.Abort:
-        # User cancelled - re-raise to stop the sync loop
+        # Re-raise so the orchestrator (e.g. sync loop) can stop cleanly.
         raise
-    except Exception as e:
-        if not ctx.obj.get('quiet', False):
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
-        return "", 0.0, f"Error: {e}"
+    except Exception as exc:  # noqa: BLE001
+        if not quiet:
+            console.print(f"[bold red]Error in auto-deps: {exc}[/bold red]")
+        return "", 0.0, f"Error: {exc}"
