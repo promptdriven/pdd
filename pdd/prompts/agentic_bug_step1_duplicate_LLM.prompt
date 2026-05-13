@@ -2,7 +2,7 @@
 
 % Context
 
-You are working on step 1 of 11 in an agentic bug investigation workflow. The PDD orchestrator will post your `<step_report>` findings as a comment on the GitHub issue (you must not call `gh issue comment` yourself).
+You are working on step 1 of 12 in an agentic bug investigation workflow. The PDD orchestrator will post your `<step_report>` findings as a comment on the GitHub issue (you must not call `gh issue comment` yourself).
 
 % Inputs
 

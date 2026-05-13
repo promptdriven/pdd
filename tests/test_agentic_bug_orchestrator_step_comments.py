@@ -997,3 +997,83 @@ def test_bug_orchestrator_backfill_skips_non_contiguous_downstream_steps(
     step1_calls = [c for c in post_calls if c.kwargs.get("step_num") == 1]
     assert step1_calls, "Step 1 should be backfilled — it's within the contiguous range."
     assert "R1" in (step1_calls[0].kwargs.get("body") or "")
+
+
+def test_bug_orchestrator_resume_with_e2e_skipped_completed_run(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """E2E-skipped completed runs must not lose Step 12 backfill or rerun PR creation.
+
+    Regression for codex review #5 of PR #966 — when Step 10 emits
+    ``E2E_NEEDED: no`` the orchestrator skips Step 11 via ``continue``. The
+    pre-fix code never persisted a synthetic Step 11 entry, so a resume of a
+    completed run had ``step_outputs`` with keys 1..10 plus 12 (missing 11).
+    The contiguous resume validator then downgraded ``last_completed_step``
+    from 12 to 10, miss-skipping Step 12's cached backfill AND rerunning the
+    side-effectful Step 12 PR creation.
+    """
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    cached_step10 = (
+        "<step_report>## Step 10: Verify</step_report>\n"
+        "E2E_NEEDED: no"
+    )
+    cached_step12 = "<step_report>## Step 12: PR created</step_report>"
+
+    bug_orchestrator_mocks["load_state"].return_value = (
+        {
+            "step_outputs": {
+                "1": "<step_report>## Step 1</step_report>",
+                "2": "<step_report>## Step 2</step_report>",
+                "3": "<step_report>## Step 3</step_report>",
+                "4": "<step_report>## Step 4</step_report>",
+                "5": "<step_report>## Step 5</step_report>",
+                "6": "<step_report>## Step 6</step_report>",
+                "7": "<step_report>## Step 7</step_report>",
+                "8": "<step_report>## Step 8</step_report>",
+                "9": (
+                    "<step_report>## Step 9</step_report>\n"
+                    "FILES_CREATED: test_x.py"
+                ),
+                "10": cached_step10,
+                # Step 11 intentionally missing — legacy state from before
+                # the synthetic-Step-11 persistence fix.
+                "12": cached_step12,
+            },
+            "last_completed_step": 12,
+            "total_cost": 0.5,
+            "model_used": "claude",
+            # All step comments already posted EXCEPT Step 12 (the one the
+            # transient post failure dropped).
+            "step_comments": {
+                str(n): {"posted": True} for n in range(1, 12) if n != 11
+            },
+        },
+        None,
+    )
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = AssertionError(
+        "No step should re-run; all 12 steps are cached after the heal."
+    )
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+    assert success is True
+
+    post_calls = bug_orchestrator_mocks["post_step_comment"].call_args_list
+
+    # Step 12's cached body must be backfilled.
+    step12_calls = [c for c in post_calls if c.kwargs.get("step_num") == 12]
+    assert step12_calls, (
+        "Step 12's cached <step_report> must be backfilled even when Step 11 "
+        "was skipped by E2E_NEEDED:no. Calls: " + repr(post_calls)
+    )
+    assert "PR created" in (step12_calls[0].kwargs.get("body") or "")
+
+    # Step 11 has no <step_report>; the synthetic entry must NOT be posted.
+    step11_calls = [c for c in post_calls if c.kwargs.get("step_num") == 11]
+    assert not step11_calls, (
+        "Synthetic E2E-skip Step 11 entry must never be posted as a visible "
+        "comment. Calls: " + repr(step11_calls)
+    )
