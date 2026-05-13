@@ -7512,7 +7512,7 @@
               "Can invoke one normalized reviewer_fallback if the primary reviewer cannot complete; the fallback becomes active for subsequent review/fix/verify gating",
               "In review-only mode, runs only the primary reviewer and never fetches push metadata, commits, or pushes",
               "Commits with PDD Bot identity and pushes fixes to the PR head ref via the shared push_with_retry helper with force_with_lease_on_non_fast_forward disabled (refuses to leave tokenized URL in git config)",
-              "If the PR head advances remotely during the fixer turn, fetches the updated head, runs a plain git rebase of the local fixer commit onto it, and retries the push instead of force-pushing over remote work; rebase conflicts abort before verifier",
+              "If the PR head advances remotely during the fixer turn, fetches refs/heads/<head_ref> from the updated head repo with token auth fallback, runs a plain git rebase --onto FETCH_HEAD HEAD~1 HEAD to replay only the fixer commit, and retries the push instead of force-pushing over remote work; rebase conflicts abort before verifier",
               "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/",

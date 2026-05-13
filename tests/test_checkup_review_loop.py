@@ -2144,8 +2144,14 @@ class TestCommitAndPushIfChanged:
             ("https://github.com/o/r.git", "HEAD:feature", False),
             ("https://github.com/o/r.git", "HEAD:feature", False),
         ]
-        assert ["git", "fetch", "--no-tags", "https://github.com/o/r.git", "feature"] in runs
-        assert ["git", "rebase", "FETCH_HEAD"] in runs
+        assert [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ] in runs
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
 
     def test_non_fast_forward_rebases_instead_of_force_push(
         self, monkeypatch: Any, tmp_path: Path
@@ -2198,8 +2204,14 @@ class TestCommitAndPushIfChanged:
             ("https://github.com/o/r.git", "HEAD:feature", False),
             ("https://github.com/o/r.git", "HEAD:feature", False),
         ]
-        assert ["git", "fetch", "--no-tags", "https://github.com/o/r.git", "feature"] in runs
-        assert ["git", "rebase", "FETCH_HEAD"] in runs
+        assert [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ] in runs
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
 
     def test_fetch_first_rebase_failure_aborts_before_second_push(
         self, monkeypatch: Any, tmp_path: Path
@@ -2242,6 +2254,113 @@ class TestCommitAndPushIfChanged:
         assert pushes == 1
         assert "Failed to rebase fixes" in message
         assert ["git", "rebase", "--abort"] in runs
+
+    def test_fetch_auth_retries_with_tokenized_exact_branch_ref(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        token_file = tmp_path / "token"
+        token_file.write_text("ghs_secret", encoding="utf-8")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            return (pushes > 1, " ! [rejected] HEAD -> feature (fetch first)")
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd[:3] == ["git", "fetch", "--no-tags"]:
+                if "x-access-token" not in cmd[3]:
+                    return type(
+                        "R",
+                        (),
+                        {
+                            "returncode": 1,
+                            "stdout": "",
+                            "stderr": "fatal: could not read Username",
+                        },
+                    )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        fetches = [cmd for cmd in runs if cmd[:3] == ["git", "fetch", "--no-tags"]]
+        assert fetches[0] == [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ]
+        assert "x-access-token" in fetches[1][3]
+        assert fetches[1][4] == "refs/heads/feature"
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+
+    def test_fetch_auth_failure_redacts_token_in_error(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        token_file = tmp_path / "token"
+        token_file.write_text("ghs_secret", encoding="utf-8")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd[:3] == ["git", "fetch", "--no-tags"] and "x-access-token" not in cmd[3]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 1,
+                        "stdout": "",
+                        "stderr": "fatal: could not read Username",
+                    },
+                )()
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "fatal: https://x-access-token:ghs_secret@github.com/o/r.git failed",
+                },
+            )()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._fetch_pr_head_for_rebase(
+            tmp_path,
+            clone_url="https://github.com/o/r.git",
+            head_ref="feature",
+            repo_owner="o",
+            repo_name="r",
+        )
+
+        assert success is False
+        assert "ghs_secret" not in message
+        assert "[REDACTED]" in message
 
     def test_push_with_retry_can_leave_non_fast_forward_to_caller(
         self, tmp_path: Path

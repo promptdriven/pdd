@@ -2473,6 +2473,8 @@ def _commit_and_push_if_changed(
             worktree,
             clone_url=clone_url,
             head_ref=head_ref,
+            repo_owner=head_owner,
+            repo_name=head_repo,
         )
         if not rebased:
             return False, rebase_message
@@ -2510,29 +2512,36 @@ def _rebase_onto_updated_pr_head(
     *,
     clone_url: str,
     head_ref: str,
+    repo_owner: str,
+    repo_name: str,
 ) -> Tuple[bool, str]:
     """Fetch the updated PR head and replay the local fix commit on top.
 
     Review-loop fixes can race with auto-heal or a maintainer push to the same
     PR branch. Force-pushing over those commits would discard remote work, so
-    recover by rebasing before retrying the push. Use a plain rebase: if the
-    fixer commit conflicts with remote changes, abort and let the next run
-    review/fix from the updated PR head instead of choosing a side silently.
+    recover by rebasing before retrying the push. Fetch the exact branch ref so
+    tags with the same name cannot populate FETCH_HEAD. Rebase only the fixer
+    commit range (HEAD~1..HEAD) onto FETCH_HEAD so a force-pushed PR head cannot
+    resurrect commits the remote branch intentionally dropped. Use a plain
+    rebase: if the fixer commit conflicts with remote changes, abort and let
+    the next run review/fix from the updated PR head instead of choosing a side
+    silently.
     """
-    fetch = subprocess.run(
-        ["git", "fetch", "--no-tags", clone_url, head_ref],
-        cwd=worktree,
-        capture_output=True,
-        text=True,
+    fetched, fetch_message = _fetch_pr_head_for_rebase(
+        worktree,
+        clone_url=clone_url,
+        head_ref=head_ref,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
     )
-    if fetch.returncode != 0:
+    if not fetched:
         return False, (
             "Failed to refresh PR branch before retrying push: "
-            f"{fetch.stderr.strip()}"
+            f"{fetch_message}"
         )
 
     rebase = subprocess.run(
-        ["git", "rebase", "FETCH_HEAD"],
+        ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"],
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -2550,6 +2559,92 @@ def _rebase_onto_updated_pr_head(
         "Failed to rebase fixes onto updated PR branch before retrying push: "
         f"{rebase.stderr.strip() or rebase.stdout.strip()}"
     )
+
+
+def _fetch_pr_head_for_rebase(
+    worktree: Path,
+    *,
+    clone_url: str,
+    head_ref: str,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """Fetch the exact PR head branch into FETCH_HEAD, with token auth fallback."""
+    head_refspec = f"refs/heads/{head_ref}"
+    raw_fetch = subprocess.run(
+        ["git", "fetch", "--no-tags", clone_url, head_refspec],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if raw_fetch.returncode == 0:
+        return True, ""
+    error = raw_fetch.stderr.strip() or raw_fetch.stdout.strip()
+    if not _is_git_auth_error(error):
+        return False, error
+
+    token = _github_token_from_env()
+    if not token:
+        return False, error
+
+    token_url = _github_tokenized_url(repo_owner, repo_name, token)
+    token_fetch = subprocess.run(
+        ["git", "fetch", "--no-tags", token_url, head_refspec],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if token_fetch.returncode == 0:
+        return True, ""
+    token_error = token_fetch.stderr.strip() or token_fetch.stdout.strip()
+    return False, _redact_secret(token_error, token)
+
+
+def _is_git_auth_error(error: str) -> bool:
+    text = error or ""
+    return any(
+        marker in text
+        for marker in (
+            "Authentication failed",
+            "HTTP 401",
+            "could not read Username",
+            "HTTP Basic: Access denied",
+        )
+    )
+
+
+def _github_token_from_env() -> str:
+    token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
+    if token_file_path:
+        token_path = Path(token_file_path)
+        if token_path.exists():
+            token = token_path.read_text(encoding="utf-8").strip()
+            if token:
+                return token
+    return (
+        os.environ.get("GH_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("PDD_GITHUB_TOKEN")
+        or ""
+    ).strip()
+
+
+def _github_tokenized_url(repo_owner: str, repo_name: str, token: str) -> str:
+    from urllib.parse import quote
+
+    return (
+        f"https://x-access-token:{quote(token, safe='')}@github.com/"
+        f"{repo_owner}/{repo_name}.git"
+    )
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    if not secret:
+        return text
+    from urllib.parse import quote
+
+    redacted = (text or "").replace(secret, "[REDACTED]")
+    return redacted.replace(quote(secret, safe=""), "[REDACTED]")
 
 
 def _git_changed_files(worktree: Path) -> List[str]:
