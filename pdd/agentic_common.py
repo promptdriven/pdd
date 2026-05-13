@@ -2667,7 +2667,7 @@ def _run_with_provider(
             "exec",
             "--sandbox", sandbox_mode,
             "--json",
-            str(prompt_path)
+            "-"
         ])
         # Allow model override via CODEX_MODEL env var (mirrors CLAUDE_MODEL for anthropic)
         codex_model = env.get("CODEX_MODEL")
@@ -2723,10 +2723,11 @@ def _run_with_provider(
     else:
         return False, f"Unknown provider {provider}", 0.0, None
 
-    # For anthropic, pipe prompt content via stdin; others use file path in cmd.
+    # Claude and Codex both support stdin. Passing the prompt path as Codex's
+    # positional argument makes the path string the prompt, not the file body.
     # OpenCode reads the prompt from the file referenced in the trailing
     # message argv, so it does NOT receive the body via stdin.
-    stdin_content = prompt_content if provider == "anthropic" else None
+    stdin_content = prompt_content if provider in {"anthropic", "openai"} else None
 
     try:
         result = _subprocess_run(
