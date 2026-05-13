@@ -58,7 +58,7 @@ help:
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
-	@echo "  make release                 - Bump version, tag, and upload to PyPI (public origin only)"
+	@echo "  make release                 - Bump version, tag, and push (GitHub Actions publishes to PyPI via OIDC after gltanaka approval)"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
@@ -696,16 +696,20 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 	CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
 	CURRENT_TAG="v$$CURRENT_VERSION"; \
 	if git tag --points-at HEAD | grep -qx "$$CURRENT_TAG"; then \
-		echo "HEAD already at $$CURRENT_TAG; publishing current version to PyPI."; \
-		$(MAKE) publish; \
+		echo "HEAD already at $$CURRENT_TAG."; \
+		echo "Pushing tag to origin to trigger GitHub Actions publish workflow."; \
+		git push origin "$$CURRENT_TAG"; \
 	else \
 		echo "Bumping version with commitizen"; \
 		python -m commitizen bump --increment PATCH --yes --check-consistency; \
 		echo "Pushing release commit and tags to origin"; \
 		git push origin main --tags; \
-		echo "Publishing new version to PyPI"; \
-		$(MAKE) publish; \
-	fi
+	fi; \
+	NEW_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
+	echo ""; \
+	echo "Tag v$$NEW_VERSION pushed. GitHub Actions will publish to PyPI after gltanaka approval."; \
+	echo "  Watch:    gh run watch --workflow release.yml"; \
+	echo "  Fallback: make publish  (uploads locally via twine)"
 	@# Post-release cleanup check (Issue #186)
 	@$(MAKE) check-suspicious-files
 
