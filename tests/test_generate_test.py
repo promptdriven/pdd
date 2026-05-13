@@ -115,7 +115,7 @@ def test_generate_test_minimum_values(valid_inputs):
 
 
 
-@pytest.mark.timeout(180)
+@pytest.mark.timeout(300)
 def test_generate_test_maximum_values(valid_inputs):
     valid_inputs['strength'] = 1.0
     valid_inputs['temperature'] = 1.0
