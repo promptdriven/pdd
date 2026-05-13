@@ -3448,7 +3448,7 @@ def test_repo_mode_sync_metadata_true_still_runs_prd_sync_when_arch_changed(
     with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
          patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
         # Force agentic PRD-sync to claim it didn't need an update.
-        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
 
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
@@ -3518,7 +3518,7 @@ def test_repo_mode_sync_metadata_true_skips_prd_when_arch_not_updated(
 
     with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
          patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
-        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
 
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
@@ -3610,3 +3610,147 @@ def test_repo_mode_summary_emits_partial_when_arch_stage_skipped(
     assert result is not None
     captured = capsys.readouterr()
     assert "partial:architecture" in captured.out, captured.out
+
+
+def _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd):
+    mock_update.return_value = {
+        "prompt_file": "prompts/src/module1_python.prompt",
+        "status": "✅ Success",
+        "cost": 0.05,
+        "model": "mock_model",
+        "error": ""
+    }
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    arch_file = repo_root / "architecture.json"
+    arch_file.write_text("{}")
+    prd_file = repo_root / "PRD.md"
+    prd_file.write_text("old PRD content")
+    prompts_dir = repo_root / "prompts"
+    prompts_dir.mkdir()
+    mock_find_arch.return_value = [arch_file]
+    mock_find_prd.return_value = prd_file
+    ctx = click.Context(click.Command('update'))
+    ctx.obj = {"verbose": False}
+    return repo_root, prd_file, ctx
+
+
+def _run_prd_sync_update(repo_root, ctx, sync_metadata=False):
+    with (
+        patch(
+            "pdd.update_main.find_and_resolve_all_pairs",
+            return_value=[("prompts/src/module1_python.prompt", "src/module1.py")],
+        ),
+        patch("pdd.update_main.git.Repo") as mock_repo,
+        patch("pdd.update_main.os.getcwd", return_value=str(repo_root)),
+        patch("pdd.pddrc_initializer.ensure_pddrc_for_scan"),
+    ):
+        mock_repo.return_value.working_tree_dir = str(repo_root)
+        return update_main(
+            ctx=ctx,
+            use_git=False,
+            repo=True,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            dry_run=False,
+            sync_metadata=sync_metadata,
+        )
+
+
+@patch('pdd.update_main.update_file_pair')
+@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.architecture_registry.find_architecture_for_project')
+@patch('pdd.update_main._find_prd_file')
+@patch(
+    'pdd.architecture_sync.update_architecture_from_prompt',
+    return_value={"success": True, "updated": True, "changes": {}},
+)
+@patch('pdd.agentic_common.run_agentic_task')
+def test_prd_sync_updated(
+    mock_agentic,
+    mock_arch,
+    mock_find_prd,
+    mock_find_arch,
+    mock_git,
+    mock_changed,
+    mock_update,
+    tmp_path,
+    capsys,
+):
+    """
+    Test that PRD file is updated when the agent returns updated PRD content,
+    and that the cost is aggregated appropriately. Tests resolution of issue #882.
+    """
+    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
+    mock_agentic.return_value = (True, "<updated-prd>new PRD content</updated-prd>", 0.12, "agent_model")
+    result = _run_prd_sync_update(repo_root, ctx)
+    assert "new PRD content" in prd_file.read_text(), "PRD file was not updated."
+    assert result is not None
+    assert result[1] == pytest.approx(0.17), f"Cost should be 0.17, got {result[1]}"
+
+
+@patch('pdd.update_main.update_file_pair')
+@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.architecture_registry.find_architecture_for_project')
+@patch('pdd.update_main._find_prd_file')
+@patch(
+    'pdd.architecture_sync.update_architecture_from_prompt',
+    return_value={"success": True, "updated": True, "changes": {}},
+)
+@patch('pdd.agentic_common.run_agentic_task')
+def test_prd_sync_no_update_needed(
+    mock_agentic,
+    mock_arch,
+    mock_find_prd,
+    mock_find_arch,
+    mock_git,
+    mock_changed,
+    mock_update,
+    tmp_path,
+    capsys,
+):
+    """
+    Test that when the agent returns NO_UPDATE_NEEDED, the PRD file remains unchanged.
+    """
+    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
+    mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.05, "agent_model")
+    result = _run_prd_sync_update(repo_root, ctx)
+    assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged."
+    assert result is not None
+    assert result[1] == pytest.approx(0.10), f"Cost should be 0.10, got {result[1]}"
+
+
+@patch('pdd.update_main.update_file_pair')
+@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.architecture_registry.find_architecture_for_project')
+@patch('pdd.update_main._find_prd_file')
+@patch(
+    'pdd.architecture_sync.update_architecture_from_prompt',
+    return_value={"success": True, "updated": True, "changes": {}},
+)
+@patch('pdd.agentic_common.run_agentic_task')
+def test_prd_sync_failure(
+    mock_agentic,
+    mock_arch,
+    mock_find_prd,
+    mock_find_arch,
+    mock_git,
+    mock_changed,
+    mock_update,
+    tmp_path,
+    capsys,
+):
+    """
+    Test that when the agent task fails, the error is recorded without crashing the entire repository update.
+    """
+    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
+    mock_agentic.return_value = (False, "API Limit reached", 0.0, "agent_model")
+    _run_prd_sync_update(repo_root, ctx)
+    out = capsys.readouterr().out
+    assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged on failure."
+    assert "API Limit reached" in out, "Failure reason should be in the output."
