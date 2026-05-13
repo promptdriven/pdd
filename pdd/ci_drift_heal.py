@@ -207,6 +207,7 @@ def _build_ci_env(cost_csv_path: str) -> Dict[str, str]:
     env = os.environ.copy()
     env["PDD_FORCE"] = "1"
     env["CI"] = "1"
+    env["PDD_NO_INTERACTIVE"] = "1"
     env["NO_COLOR"] = "1"
     env["PDD_OUTPUT_COST_PATH"] = str(cost_csv_path)
     env.setdefault("PDD_FORCE_LOCAL", "1")

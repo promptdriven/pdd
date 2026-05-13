@@ -1547,7 +1547,7 @@ Key practice: Code and examples are ephemeral (regenerated); Tests and Prompts a
 | :--- | :--- | :--- |
 | **New Feature** | **The Prompt** | 1. Add/update contract rules in the prompt.<br>2. Add or update user stories for product-level behavior.<br>3. Regenerate code (LLM sees existing tests as behavioral context).<br>4. Generate or merge executable tests.<br>5. Run story validation and tests. |
 | **Bug Fix (Code)** | **The Test File** | 1. Use `pdd bug` to create a failing test case (repro) in the Test file.<br>2. Clarify the Prompt to address the edge case if needed.<br>3. Run `pdd fix`; the LLM sees the new test as behavioral context, and the test runner enforces the result.<br>**Tip:** Use `pdd fix --protect-tests` if the tests from `pdd bug` are correct and you want to prevent the LLM from modifying them. |
-| **Bug Fix (Prompt Defect)** | **The Prompt** | When `pdd bug` determines the prompt specification itself is wrong (Step 5.5), it auto-fixes the prompt file. The workflow then continues to generate tests based on the corrected prompt. |
+| **Bug Fix (Prompt Defect)** | **The Prompt** | When `pdd bug` determines the prompt specification itself is wrong (Step 7), it auto-fixes the prompt file. The workflow then continues to generate tests based on the corrected prompt. |
 
 **Key insight:** When you run `pdd generate` after adding a test, the LLM sees that test as behavioral context. The generated code should satisfy it, but the test suite is still the enforcement mechanism.
 
@@ -1580,7 +1580,7 @@ If the intended behavior changed, update the prompt. For example, "The module sh
 
 ### Prompt Defects vs. Code Bugs
 
-In PDD, the prompt is the source of truth. However, prompts themselves can contain defects. The `pdd bug` agentic workflow (Step 5.5: Prompt Classification) distinguishes between two types of bugs:
+In PDD, the prompt is the source of truth. However, prompts themselves can contain defects. The `pdd bug` agentic workflow (Step 7: Prompt Classification) distinguishes between two types of bugs:
 
 | Defect Type | Definition | Detection | Action |
 |-------------|------------|-----------|--------|
@@ -1589,7 +1589,7 @@ In PDD, the prompt is the source of truth. However, prompts themselves can conta
 
 **How Prompt Classification Works:**
 
-After root cause analysis (Step 5), the workflow examines whether:
+After root cause analysis (Step 6), the workflow examines whether:
 1. The code correctly implements the prompt, but the prompt is wrong (→ Prompt Defect)
 2. The code incorrectly implements the prompt (→ Code Bug)
 

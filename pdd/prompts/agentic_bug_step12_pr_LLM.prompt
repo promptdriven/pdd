@@ -1,4 +1,4 @@
-<pdd-reason>Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.</pdd-reason>
+<pdd-reason>Creates draft PR with failing tests and PDD fix command for step 12 of agentic bug workflow.</pdd-reason>
 <pdd-interface>
 {
   "type": "command",

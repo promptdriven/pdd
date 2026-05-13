@@ -436,6 +436,94 @@ def test_bug_orchestrator_posts_step_comment_on_success(bug_orchestrator_mocks, 
     assert "No duplicates found" in step1_body
 
 
+def test_bug_orchestrator_posts_failed_step_fallback(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """Soft failed steps should still get a visible FAILED fallback comment."""
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    captured_states: list = []
+
+    def save_side_effect(cwd, issue_number, workflow_type, state, *args, **kwargs):
+        captured_states.append(copy.deepcopy(state))
+        return None
+
+    bug_orchestrator_mocks["save_state"].side_effect = save_side_effect
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step6":
+            return (False, "Provider timeout during root cause", 0.1, "claude")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: test_x.py",
+                0.1,
+                "claude",
+            )
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, _msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+    assert success is True
+
+    step6_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 6
+    ]
+    assert step6_calls
+    assert step6_calls[0].kwargs.get("body") is None
+    assert "Provider timeout" in step6_calls[0].kwargs.get("output", "")
+
+    step6_comment_states = [
+        s.get("step_comments", {}).get("6", {}) for s in captured_states
+        if s.get("step_comments", {}).get("6")
+    ]
+    assert step6_comment_states
+    assert step6_comment_states[-1].get("failed_posted") is True
+    assert step6_comment_states[-1].get("posted") is not True
+
+
+def test_bug_orchestrator_step12_failure_returns_failure(
+    bug_orchestrator_mocks, bug_default_args
+):
+    """A failed final PR step must not report a successful investigation."""
+    from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
+
+    def run_side_effect(*args, **kwargs):
+        label = kwargs.get("label", "")
+        if label == "step9":
+            return (
+                True,
+                "<step_report>## Step 9 details</step_report>\nFILES_CREATED: test_x.py",
+                0.1,
+                "claude",
+            )
+        if label == "step12":
+            return (False, "All agent providers failed: timed out", 0.1, "claude")
+        return (True, f"<step_report>## Step {label}</step_report>", 0.1, "claude")
+
+    bug_orchestrator_mocks["run_agentic_task"].side_effect = run_side_effect
+
+    success, msg, _cost, _model, _files = run_agentic_bug_orchestrator(
+        **bug_default_args
+    )
+
+    assert success is False
+    assert "step 12" in msg.lower()
+    assert "timed out" in msg
+
+    step12_calls = [
+        c for c in bug_orchestrator_mocks["post_step_comment"].call_args_list
+        if c.kwargs.get("step_num") == 12
+    ]
+    assert step12_calls
+    assert step12_calls[0].kwargs.get("body") is None
+
+
 def test_bug_orchestrator_does_not_repost_on_resume(bug_orchestrator_mocks, bug_default_args):
     """Resume after step 1 succeeded previously: step 1 must NOT be reposted."""
     from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator

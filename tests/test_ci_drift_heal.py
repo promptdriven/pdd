@@ -1798,12 +1798,13 @@ class TestParseCostFromCsv:
 
 class TestBuildCiEnv:
     def test_sets_required_env_vars(self):
-        """Sets PDD_FORCE, CI, NO_COLOR, PDD_OUTPUT_COST_PATH."""
+        """Sets required non-interactive CI subprocess environment."""
         from pdd.ci_drift_heal import _build_ci_env
 
         env = _build_ci_env("/tmp/cost.csv")
         assert env["PDD_FORCE"] == "1"
         assert env["CI"] == "1"
+        assert env["PDD_NO_INTERACTIVE"] == "1"
         assert env["NO_COLOR"] == "1"
         assert env["PDD_OUTPUT_COST_PATH"] == "/tmp/cost.csv"
         assert env["PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE"] == "1"

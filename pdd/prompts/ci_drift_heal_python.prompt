@@ -84,7 +84,7 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 16. **Operational bypass:** `PDD_HEAL_SYNC_SKIP_MODULES` env var (comma-separated) skips `pdd sync`/`pdd example` steps for listed modules. For `update` drifts, the update itself still runs but the follow-up example is skipped; `main` records that module as both healed and skipped so PR mode cannot create a success checkpoint. For fully skipped non-update operations, `heal_module` returns `None` (distinct from True/False).
 
-17. **Environment:** Subprocess env sets `PDD_FORCE=1`, `CI=1`, `NO_COLOR=1`, `PDD_OUTPUT_COST_PATH`, `PDD_FORCE_LOCAL=1`, `PDD_SKIP_LOCAL_MODELS=1`, `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`, and defaults `PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT=1` plus `PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT=1`.
+17. **Environment:** Subprocess env sets `PDD_FORCE=1`, `CI=1`, `PDD_NO_INTERACTIVE=1`, `NO_COLOR=1`, `PDD_OUTPUT_COST_PATH`, `PDD_FORCE_LOCAL=1`, `PDD_SKIP_LOCAL_MODELS=1`, `PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE=1`, and defaults `PDD_HEAL_SKIP_EXISTING_EXAMPLE_DRIFT=1` plus `PDD_HEAL_SKIP_REVIEW_ONLY_EXAMPLE_DRIFT=1`.
 
 18. **CLI interface:** `argparse` with `--modules` (space/comma-separated), `--budget-cap` (float), `--skip-ci` (flag), `--diff-base` (string). Invoked as `python -m pdd.ci_drift_heal`.
 

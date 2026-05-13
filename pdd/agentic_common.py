@@ -360,49 +360,114 @@ def _is_rate_limited(error_message: str) -> bool:
 RATE_LIMIT_BACKOFF_FLOOR: float = 60.0
 
 
-def _is_permanent_error(error_message: str) -> bool:
-    """Detect permanent provider errors that should NOT be retried.
+_PERMANENT_ERROR_CLASSES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
+    # (classification, regex patterns) — order matters; first match wins.
+    (
+        "auth",
+        (
+            r"authentication[_\s]error",
+            r"authentication\s+failed",
+            r"failed\s+to\s+authenticate",
+            r"invalid\s+bearer",
+            r"invalid\s+api\s+key",
+            r"invalid\s+key",
+            r"\b401\b",
+            r"access\s+denied",
+            r"permission\s+denied",
+        ),
+    ),
+    (
+        "invalid-parameter",
+        (
+            r"invalid\s+parameter",
+            r"invalid.*temperature|temperature.*(?:not supported|out of range)",
+            r"not\s+supported\s+for\s+this\s+model",
+            # Negative lookahead so OpenCode "model not found in provider"
+            # misconfigurations classify as `provider-config` (their dedicated
+            # class lower in this table), not as a bare invalid-parameter.
+            r"model\s+not\s+found(?!\s+in\s+provider)",
+        ),
+    ),
+    (
+        # Issue #1072: quota exhaustion (permanent even when 429 is present)
+        "quota",
+        (
+            r"quota\s+(exhausted|exceeded)",
+            r"daily\s+quota",
+            r"terminal\s*quota\s*error",
+        ),
+    ),
+    (
+        # Issue #814: Anthropic billing / credit-exhaustion 400 bodies
+        "billing/credit-exhaustion",
+        (
+            r"credit\s+balance\s+is\s+too\s+low",
+            r"insufficient\s+(credit|balance|funds)",
+        ),
+    ),
+    (
+        # Issue #1232: Anthropic CLI OAuth/login failures on cloud workers
+        "oauth/login",
+        (
+            r"not\s+logged\s+in",
+            r"please\s+run\s+/login",
+        ),
+    ),
+    (
+        # OpenCode-specific misconfigurations that cannot heal without user action
+        "provider-config",
+        (
+            r"provider\s+not\s+configured",
+            r"no\s+provider\s+configured",
+            r"model\s+not\s+found\s+in\s+provider",
+            r"run\s+`?opencode\s+auth\s+login`?",
+            r"opencode\s+auth\s+login",
+            r"configure\s+(a\s+|the\s+)?provider",
+        ),
+    ),
+)
 
-    Includes authentication failures, invalid parameters (like temperature),
-    and model access/not found errors.
+# Issue #814 weak billing-page hint. Runs only after the strong classes above
+# AND the rate-limit short-circuit so a transient 429 mentioning
+# "Plans & Billing" stays transient.
+_PERMANENT_ERROR_WEAK_BILLING_PATTERN: str = r"plans\s*&\s*billing"
+
+
+def _classify_permanent_error(error_message: str) -> Optional[str]:
+    """Return a stable classification token for a permanent error, or None.
+
+    Classification runs in three tiers so a body that incidentally carries
+    rate-limit phrasing cannot mask a genuinely permanent failure:
+
+    1. Strong-permanent classes (auth / invalid-parameter / quota /
+       billing/credit-exhaustion / oauth/login / provider-config) win
+       first. A "401 … see rate-limit docs" body still classifies as
+       permanent so the orchestrator falls through to the next provider
+       instead of sleeping on the 60s rate-limit floor (Issue #1072,
+       Issue #814).
+    2. Rate-limit short-circuit: if step 1 did not match and
+       `_is_rate_limited` is True, the error is transient (returns
+       ``None``) so a generic HTTP 429 that just points the user at
+       "Plans & Billing" keeps its standard retry/backoff treatment.
+    3. Weak-permanent hint: a bare "Plans & Billing" mention without any
+       of the stronger patterns above is still classified as
+       billing/credit-exhaustion so Anthropic billing pages without an
+       accompanying 429 status are not retried (Issue #814).
     """
     msg = error_message.lower()
-    permanent_patterns = [
-        r"authentication[_\s]error",
-        r"authentication\s+failed",
-        r"failed\s+to\s+authenticate",
-        r"invalid\s+bearer",
-        r"invalid\s+api\s+key",
-        r"invalid\s+key",
-        r"invalid\s+parameter",
-        r"invalid.*temperature|temperature.*(?:not supported|out of range)",
-        r"\b401\b",
-        r"not\s+supported\s+for\s+this\s+model",
-        r"model\s+not\s+found",
-        r"access\s+denied",
-        r"permission\s+denied",
-        # Issue #1072: Quota exhaustion patterns
-        r"quota\s+(exhausted|exceeded)",
-        r"daily\s+quota",
-        r"terminal\s*quota\s*error",
-        # Issue #1232: Anthropic CLI OAuth/login failure on cloud workers
-        # ("Not logged in - Please run /login"). Without this, every cloud
-        # one-session run burns its first attempt on Anthropic before falling
-        # through to OpenAI.
-        r"not\s+logged\s+in",
-        r"please\s+run\s+/login",
-        # OpenCode-specific configuration failures: these cannot heal
-        # without user action (running `opencode auth login`, configuring a
-        # provider, or correcting the OPENCODE_MODEL identifier). Retrying
-        # them on the same provider just burns the retry budget.
-        r"provider\s+not\s+configured",
-        r"no\s+provider\s+configured",
-        r"model\s+not\s+found\s+in\s+provider",
-        r"run\s+`?opencode\s+auth\s+login`?",
-        r"opencode\s+auth\s+login",
-        r"configure\s+(a\s+|the\s+)?provider",
-    ]
-    return any(re.search(p, msg) for p in permanent_patterns)
+    for classification, patterns in _PERMANENT_ERROR_CLASSES:
+        if any(re.search(pattern, msg) for pattern in patterns):
+            return classification
+    if _is_rate_limited(error_message):
+        return None
+    if re.search(_PERMANENT_ERROR_WEAK_BILLING_PATTERN, msg):
+        return "billing/credit-exhaustion"
+    return None
+
+
+def _is_permanent_error(error_message: str) -> bool:
+    """Backward-compatible wrapper around `_classify_permanent_error`."""
+    return _classify_permanent_error(error_message) is not None
 
 
 def _codex_auth_failure_message(error_detail: str) -> Optional[str]:
@@ -2063,9 +2128,29 @@ def run_agentic_task(
                     )
                     any_attempt_logged_inside = True
 
-                if not success and _is_permanent_error(output):
-                    if verbose:
-                        console.print(f"[yellow]Permanent error from {provider}, skipping retries.[/yellow]")
+                permanent_class = (
+                    _classify_permanent_error(output) if not success else None
+                )
+                if permanent_class is not None:
+                    # Issue #814: emit a default-mode (non-verbose) diagnostic so
+                    # the user sees which provider was skipped and why, instead
+                    # of the workflow silently advancing to the next provider.
+                    # Suppressed under quiet=True so callers honoring the quiet
+                    # contract (e.g. Issue #813 paths) stay silent on stdout.
+                    #
+                    # The line carries the stable classification token (e.g.
+                    # ``billing/credit-exhaustion``, ``auth``, ``quota``) — NOT
+                    # the raw provider stderr — so credentials echoed in the
+                    # body cannot leak to stdout/CI logs and so no Rich-markup
+                    # escaping of untrusted text is required. The full output
+                    # is still captured in the JSONL audit log above and is
+                    # available via ``--verbose``.
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Provider {provider} reported a permanent error "
+                            f"({permanent_class}); skipping retries. "
+                            f"Use --verbose for the full provider output.[/yellow]"
+                        )
                     break
 
                 # Failed - retry with backoff if attempts remain
@@ -2925,8 +3010,19 @@ def _parse_provider_json(
             # Claude Code JSON includes is_error when the session failed
             # (auth, refusal, crash). Propagate as failure so callers can
             # retry or fall through instead of treating it as success.
+            #
+            # Issue #814 codex iter-13: preserve `api_error_status` in the
+            # text we hand to `_classify_permanent_error` /
+            # `_is_rate_limited`. Without it, a 429 envelope whose
+            # `result` is just "Please go to Plans & Billing..." would
+            # match the weak billing-page pattern and be misclassified
+            # as permanent — bypassing the intended rate-limit retry.
             if data.get("is_error"):
-                return False, str(output_text) or "CLI reported is_error with no message", cost, actual_model
+                api_status = data.get("api_error_status")
+                detail = str(output_text) or "CLI reported is_error with no message"
+                if api_status is not None:
+                    detail = f"HTTP {api_status}: {detail}"
+                return False, detail, cost, actual_model
 
         elif provider == "google":
             stats = data.get("stats", {})

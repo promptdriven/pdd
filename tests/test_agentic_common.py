@@ -6391,3 +6391,550 @@ class TestRateLimitBackoffFloor:
         from pdd.agentic_common import RATE_LIMIT_BACKOFF_FLOOR
         high_backoff = 90.0
         assert max(high_backoff, RATE_LIMIT_BACKOFF_FLOOR) == 90.0
+
+
+# ---------------------------------------------------------------------------
+# Issue #814: credit-balance / billing 400s as permanent errors
+# ---------------------------------------------------------------------------
+
+
+class TestIssue814BillingErrorsPermanent:
+    """Anthropic billing/credit-balance 400 bodies must classify as permanent.
+
+    Spec section 14 (Error Classification) requires that
+    `_is_permanent_error()` matches:
+      - "credit balance is too low"
+      - "plans & billing"
+      - "insufficient credit" / "insufficient balance" / "insufficient funds"
+
+    so the orchestrator advances to the next provider in
+    `PDD_AGENTIC_PROVIDER` order instead of burning all retries on the same
+    provider.
+    """
+
+    def test_credit_balance_is_too_low_is_permanent(self):
+        # Verbatim shape from Anthropic 400 body
+        body = (
+            'Exit code 1: {"type":"error","error":{"type":"invalid_request_error",'
+            '"message":"Your credit balance is too low to access the Anthropic API."}}'
+        )
+        assert _is_permanent_error(body) is True
+
+    def test_plans_and_billing_phrase_is_permanent(self):
+        body = "Please go to Plans & Billing to upgrade or purchase credits."
+        assert _is_permanent_error(body) is True
+
+    def test_insufficient_credit_is_permanent(self):
+        assert _is_permanent_error("insufficient credit on account") is True
+
+    def test_insufficient_balance_is_permanent(self):
+        assert _is_permanent_error("insufficient balance to complete request") is True
+
+    def test_insufficient_funds_is_permanent(self):
+        assert _is_permanent_error("insufficient funds for this operation") is True
+
+    def test_billing_error_is_case_insensitive(self):
+        # _is_permanent_error lowercases its input first; ensure mixed-case bodies match.
+        assert _is_permanent_error("Your CREDIT BALANCE is TOO LOW.") is True
+        assert _is_permanent_error("Plans & Billing") is True
+
+    def test_unrelated_billing_word_does_not_match(self):
+        # Random use of "billing" without the documented phrase must not flag
+        # a transient error as permanent.
+        assert _is_permanent_error("billing pipeline timed out") is False
+
+    def test_rate_limited_429_with_billing_hint_is_not_permanent(self):
+        # Issue #814: a 429/rate-limit message that happens to point users at
+        # the Plans & Billing page must stay TRANSIENT so run_agentic_task's
+        # extended (RATE_LIMIT_BACKOFF_FLOOR) retry path still fires, instead
+        # of falling through to the permanent branch.
+        from pdd.agentic_common import _is_rate_limited
+
+        body = (
+            "HTTP 429: rate limit exceeded. "
+            "Visit Plans & Billing to increase your rate limits."
+        )
+        assert _is_rate_limited(body) is True
+        assert _is_permanent_error(body) is False
+
+        api_error = '{"api_error_status": 429, "detail": "see Plans & Billing"}'
+        assert _is_rate_limited(api_error) is True
+        assert _is_permanent_error(api_error) is False
+
+    def test_auth_or_config_with_rate_limit_text_stays_permanent(self):
+        # Codex iteration-3: when an auth/config error happens to contain a
+        # generic "rate limit" or "429" token (e.g. a help-link snippet), the
+        # rate-limit short-circuit must NOT preempt the strong-permanent
+        # patterns or run_agentic_task will retry a non-recoverable provider.
+        from pdd.agentic_common import _is_rate_limited
+
+        bodies = [
+            "401 Unauthorized — see https://example.com/docs/rate-limit",
+            "invalid api key (refer to rate limit policy)",
+            "provider not configured; visit our rate limit docs",
+            "model not found; consult the 429 troubleshooting guide",
+            "Authentication failed — too many requests reference link",
+            "Not logged in — please run /login. See our rate limit page.",
+        ]
+        for body in bodies:
+            assert _is_rate_limited(body), (
+                f"sanity: {body!r} should look 429-like to _is_rate_limited"
+            )
+            assert _is_permanent_error(body), (
+                f"strong-permanent must outrank rate-limit short-circuit: {body!r}"
+            )
+
+    def test_parse_provider_json_preserves_api_error_status_for_classifier(self):
+        # Codex iter-13: when Claude Code exits 0 but returns an error
+        # envelope, `_parse_provider_json` strips top-level fields and
+        # returns only `data["result"]`. If a transient 429 envelope's
+        # result body is just "Please go to Plans & Billing...", the weak
+        # billing-page classifier would misclassify it as permanent and
+        # bypass the rate-limit retry path. Verify that the parser
+        # preserves `api_error_status` in the returned text so the
+        # downstream classifier sees the 429 marker.
+        from pdd.agentic_common import (
+            _classify_permanent_error,
+            _is_rate_limited,
+            _parse_provider_json,
+        )
+
+        # 429 with a billing-page hint must stay TRANSIENT after parsing.
+        transient_429 = {
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 429,
+            "result": "Please go to Plans & Billing to upgrade.",
+        }
+        success, text, *_ = _parse_provider_json("anthropic", transient_429)
+        assert success is False
+        assert "429" in text, (
+            f"Parser must keep api_error_status visible to classifier, got: {text!r}"
+        )
+        assert _is_rate_limited(text), (
+            f"_is_rate_limited must see the preserved 429, got text={text!r}"
+        )
+        assert _classify_permanent_error(text) is None, (
+            "Transient 429 with billing hint must classify as transient, "
+            f"got classification for text={text!r}"
+        )
+
+        # 400 with a credit-balance body stays PERMANENT.
+        permanent_400 = {
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 400,
+            "result": (
+                "Your credit balance is too low to access the Anthropic API. "
+                "Please go to Plans & Billing to upgrade or purchase credits."
+            ),
+        }
+        success, text, *_ = _parse_provider_json("anthropic", permanent_400)
+        assert success is False
+        assert "400" in text
+        assert _classify_permanent_error(text) == "billing/credit-exhaustion"
+
+        # No api_error_status: fall back to bare result text, no prefix.
+        no_status = {
+            "type": "result",
+            "is_error": True,
+            "result": "Authentication failed",
+        }
+        success, text, *_ = _parse_provider_json("anthropic", no_status)
+        assert success is False
+        assert text == "Authentication failed", (
+            f"Parser must omit prefix when api_error_status is absent, got: {text!r}"
+        )
+
+    def test_quota_exhaustion_with_429_stays_permanent(self):
+        # Issue #1072 + Issue #814: when a provider returns BOTH a 429-like
+        # status and a hard-exhaustion marker (daily quota, quota exhausted,
+        # TerminalQuotaError, credit balance too low, insufficient credit/
+        # balance/funds), the result must remain PERMANENT — looping with the
+        # 60s rate-limit floor on a non-recoverable quota burns the budget
+        # instead of advancing to the next provider.
+        from pdd.agentic_common import _is_rate_limited
+
+        for body in (
+            "HTTP 429: daily quota exceeded for project foo",
+            "rate limit hit — quota exhausted, please upgrade",
+            '{"api_error_status": 429, "detail": "TerminalQuotaError"}',
+            "429 Too Many Requests — credit balance is too low",
+            "429 — insufficient credit on account",
+        ):
+            assert _is_rate_limited(body), f"sanity: {body!r} should look 429-like"
+            assert _is_permanent_error(body), (
+                f"hard exhaustion must win over 429 short-circuit: {body!r}"
+            )
+
+    def test_classify_permanent_error_returns_stable_classification(self):
+        # Issue #814: diagnostics derived from provider stderr land in CI/
+        # stdout. To avoid leaking credentials echoed by the provider, the
+        # default-mode line interpolates a STABLE classification token, not
+        # the raw provider body. This test pins those token names so the
+        # diagnostic stays predictable across refactors.
+        from pdd.agentic_common import _classify_permanent_error
+
+        cases = {
+            "Authentication failed: invalid api key": "auth",
+            "HTTP 401 Unauthorized": "auth",
+            "Access denied for caller": "auth",
+            "invalid parameter: temperature out of range": "invalid-parameter",
+            "model not found": "invalid-parameter",
+            "daily quota exceeded": "quota",
+            "TerminalQuotaError: quota exhausted": "quota",
+            "Credit balance is too low to access the Anthropic API": (
+                "billing/credit-exhaustion"
+            ),
+            "insufficient credit on account": "billing/credit-exhaustion",
+            "Please go to Plans & Billing to upgrade": "billing/credit-exhaustion",
+            "Not logged in - Please run /login": "oauth/login",
+            "provider not configured for OPENCODE_MODEL": "provider-config",
+            # Codex iteration-9 regression: the generic "model not found"
+            # pattern in `invalid-parameter` must NOT preempt the OpenCode-
+            # specific "model not found in provider" classification.
+            "OpenCode error: model not found in provider": "provider-config",
+        }
+        for body, expected in cases.items():
+            assert _classify_permanent_error(body) == expected, (
+                f"{body!r} should classify as {expected!r}, got "
+                f"{_classify_permanent_error(body)!r}"
+            )
+        # Transient inputs return None
+        assert _classify_permanent_error("connection refused") is None
+        assert _classify_permanent_error("HTTP 429 rate limit") is None
+        assert (
+            _classify_permanent_error(
+                "HTTP 429: rate limit exceeded. Visit Plans & Billing to "
+                "increase your rate limits."
+            )
+            is None
+        )
+
+    def test_credit_balance_error_skips_retries_and_falls_back(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """User workflow: exhausted Anthropic credits should not burn retries."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, msg, cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+
+        assert success is True
+        assert provider == "google"
+        assert "Google success" in msg
+        assert mock_subprocess_run.call_count == 2
+        sleep_mock.assert_not_called()
+
+    def test_permanent_error_emits_default_mode_diagnostic(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        mock_console,
+        tmp_path,
+    ):
+        """Issue #814 (second half): surface a clear diagnostic in default
+        (non-verbose) mode so the user sees which provider was skipped and a
+        snippet of the error, instead of the workflow silently advancing."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep"):
+            success, *_ = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+        assert success is True
+
+        printed = [
+            str(call.args[0])
+            for call in mock_console.print.call_args_list
+            if call.args
+        ]
+        permanent_lines = [line for line in printed if "permanent error" in line.lower()]
+        assert permanent_lines, (
+            "Expected a default-mode permanent-error diagnostic, got: " f"{printed}"
+        )
+        # The diagnostic emits a stable classification token rather than a
+        # slice of the provider's raw stderr (which could echo credentials).
+        # The exact token for a credit-balance/Plans & Billing body is
+        # ``billing/credit-exhaustion``.
+        assert any(
+            "billing/credit-exhaustion" in line.lower() for line in permanent_lines
+        ), (
+            "Diagnostic must name the permanent-error classification: "
+            f"{permanent_lines}"
+        )
+        # Untrusted provider stderr must NOT be echoed (credential-leak risk).
+        assert not any("credit balance" in line.lower() for line in permanent_lines), (
+            "Diagnostic must not echo raw provider stderr: " f"{permanent_lines}"
+        )
+        assert any("--verbose" in line for line in permanent_lines), (
+            "Diagnostic should advise --verbose for full provider output: "
+            f"{permanent_lines}"
+        )
+
+    def test_permanent_error_diagnostic_suppressed_under_quiet(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        mock_console,
+        tmp_path,
+    ):
+        """Issue #814 (codex follow-up): the default-mode permanent-error
+        diagnostic must honor the quiet contract — callers passing
+        quiet=True must see no stdout for the permanent-error skip, while
+        fallback still succeeds."""
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = "Credit balance is too low"
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, _output, _cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5, quiet=True
+            )
+        assert success is True
+        # Permanent-error classification must break out of retries on the
+        # first attempt and advance to the fallback provider, not silently
+        # retry anthropic. Without these assertions the test could pass for
+        # the wrong reason — e.g. anthropic retried twice and consumed the
+        # google_success mock as a retry.
+        assert provider == "google", (
+            f"Expected fallback to google after anthropic permanent error, "
+            f"got provider={provider!r}"
+        )
+        assert mock_subprocess_run.call_count == 2, (
+            "Permanent error must skip retries — expected exactly one "
+            "anthropic attempt + one google attempt, got "
+            f"{mock_subprocess_run.call_count} subprocess calls"
+        )
+        sleep_mock.assert_not_called()
+
+        printed = [
+            str(call.args[0])
+            for call in mock_console.print.call_args_list
+            if call.args
+        ]
+        permanent_lines = [line for line in printed if "permanent error" in line.lower()]
+        assert not permanent_lines, (
+            "quiet=True must suppress the permanent-error diagnostic, got: "
+            f"{permanent_lines}"
+        )
+
+    def test_permanent_error_diagnostic_does_not_echo_untrusted_stderr(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """Issue #814 (codex iter-5..8 follow-up): the default-mode permanent-
+        error diagnostic MUST NOT echo any slice of the provider's raw stderr.
+
+        Earlier iterations sliced the first line of provider output into the
+        diagnostic and tried to redact secrets with a regex. That kept finding
+        new credential shapes that slipped through. The robust fix is to not
+        echo untrusted text at all: the line carries only the provider name
+        and a stable classification token. Verify that even when the failing
+        body contains a fake credential and Rich-markup metacharacters,
+        neither survives into the rendered diagnostic line, and that the
+        diagnostic does not raise `MarkupError` (which would abort fallback
+        before the next provider is tried).
+        """
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        # Body carries: (1) a permanent-error classification trigger
+        # ("credit balance is too low"); (2) a fake credential the diagnostic
+        # must not echo; (3) literal Rich tags that would crash
+        # console.print(f"[yellow]...{raw}[/yellow]") if interpolated as-is.
+        anthropic_failure = MagicMock()
+        anthropic_failure.returncode = 1
+        anthropic_failure.stdout = ""
+        anthropic_failure.stderr = (
+            "Credit balance is too low [/yellow] [bold]boom[/bold] "
+            "GOOGLE_API_KEY=AIzaSyFAKEcredential012345"
+        )
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_failure, google_success]
+
+        from io import StringIO
+        from rich.console import Console as RealConsole
+        capture = StringIO()
+        real_console = RealConsole(file=capture, force_terminal=False, no_color=True)
+
+        with patch("pdd.agentic_common.console", real_console), \
+                patch("pdd.agentic_common.time.sleep"):
+            success, _output, _cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+        assert success is True
+        assert provider == "google"
+        out = capture.getvalue()
+        # Classification token IS in the diagnostic line.
+        assert "billing/credit-exhaustion" in out, (
+            f"Expected classification token in rendered diagnostic, got: {out!r}"
+        )
+        # Untrusted slices of provider stderr are NOT echoed.
+        for needle in (
+            "credit balance",  # raw stderr fragment
+            "boom",            # raw stderr fragment after markup tags
+            "AIzaSyFAKEcredential012345",  # fake credential
+            "GOOGLE_API_KEY",  # env-style key name
+        ):
+            assert needle.lower() not in out.lower(), (
+                f"Diagnostic must not echo untrusted stderr fragment "
+                f"{needle!r}, got: {out!r}"
+            )
+
+    def test_anthropic_is_error_json_envelope_skips_retries(
+        self,
+        mock_shutil_which,
+        mock_subprocess_run,
+        mock_env,
+        mock_load_model_data,
+        tmp_path,
+    ):
+        """Issue #814 end-to-end repro: the exact JSON envelope the original
+        reporter captured in `.pdd/agentic-logs/session_*.jsonl`.
+
+        Claude Code CLI exits 0 but returns `is_error: true` + an
+        `api_error_status: 400` + a result body containing "Credit balance is
+        too low". `_parse_provider_json` extracts `data["result"]` as the
+        output and propagates `success=False`. `_run_with_provider`'s caller
+        in `run_agentic_task` then calls `_is_permanent_error(output)` —
+        which must match the billing pattern and break out of the retry
+        loop, allowing the orchestrator to advance to the next provider.
+
+        Without the Issue #814 fix the orchestrator burns 3 retries on the
+        same anthropic 400 before moving on; with the fix it advances on
+        the first failure.
+        """
+        mock_shutil_which.return_value = "/bin/cmd"
+        mock_env["GEMINI_API_KEY"] = "key"
+
+        # Exact body shape captured in issue #814 (513-byte response).
+        # Claude Code exits 0 with this JSON in stdout when the API itself
+        # returns a billing-class 400.
+        anthropic_400 = MagicMock()
+        anthropic_400.returncode = 0
+        anthropic_400.stdout = json.dumps({
+            "type": "result",
+            "is_error": True,
+            "api_error_status": 400,
+            "result": (
+                "Your credit balance is too low to access the Anthropic API. "
+                "Please go to Plans & Billing to upgrade or purchase credits."
+            ),
+            "total_cost_usd": 0.0,
+            "session_id": "abc-123",
+        })
+        anthropic_400.stderr = ""
+
+        google_success = MagicMock()
+        google_success.returncode = 0
+        google_success.stdout = json.dumps({
+            "response": (
+                "Google success after Anthropic billing failure. "
+                "This response is long enough to avoid false-positive handling."
+            ),
+            "stats": {},
+        })
+        google_success.stderr = ""
+
+        mock_subprocess_run.side_effect = [anthropic_400, google_success]
+
+        with patch("pdd.agentic_common.time.sleep") as sleep_mock:
+            success, msg, cost, provider = run_agentic_task(
+                "Do work", tmp_path, max_retries=3, retry_delay=5
+            )
+
+        # End-to-end assertions matching the original reporter's expected fix:
+        # 1. Workflow succeeds via the fallback provider
+        assert success is True, f"Expected fallback success, got msg={msg!r}"
+        assert provider == "google"
+        # 2. Exactly 2 subprocess calls — one anthropic (permanent error), one google (success)
+        #    NOT 4+ (which would mean retries on anthropic burned the budget)
+        assert mock_subprocess_run.call_count == 2, (
+            f"Expected single anthropic attempt + single google attempt; got "
+            f"{mock_subprocess_run.call_count}. Pre-fix this would be 4 "
+            f"(3 anthropic retries + 1 google)."
+        )
+        # 3. No backoff sleep — permanent errors must NOT delay the fallback
+        sleep_mock.assert_not_called()

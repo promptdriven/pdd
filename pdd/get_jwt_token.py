@@ -48,6 +48,23 @@ class UserCancelledError(AuthError):
     """Raised when the user cancels the authentication process."""
     pass
 
+
+def _is_noninteractive() -> bool:
+    """Return True when the process cannot safely prompt a human.
+
+    Used to refuse GitHub device-flow OAuth in CI/Cloud Build/Docker contexts
+    where no one can enter the verification code. Driven by explicit env vars
+    only: device flow writes to stdout, so a non-TTY stdin alone is not a
+    reliable signal.
+    """
+    truthy = ("1", "true", "yes")
+    if os.environ.get("PDD_NO_INTERACTIVE", "").lower() in truthy:
+        return True
+    if os.environ.get("CI", "").lower() in truthy:
+        return True
+    return False
+
+
 class RateLimitError(AuthError):
     """Raised when rate limits are exceeded."""
     pass
@@ -648,6 +665,15 @@ async def get_jwt_token(
             if isinstance(e, RateLimitError):
                 raise
             print("Attempting re-authentication...")
+
+    # Refuse interactive device-flow when no human can enter the verification code
+    # (CI / Cloud Build / Docker). Upstream CloudConfig.get_jwt_token catches
+    # AuthError and falls back to local execution.
+    if _is_noninteractive():
+        raise AuthError(
+            "Refusing interactive device-flow auth in non-interactive context. "
+            "Set PDD_JWT_TOKEN, or run `pdd auth login` to cache credentials."
+        )
 
     # Initiate Device Flow
     device_flow = DeviceFlow(github_client_id)

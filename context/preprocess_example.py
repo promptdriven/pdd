@@ -11,9 +11,33 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from pdd.preprocess import preprocess
+from pdd.preprocess import preprocess as _pdd_preprocess
 
 console = Console()
+
+
+def preprocess(
+    prompt: str,
+    recursive: bool = False,
+    double_curly_brackets: bool = True,
+    exclude_keys=None,
+) -> str:
+    """Top-level wrapper around `pdd.preprocess.preprocess`.
+
+    Exists so static-resolution tooling (e.g. the prompt-include
+    selector resolver) can find a `def preprocess` symbol in this
+    example file and bind ``<include>`` references to it instead of
+    replacing the include with an `Invalid selector` placeholder.
+    Signature and defaults mirror `pdd.preprocess.preprocess` exactly
+    (notably `recursive=False`) so importers do not see surprise nested
+    tag expansion when they omit the flag.
+    """
+    return _pdd_preprocess(
+        prompt=prompt,
+        recursive=recursive,
+        double_curly_brackets=double_curly_brackets,
+        exclude_keys=exclude_keys,
+    )
 
 def main() -> None:
     """
@@ -78,7 +102,7 @@ Note: Use the template key {{expected_key}}.
         prompt=raw_prompt,
         recursive=False,
         double_curly_brackets=True,
-        exclude_keys=["expected_key"]
+        exclude_keys=["expected_key"],
     )
 
     console.print("[bold green]Preprocessed Prompt Output:[/bold green]")

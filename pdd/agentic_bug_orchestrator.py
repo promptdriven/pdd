@@ -950,8 +950,6 @@ def _maybe_post_step_comment(
     terminate ``_extract_step_report`` early. Acceptable for v1 — models do
     not normally emit the closing tag inside their own report body.
     """
-    if not step_success:
-        return github_comment_id
     # Defensive normalization: stale/corrupted persisted state (e.g. a list, or
     # a per-step entry that isn't a dict) would otherwise crash on `.get()`.
     # Only a literal `True` for `posted` counts — truthy strings/ints don't.
@@ -960,6 +958,31 @@ def _maybe_post_step_comment(
         raw_sc = {}
     state["step_comments"] = raw_sc
     entry = raw_sc.get(str(step_num))
+    if not step_success:
+        if isinstance(entry, dict) and entry.get("failed_posted") is True:
+            return github_comment_id
+        step_num_int = step_num if isinstance(step_num, int) else int(step_num)
+        posted = post_step_comment(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=step_num_int,
+            total_steps=12,
+            description=description,
+            output=step_output,
+            cwd=cwd,
+        )
+        state["step_comments"][str(step_num)] = {
+            "failed_posted": bool(posted),
+            "failed_pending": not bool(posted),
+        }
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+        return github_comment_id
     if isinstance(entry, dict) and entry.get("posted") is True:
         return github_comment_id
     extracted = _extract_step_report(step_output)
@@ -1421,7 +1444,7 @@ def run_agentic_bug_orchestrator(
     reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 11-step agentic bug investigation workflow.
+    Orchestrates the 12-step agentic bug investigation workflow.
     
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
@@ -1481,7 +1504,7 @@ def run_agentic_bug_orchestrator(
     for s_key, s_out in step_outputs.items():
         context[f"step{s_key}_output"] = s_out
 
-    # Re-extract files from step 5.5/7/9 outputs if available
+    # Re-extract files from step 5/7/9/11 outputs if available
     changed_files: List[str] = []
     
     # Step 5
@@ -1491,7 +1514,7 @@ def run_agentic_bug_orchestrator(
         repro_files = _parse_changed_files(s5_out, "REPRO_FILES_CREATED")
         changed_files.extend(repro_files)
 
-    # Step 5.5
+    # Legacy fractional prompt-classification state from older resumed runs.
     if "step5.5_output" in context:
         s55_out = context["step5.5_output"]
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
@@ -1667,6 +1690,7 @@ def run_agentic_bug_orchestrator(
 
     current_work_dir = cwd
     consecutive_failures = 0
+    terminal_step_failed: Optional[str] = None
     skip_e2e = False
 
     # Codex review #5 of PR #966: rehydrate skip_e2e from cached Step 10
@@ -2579,6 +2603,8 @@ def run_agentic_bug_orchestrator(
             last_completed_step = step_num
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+            if step_num == 12:
+                terminal_step_failed = step_output
 
         save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:
@@ -2614,6 +2640,17 @@ def run_agentic_bug_orchestrator(
         url_match = re.search(r"https://github.com/\S+/pull/\d+", s10_out)
         if url_match:
             pr_url = url_match.group(0)
+
+    if terminal_step_failed is not None:
+        if not quiet:
+            console.print("\n[red]❌ Investigation failed[/red]")
+            console.print(f"   Total cost: ${total_cost:.4f}")
+            console.print(f"   Files changed: {', '.join(changed_files) if changed_files else 'none'}")
+            if worktree_path:
+                console.print(f"   Worktree: {worktree_path}")
+            console.print("   PR created: none")
+        detail = terminal_step_failed.strip().splitlines()[0] if terminal_step_failed.strip() else "unknown error"
+        return False, f"Investigation failed at step 12: {detail}", total_cost, model_used, changed_files
 
     if not quiet:
         console.print("\n[green]✅ Investigation complete[/green]")
