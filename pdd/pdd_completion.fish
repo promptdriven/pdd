@@ -158,6 +158,7 @@ complete -c pdd -n "__fish_seen_subcommand_from checkup" -l require-final-fresh-
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l no-require-final-fresh-review -d "Skip final fresh review"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l blocking-severities -x -d "Comma-separated blocking severities"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l clean-reviewer-states -x -d "Comma-separated reviewer states treated as clean"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l fallback-reviewer-on-failure -d "Promote fixer to fallback reviewer if primary ends failed/missing (off by default)"
 
 # sync command
 complete -c pdd -n "__fish_seen_subcommand_from sync" -l max-attempts -x -d "Max attempts for loops"

@@ -7434,7 +7434,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7548,15 +7548,16 @@
           "require_final_fresh_review",
           "blocking_severities",
           "clean_reviewer_states",
+          "fallback_reviewer_on_failure",
           "timeout_adder",
           "reasoning_time"
         ],
         "artifacts_layout": {
           "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
           "per_round": [
-            "round-{N}-{review|verify}-{role}.prompt.txt",
-            "round-{N}-{review|verify}-{role}.output.txt",
-            "round-{N}-{review|verify}-{role}.findings.json",
+            "round-{N}-{review|verify|fallback}-{role}.prompt.txt",
+            "round-{N}-{review|verify|fallback}-{role}.output.txt",
+            "round-{N}-{review|verify|fallback}-{role}.findings.json",
             "round-{N}-fix-{fixer}-for-{reviewer}.prompt.txt",
             "round-{N}-fix-{fixer}-for-{reviewer}.output.txt",
             "round-{N}-fix-{fixer}-for-{reviewer}.findings.json",
