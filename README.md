@@ -618,6 +618,7 @@ graph TB
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
+- **[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from prompt metadata tags
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
@@ -1056,6 +1057,32 @@ Options (agentic mode):
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
+
+### 1a. sync-architecture
+
+Sync `architecture.json` from prompt metadata tags (`<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`). This is useful after editing prompt metadata directly, or after backfilling prompt tags, so the architecture graph and command metadata stay aligned with the prompts.
+
+```bash
+# Preview architecture updates for all prompts
+pdd sync-architecture --dry-run
+
+# Update architecture.json from all prompt metadata tags
+pdd sync-architecture
+
+# Update architecture.json from specific prompt entries
+pdd sync-architecture commands/maintenance_python.prompt
+```
+
+Arguments:
+- No argument: Scan all prompt files known to the current project.
+- `FILENAMES`: Optional prompt filenames as they appear in `architecture.json` or under the configured prompts directory.
+
+Options:
+- `--dry-run`: Report which architecture entries would change without writing `architecture.json`.
+
+The command prints updated prompt entries and validation errors or warnings. It exits non-zero when validation fails, even if it was able to write requested metadata updates before validation.
+
+> Note: Validation is repo-wide and runs even when you target a single prompt. If your `architecture.json` already has unrelated missing-dependency errors elsewhere, the exit code stays non-zero on `--dry-run` even for an otherwise-clean target prompt. Fix the repo-wide errors (or scope your check) before relying on the exit code in scripts.
 
 ### 2. generate
 
@@ -3485,17 +3512,22 @@ PDD can be integrated into various development workflows. Here are the conceptua
 **Usage:**
 ```bash
 # Scan all modules (main branch trigger)
-python -m pdd.ci_drift_heal
+python -m pdd.ci_drift_heal --diff-base HEAD~1
 
-# Scan specific modules (PR trigger)
-python -m pdd.ci_drift_heal --modules module_a module_b
+# Scan specific modules (PR trigger) — pass --diff-base so clean-CI
+# reclassification and the phantom-crash filter can run
+python -m pdd.ci_drift_heal \
+    --modules module_a module_b \
+    --diff-base origin/main...HEAD
 
 # With budget cap and skip-ci flag
-python -m pdd.ci_drift_heal --budget-cap 5.00 --skip-ci
+python -m pdd.ci_drift_heal \
+    --budget-cap 5.00 --skip-ci --diff-base HEAD~1
 ```
 
 **Key Options:**
 - `--modules`: Limit detection to specific modules (for PR-scoped checks)
+- `--diff-base`: Git diff base (e.g. `origin/main...HEAD` on PR builds, `HEAD~1` on push-to-main). **Required in CI.** Without it (or if the git lookup returns `None`, e.g. shallow checkout / missing ref), the phantom "no run_report" crash filter cannot determine whether a touched module is genuinely untouched, and the `heal_module` guard fails closed — the affected module is recorded as **failed** and the heal exits non-zero. Always provide a resolvable `--diff-base` so the touched/untouched split can run inside `detect_drift`.
 - `--budget-cap FLOAT`: Maximum dollar amount for LLM healing calls
 - `--skip-ci`: Add `[skip ci]` to commit message (prevents CI re-trigger)
 
@@ -3516,21 +3548,21 @@ For detailed command examples for each workflow, see the respective command docu
 
 ### CI Auto-Heal
 
-**Workflow File**: `.github/workflows/auto-heal-drift.yml`
+**Workflow File**: `.github/workflows/auto-heal.yml`. It only dispatches the heal — the heal itself runs in pdd_cloud's Google Cloud Build pipeline, which checks out the PR branch and invokes `python -m pdd.ci_drift_heal` from an installed pdd-cli wheel.
 
-**Purpose**: Automatically detect and fix prompt-code drift in CI.
+**Purpose**: Automatically detect and fix prompt-code drift on pull requests.
 
 **Triggers**:
-- **Pull requests**: Heals only modules changed by the PR, commits fixes to the PR branch
-- **Push to main**: Heals all modules, commits fixes directly to main
+- `pull_request_target` (opened / synchronize / reopened / ready_for_review): heals only modules changed by the PR and pushes a `chore: auto-heal …` commit back to the PR branch.
+- `issue_comment` with a `/heal` command on a PR by an authorized collaborator: same as above, on demand.
 
-**Loop prevention**: Commits from auto-heal use `chore: auto-heal [skip ci]` message; the workflow skips runs triggered by this pattern.
+There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
+
+**Loop prevention**: Auto-heal commits start with `chore: auto-heal …`; the Cloud Build step short-circuits when the triggering commit subject matches that prefix, so the heal cannot retrigger itself.
 
 **Metadata Finalization**: The auto-heal `update` path invokes the same `run_metadata_sync` orchestrator as `pdd update --sync-metadata` and preflight drift-heal, so prompt tags, architecture entries, run reports, and fingerprint state are always reconciled together. **Any stage reporting `failed`** blocks the auto-heal checkpoint commit so a PR cannot land a half-synced state; `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) and does not block — matching the contract documented in the CI Drift Detection section above.
 
-**Configuration**: Set `PDD_BUDGET_CAP` repository variable to control LLM spend per run (default: `5.00`).
-
-For full details, see [docs/ci-auto-heal.md](docs/ci-auto-heal.md).
+**Configuration**: Heal budget is controlled by the `_PDD_BUDGET_CAP` substitution on the pdd_cloud auto-heal Cloud Build trigger (see `cloudbuild-pdd-cli-auto-heal-pr.yaml` in the `pdd_cloud` repo); the GHA workflow does not read a repo variable.
 
 ## Integrations
 
