@@ -1,3 +1,5 @@
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
 1) This module acts as the multi-step agentic orchestrator for the `pdd checkup` command, responsible for managing an 8-step workflow that analyzes, fixes, and verifies software issues. It coordinates between LLM-based agents, local environment execution, and git state management, ensuring that changes are isolated in worktrees and that the workflow can be resumed gracefully after interruptions.
 
 2) Requirements:
@@ -13,6 +15,27 @@
        - Skip Step 8 entirely (the PR already exists; the job is to verify it, not open another).
        - When the user passes `--pr` without `--no-fix`, the CLI must force `no_fix=True` and warn — generating fixes inside `.pdd/worktrees/checkup-pr-N/` without pushing them silently abandons the work. (Push-back is a separate follow-up.)
     8. Implement per-step timeouts and error handling, including a mechanism to abort if agent providers fail consecutively.
+    9. **Trusted Step Report Comments (Issue #972, sub of #968)**: The orchestrator owns posting per-step status comments to the GitHub issue using trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` directly for successful step progress; instead each step emits a `<step_report>...</step_report>` block in its agent output, and the orchestrator extracts and posts it once per step. Legacy hard-stop / failure / verification-verdict comments (notably the Step 7 dual-thread `gh pr comment` + `gh issue comment` routing in PR mode) are preserved unchanged — the trusted helper supplements, not replaces, them.
+        - Import from `pdd.agentic_common`: `extract_step_report(step_output) -> Optional[str]`, `post_step_comment_once(*, repo_owner, repo_name, issue_number, step_num, body, posted_steps: Set[int], cwd) -> bool` (redacts secrets, truncates to GitHub's comment cap, posts via `gh issue comment`, and mutates `posted_steps` on success; no-op when `step_num` already in `posted_steps`), and `normalize_step_comments_state(raw) -> Set[int]` (coerces persisted list/set/None/malformed into `Set[int]`).
+        - **State shape**: add `state["step_comments"]` as a sorted `List[int]` of step indices whose comment was successfully posted; hydrate to `Set[int]` via `normalize_step_comments_state` on resume; persist back as a sorted list on every `save_workflow_state` call (normal completion AND hard-stop / failure early-returns).
+        - **Posting protocol** inside the per-step loop, applied uniformly to integer steps (1–8) and fractional steps (6.1, 6.2, 6.3): compute `report_body = extract_step_report(step_output)`; if `None`, skip posting and continue (missing/malformed report MUST NOT fail the run; raw output remains in `step_outputs`). Otherwise build `f"## Step {step_num}/{total_steps}: {description}\n\n{report_body}"` and call `post_step_comment_once(...)`. Post BEFORE any hard-stop / abort check so hard-stop steps still emit a user-visible comment.
+        - **Composite-key encoding (REQUIRED — helper is `Set[int]`-typed)**: `post_step_comment_once`, `normalize_step_comments_state`, and the persisted `step_comments` list are all `int`-only. The orchestrator MUST therefore project every (step_num, iteration) pair into a deterministic non-negative integer key before passing it as `step_num=` to the helper. Use this canonical formula:
+            ```python
+            def _step_comment_key(step_num: float, iteration: int = 1) -> int:
+                # iteration defaults to 1 for non-iterative steps (1, 2, 4, 5, 8).
+                # step_num supports fractional values (6.1, 6.2, 6.3).
+                # int(round(step_num * 10)) gives stable encoding: 1->10, 6.1->61, 6.3->63.
+                # iteration * 10000 gives a clean decade per loop iteration.
+                # Result is unique for iteration in [1, 999] and step_num in [0, 999.9].
+                return iteration * 10000 + int(round(step_num * 10))
+            ```
+          Use `iteration=1` for every non-iterative step. For Fix-Verify iterations, pass the actual iteration (1, 2, 3, ...). This guarantees:
+            - re-runs of the same logical step across iterations get distinct keys (so they are not collapsed into one "already posted" no-op),
+            - the resume-replay loop deterministically reproduces the same key for the same (step_num, iteration), so the helper's idempotency check works correctly,
+            - keys round-trip through JSON/list serialization without loss because they are plain integers.
+          Persist `state["step_comments"] = sorted(posted_step_comments)` (a sorted `List[int]`) and rehydrate via `normalize_step_comments_state` on resume.
+        - **PR-mode**: in PR-verification mode the trusted helper still posts to the GitHub *issue* thread (`post_step_comment_once` calls `gh issue comment`). It does NOT replace the Step 7 PR-thread comment routing (`gh pr comment`) — both posts are part of the consumer contract documented in requirement 7.
+        - **Resume replay loop** (before the main step loop): iterate completed (step_num, iteration) pairs in order; for each pair, recompute the integer key via `_step_comment_key(step_num, iteration)` (the same encoding used during the live posting pass). If the key is missing from `posted_step_comments`, run `extract_step_report` on its cached output and call `post_step_comment_once` with the computed key. The helper is a no-op for already-posted keys, so the loop is safe to run unconditionally on every resume. Persist `step_comments` if any new keys were posted; this retries transient `gh` failures (rate limits, missing CLI) instead of silently losing them.
 
 3) Dependencies:
     <agentic_common>

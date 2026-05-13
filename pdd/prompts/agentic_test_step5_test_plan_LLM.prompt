@@ -89,14 +89,16 @@ You are working on step 5 of 18 in an agentic test generation workflow. Previous
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
+The `<step_report>` content should follow one of these formats:
 
 **If plan is achievable:**
-```markdown
+```
+<step_report>
 ## Step 5: Create Test Plan
 
 **Status:** Plan Ready
@@ -150,10 +152,12 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 
 ---
 *Proceeding to Step 5b: Enhance Plan*
+</step_report>
 ```
 
 **If plan is BLOCKED (STOP workflow):**
-```markdown
+```
+<step_report>
 ## Step 5: Create Test Plan
 
 **Status:** PLAN_BLOCKED
@@ -177,6 +181,7 @@ The test plan cannot proceed due to:
 
 ---
 *Test generation paused - plan blocked by missing requirements.*
+</step_report>
 ```
 
 CRITICAL: Missing credentials for external services is NEVER a blocker.
@@ -205,4 +210,7 @@ TEST_PLAN_STATUS: PLAN_BLOCKED
 - Tag the issue author (@username) when requesting info
 - Be comprehensive - test everything visible/interactive
 - Include both positive tests and error handling tests
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update. The orchestrator posts
+  the step report (including the PLAN_BLOCKED variant) before processing the
+  hard-stop, so the user-visible comment is preserved.

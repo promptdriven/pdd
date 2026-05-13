@@ -57,15 +57,15 @@ You are working on step 2 of 18 in an agentic test generation workflow. Previous
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 2: Documentation Check
 
 **Status:** Research Complete
@@ -104,10 +104,12 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 3: Analyze & Clarify*
+</step_report>
 ```
 
 % Important
 
 - Focus on understanding what exists in the codebase
 - Document file paths and patterns that will inform test generation
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

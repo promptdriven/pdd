@@ -82,15 +82,15 @@ Each item must be:
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 7: Manual Testing Checklist
 
 **Status:** Checklist Created
@@ -109,6 +109,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 8: Manual Testing Execution*
+</step_report>
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -124,4 +125,5 @@ MANUAL_CHECKLIST_ITEMS: [N]
 - Be exhaustive — the agent executing these tests tends to stop prematurely, so include everything
 - Each item must be independently testable
 - Group items into logical chunks (by page or by story) for batched execution
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

@@ -112,7 +112,14 @@ In **PR mode**, `issue_aligned` is REQUIRED.
 Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode) `issue_aligned` is true AND no critical findings remain in the PR's diff.
 Set `"success": false` otherwise.
 
-6. **Post the final summary** as a GitHub comment — route by mode:
+6. **Post the final verification verdict** as a GitHub comment — route by mode.
+
+   This Step-7 verdict comment is the LEGACY verification-verdict comment and
+   is preserved unchanged by the trusted-step-comment flow (Issue #972). It is
+   NOT replaced by `<step_report>`; the orchestrator's trusted helper does not
+   own the verdict's dual-thread (PR + issue) routing, so the agent posts it
+   directly. Do NOT additionally emit a `<step_report>` block for Step 7 — the
+   verdict comment IS the user-visible Step 7 report.
 
    - **Issue mode** (`pr_mode` = `false`): post to the issue thread only.
      ```

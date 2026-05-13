@@ -85,16 +85,16 @@ You are working on step 14 of 18 in an agentic test generation workflow. Previou
 
 % Output
 
-After completing your fixes, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+The `<step_report>` content should follow one of these formats:
 
 **If all tests now pass:**
-```markdown
+```
+<step_report>
 ## Step 14: Fix & Iterate
 
 **Status:** All Tests Passing
@@ -115,10 +115,12 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 15: Validate Tests Against Plan*
+</step_report>
 ```
 
 **If some tests still fail:**
-```markdown
+```
+<step_report>
 ## Step 14: Fix & Iterate
 
 **Status:** Some Tests Still Failing
@@ -146,6 +148,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 15: Validate Tests Against Plan (with known failing tests)*
+</step_report>
 ```
 
 % Machine-Readable Output (REQUIRED)
@@ -170,4 +173,5 @@ FILES_MODIFIED: path/to/test_file1, path/to/test_file2
 - Document every fix clearly
 - If a test truly cannot pass, document why
 - Give up on a test after 5 attempts
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.

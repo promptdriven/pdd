@@ -7602,7 +7602,9 @@
   {
     "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop and worktree isolation.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 218,
     "filename": "agentic_checkup_orchestrator_python.prompt",
     "filepath": "pdd/agentic_checkup_orchestrator.py",

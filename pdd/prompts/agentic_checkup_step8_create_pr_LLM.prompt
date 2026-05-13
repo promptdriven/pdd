@@ -84,14 +84,17 @@ Fixes #{issue_number}
 *Created by pdd checkup workflow*
 ```
 
-% Issue Comment Format
+% Step Report (posted by orchestrator)
 
-Post a comment on the issue using:
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your final report inside a `<step_report>...</step_report>` block in your
+final response. The orchestrator will extract that block and post it once.
 
-```markdown
+The `<step_report>` content should follow this format:
+
+```
+<step_report>
 ## Step 8/8: Pull Request Created
 
 **PR:** [#{{pr_number}}]({{pr_url}})
@@ -107,6 +110,7 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 
 ---
 *Checkup workflow complete.*
+</step_report>
 ```
 
 % Important
@@ -116,3 +120,6 @@ gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
 - Use `git add -A` to stage all changes in the worktree
 - Do NOT create a new branch — you are already on `checkup/issue-{issue_number}` in the worktree
 - This is the final step — workflow is complete after this
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update. The orchestrator posts
+  the step report using trusted credentials.

@@ -64,15 +64,15 @@ Write a **regression test** for EVERY bug fixed in Step 6a:
 
 % Output
 
-After completing your work, use `gh issue comment` to post your findings to issue #{issue_number}:
+DO NOT call `gh issue comment` for the step report. The orchestrator posts
+step reports to the GitHub issue using trusted credentials. Instead, emit
+your findings inside a `<step_report>...</step_report>` block in your final
+response. The orchestrator will extract that block and post it once.
+
+The `<step_report>` content should follow this format:
 
 ```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 6b/8: Regression Tests (Iteration {fix_verify_iteration})
 
 ### Regression Tests Written
@@ -82,6 +82,7 @@ Your comment should follow this format:
 
 ---
 *Proceeding to Step 6c: E2E Tests*
+</step_report>
 ```
 
 You MUST output the following lines at the end listing all files you created or modified:
@@ -93,5 +94,6 @@ FILES_MODIFIED: path/to/file3, path/to/file4
 - Write a regression test for EVERY fix from Step 6a — do not skip any
 - Follow the project's existing test conventions (framework, directory, naming)
 - Each test should be specific enough to catch a reversion of its corresponding fix
-- Always post your findings as a GitHub comment before completing
+- Emit the `<step_report>` block in your final response — do NOT call
+  `gh issue comment` for the per-step status update.
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
