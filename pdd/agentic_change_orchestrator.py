@@ -1,1186 +1,123 @@
-"""
-Orchestrator for the 13-step agentic change workflow.
-Runs each step as a separate agentic task, accumulates context, tracks progress/cost,
-and supports resuming from saved state. Includes a review loop (steps 11-12).
+"""Orchestrator for the 13-step agentic change workflow.
+
+Implements the `pdd change` workflow: takes a GitHub issue and produces a PR
+with prompt/code changes, running each step as a separate agentic task with
+state persistence, review loops, and worktree isolation.
 """
 
-import glob
+from __future__ import annotations
+
 import json
 import os
 import re
+import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import threading
+from collections import defaultdict, deque
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Any
+from typing import Any, Deque, Dict, List, Optional, Set, Tuple
 
 from rich.console import Console
-from rich.markup import escape
 
 from pdd.agentic_common import (
-    run_agentic_task,
-    load_workflow_state,
-    save_workflow_state,
+    DEFAULT_MAX_RETRIES,
+    clear_agentic_progress,
     clear_workflow_state,
+    extract_step_report,
+    load_workflow_state,
+    normalize_step_comments_state,
+    post_step_comment,
+    post_step_comment_once,
+    run_agentic_task,
+    save_workflow_state,
+    set_agentic_progress,
     substitute_template_variables,
     validate_cached_state,
-    DEFAULT_MAX_RETRIES,
-    post_step_comment,
-    set_agentic_progress,
-    clear_agentic_progress,
 )
 from pdd.load_prompt_template import load_prompt_template
-from pdd.sync_order import (
-    build_dependency_graph,
-    topological_sort,
-    get_affected_modules,
-    generate_sync_order_script,
-    extract_module_from_include,
-    discover_associated_documents,
-)
-from pdd.construct_paths import _find_pddrc_file, _load_pddrc_config, _detect_context
-from pdd.get_extension import get_extension
 from pdd.preprocess import preprocess
-from pdd.architecture_registry import extract_modules
-from pdd.architecture_sync import _merge_interface_signatures, register_untracked_prompts
+from pdd.architecture_sync import (
+    _merge_interface_signatures,
+    register_untracked_prompts,
+)
+from pdd.construct_paths import (
+    _detect_context,
+    _find_pddrc_file,
+    _load_pddrc_config,
+)
+from pdd.get_extension import get_extension
 
-# Initialize console for rich output
+
 console = Console()
 
-# Per-Step Timeouts (Workflow specific)
+# ---------------------------------------------------------------------------
+# Configuration
+# ---------------------------------------------------------------------------
+
 CHANGE_STEP_TIMEOUTS: Dict[int, float] = {
-    1: 240.0,   # Duplicate Check
-    2: 240.0,   # Docs Comparison
-    3: 340.0,   # Research
-    4: 340.0,   # Clarify
-    5: 340.0,   # Docs Changes
-    6: 340.0,   # Identify Dev Units
-    7: 340.0,   # Architecture Review
-    8: 600.0,   # Analyze Prompt Changes (Complex)
-    9: 1000.0,  # Implement Changes (Most Complex)
-    10: 600.0,  # Architecture Update + Associated Document Updates
-    11: 340.0,  # Identify Issues
-    12: 600.0,  # Fix Issues (Complex)
-    13: 340.0,  # Create PR
+    1: 240.0,
+    2: 240.0,
+    3: 340.0,
+    4: 340.0,
+    5: 340.0,
+    6: 340.0,
+    7: 340.0,
+    8: 600.0,
+    9: 1000.0,
+    10: 600.0,
+    11: 340.0,
+    12: 600.0,
+    13: 340.0,
+}
+
+STEP_NAMES: Dict[int, str] = {
+    1: "Duplicate Check",
+    2: "Docs Comparison",
+    3: "Research",
+    4: "Clarify",
+    5: "Docs Changes",
+    6: "Identify Dev Units",
+    7: "Architecture Review",
+    8: "Analyze Prompt Changes",
+    9: "Implement Changes",
+    10: "Architecture Update",
+    11: "Identify Issues",
+    12: "Fix Issues",
+    13: "Create PR",
+}
+
+STEP_TEMPLATE_NAMES: Dict[int, str] = {
+    1: "agentic_change_step1_duplicate_LLM",
+    2: "agentic_change_step2_docs_LLM",
+    3: "agentic_change_step3_research_LLM",
+    4: "agentic_change_step4_clarify_LLM",
+    5: "agentic_change_step5_docs_change_LLM",
+    6: "agentic_change_step6_devunits_LLM",
+    7: "agentic_change_step7_architecture_LLM",
+    8: "agentic_change_step8_analyze_LLM",
+    9: "agentic_change_step9_implement_LLM",
+    10: "agentic_change_step10_architecture_update_LLM",
+    11: "agentic_change_step11_identify_issues_LLM",
+    12: "agentic_change_step12_fix_issues_LLM",
+    13: "agentic_change_step13_create_pr_LLM",
 }
 
 MAX_REVIEW_ITERATIONS = 5
-
-
-def _review_loop_no_issues(output: str) -> bool:
-    """Detect 'no issues found' in step 11 output.
-
-    LLMs don't reliably emit exact magic tokens (see #865, #868).
-    Uses case-insensitive matching with semantic variants so the review
-    loop exits early even when the LLM doesn't emit the exact phrase.
-    """
-    lower = output.lower()
-    if "no issues found" in lower:
-        return True
-    variants = [
-        "no issues identified",
-        "no issues detected",
-        "no issues remain",
-        "no remaining issues",
-        "all checks passed",
-        "everything looks good",
-        "no problems found",
-        "no problems detected",
-        "no issues to fix",
-        "no issues to report",
-    ]
-    return any(v in lower for v in variants)
-
-
-def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
-    """Remove corrupted dependency values from architecture.json after step 10."""
-    arch_path = worktree_path / "architecture.json"
-    if not arch_path.exists():
-        return
-    try:
-        with open(arch_path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-        modules = extract_modules(data)
-        changed = False
-        for entry in modules:
-            if not isinstance(entry, dict):
-                continue
-            deps = entry.get("dependencies", [])
-            clean = [
-                d for d in deps
-                if isinstance(d, str) and d.endswith(".prompt") and "\n" not in d and len(d) <= 100
-            ]
-            if clean != deps:
-                entry["dependencies"] = clean
-                changed = True
-        if changed:
-            # Preserve on-disk format: if original was dict-format, write back as dict
-            if isinstance(data, dict) and isinstance(data.get("modules"), list):
-                data["modules"] = modules
-            else:
-                data = modules
-            with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-    except (json.JSONDecodeError, OSError):
-        pass
-
-
-def _scope_architecture_to_changed_files(
-    worktree_path: Path,
-    previous_architecture: Optional[List[Dict[str, Any]]],
-    changed_files: List[str],
-) -> None:
-    """Revert architecture.json entries for files not in changed_files to their previous state.
-
-    After Step 10, the LLM may mutate entries for modules it was never asked to
-    touch (reason, dependencies, interface signatures, etc.). This function
-    enforces scope by replacing out-of-scope entries with their pre-Step-10
-    versions and removing entries that didn't exist before and aren't in scope.
-    """
-    arch_path = worktree_path / "architecture.json"
-    if not arch_path.exists() or previous_architecture is None:
-        return
-
-    try:
-        with open(arch_path, "r", encoding="utf-8") as f:
-            raw_arch = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return
-
-    current_modules = extract_modules(raw_arch)
-
-    in_scope_filenames: set = set()
-    for fp in changed_files:
-        normalized = fp.replace("\\", "/")
-        prompts_idx = normalized.rfind("prompts/")
-        if prompts_idx != -1:
-            rel = normalized[prompts_idx + len("prompts/"):]
-        else:
-            rel = normalized
-        basename = rel.rsplit("/", 1)[-1] if "/" in rel else rel
-        if basename.endswith(".prompt"):
-            in_scope_filenames.add(basename)
-            if rel != basename:
-                in_scope_filenames.add(rel)
-
-    prev_by_filename: Dict[str, Dict[str, Any]] = {}
-    prev_by_filepath: Dict[str, Dict[str, Any]] = {}
-    for entry in previous_architecture:
-        if not isinstance(entry, dict):
-            continue
-        fn = entry.get("filename")
-        fp = entry.get("filepath")
-        if fn:
-            prev_by_filename[fn] = entry
-        if fp:
-            prev_by_filepath[fp] = entry
-
-    scoped: List[Dict[str, Any]] = []
-    for entry in current_modules:
-        filename = entry.get("filename", "")
-        filepath = entry.get("filepath", "")
-
-        entry_in_scope = filename in in_scope_filenames
-
-        if entry_in_scope:
-            scoped.append(entry)
-        else:
-            prev_entry = prev_by_filename.get(filename)
-            if prev_entry is None and filepath:
-                prev_entry = prev_by_filepath.get(filepath)
-            if prev_entry is not None:
-                scoped.append(prev_entry)
-
-    try:
-        if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
-            raw_arch["modules"] = scoped
-            write_data = raw_arch
-        else:
-            write_data = scoped
-        with open(arch_path, "w", encoding="utf-8") as f:
-            json.dump(write_data, f, indent=2)
-    except OSError:
-        pass
-
-def _validate_architecture_filepaths(
-    worktree_path: Path,
-) -> List[str]:
-    """Validate and auto-correct architecture.json filepath entries.
-
-    For each entry with a ``filepath`` field, checks whether the file exists
-    relative to *worktree_path*.  When a file is not found at the declared
-    path but *is* found at the PDD-conventional location
-    (``pdd/<module_name>.py`` derived from the ``filename`` field), the
-    filepath is corrected in-place.  Returns a list of human-readable
-    warning strings describing any mismatches (corrected or not).
-    """
-    arch_path = worktree_path / "architecture.json"
-    if not arch_path.exists():
-        return []
-
-    try:
-        with open(arch_path, "r", encoding="utf-8") as f:
-            raw_arch = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-    modules = extract_modules(raw_arch)
-    warnings: List[str] = []
-    changed = False
-
-    for entry in modules:
-        filepath = entry.get("filepath")
-        if not filepath:
-            continue
-
-        full_path = worktree_path / filepath
-        if full_path.exists():
-            continue
-
-        filename = entry.get("filename", "")
-        conventional_path = None
-        if filename.endswith(".prompt"):
-            stem = filename[:-len(".prompt")]
-            parts = stem.rsplit("_", 1)
-            if len(parts) == 2:
-                module_name, lang_suffix = parts
-                if lang_suffix == "python":
-                    conventional_path = f"pdd/{module_name}.py"
-
-        if conventional_path and (worktree_path / conventional_path).exists():
-            warnings.append(
-                f"architecture.json: filepath '{filepath}' does not exist; "
-                f"corrected to '{conventional_path}'"
-            )
-            entry["filepath"] = conventional_path
-            changed = True
-        else:
-            warnings.append(
-                f"architecture.json: filepath '{filepath}' for entry "
-                f"'{filename}' does not exist on disk"
-            )
-
-    if changed:
-        try:
-            if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
-                raw_arch["modules"] = modules
-                write_data = raw_arch
-            else:
-                write_data = modules
-            with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(write_data, f, indent=2)
-        except OSError:
-            pass
-
-    return warnings
-
-
-def _sanitize_architecture_interfaces(
-    worktree_path: Path,
-    previous_architecture: Optional[List[Dict[str, Any]]],
-) -> List[str]:
-    """Preserve existing interface parameters after Step 10 direct architecture edits."""
-    arch_path = worktree_path / "architecture.json"
-    if not arch_path.exists() or not previous_architecture:
-        return []
-
-    try:
-        with open(arch_path, "r", encoding="utf-8") as f:
-            raw_arch = json.load(f)
-    except (json.JSONDecodeError, OSError):
-        return []
-
-    current_modules = extract_modules(raw_arch)
-
-    old_by_filename = {
-        entry.get("filename"): entry
-        for entry in previous_architecture
-        if isinstance(entry, dict) and entry.get("filename")
-    }
-    old_by_filepath = {
-        entry.get("filepath"): entry
-        for entry in previous_architecture
-        if isinstance(entry, dict) and entry.get("filepath")
-    }
-
-    warnings: List[str] = []
-    changed = False
-
-    for entry in current_modules:
-        old_entry = None
-        filename = entry.get("filename")
-        filepath = entry.get("filepath")
-        if filename:
-            old_entry = old_by_filename.get(filename)
-        if old_entry is None and filepath:
-            old_entry = old_by_filepath.get(filepath)
-        if not isinstance(old_entry, dict):
-            continue
-
-        merged_interface, merge_warnings = _merge_interface_signatures(
-            old_entry.get("interface"),
-            entry.get("interface"),
-        )
-        if merged_interface != entry.get("interface"):
-            entry["interface"] = merged_interface
-            changed = True
-        warnings.extend(merge_warnings)
-
-    if changed:
-        try:
-            if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
-                raw_arch["modules"] = current_modules
-                write_data = raw_arch
-            else:
-                write_data = current_modules
-            with open(arch_path, "w", encoding="utf-8") as f:
-                json.dump(write_data, f, indent=2)
-        except OSError:
-            return []
-
-    return warnings
-
-def _get_git_root(cwd: Path) -> Optional[Path]:
-    """Get repo root via git rev-parse."""
-    if not cwd.exists():
-        return None
-    try:
-        result = subprocess.run(
-            ["git", "rev-parse", "--show-toplevel"],
-            cwd=cwd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        return Path(result.stdout.strip())
-    except subprocess.CalledProcessError:
-        return None
-
-def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
-    """Check if path is in git worktree list --porcelain output."""
-    git_root = _get_git_root(cwd)
-    if not git_root:
-        return False
-    try:
-        wt_list = subprocess.run(
-            ["git", "worktree", "list", "--porcelain"],
-            cwd=git_root,
-            capture_output=True,
-            text=True
-        ).stdout
-        return str(worktree_path) in wt_list
-    except Exception:
-        return False
-
-def _branch_exists(cwd: Path, branch: str) -> bool:
-    """Check via git show-ref --verify refs/heads/{branch}."""
-    git_root = _get_git_root(cwd)
-    if not git_root:
-        return False
-    try:
-        subprocess.run(
-            ["git", "show-ref", "--verify", f"refs/heads/{branch}"],
-            cwd=git_root,
-            check=True,
-            capture_output=True
-        )
-        return True
-    except subprocess.CalledProcessError:
-        return False
-
-def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
-    """Remove via git worktree remove --force."""
-    git_root = _get_git_root(cwd)
-    if not git_root:
-        return False, "Not a git repository"
-    try:
-        subprocess.run(
-            ["git", "worktree", "remove", "--force", str(worktree_path)],
-            cwd=git_root,
-            capture_output=True,
-            check=True
-        )
-        return True, ""
-    except subprocess.CalledProcessError as e:
-        return False, str(e)
-
-def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
-    """Delete via git branch -D."""
-    git_root = _get_git_root(cwd)
-    if not git_root:
-        return False, "Not a git repository"
-    try:
-        subprocess.run(
-            ["git", "branch", "-D", branch],
-            cwd=git_root,
-            capture_output=True,
-            check=True
-        )
-        return True, ""
-    except subprocess.CalledProcessError as e:
-        return False, str(e)
-
-def _resolve_main_ref(git_root: Path) -> str:
-    """Resolve the main branch ref for use as worktree base.
-
-    Returns a commit hash when a named ref is found, or the literal
-    string "HEAD" as a last resort.  Checks origin/main, origin/master,
-    main, master (in that order).
-    """
-    for ref in ("origin/main", "origin/master", "main", "master"):
-        result = subprocess.run(
-            ["git", "rev-parse", "--verify", ref],
-            cwd=git_root, capture_output=True, text=True,
-        )
-        if result.returncode == 0:
-            return result.stdout.strip()
-    return "HEAD"
-
-
-def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional[Path], Optional[str]]:
-    """
-    Create an isolated git worktree for the issue.
-    Returns (worktree_path, error_message).
-    """
-    git_root = _get_git_root(cwd)
-    if not git_root:
-        return None, "Not a git repository"
-
-    branch_name = f"change/issue-{issue_number}"
-    worktree_rel_path = Path(".pdd") / "worktrees" / f"change-issue-{issue_number}"
-    worktree_path = git_root / worktree_rel_path
-
-    # Clean up existing directory if it exists
-    if worktree_path.exists():
-        if _worktree_exists(cwd, worktree_path):
-            success, err = _remove_worktree(cwd, worktree_path)
-            if not success:
-                # Fallback to rmtree if git command fails but dir exists
-                try:
-                    shutil.rmtree(worktree_path)
-                except Exception:
-                    pass
-        else:
-            # Just a directory
-            shutil.rmtree(worktree_path)
-
-    # Check if a remote branch exists with prior work to preserve
-    remote_ref = f"origin/{branch_name}"
-    remote_exists = False
-    try:
-        subprocess.run(
-            ["git", "fetch", "origin", branch_name],
-            cwd=git_root, capture_output=True, check=True
-        )
-        subprocess.run(
-            ["git", "show-ref", "--verify", f"refs/remotes/{remote_ref}"],
-            cwd=git_root, capture_output=True, check=True
-        )
-        remote_exists = True
-    except subprocess.CalledProcessError as e:
-        # Distinguish "branch doesn't exist on remote" (exit code 128 with
-        # "couldn't find remote ref") from transient network/auth errors.
-        stderr = ""
-        if e.stderr:
-            stderr = e.stderr if isinstance(e.stderr, str) else e.stderr.decode(errors="replace")
-        if "couldn't find remote ref" in stderr or "not found" in stderr.lower():
-            pass  # Branch doesn't exist remotely — expected on first run
-        elif stderr:
-            if not quiet:
-                console.print(f"[yellow]Warning: git fetch failed for {branch_name}: {stderr.strip()}[/yellow]")
-
-    # Clean up local branch if it exists
-    branch_exists = _branch_exists(cwd, branch_name)
-    if branch_exists:
-        success, _err = _delete_branch(cwd, branch_name)
-        if success:
-            branch_exists = False
-
-    # Create worktree — reuse remote branch if it has prior work
-    try:
-        worktree_path.parent.mkdir(parents=True, exist_ok=True)
-        if branch_exists:
-            # Branch couldn't be deleted (e.g. currently checked out) — use existing
-            # --force required: git refuses to checkout a branch already in use
-            subprocess.run(
-                ["git", "worktree", "add", "--force", str(worktree_path), branch_name],
-                cwd=git_root, capture_output=True, check=True
-            )
-        elif remote_exists:
-            # Remote branch has prior work — start from it instead of HEAD
-            subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), remote_ref],
-                cwd=git_root, capture_output=True, check=True
-            )
-            if not quiet:
-                console.print(f"[blue]Reusing remote branch {branch_name} (preserving prior changes)[/blue]")
-        else:
-            # No prior work — create new branch from main
-            base_ref = _resolve_main_ref(git_root)
-            subprocess.run(
-                ["git", "worktree", "add", "-b", branch_name, str(worktree_path), base_ref],
-                cwd=git_root, capture_output=True, check=True
-            )
-        if not quiet:
-            console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
-        return worktree_path, None
-    except subprocess.CalledProcessError as e:
-        return None, f"Git worktree creation failed: {e}"
-
-_PARSE_CHANGED_FILES_TERMINATORS = (
-    "FILES_CREATED",
-    "FILES_MODIFIED",
-    "ARCHITECTURE_FILES_MODIFIED",
-    "ASSOCIATED_DOCS_MODIFIED",
-    "ASSOCIATED_DOCS_CONFLICTS",
-    "ASSOCIATED_DOCS_UNCHANGED",
-    "DIRECT_EDITS",
-    "MANUAL_REVIEW",
-    "ORCHESTRATOR_POSTCHECK_WARNINGS",
-    "DOC_SYNC_SILENT_DROPS",
-    "DOC_SYNC_BUCKET_OVERLAPS",
-    "STOP_CONDITION",
-)
-
-
-def _collect_manual_review_lines(*sources: str) -> str:
-    """Collect ``MANUAL_REVIEW: ...`` lines from one or more text sources,
-    de-duped while preserving first-seen order. Returns ``"None"`` when no
-    flags are present so the Step 13 template renders a stable placeholder.
-    """
-    seen: Set[str] = set()
-    ordered: List[str] = []
-    for src in sources:
-        if not src:
-            continue
-        for line in src.splitlines():
-            stripped = line.strip()
-            while stripped and stripped[0] in "-*•":
-                stripped = stripped[1:].lstrip()
-            if stripped.upper().startswith("MANUAL_REVIEW:") and stripped not in seen:
-                seen.add(stripped)
-                ordered.append(stripped)
-    return "\n".join(ordered) if ordered else "None"
-
-
-def _find_marker_start(line: str, prefix: str) -> Optional[int]:
-    """Return the index just after ``prefix:`` in ``line`` if it appears at a
-    word boundary, else None. Word boundary means the character before
-    ``prefix`` is not alphanumeric/underscore — this prevents ``MY_FILES_MODIFIED:``
-    from matching ``FILES_MODIFIED:``.
-    """
-    idx = line.find(prefix)
-    while idx != -1:
-        if idx == 0 or not (line[idx - 1].isalnum() or line[idx - 1] == "_"):
-            return idx + len(prefix)
-        idx = line.find(prefix, idx + 1)
-    return None
-
-
-def _truncate_at_inline_terminator(
-    text: str, terminators: Sequence[str], skip_prefix: str
-) -> str:
-    """Trim ``text`` at the first inline occurrence of any terminator marker,
-    skipping ``skip_prefix`` (the marker we're currently inside, so a repeat
-    of our own marker still terminates but our entry-point doesn't).
-    """
-    earliest: Optional[int] = None
-    for term in terminators:
-        term_prefix = f"{term}:"
-        end_after = _find_marker_start(text, term_prefix)
-        if end_after is None:
-            continue
-        # _find_marker_start returns the index AFTER the colon; the marker
-        # itself starts at end_after - len(term_prefix).
-        marker_start = end_after - len(term_prefix)
-        if earliest is None or marker_start < earliest:
-            earliest = marker_start
-    if earliest is None:
-        return text
-    return text[:earliest].rstrip()
-
-
-def _extract_marker_paths(marker: str, output: str) -> List[str]:
-    """Walk lines after ``marker:`` until blank or another known marker.
-
-    Multi-line payloads are supported (LLMs wrap long lists across lines).
-    The marker is also detected when it appears mid-line (e.g.
-    ``Implementation done. FILES_MODIFIED: a.py, b.py``); in that case the
-    section starts at the marker and ends at the line break, matching the
-    behavior of the prior single-line regex parser.
-    """
-    prefix = f"{marker}:"
-    other_terminators = tuple(
-        t for t in _PARSE_CHANGED_FILES_TERMINATORS if t != marker
-    )
-    lines = output.splitlines()
-    payload_lines: List[str] = []
-    in_section = False
-    for line in lines:
-        lstrip = line.lstrip()
-        if not in_section:
-            start_idx = _find_marker_start(line, prefix)
-            if start_idx is None:
-                continue
-            in_section = True
-            # When the marker started inline (mid-line), the remainder of
-            # the line may also contain another marker (e.g.
-            # ``Done. FILES_MODIFIED: a.py DIRECT_EDITS: b.md``). Truncate
-            # at the next inline terminator so we don't swallow the next
-            # section's tag/value as a path.
-            first = _truncate_at_inline_terminator(
-                line[start_idx:], other_terminators, prefix
-            ).strip()
-            if first:
-                payload_lines.append(first)
-            continue
-        stripped = line.strip()
-        if not stripped:
-            break
-        # Preserve any prefix text before an inline terminator on a
-        # continuation line. ``b.py ARCHITECTURE_FILES_MODIFIED: arch.json``
-        # contributes ``b.py`` to FILES_MODIFIED's payload, then ends the
-        # section — losing ``b.py`` would silently drop a real file from
-        # downstream Step 10 doc discovery.
-        truncated = _truncate_at_inline_terminator(
-            line, other_terminators, prefix
-        )
-        if truncated != line:
-            if truncated.strip():
-                payload_lines.append(truncated)
-            break
-        payload_lines.append(line)
-
-    entries: List[str] = []
-    for raw_line in payload_lines:
-        s = raw_line.strip()
-        # Strip leading bullets per line so "- README.md" yields "README.md".
-        while s and s[0] in "-*•":
-            s = s[1:].lstrip()
-        for part in s.split(","):
-            piece = part.strip()
-            # Re-strip bullets per entry so a single inline list like
-            # ``- a.md, - b.md, • c.md`` normalizes each comma-piece.
-            while piece and piece[0] in "-*•":
-                piece = piece[1:].lstrip()
-            # Strip surrounding markdown emphasis / code ticks so
-            # ``**README.md**`` and ```README.md``` both normalize cleanly.
-            piece = piece.strip("*`").strip()
-            if piece:
-                entries.append(piece)
-    return entries
-
-
-def _parse_changed_files(output: str) -> List[str]:
-    """Extract file paths from FILES_CREATED, FILES_MODIFIED, or DIRECT_EDITS lines.
-
-    Multi-line marker payloads are supported (the LLM frequently wraps long
-    lists across lines). All markers share the same line-walker shape; see
-    ``_extract_marker_paths``.
-    """
-    files: List[str] = []
-    files.extend(_extract_marker_paths("FILES_CREATED", output))
-    files.extend(_extract_marker_paths("FILES_MODIFIED", output))
-    files.extend(_extract_marker_paths("ARCHITECTURE_FILES_MODIFIED", output))
-    files.extend(_extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", output))
-
-    # Log ASSOCIATED_DOCS_CONFLICTS as warnings (docs that need manual review).
-    conflict_list = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", output)
-    if conflict_list:
-        console.print(
-            f"[yellow]Associated docs flagged for manual review: {', '.join(conflict_list)}[/yellow]"
-        )
-
-    files.extend(_extract_marker_paths("DIRECT_EDITS", output))
-
-    return list(set(files))  # Deduplicate
-
-
-def _prompt_paths_from_changed_file_entries(
-    entries: Sequence[str],
-    worktree_path: Path,
-) -> Set[Path]:
-    """Return changed prompt paths resolved against the workflow worktree.
-
-    Step 9 has two successful reporting paths: explicit ``FILES_*`` markers
-    and the worktree fallback. Step 10 associated-document discovery must use
-    the authoritative changed-file set from both paths, not only the marker
-    payloads.
-    """
-    prompt_paths: Set[Path] = set()
-    for raw in entries:
-        for part in str(raw).split(","):
-            fp = part.strip().strip("*`").strip()
-            if not fp:
-                continue
-            normalized = fp.replace("\\", "/")
-            if not normalized.endswith(".prompt"):
-                continue
-            path = Path(normalized)
-            prompt_paths.add(path if path.is_absolute() else worktree_path / path)
-    return prompt_paths
-
-
-def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
-    """
-    Parse Step 6 output for 'Direct Edit Candidates' table.
-    Extract file paths from the first column of each row.
-    Returns empty list if no table found.
-    """
-    candidates = []
-    # Look for the Direct Edit Candidates table section
-    # Format: | file_path | edit_type | markers |
-    table_pattern = r"### Direct Edit Candidates[^\n]*\n\|[^\n]+\n\|[-\s|]+\n((?:\|[^\n]+\n)*)"
-    table_match = re.search(table_pattern, step6_output, re.IGNORECASE)
-    if table_match:
-        rows = table_match.group(1).strip().split("\n")
-        for row in rows:
-            if row.strip().startswith("|"):
-                # Extract first column (file path)
-                cols = [c.strip() for c in row.split("|")]
-                if len(cols) >= 2 and cols[1]:  # cols[0] is empty due to leading |
-                    file_path = cols[1].strip().strip("`")
-                    if file_path and not file_path.startswith("-"):
-                        candidates.append(file_path)
-    return candidates
-
-def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]:
-    """
-    Detect actual file changes in worktree using git status.
-    Fallback for when LLM output lacks FILES_CREATED/FILES_MODIFIED markers.
-    Only returns prompt and documentation files (matching step 9 scope),
-    plus any files in the direct_edit_candidates list.
-    """
-    try:
-        result = subprocess.run(
-            ["git", "status", "--porcelain"],
-            cwd=worktree_path,
-            capture_output=True, text=True, check=True
-        )
-        files = []
-        allowed_extensions = {".prompt", ".md"}
-        direct_edit_set = set(direct_edit_candidates or [])
-        for line in result.stdout.splitlines():
-            if not line.strip():
-                continue
-            # git status --porcelain format: "XY filename" (2 status chars + space + path)
-            filepath = line[3:].strip().split(" -> ")[-1]
-            # Skip temp files from run_agentic_task
-            if filepath.startswith(".agentic_prompt_"):
-                continue
-            # Include prompt/doc files (step 9 scope) OR direct edit candidates
-            if any(filepath.endswith(ext) for ext in allowed_extensions):
-                files.append(filepath)
-            elif filepath in direct_edit_set or any(filepath.endswith(c) for c in direct_edit_set):
-                files.append(filepath)
-        return files
-    except Exception:
-        return []
-
-def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
-    """Check output for hard stop conditions.
-
-    Clarification steps (4, 7) require the explicit STOP_CONDITION: tag.
-    Other steps use case-insensitive substring matching as a fallback.
-    A universal STOP_CONDITION: tag is recognized on any step.
-    """
-    if not output:
-        return None
-    stop_match = re.search(r'STOP_CONDITION:\s*(.+)', output, re.IGNORECASE)
-    output_lower = output.lower()
-
-    if step_num == 1 and "duplicate of #" in output_lower:
-        return "Issue is a duplicate"
-    if step_num == 2 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*already implemented", output_lower, re.MULTILINE):
-        return "Already implemented"
-    if step_num == 4:
-        if stop_match and "clarification" in stop_match.group(1).lower():
-            return "Clarification needed"
-        return None
-    if step_num == 6 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*no dev units found", output_lower, re.MULTILINE):
-        return "No dev units found"
-    if step_num == 7:
-        if stop_match and "architectural" in stop_match.group(1).lower():
-            return "Architectural decision needed"
-        return None
-    if step_num == 8 and re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*no changes required", output_lower, re.MULTILINE):
-        return "No changes needed"
-    if step_num == 9:
-        if "fail:" in output_lower:
-            return "Implementation failed"
-    # Universal fallback: any STOP_CONDITION tag on an unhandled step
-    if stop_match:
-        return stop_match.group(1).strip()
-    return None
-
-
-
-# Steps where a hard stop is a "clarification" request (user may respond, step should re-run)
-_CLARIFICATION_STEPS = {4, 7}
-
-
-# ---------------------------------------------------------------------------
-# Step 8.5 — Pre-flight drift heal
-# ---------------------------------------------------------------------------
-
-# Process-wide lock guarding the os.chdir window in _preflight_drift_heal.
-# detect_drift() reads from CWD; chdir is process-global, so concurrent
-# orchestrator runs in the same process would stomp each other's cwd. The
-# lock serializes the (chdir, detect_drift, chdir-back) critical section.
+MAX_CONSECUTIVE_PROVIDER_FAILURES = 3
+_PREFLIGHT_MAX_HEAL_MODULES = 10
 _PREFLIGHT_CHDIR_LOCK = threading.Lock()
 
-_PREFLIGHT_MAX_HEAL_MODULES = 10
-
-
-def _preflight_drift_heal(
-    worktree_path: Path,
-    quiet: bool = False,
-    timeout_per_module: float = 300.0,
-    max_modules: int = _PREFLIGHT_MAX_HEAL_MODULES,
-) -> Tuple[List[str], List[str], List[str]]:
-    """Detect and heal stale prompts before `pdd change` rewrites them.
-
-    If a module's code has drifted from its prompt (code edited directly
-    without updating the prompt), the prompt describes the *previous* code.
-    Any `pdd change` operation would then reason from a stale prompt and
-    produce bad output.
-
-    This runs ``sync_determine_operation`` on every prompt in the worktree
-    (hash-only, no LLM) to find modules with ``operation == "update"`` (prompt
-    stale vs code), and runs ``pdd update <code_path>`` on each one *in the
-    worktree* to realign the prompt before Step 9 rewrites it.
-
-    Args:
-        worktree_path: Path to the isolated git worktree where the change will
-            run. Healing happens inside the worktree so that if any
-            `pdd update` produces a bad prompt rewrite it is contained to the
-            worktree and does not touch the user's main tree.
-        quiet: If True, suppress console output.
-        timeout_per_module: Hard cap on subprocess timeout for each `pdd update`.
-        max_modules: Cap on how many drifted modules this pass will heal. With
-            ``timeout_per_module`` defaulting to 300s, an unbounded fan-out
-            could spend hours before Step 9 starts. When the drift list
-            exceeds this cap, the alphabetically-first ``max_modules`` are
-            healed and the remainder are deferred to the CI auto-heal pipeline
-            (which runs on every resulting PR). The cap is intentionally
-            generous — most realistic ``pdd change`` worktrees see 0–3 drifted
-            modules; double-digit drift is the pathological case.
-
-    Returns:
-        Tuple of (healed_modules, failed_modules, healed_prompt_paths).
-        ``healed_modules`` and ``failed_modules`` are basenames; the third
-        element is the list of prompt-file paths (as recorded in
-        ``DriftInfo.prompt_path``) that were rewritten by ``pdd update``.
-        Surfacing the healed *prompt paths* lets the Step 10 discovery sweep
-        re-run ``discover_associated_documents`` against the new prompt
-        content, so any docs reachable from the just-healed prompt's
-        ``<include>`` graph still go through the doc-sync contract — closing
-        the gap where Step 8.5 mutations otherwise bypassed Steps 10/10.5.
-
-        A module counts as "healed" if `pdd update` returned exit 0; "failed"
-        if it returned non-zero or raised. Failure does not abort the workflow:
-        the change proceeds against the unhealed prompt (Step 9's LLM may still
-        succeed, and pretending drift is not present is no worse than before).
-
-    Scope:
-        The drift list is snapshotted once via `detect_drift()` and iterated.
-        If healing module A causes module B's dependency graph to change (e.g.
-        A's interface is rewritten and B includes A), B's drift state is not
-        re-evaluated in this pass. The cascade case is intentionally delegated
-        to the CI auto-heal pipeline (`ci_drift_heal.py`, the same primitive
-        called here) which runs on every resulting PR — duplicating that loop
-        inside this function would re-implement an existing safety net.
-    """
-    if not worktree_path.exists():
-        return [], [], []
-
-    try:
-        from pdd.ci_drift_heal import detect_drift
-    except (ImportError, ModuleNotFoundError) as exc:
-        if not quiet:
-            console.print(
-                f"[yellow]⚠ Pre-flight drift heal unavailable ({exc}); "
-                "continuing without pre-flight heal.[/yellow]"
-            )
-        return [], [], []
-
-    # detect_drift() reads from CWD; ci_drift_heal's public API doesn't accept
-    # a cwd argument so we must chdir into the worktree. chdir is process-
-    # global, so serialize the (chdir → detect_drift → chdir-back) window
-    # behind a module lock to prevent concurrent orchestrator runs in the
-    # same process from clobbering each other's cwd.
-    original_cwd = Path.cwd()
-    prompt_drifts: List = []
-    with _PREFLIGHT_CHDIR_LOCK:
-        try:
-            os.chdir(worktree_path)
-            try:
-                prompt_drifts, _example_drifts = detect_drift()
-            except Exception as exc:
-                if not quiet:
-                    console.print(
-                        f"[yellow]⚠ Pre-flight drift detection raised ({exc}); "
-                        "continuing without pre-flight heal.[/yellow]"
-                    )
-                return [], [], []
-        finally:
-            os.chdir(original_cwd)
-
-    if not prompt_drifts:
-        if not quiet:
-            console.print(
-                "[blue][Step 8.5/13][/blue] Pre-flight drift check: "
-                "all prompts in sync with code."
-            )
-        return [], [], []
-
-    drifted_names = sorted({d.basename for d in prompt_drifts})
-
-    # Reviewer 4th-pass: cap fan-out. With timeout_per_module=300s,
-    # heading into a worktree with N drifted modules costs N × 5 min in
-    # the worst case — unbounded for very large repos. Heal the first
-    # ``max_modules`` (alphabetical for determinism) and defer the rest
-    # to the CI auto-heal pipeline that runs on every resulting PR.
-    deferred_names: List[str] = []
-    if len(drifted_names) > max_modules:
-        deferred_names = drifted_names[max_modules:]
-        kept = set(drifted_names[:max_modules])
-        prompt_drifts = [d for d in prompt_drifts if d.basename in kept]
-        drifted_names = sorted(kept)
-
-    if not quiet:
-        console.print(
-            f"[yellow][Step 8.5/13][/yellow] Pre-flight drift check: "
-            f"{len(drifted_names)} module(s) drifted — healing before change: "
-            f"{', '.join(drifted_names)}"
-        )
-        if deferred_names:
-            console.print(
-                f"   [yellow]⚠[/yellow] {len(deferred_names)} additional drifted "
-                f"module(s) deferred to CI auto-heal (cap={max_modules}): "
-                f"{', '.join(deferred_names)}"
-            )
-
-    # Reviewer 3rd-pass: the heal subprocess runs in a headless Cloud Run
-    # worker; stdin is piped so pdd.auto_update's isatty() auto-detect
-    # usually picks up "non-interactive" — but the production CI auto-heal
-    # path (ci_drift_heal._build_ci_env) also sets explicit guardrails to
-    # skip local LM Studio calls, force non-TTY behavior, and restore
-    # protected paths if pdd sync/update times out mid-mutation. Mirror
-    # those guardrails here so Step 8.5 is as defensive as the CI heal
-    # path it shares the detect_drift primitive with.
-    heal_env = os.environ.copy()
-    heal_env.setdefault("PDD_FORCE", "1")
-    heal_env.setdefault("CI", "1")
-    heal_env.setdefault("NO_COLOR", "1")
-    heal_env.setdefault("PDD_FORCE_LOCAL", "1")
-    heal_env.setdefault("PDD_SKIP_LOCAL_MODELS", "1")
-    heal_env.setdefault("PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE", "1")
-
-    healed: List[str] = []
-    failed: List[str] = []
-    healed_prompts: List[str] = []
-    for drift in prompt_drifts:
-        if not drift.code_path:
-            failed.append(drift.basename)
-            continue
-        try:
-            # Use sys.executable + -m pdd so the heal subprocess uses the
-            # same Python venv as the orchestrator. A bare ["pdd", ...]
-            # would pick up whatever pdd binary is on PATH, which can be
-            # a different version when devs have a global install plus a
-            # project-local one.
-            #
-            # `--sync-metadata` routes the heal through the shared
-            # `run_metadata_sync` orchestrator so prompt tags, architecture
-            # entries, run-report cleanup, and fingerprint state are all
-            # finalized atomically (issue #871). Without it, single-file
-            # `pdd update` leaves the fingerprint stale and the same drift is
-            # re-detected on the next preflight pass.
-            result = subprocess.run(
-                [sys.executable, "-m", "pdd", "update", "--sync-metadata", drift.code_path],
-                cwd=str(worktree_path),
-                capture_output=True,
-                text=True,
-                timeout=timeout_per_module,
-                env=heal_env,
-            )
-            if result.returncode == 0:
-                healed.append(drift.basename)
-                if drift.prompt_path:
-                    healed_prompts.append(drift.prompt_path)
-                if not quiet:
-                    console.print(f"   [green]✓[/green] healed {drift.basename}")
-            else:
-                failed.append(drift.basename)
-                if not quiet:
-                    tail = result.stderr.strip().splitlines()[-1:] or ["(no stderr)"]
-                    console.print(
-                        f"   [red]✗[/red] heal failed {drift.basename}: "
-                        f"{escape(tail[0])}"
-                    )
-        except subprocess.TimeoutExpired:
-            failed.append(drift.basename)
-            if not quiet:
-                console.print(
-                    f"   [red]✗[/red] heal timed out for {drift.basename}"
-                )
-        except Exception as exc:
-            failed.append(drift.basename)
-            if not quiet:
-                console.print(
-                    f"   [red]✗[/red] heal raised for {drift.basename}: {exc}"
-                )
-
-    if not quiet:
-        console.print(
-            f"   → Pre-flight heal complete: "
-            f"{len(healed)} healed, {len(failed)} failed."
-        )
-    return healed, failed, healed_prompts
-
 
 # ---------------------------------------------------------------------------
-# Step 10.5 — Post-Step-10 associated-document contract verifier
+# Helper: Project configuration (.pddrc)
 # ---------------------------------------------------------------------------
-
-
-
-def _verify_doc_sync_contract(
-    discovered_docs: List[str],
-    step10_output: str,
-) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
-    """Enforce the associated-document contract after Step 10.
-
-    The contract: every doc in *discovered_docs* (from Step 10's pre-call to
-    ``discover_associated_documents``) must appear in Step 10's output under
-    EXACTLY ONE of:
-      - ``ASSOCIATED_DOCS_MODIFIED:``  — LLM edited the doc
-      - ``ASSOCIATED_DOCS_CONFLICTS:`` — LLM flagged it for manual review
-      - ``ASSOCIATED_DOCS_UNCHANGED:`` — LLM determined it was already consistent
-
-    Two classes of contract violation are caught:
-
-    1. **Silent drops** — a discovered doc appears in none of the three
-       buckets. The LLM forgot it. Downstream consumers (review loops, PR
-       bodies) never learn the doc was skipped.
-
-    2. **Overlap (contradictory state)** — a discovered doc appears in two or
-       more buckets (e.g. both ``MODIFIED`` and ``UNCHANGED``). The LLM made
-       inconsistent claims about the same file. Treating such a doc as
-       "handled" lets a real state conflict ride through to the PR.
-
-    The Step 10 prompt must instruct the LLM to emit exactly one marker per
-    doc; otherwise this verifier false-positives on every doc.
-
-    Scope:
-        The contract only protects docs the static discovery (`<include>`
-        graph + architecture BFS) actually found. Docs that *should* be
-        referenced via `<include>` but aren't tagged are invisible here —
-        catching that class of gap requires semantic auto-deps discovery,
-        which is tracked separately as future work.
-
-    Args:
-        discovered_docs: The list the orchestrator passed in via
-            ``context["associated_documents"]``. Pass ``[]`` when no docs were
-            discovered (the contract is trivially satisfied).
-        step10_output: Raw Step 10 LLM output text.
-
-    Returns:
-        Tuple of (modified, conflicted, unchanged, silently_dropped, overlapping).
-        Both *silently_dropped* and *overlapping* are alarms — the former lists
-        discovered docs the LLM never addressed, the latter lists discovered
-        docs the LLM placed in more than one bucket simultaneously.
-    """
-    if not discovered_docs:
-        return [], [], [], [], []
-
-    # Reviewer 4th-pass fixes (bugs 1 + 2):
-    #   (a) Multi-line marker values, UNINDENTED continuation. The prior
-    #       regex `[^\n]*(?:\n[ \t]+[^\n]*)*` required continuation lines
-    #       to start with whitespace. LLMs frequently wrap a long list
-    #       without indenting the next line — those entries vanished
-    #       silently and were re-flagged as silent drops. Replaced with a
-    #       line-by-line walk that stops at a blank line or another known
-    #       marker, regardless of indentation.
-    #   (b) Bulleted list with no commas (e.g. "MARKER:\n  - a.md\n  - b.md").
-    #       Joining lines with " " before splitting on "," produced a
-    #       single entry "- a.md   - b.md" which `_strip_entry` could only
-    #       partially un-bullet. Strip the leading bullet *per line* before
-    #       splitting on comma, so each line is its own potential entry.
-    # The verifier and ``_extract_marker_paths`` share marker-walking
-    # semantics by design — if they ever disagree on what Step 10 emitted
-    # the orchestrator's bookkeeping silently diverges from the contract.
-    modified = _extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", step10_output)
-    conflicted = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", step10_output)
-    unchanged = _extract_marker_paths("ASSOCIATED_DOCS_UNCHANGED", step10_output)
-
-    def _normalize(p: str) -> str:
-        # Normalize backslashes to forward slashes BEFORE pathlib so a
-        # windows-style 'docs\\foo.md' matches a posix 'docs/foo.md'.
-        return Path(p.replace("\\", "/")).as_posix()
-
-    mod_norm = {_normalize(p) for p in modified}
-    conf_norm = {_normalize(p) for p in conflicted}
-    unch_norm = {_normalize(p) for p in unchanged}
-    handled: Set[str] = mod_norm | conf_norm | unch_norm
-
-    silently_dropped = [
-        d for d in discovered_docs
-        if _normalize(d) not in handled
-    ]
-
-    # A doc is in overlap if its normalized form appears in 2+ of the three
-    # buckets. Preserves the discovered-list ordering for deterministic output.
-    overlapping = [
-        d for d in discovered_docs
-        if sum(
-            1 for bucket in (mod_norm, conf_norm, unch_norm)
-            if _normalize(d) in bucket
-        ) >= 2
-    ]
-
-    return modified, conflicted, unchanged, silently_dropped, overlapping
-
-
-def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> str:
-    """Re-fetch issue updated_at from GitHub API.
-
-    Used after a clarification stop to capture the timestamp AFTER
-    the bot's own comment, so stale detection doesn't false-trigger.
-    """
-    try:
-        result = subprocess.run(
-            ["gh", "api", f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
-             "--jq", ".updated_at"],
-            capture_output=True, text=True, check=False, timeout=15,
-        )
-        if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip()
-        console.print(
-            f"[yellow]Warning: Failed to re-fetch issue updated_at "
-            f"(rc={result.returncode}): {result.stderr.strip()}[/yellow]"
-        )
-    except subprocess.TimeoutExpired:
-        console.print("[yellow]Warning: Timed out re-fetching issue updated_at[/yellow]")
-    except OSError as e:
-        console.print(f"[yellow]Warning: OSError re-fetching issue updated_at: {e}[/yellow]")
-    return ""
-
-
-def _get_state_dir(cwd: Path) -> Path:
-    """Get the state directory relative to git root."""
-    root = _get_git_root(cwd) or cwd
-    return root / ".pdd" / "change-state"
 
 def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
-    """
-    Load .pddrc configuration and return context keys for step templates.
-
-    Returns dict with: language, source_dir, test_dir, example_dir, ext, lang
-    Falls back to sensible defaults if no .pddrc found.
-    """
+    """Load .pddrc context for prompt template variables."""
     defaults = {
         "language": "python",
         "source_dir": "src/",
@@ -1189,134 +126,788 @@ def _load_pddrc_context(cwd: Path) -> Dict[str, str]:
         "ext": "py",
         "lang": "_python",
     }
-
     try:
         pddrc_path = _find_pddrc_file(cwd)
         if not pddrc_path:
             return defaults
-
         config = _load_pddrc_config(pddrc_path)
-        if not config:
-            return defaults
-
-        # Detect the appropriate context
         context_name = _detect_context(cwd, config)
-        contexts = config.get("contexts", {})
-        ctx_config = contexts.get(context_name, contexts.get("default", {}))
 
-        # Config values may be at top level or nested under "defaults"
-        ctx_defaults = ctx_config.get("defaults", ctx_config)
+        # Extract context's defaults
+        contexts = config.get("contexts", {}) if isinstance(config, dict) else {}
+        ctx = contexts.get(context_name, {}) if isinstance(contexts, dict) else {}
+        ctx_defaults = ctx.get("defaults", {}) if isinstance(ctx, dict) else {}
 
         language = ctx_defaults.get("default_language", defaults["language"])
         source_dir = ctx_defaults.get("generate_output_path", defaults["source_dir"])
         test_dir = ctx_defaults.get("test_output_path", defaults["test_dir"])
         example_dir = ctx_defaults.get("example_output_path", defaults["example_dir"])
 
-        # Derive ext from language
-        ext = get_extension(language) if language else defaults["ext"]
+        ext = get_extension(language)
         if ext.startswith("."):
-            ext = ext[1:]  # Remove leading dot if present
-
-        # Derive lang suffix
-        lang = f"_{language}" if language else defaults["lang"]
+            ext = ext[1:]
+        lang = f"_{language}"
 
         return {
             "language": language,
             "source_dir": source_dir,
             "test_dir": test_dir,
             "example_dir": example_dir,
-            "ext": ext,
+            "ext": ext or defaults["ext"],
             "lang": lang,
         }
     except Exception:
-        # On any error, return defaults
         return defaults
 
 
-def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
-    """
-    Build a formatted string describing the module dependency graph.
+# ---------------------------------------------------------------------------
+# Helper: Git operations
+# ---------------------------------------------------------------------------
 
-    This is used to provide Step 6 with structured dependency information
-    so it can identify transitively affected modules.
+def _run_git(args: List[str], cwd: Path, capture: bool = True, timeout: float = 60.0) -> subprocess.CompletedProcess:
+    """Run a git command."""
+    return subprocess.run(
+        ["git", *args],
+        cwd=str(cwd),
+        capture_output=capture,
+        text=True,
+        timeout=timeout,
+    )
 
-    Args:
-        prompts_dir: Path to the prompts directory
-        quiet: Whether to suppress logging
 
-    Returns:
-        Formatted string describing dependencies, or empty string if unavailable
-    """
-    if not prompts_dir.exists():
-        return ""
-
+def _get_git_root(cwd: Path) -> Optional[Path]:
+    """Get the repository root via git rev-parse --show-toplevel."""
     try:
-        graph = build_dependency_graph(prompts_dir)
-        if not graph:
-            return ""
-
-        # Build reverse dependencies (module -> list of modules that depend on it)
-        reverse_deps: Dict[str, List[str]] = {}
-        for module, deps in graph.items():
-            for dep in deps:
-                if dep not in reverse_deps:
-                    reverse_deps[dep] = []
-                reverse_deps[dep].append(module)
-
-        # Format as readable text for the LLM
-        lines = []
-        lines.append("## Module Dependency Graph")
-        lines.append("")
-        lines.append("When a module is modified, all modules that depend on it (directly or transitively) may also need updates.")
-        lines.append("")
-
-        # Show modules with dependents (these are the ones that matter for ripple effects)
-        modules_with_dependents = {k: v for k, v in reverse_deps.items() if v}
-        if modules_with_dependents:
-            lines.append("### Modules and their dependents (modules that will be affected if changed):")
-            lines.append("")
-            # Sort by number of dependents (most impactful first)
-            for module in sorted(modules_with_dependents.keys(),
-                               key=lambda m: len(modules_with_dependents[m]),
-                               reverse=True)[:30]:  # Limit to top 30
-                dependents = modules_with_dependents[module]
-                lines.append(f"- **{module}** → affects: {', '.join(sorted(dependents)[:10])}")
-                if len(dependents) > 10:
-                    lines.append(f"  (and {len(dependents) - 10} more)")
-
-        lines.append("")
-        lines.append(f"Total modules tracked: {len(graph)}")
-
-        return "\n".join(lines)
-
-    except Exception as e:
-        if not quiet:
-            console.print(f"[yellow]Warning: Could not build dependency context: {e}[/yellow]")
-        return ""
-
-
-def _check_existing_pr(repo_owner: str, repo_name: str, issue_number: int) -> Optional[str]:
-    """Check if an open PR already exists for this issue's branch.
-
-    Returns the PR URL if found, None otherwise.
-    """
-    branch = f"change/issue-{issue_number}"
-    try:
-        result = subprocess.run(
-            ["gh", "pr", "list", "--repo", f"{repo_owner}/{repo_name}",
-             "--search", f"head:{branch}", "--state", "open",
-             "--json", "url", "--limit", "1"],
-            capture_output=True, text=True, check=False, timeout=30,
-        )
-        if result.returncode != 0:
-            return None
-        data = json.loads(result.stdout)
-        if data and isinstance(data, list) and data[0].get("url"):
-            return data[0]["url"]
-    except (subprocess.TimeoutExpired, json.JSONDecodeError, Exception):
+        result = _run_git(["rev-parse", "--show-toplevel"], cwd)
+        if result.returncode == 0:
+            return Path(result.stdout.strip())
+    except Exception:
         pass
     return None
 
+
+def _resolve_main_ref(git_root: Path) -> str:
+    """Resolve the main branch ref for use as worktree base."""
+    candidates = ["origin/main", "origin/master", "main", "master"]
+    for ref in candidates:
+        try:
+            result = _run_git(["rev-parse", "--verify", ref], git_root)
+            if result.returncode == 0:
+                return result.stdout.strip()
+        except Exception:
+            continue
+    return "HEAD"
+
+
+def _worktree_exists(cwd: Path, worktree_path: Path) -> bool:
+    """Check if path is in `git worktree list --porcelain` output."""
+    try:
+        result = _run_git(["worktree", "list", "--porcelain"], cwd)
+        if result.returncode != 0:
+            return False
+        target = str(worktree_path.resolve())
+        for line in result.stdout.splitlines():
+            if line.startswith("worktree "):
+                wt_path = line.split(" ", 1)[1].strip()
+                try:
+                    if str(Path(wt_path).resolve()) == target:
+                        return True
+                except Exception:
+                    continue
+    except Exception:
+        pass
+    return False
+
+
+def _branch_exists(cwd: Path, branch: str) -> bool:
+    """Check if a local branch exists."""
+    try:
+        result = _run_git(["show-ref", "--verify", f"refs/heads/{branch}"], cwd)
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _remove_worktree(cwd: Path, worktree_path: Path) -> Tuple[bool, str]:
+    """Remove an existing worktree."""
+    try:
+        result = _run_git(["worktree", "remove", "--force", str(worktree_path)], cwd)
+        if result.returncode == 0:
+            return True, ""
+        return False, result.stderr.strip() or "git worktree remove failed"
+    except Exception as e:
+        return False, str(e)
+
+
+def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
+    """Delete a local branch."""
+    try:
+        result = _run_git(["branch", "-D", branch], cwd)
+        if result.returncode == 0:
+            return True, ""
+        return False, result.stderr.strip() or "git branch -D failed"
+    except Exception as e:
+        return False, str(e)
+
+
+def _setup_worktree(
+    cwd: Path, issue_number: int, quiet: bool
+) -> Tuple[Optional[Path], Optional[str]]:
+    """Create an isolated git worktree for the change workflow."""
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return None, "Not in a git repository"
+
+    worktree_path = git_root / ".pdd" / "worktrees" / f"change-issue-{issue_number}"
+    branch_name = f"change/issue-{issue_number}"
+
+    # If worktree already exists, remove it
+    if _worktree_exists(git_root, worktree_path):
+        ok, err = _remove_worktree(git_root, worktree_path)
+        if not ok and not quiet:
+            console.print(f"[yellow]Warning removing existing worktree: {err}[/yellow]")
+
+    # If directory exists but is not a worktree, remove it
+    if worktree_path.exists():
+        try:
+            shutil.rmtree(worktree_path)
+        except Exception as e:
+            return None, f"Failed to remove existing directory: {e}"
+
+    # Ensure parent directory exists
+    worktree_path.parent.mkdir(parents=True, exist_ok=True)
+
+    main_ref = _resolve_main_ref(git_root)
+
+    if _branch_exists(git_root, branch_name):
+        # Try to delete the branch first
+        deleted, _del_err = _delete_branch(git_root, branch_name)
+        if deleted:
+            # Create new branch from main ref
+            try:
+                result = _run_git(
+                    ["worktree", "add", "-b", branch_name, str(worktree_path), main_ref],
+                    git_root,
+                )
+                if result.returncode != 0:
+                    return None, result.stderr.strip() or "git worktree add failed"
+            except Exception as e:
+                return None, str(e)
+        else:
+            # Branch couldn't be deleted (perhaps in use); use existing
+            try:
+                result = _run_git(
+                    ["worktree", "add", "--force", str(worktree_path), branch_name],
+                    git_root,
+                )
+                if result.returncode != 0:
+                    return None, result.stderr.strip() or "git worktree add --force failed"
+            except Exception as e:
+                return None, str(e)
+    else:
+        # Create new branch from main ref
+        try:
+            result = _run_git(
+                ["worktree", "add", "-b", branch_name, str(worktree_path), main_ref],
+                git_root,
+            )
+            if result.returncode != 0:
+                return None, result.stderr.strip() or "git worktree add failed"
+        except Exception as e:
+            return None, str(e)
+
+    return worktree_path, None
+
+
+def _detect_worktree_changes(
+    worktree_path: Path,
+    direct_edit_candidates: Optional[List[str]] = None,
+) -> List[str]:
+    """Detect file changes in worktree via git status --porcelain."""
+    candidates = set(direct_edit_candidates or [])
+    changed: List[str] = []
+    try:
+        result = _run_git(["status", "--porcelain"], worktree_path)
+        if result.returncode != 0:
+            return []
+        for line in result.stdout.splitlines():
+            if not line.strip():
+                continue
+            # Format: XY path  (or XY orig -> path for renames)
+            status = line[:2]
+            rest = line[3:].strip() if len(line) > 3 else ""
+            if "->" in rest:
+                rest = rest.split("->", 1)[1].strip()
+            # Strip surrounding quotes
+            if rest.startswith('"') and rest.endswith('"'):
+                rest = rest[1:-1]
+            if not rest:
+                continue
+            # Skip temp files
+            if ".agentic_prompt_" in rest:
+                continue
+            basename = Path(rest).name
+            if rest.endswith(".prompt") or rest.endswith(".md"):
+                changed.append(rest)
+            elif rest in candidates or basename in candidates:
+                changed.append(rest)
+            elif candidates and any(rest.endswith(c) or c.endswith(rest) for c in candidates):
+                changed.append(rest)
+        # Dedupe preserve order
+        seen: Set[str] = set()
+        dedup: List[str] = []
+        for f in changed:
+            if f not in seen:
+                seen.add(f)
+                dedup.append(f)
+        return dedup
+    except Exception:
+        return []
+
+
+# ---------------------------------------------------------------------------
+# Helper: GitHub operations
+# ---------------------------------------------------------------------------
+
+def _check_existing_pr(
+    repo_owner: str, repo_name: str, issue_number: int
+) -> Optional[str]:
+    """Check if an open PR already exists for change/issue-{N}."""
+    branch = f"change/issue-{issue_number}"
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "pr",
+                "list",
+                "--repo",
+                f"{repo_owner}/{repo_name}",
+                "--head",
+                branch,
+                "--state",
+                "open",
+                "--json",
+                "url",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return None
+        data = json.loads(result.stdout or "[]")
+        if isinstance(data, list) and data:
+            entry = data[0]
+            if isinstance(entry, dict) and "url" in entry:
+                return entry["url"]
+    except Exception:
+        return None
+    return None
+
+
+def _fetch_issue_updated_at(
+    repo_owner: str, repo_name: str, issue_number: int
+) -> str:
+    """Fetch current updated_at timestamp for the GitHub issue."""
+    try:
+        result = subprocess.run(
+            [
+                "gh",
+                "api",
+                f"repos/{repo_owner}/{repo_name}/issues/{issue_number}",
+                "--jq",
+                ".updated_at",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if result.returncode == 0:
+            return result.stdout.strip()
+    except Exception:
+        pass
+    return ""
+
+
+# ---------------------------------------------------------------------------
+# Helper: Output parsing
+# ---------------------------------------------------------------------------
+
+def _parse_files_marker(output: str, marker: str) -> List[str]:
+    """Parse a `MARKER: path1, path2` line from output."""
+    if not output:
+        return []
+    pattern = re.compile(rf"^{re.escape(marker)}[ \t]*:[ \t]*(.+)$", re.MULTILINE)
+    files: List[str] = []
+    for match in pattern.finditer(output):
+        line = match.group(1).strip()
+        if not line or line.lower() in ("none", "n/a", "(none)"):
+            continue
+        for part in line.split(","):
+            p = part.strip()
+            if p and p.lower() not in ("none", "n/a"):
+                files.append(p)
+    # Dedupe preserve order
+    seen: Set[str] = set()
+    out: List[str] = []
+    for f in files:
+        if f not in seen:
+            seen.add(f)
+            out.append(f)
+    return out
+
+
+def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
+    """Parse the 'Direct Edit Candidates' table from Step 6 output."""
+    if not step6_output:
+        return []
+    # Find a header that mentions Direct Edit Candidates
+    header_re = re.compile(r"direct edit candidates", re.IGNORECASE)
+    m = header_re.search(step6_output)
+    if not m:
+        return []
+    # Take everything after the header
+    tail = step6_output[m.end():]
+    candidates: List[str] = []
+    for line in tail.splitlines():
+        line = line.rstrip()
+        if not line.lstrip().startswith("|"):
+            # Stop at first non-table line after we've started
+            if candidates:
+                break
+            continue
+        # Skip table separator lines (---)
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if not cells:
+            continue
+        first = cells[0]
+        if not first or set(first) <= set("-: "):
+            continue
+        # Skip header rows
+        if first.lower() in ("file", "file path", "path", "filename"):
+            continue
+        # Strip backticks
+        first = first.strip("`").strip()
+        if first:
+            candidates.append(first)
+    # Dedupe
+    seen: Set[str] = set()
+    out: List[str] = []
+    for c in candidates:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Helper: Hard stop detection
+# ---------------------------------------------------------------------------
+
+def _check_hard_stop(step_num: int, output: str) -> Optional[str]:
+    """Check if a step's output indicates a hard stop. Returns the reason or None."""
+    if not output:
+        return None
+
+    # Universal STOP_CONDITION tag
+    stop_tag = re.search(r"STOP_CONDITION\s*:\s*(.+)", output)
+    if stop_tag:
+        reason = stop_tag.group(1).strip().splitlines()[0]
+
+        # Steps 4 and 7 ONLY stop via this tag
+        if step_num == 4:
+            if "clarif" in reason.lower():
+                return f"Clarification needed: {reason}"
+        elif step_num == 7:
+            if "architectural" in reason.lower() or "architecture" in reason.lower():
+                return f"Architectural decision needed: {reason}"
+        else:
+            return reason
+
+    if step_num == 1:
+        if re.search(r"Duplicate of #\d+", output):
+            return "Issue is a duplicate of an existing issue"
+    elif step_num == 2:
+        if re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*already implemented",
+                     output, re.MULTILINE | re.IGNORECASE):
+            return "Issue is already implemented"
+    elif step_num == 6:
+        if re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*no dev units found",
+                     output, re.MULTILINE | re.IGNORECASE):
+            return "No dev units found"
+    elif step_num == 8:
+        if re.search(r"^(?:\*\*)?(?:status|result)[:\s*]*no changes required",
+                     output, re.MULTILINE | re.IGNORECASE):
+            return "No changes required"
+    elif step_num == 9:
+        if "FAIL:" in output:
+            # Extract the FAIL reason
+            m = re.search(r"FAIL:\s*(.+)", output)
+            return f"Implementation failed: {m.group(1).strip() if m else 'unknown'}"
+
+    return None
+
+
+def _is_provider_failure(output: str) -> bool:
+    """Check if output indicates all providers failed."""
+    return bool(output) and "All agent providers failed" in output
+
+
+def _review_loop_no_issues(output: str) -> bool:
+    """Case-insensitive check for 'no issues found' in output."""
+    return bool(output) and "no issues found" in output.lower()
+
+
+# ---------------------------------------------------------------------------
+# Helper: Architecture sanitization
+# ---------------------------------------------------------------------------
+
+def _sanitize_architecture_dependencies(worktree_path: Path) -> None:
+    """Remove corrupted dependency values from architecture.json."""
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists():
+        return
+    try:
+        data = json.loads(arch_path.read_text(encoding="utf-8"))
+    except Exception:
+        return
+
+    def _clean_deps(deps: Any) -> List[str]:
+        if not isinstance(deps, list):
+            return []
+        cleaned: List[str] = []
+        for d in deps:
+            if not isinstance(d, str):
+                continue
+            if "\n" in d:
+                continue
+            if len(d) > 100:
+                continue
+            if not d.endswith(".prompt"):
+                continue
+            cleaned.append(d)
+        return cleaned
+
+    modules = data["modules"] if isinstance(data, dict) and isinstance(data.get("modules"), list) else data
+    if not isinstance(modules, list):
+        return
+    changed = False
+    for entry in modules:
+        if isinstance(entry, dict) and "dependencies" in entry:
+            new_deps = _clean_deps(entry.get("dependencies"))
+            if new_deps != entry.get("dependencies"):
+                entry["dependencies"] = new_deps
+                changed = True
+    if changed:
+        try:
+            arch_path.write_text(
+                json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
+
+def _sanitize_architecture_interfaces(
+    worktree_path: Path,
+    previous_architecture: Optional[Any],
+) -> List[str]:
+    """Merge dropped interface signatures and return any warnings."""
+    warnings: List[str] = []
+    arch_path = worktree_path / "architecture.json"
+    if not arch_path.exists() or previous_architecture is None:
+        return warnings
+    try:
+        current = json.loads(arch_path.read_text(encoding="utf-8"))
+    except Exception:
+        return warnings
+
+    def _entries(d: Any) -> List[Dict[str, Any]]:
+        if isinstance(d, dict) and isinstance(d.get("modules"), list):
+            return d["modules"]
+        if isinstance(d, list):
+            return d
+        return []
+
+    old_entries = _entries(previous_architecture)
+    new_entries = _entries(current)
+    old_by_filename = {
+        e.get("filename"): e for e in old_entries if isinstance(e, dict) and e.get("filename")
+    }
+    changed = False
+    for entry in new_entries:
+        if not isinstance(entry, dict):
+            continue
+        fn = entry.get("filename")
+        old_entry = old_by_filename.get(fn) if fn else None
+        if not old_entry:
+            continue
+        old_iface = old_entry.get("interface")
+        new_iface = entry.get("interface")
+        if not isinstance(new_iface, dict):
+            continue
+        merged, merge_warnings = _merge_interface_signatures(old_iface, new_iface)
+        warnings.extend(merge_warnings)
+        if merged != new_iface:
+            entry["interface"] = merged
+            changed = True
+    if changed:
+        try:
+            arch_path.write_text(
+                json.dumps(current, indent=2, ensure_ascii=False) + "\n",
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+    return warnings
+
+
+# ---------------------------------------------------------------------------
+# Helper: Dependency context (for Step 6)
+# ---------------------------------------------------------------------------
+
+def _build_dependency_context(prompts_dir: Path, quiet: bool = False) -> str:
+    """Build a formatted dependency graph for Step 6."""
+    if not prompts_dir.exists():
+        return ""
+    try:
+        from pdd.sync_order import build_dependency_graph
+
+        graph = build_dependency_graph(prompts_dir)
+        if not graph:
+            return ""
+        # Reverse graph: module -> dependents
+        reverse: Dict[str, Set[str]] = defaultdict(set)
+        for mod, deps in graph.items():
+            for d in deps:
+                reverse[d].add(mod)
+        # Sort by number of dependents desc
+        sorted_mods = sorted(reverse.items(), key=lambda x: (-len(x[1]), x[0]))[:30]
+        lines = ["## Module Dependency Graph", ""]
+        for mod, dependents in sorted_mods:
+            dep_list = sorted(dependents)[:10]
+            lines.append(f"- **{mod}** ({len(dependents)} dependents): {', '.join(dep_list)}")
+        return "\n".join(lines)
+    except Exception as e:
+        if not quiet:
+            console.print(f"[yellow]Warning: dependency context build failed: {e}[/yellow]")
+        return ""
+
+
+# ---------------------------------------------------------------------------
+# Helper: Pre-flight drift heal (Step 8.5)
+# ---------------------------------------------------------------------------
+
+def _preflight_drift_heal(
+    worktree_path: Path,
+    quiet: bool = False,
+    timeout_per_module: float = 300.0,
+    max_modules: int = _PREFLIGHT_MAX_HEAL_MODULES,
+) -> Tuple[List[str], List[str], List[str]]:
+    """Heal modules whose prompts are stale relative to their code.
+
+    Contained to the worktree. Single-pass (no fixed-point loop).
+    Returns (healed_basenames, failed_basenames, healed_prompt_paths).
+    """
+    healed: List[str] = []
+    failed: List[str] = []
+    healed_prompts: List[str] = []
+
+    with _PREFLIGHT_CHDIR_LOCK:
+        try:
+            from pdd.ci_drift_heal import detect_drift  # type: ignore
+        except Exception as e:
+            if not quiet:
+                console.print(
+                    f"[yellow]Pre-flight drift heal: detect_drift import failed ({e}); skipping.[/yellow]"
+                )
+            return healed, failed, healed_prompts
+
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(str(worktree_path))
+            try:
+                drift_result = detect_drift()
+            except Exception as e:
+                if not quiet:
+                    console.print(
+                        f"[yellow]Pre-flight drift heal: detect_drift failed ({e}); skipping.[/yellow]"
+                    )
+                return healed, failed, healed_prompts
+
+            # Expected: (prompt_drifts, example_drifts)
+            try:
+                prompt_drifts, _example_drifts = drift_result
+            except Exception:
+                prompt_drifts = drift_result if isinstance(drift_result, list) else []
+
+            # Filter for operation == "update"
+            update_drifts = []
+            for d in prompt_drifts or []:
+                op = getattr(d, "operation", None)
+                if op is None and isinstance(d, dict):
+                    decision = d.get("decision") or {}
+                    op = decision.get("operation") if isinstance(decision, dict) else None
+                if op == "update":
+                    update_drifts.append(d)
+
+            if not update_drifts:
+                if not quiet:
+                    console.print(
+                        "[Step 8.5/13] Pre-flight drift check: all prompts in sync with code."
+                    )
+                return healed, failed, healed_prompts
+
+            # Cap fan-out
+            def _drift_basename(d: Any) -> str:
+                bn = getattr(d, "basename", None)
+                if bn:
+                    return bn
+                if isinstance(d, dict):
+                    return d.get("basename") or d.get("module") or "unknown"
+                return "unknown"
+
+            update_drifts.sort(key=_drift_basename)
+            if len(update_drifts) > max_modules:
+                deferred = [_drift_basename(d) for d in update_drifts[max_modules:]]
+                if not quiet:
+                    console.print(
+                        f"[yellow]Pre-flight: {len(update_drifts)} drifts detected; "
+                        f"healing first {max_modules}, deferring {len(deferred)} to CI: "
+                        f"{', '.join(deferred[:10])}{'...' if len(deferred) > 10 else ''}[/yellow]"
+                    )
+                update_drifts = update_drifts[:max_modules]
+
+            # Build heal env
+            heal_env = os.environ.copy()
+            heal_env.update({
+                "PDD_FORCE": "1",
+                "CI": "1",
+                "NO_COLOR": "1",
+                "PDD_FORCE_LOCAL": "1",
+                "PDD_SKIP_LOCAL_MODELS": "1",
+                "PDD_RESTORE_PROTECTED_PATHS_ON_FAILURE": "1",
+            })
+
+            for drift in update_drifts:
+                basename = _drift_basename(drift)
+                code_path = getattr(drift, "code_path", None)
+                if code_path is None and isinstance(drift, dict):
+                    code_path = drift.get("code_path")
+                prompt_path = getattr(drift, "prompt_path", None)
+                if prompt_path is None and isinstance(drift, dict):
+                    prompt_path = drift.get("prompt_path")
+
+                if not code_path:
+                    failed.append(basename)
+                    continue
+
+                try:
+                    if not quiet:
+                        console.print(f"[blue]Pre-flight heal: pdd update {code_path}[/blue]")
+                    proc = subprocess.run(
+                        [sys.executable, "-m", "pdd", "update", str(code_path)],
+                        cwd=str(worktree_path),
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_per_module,
+                        env=heal_env,
+                    )
+                    if proc.returncode == 0:
+                        healed.append(basename)
+                        if prompt_path:
+                            healed_prompts.append(str(prompt_path))
+                    else:
+                        failed.append(basename)
+                        if not quiet:
+                            err_tail = (proc.stderr or "").strip().splitlines()[-3:]
+                            console.print(
+                                f"[yellow]Heal failed for {basename} (rc={proc.returncode}): "
+                                f"{' | '.join(err_tail)}[/yellow]"
+                            )
+                except subprocess.TimeoutExpired:
+                    failed.append(basename)
+                    if not quiet:
+                        console.print(f"[yellow]Heal timeout for {basename}[/yellow]")
+                except Exception as e:
+                    failed.append(basename)
+                    if not quiet:
+                        console.print(f"[yellow]Heal error for {basename}: {e}[/yellow]")
+        finally:
+            try:
+                os.chdir(original_cwd)
+            except Exception:
+                pass
+
+    return healed, failed, healed_prompts
+
+
+# ---------------------------------------------------------------------------
+# Helper: Doc-sync contract verifier (Step 10.5)
+# ---------------------------------------------------------------------------
+
+def _verify_doc_sync_contract(
+    discovered_docs: List[str],
+    step10_output: str,
+) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
+    """Verify that every discovered doc appears in EXACTLY ONE bucket.
+
+    Returns (modified, conflicted, unchanged, silently_dropped, overlapping).
+    """
+    modified = _parse_files_marker(step10_output, "ASSOCIATED_DOCS_MODIFIED")
+    conflicted = _parse_files_marker(step10_output, "ASSOCIATED_DOCS_CONFLICTS")
+    unchanged = _parse_files_marker(step10_output, "ASSOCIATED_DOCS_UNCHANGED")
+
+    silently_dropped: List[str] = []
+    overlapping: List[str] = []
+
+    mod_set = set(modified)
+    conf_set = set(conflicted)
+    unch_set = set(unchanged)
+
+    for doc in discovered_docs:
+        buckets = sum([doc in mod_set, doc in conf_set, doc in unch_set])
+        if buckets == 0:
+            silently_dropped.append(doc)
+        elif buckets > 1:
+            overlapping.append(doc)
+
+    return modified, conflicted, unchanged, silently_dropped, overlapping
+
+
+# ---------------------------------------------------------------------------
+# Helper: Truncation for console
+# ---------------------------------------------------------------------------
+
+def _last_line(output: str, max_len: int = 80) -> str:
+    if not output:
+        return ""
+    for line in reversed(output.splitlines()):
+        if line.strip():
+            line = line.strip()
+            if len(line) > max_len:
+                line = line[: max_len - 3] + "..."
+            return line
+    return ""
+
+
+def _format_template(prompt_template: str, context: Dict[str, Any]) -> str:
+    """Preprocess (expand includes) then substitute template variables."""
+    try:
+        processed = preprocess(
+            prompt_template,
+            recursive=True,
+            double_curly_brackets=True,
+            exclude_keys=list(context.keys()),
+        )
+    except Exception:
+        processed = prompt_template
+    return substitute_template_variables(processed, context)
+
+
+# ---------------------------------------------------------------------------
+# Main orchestrator
+# ---------------------------------------------------------------------------
 
 def run_agentic_change_orchestrator(
     issue_url: str,
@@ -1333,771 +924,1252 @@ def run_agentic_change_orchestrator(
     quiet: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
-    reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
+    """Run the 13-step agentic change workflow.
+
+    Returns (success, final_message, total_cost, model_used, changed_files).
     """
-    Orchestrates the 13-step agentic change workflow.
-    
-    Returns:
-        (success, final_message, total_cost, model_used, changed_files)
-    """
+    cwd = Path(cwd).resolve()
+    total_cost = 0.0
+    model_used = "unknown"
+    changed_files: List[str] = []
 
-    # Ensure any stale agentic progress from previous runs is cleared.
-    clear_agentic_progress()
-    
-    if not quiet:
-        console.print(f"Implementing change for issue #{issue_number}: \"{issue_title}\"")
-
-    state_dir = _get_state_dir(cwd)
-
-    # Load state
-    state, loaded_gh_id = load_workflow_state(
-        cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state
-    )
-
-    # Guard: if an open PR already exists for this issue, return early
-    existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
+    # ---- Existing PR guard ----
+    try:
+        existing_pr = _check_existing_pr(repo_owner, repo_name, issue_number)
+    except Exception:
+        existing_pr = None
     if existing_pr:
         if not quiet:
-            console.print(f"[yellow]PR already exists for issue #{issue_number}: {existing_pr}[/yellow]")
+            console.print(f"[yellow]PR already exists: {existing_pr}[/yellow]")
         return True, f"PR already exists: {existing_pr}", 0.0, "unknown", []
 
-    # Check for stale state: if issue was updated since state was saved, start fresh
-    if state is not None and issue_updated_at:
-        stored_updated_at = state.get("issue_updated_at")
-        if stored_updated_at and stored_updated_at != issue_updated_at:
-            # Issue was modified - state is stale
-            if not quiet:
-                console.print("[yellow]Issue was updated since last run - starting fresh[/yellow]")
-            clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
-            state = None
-            loaded_gh_id = None
-
-    # Initialize variables from state or defaults
-    if state is not None:
-        last_completed_step = state.get("last_completed_step", 0)
-        step_outputs = state.get("step_outputs", {})
-        total_cost = state.get("total_cost", 0.0)
-        model_used = state.get("model_used", "unknown")
-        github_comment_id = loaded_gh_id
-        worktree_path_str = state.get("worktree_path")
-        worktree_path = Path(worktree_path_str) if worktree_path_str else None
-        # Ensure issue_updated_at is in state for future staleness checks
-        if issue_updated_at:
-            state["issue_updated_at"] = issue_updated_at
-
-        # Issue #467: Validate cached state — correct last_completed_step
-        # if any cached step outputs have "FAILED:" prefix.
-        last_completed_step = validate_cached_state(
-            last_completed_step, step_outputs, quiet=quiet
+    # ---- Header ----
+    if not quiet:
+        console.print(
+            f"\n[bold cyan]Implementing change for issue #{issue_number}: "
+            f'"{issue_title}"[/bold cyan]\n'
         )
-    else:
-        state = {"step_outputs": {}, "issue_updated_at": issue_updated_at, "last_completed_step": 0}
-        last_completed_step = 0
-        step_outputs = state["step_outputs"]
-        total_cost = 0.0
-        model_used = "unknown"
-        github_comment_id = None
-        worktree_path = None
-    
-    pddrc_context = _load_pddrc_context(cwd)
 
-    context = {
+    # ---- Clear stale progress, then track ----
+    try:
+        clear_agentic_progress()
+    except Exception:
+        pass
+
+    # ---- State setup ----
+    state_dir = cwd / ".pdd" / "change-state"
+    git_root = _get_git_root(cwd)
+    if git_root:
+        state_dir = git_root / ".pdd" / "change-state"
+
+    try:
+        loaded = load_workflow_state(
+            cwd=cwd,
+            issue_number=issue_number,
+            workflow="change",
+            state_dir=state_dir,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+        )
+    except Exception as e:
+        if not quiet:
+            console.print(f"[yellow]State load failed: {e}; starting fresh.[/yellow]")
+        loaded = None
+
+    state: Dict[str, Any] = {}
+    github_comment_id: Optional[str] = None
+    if loaded:
+        if isinstance(loaded, tuple) and len(loaded) == 2:
+            state, github_comment_id = loaded
+        elif isinstance(loaded, dict):
+            state = loaded
+            github_comment_id = state.get("github_comment_id")
+        else:
+            state = {}
+
+    if not isinstance(state, dict):
+        state = {}
+
+    # ---- Stale state detection ----
+    if state and issue_updated_at:
+        prior_updated = state.get("issue_updated_at", "")
+        if prior_updated and prior_updated != issue_updated_at:
+            if not quiet:
+                console.print(
+                    "[yellow]Issue was updated since last run; clearing state and starting fresh.[/yellow]"
+                )
+            try:
+                clear_workflow_state(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    workflow="change",
+                    state_dir=state_dir,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    use_github_state=use_github_state,
+                )
+            except Exception:
+                pass
+            state = {}
+            github_comment_id = None
+
+    # ---- Initialize state defaults ----
+    state.setdefault("workflow", "change")
+    state.setdefault("issue_url", issue_url)
+    state.setdefault("issue_number", issue_number)
+    state.setdefault("step_outputs", {})
+    state.setdefault("total_cost", 0.0)
+    state.setdefault("model_used", "unknown")
+    state.setdefault("review_iteration", 0)
+    state.setdefault("previous_fixes", "")
+    state["issue_updated_at"] = issue_updated_at or state.get("issue_updated_at", "")
+
+    # Normalize step_comments
+    step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
+    state["step_comments"] = sorted(step_comments_set)
+
+    # Validate cached state to find true last successful step
+    try:
+        last_completed = validate_cached_state(state)
+    except Exception:
+        last_completed = state.get("last_completed_step", 0) or 0
+    state["last_completed_step"] = last_completed
+    start_step = (last_completed or 0) + 1
+
+    total_cost = float(state.get("total_cost", 0.0) or 0.0)
+    model_used = state.get("model_used", "unknown") or "unknown"
+
+    # Recover changed_files from state
+    if "changed_files" in state and isinstance(state["changed_files"], list):
+        changed_files = list(state["changed_files"])
+
+    if start_step > 1 and not quiet:
+        console.print(
+            f"[blue]Resuming from step {start_step} (steps 1-{last_completed} cached)[/blue]"
+        )
+
+    # ---- Build initial context ----
+    pddrc_context = _load_pddrc_context(cwd)
+    context: Dict[str, Any] = {
         "issue_url": issue_url,
         "issue_content": issue_content,
         "repo_owner": repo_owner,
         "repo_name": repo_name,
-        "issue_number": issue_number,
+        "issue_number": str(issue_number),
         "issue_author": issue_author,
         "issue_title": issue_title,
         **pddrc_context,
     }
-    
-    for s_num, s_out in step_outputs.items():
-        context[f"step{s_num}_output"] = s_out
 
-    changed_files = []
-    
-    if "step9_output" in context:
-        s9_out = context["step9_output"]
-        extracted_files = _parse_changed_files(s9_out)
-        if not extracted_files and worktree_path and worktree_path.exists():
-            # Resume case for the successful Step 9 fallback path: the LLM
-            # omitted FILES_* markers, so the only authoritative source is
-            # the worktree's current git status.
-            extracted_files = _detect_worktree_changes(
-                worktree_path,
-                _parse_direct_edit_candidates(context.get("step6_output", "")),
-            )
-        changed_files.extend(extracted_files)
-        # Reviewer 6th-pass (F2): use the same multi-line + bullet-aware
-        # extractor as `_parse_changed_files`, then comma-join. The old
-        # `\s*(.*)` regex truncated multi-line LLM output to the first
-        # line, so any prompt path on lines 2+ never reached Step 10's
-        # discovery sweep and its docs bypassed Step 10.5.
-        context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", s9_out))
-        context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", s9_out))
-    
-    if "step10_output" in context:
-        s10_out = context["step10_output"]
-        arch_files = _parse_changed_files(s10_out)
-        new_files = [f for f in arch_files if f not in changed_files]
-        changed_files.extend(new_files)
-
-    if changed_files:
-        context["files_to_stage"] = ", ".join(changed_files)
-
-    start_step = last_completed_step + 1
-    
-    if last_completed_step > 0 and not quiet:
-        console.print(f"Resuming change workflow for issue #{issue_number}")
-        console.print(f"   Steps 1-{last_completed_step} already complete (cached)")
-        console.print(f"   Starting from Step {start_step}")
-
-    steps_config = [
-        (1, "duplicate", "Search for duplicate issues"),
-        (2, "docs", "Check if already implemented"),
-        (3, "research", "Research to clarify specifications"),
-        (4, "clarify", "Verify requirements are clear"),
-        (5, "docs_change", "Analyze documentation changes needed"),
-        (6, "devunits", "Identify dev units involved"),
-        (7, "architecture", "Review architecture"),
-        (8, "analyze", "Analyze prompt changes"),
-        (9, "implement", "Implement the prompt changes"),
-        (10, "architecture_update", "Update architecture metadata"),
-    ]
-
-    current_work_dir = cwd
-
-    if start_step >= 9:
-        if worktree_path and worktree_path.exists():
-             if not quiet:
-                console.print(f"[blue]Reusing existing worktree: {worktree_path}[/blue]")
-             current_work_dir = worktree_path
-             context["worktree_path"] = str(worktree_path)
-        else:
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet)
-            if not wt_path:
-                return False, f"Failed to restore worktree: {err}", total_cost, model_used, []
-            worktree_path = wt_path
-            current_work_dir = worktree_path
-            state["worktree_path"] = str(worktree_path)
-            context["worktree_path"] = str(worktree_path)
-
-    consecutive_provider_failures = 0
-    previous_architecture = None
-
-    for step_num, name, description in steps_config:
-        if step_num < start_step:
+    # Replay cached step outputs into context
+    for n_str, output in state.get("step_outputs", {}).items():
+        try:
+            n = int(n_str)
+        except Exception:
             continue
+        if isinstance(output, str) and not output.startswith("FAILED:"):
+            context[f"step{n}_output"] = output
 
-        # Record progress so KeyboardInterrupt can report how far we got.
-        completed_list = list(range(1, step_num)) if step_num > 1 else []
-        set_agentic_progress(
-            workflow="change",
-            current_step=step_num,
-            total_steps=13,
-            step_name=description,
-            completed_steps=completed_list,
+    # ---- Helpers for state ----
+    def _save_state() -> None:
+        nonlocal github_comment_id
+        try:
+            state["total_cost"] = total_cost
+            state["model_used"] = model_used
+            state["changed_files"] = list(changed_files)
+            state["step_comments"] = sorted(step_comments_set)
+            result = save_workflow_state(
+                cwd=cwd,
+                issue_number=issue_number,
+                workflow="change",
+                state=state,
+                state_dir=state_dir,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
+            if isinstance(result, str):
+                github_comment_id = result
+                state["github_comment_id"] = result
+            elif isinstance(result, dict) and "comment_id" in result:
+                github_comment_id = result["comment_id"]
+                state["github_comment_id"] = result["comment_id"]
+        except Exception as e:
+            if not quiet:
+                console.print(f"[yellow]Warning: state save failed: {e}[/yellow]")
+
+    def _post_success_comment(step_num: int, step_output: str, current_work_dir: Path) -> None:
+        """Per-step success-comment hook (best-effort)."""
+        try:
+            report_body = extract_step_report(step_output)
+            if report_body is None:
+                return
+            try:
+                ok = post_step_comment_once(
+                    repo_owner,
+                    repo_name,
+                    issue_number,
+                    step_num,
+                    report_body,
+                    step_comments_set,
+                    current_work_dir,
+                )
+            except Exception as e:
+                if not quiet:
+                    console.print(f"[yellow]post_step_comment_once failed: {e}[/yellow]")
+                ok = False
+            # Persist canonical sorted form unconditionally
+            try:
+                state["step_comments"] = sorted(step_comments_set)
+                _save_state()
+            except Exception:
+                pass
+            if not ok and not quiet:
+                console.print(
+                    f"[yellow]Warning: step {step_num} success comment not posted[/yellow]"
+                )
+        except Exception as e:
+            if not quiet:
+                console.print(f"[yellow]Step success-comment hook error: {e}[/yellow]")
+
+    def _hard_stop(step_num: int, reason: str, current_work_dir: Path) -> Tuple[bool, str, float, str, List[str]]:
+        """Handle a hard-stop: post comment, save state, return failure tuple."""
+        if not quiet:
+            console.print(
+                f"\n[bold yellow]Investigation stopped at Step {step_num}: {reason}[/bold yellow]"
+            )
+
+        # Clarification steps re-run on resume
+        if step_num in (4, 7):
+            state["last_completed_step"] = step_num - 1
+
+        try:
+            post_step_comment(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=step_num,
+                step_name=STEP_NAMES.get(step_num, f"Step {step_num}"),
+                output=reason,
+                cwd=current_work_dir,
+                is_failure=True,
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(f"[yellow]Failed to post stop comment: {e}[/yellow]")
+
+        _save_state()
+
+        # Refresh issue_updated_at after clarification stops
+        if step_num in (4, 7):
+            try:
+                fresh = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
+                if fresh:
+                    state["issue_updated_at"] = fresh
+                    _save_state()
+            except Exception:
+                pass
+
+        try:
+            clear_agentic_progress()
+        except Exception:
+            pass
+
+        return (
+            False,
+            f"Stopped at step {step_num}: {reason}",
+            total_cost,
+            model_used,
+            changed_files,
         )
 
-        previous_architecture = None
+    # ---- Working directory tracking ----
+    current_work_dir = cwd
+    worktree_path: Optional[Path] = None
+    if state.get("worktree_path"):
+        wt_candidate = Path(state["worktree_path"])
+        if wt_candidate.exists():
+            worktree_path = wt_candidate
+            current_work_dir = wt_candidate
+            context["worktree_path"] = str(wt_candidate)
 
-        # Before Step 6, build dependency context to help identify transitively affected modules
-        if step_num == 6:
-            prompts_dir = cwd / "prompts"
-            if prompts_dir.exists():
-                dep_context = _build_dependency_context(prompts_dir, quiet=quiet)
-                context["dependency_context"] = dep_context
-            else:
-                context["dependency_context"] = ""
+    consecutive_provider_failures = 0
+    files_created: List[str] = []
+    files_modified: List[str] = []
+    direct_edits: List[str] = []
 
-        if step_num == 9:
-            if worktree_path and worktree_path.exists():
-                 current_work_dir = worktree_path
-                 if not quiet:
-                     console.print(f"[blue]Using existing worktree: {worktree_path}[/blue]")
-            else:
+    # ---- Recover prior step files info from cached step9 output ----
+    if "9" in state.get("step_outputs", {}):
+        cached9 = state["step_outputs"]["9"]
+        if isinstance(cached9, str) and not cached9.startswith("FAILED:"):
+            files_created = _parse_files_marker(cached9, "FILES_CREATED")
+            files_modified = _parse_files_marker(cached9, "FILES_MODIFIED")
+            direct_edits = _parse_files_marker(cached9, "DIRECT_EDITS")
+            context["files_created"] = ", ".join(files_created) or "None"
+            context["files_modified"] = ", ".join(files_modified) or "None"
+            context["direct_edits"] = ", ".join(direct_edits) or "None"
+            if not changed_files:
+                merged = list(files_created) + list(files_modified) + list(direct_edits)
+                seen: Set[str] = set()
+                for f in merged:
+                    if f and f not in seen:
+                        seen.add(f)
+                        changed_files.append(f)
+            context["files_to_stage"] = ", ".join(changed_files) or "None"
+
+    # ---- Recover direct_edit_candidates from cached step6 output ----
+    if "6" in state.get("step_outputs", {}):
+        cached6 = state["step_outputs"]["6"]
+        if isinstance(cached6, str) and not cached6.startswith("FAILED:"):
+            context["direct_edit_candidates"] = _parse_direct_edit_candidates(cached6)
+
+    # =====================================================================
+    # MAIN STEP LOOP (steps 1-10)
+    # =====================================================================
+    for step_num in range(1, 11):
+        step_name = STEP_NAMES[step_num]
+        completed_steps = list(range(1, step_num))
+
+        try:
+            set_agentic_progress(
+                workflow="change",
+                current_step=step_num,
+                total_steps=13,
+                step_name=step_name,
+                completed_steps=completed_steps,
+            )
+        except Exception:
+            pass
+
+        # Check cache
+        cached_output = state.get("step_outputs", {}).get(str(step_num))
+        if (
+            step_num < start_step
+            and isinstance(cached_output, str)
+            and not cached_output.startswith("FAILED:")
+        ):
+            context[f"step{step_num}_output"] = cached_output
+            if not quiet:
+                console.print(f"[dim][Step {step_num}/13] {step_name}: cached[/dim]")
+                console.print(f"  → Step {step_num} complete.")
+            # Check for hard stop in cached output (resume sanity)
+            stop_reason = _check_hard_stop(step_num, cached_output)
+            if stop_reason:
+                return _hard_stop(step_num, stop_reason, current_work_dir)
+            # Step-specific cached recovery
+            if step_num == 6:
+                context["direct_edit_candidates"] = _parse_direct_edit_candidates(cached_output)
+            continue
+
+        # ---- Pre-step-9: setup worktree ----
+        if step_num == 9 and worktree_path is None:
+            # Warn if not on main/master
+            try:
+                br_result = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+                current_branch = br_result.stdout.strip() if br_result.returncode == 0 else ""
+                if current_branch and current_branch not in ("main", "master") and not quiet:
+                    console.print(
+                        f"[yellow]Note: Creating branch from HEAD ({current_branch}), "
+                        "not origin/main. PR will include commits from this branch. "
+                        "Run from main for independent changes.[/yellow]"
+                    )
+            except Exception:
+                pass
+            wt, err = _setup_worktree(cwd, issue_number, quiet)
+            if not wt:
                 try:
-                    current_branch = subprocess.run(
-                        ["git", "rev-parse", "--abbrev-ref", "HEAD"],
-                        cwd=cwd,
-                        capture_output=True,
-                        text=True,
-                        check=True
-                    ).stdout.strip()
-                    if current_branch not in ["main", "master"] and not quiet:
-                        console.print(f"[yellow]Note: Creating branch from HEAD ({current_branch}), not origin/main. PR will include commits from this branch. Run from main for independent changes.[/yellow]")
-                except subprocess.CalledProcessError:
+                    clear_agentic_progress()
+                except Exception:
                     pass
-
-                wt_path, err = _setup_worktree(cwd, issue_number, quiet)
-                if not wt_path:
-                    return False, f"Failed to create worktree: {err}", total_cost, model_used, []
-                worktree_path = wt_path
-                current_work_dir = worktree_path
-                state["worktree_path"] = str(worktree_path)
-                context["worktree_path"] = str(worktree_path)
-
-            # Step 8.5: pre-flight drift heal — run once per worktree (so heals
-            # are contained to the worktree and can't touch the user's main
-            # tree). Idempotency is tied to the worktree path, not the
-            # workflow: if the worktree is recreated between runs (e.g. user
-            # deletes `.pdd/worktrees/change-issue-{N}/` after a strict-mode
-            # abort), we MUST re-heal because the new worktree starts clean
-            # without the previous heal's effects.
-            worktree_path_str = str(worktree_path) if worktree_path else None
-            already_healed_worktree = state.get("preflight_healed_worktree")
-            if (
-                worktree_path
-                and worktree_path.exists()
-                and (
-                    not state.get("preflight_drift_healed")
-                    or already_healed_worktree != worktree_path_str
+                return (
+                    False,
+                    f"Failed to create worktree: {err}",
+                    total_cost,
+                    model_used,
+                    changed_files,
                 )
-            ):
-                healed, failed_heal, healed_prompts = _preflight_drift_heal(
-                    worktree_path=worktree_path,
-                    quiet=quiet,
-                )
+            worktree_path = wt
+            current_work_dir = wt
+            context["worktree_path"] = str(wt)
+            state["worktree_path"] = str(wt)
+            if not quiet:
+                console.print(f"[blue]Working in worktree: {wt}[/blue]")
+
+            # ---- Step 8.5: Pre-flight drift heal ----
+            already_healed = (
+                state.get("preflight_drift_healed") is True
+                and state.get("preflight_healed_worktree") == str(worktree_path)
+            )
+            if not already_healed:
+                if not quiet:
+                    console.print(f"[Step 8.5/13] Pre-flight drift heal...")
+                try:
+                    healed, failed_h, healed_prompts = _preflight_drift_heal(
+                        worktree_path, quiet=quiet
+                    )
+                except Exception as e:
+                    if not quiet:
+                        console.print(f"[yellow]Pre-flight heal error: {e}[/yellow]")
+                    healed, failed_h, healed_prompts = [], [], []
                 state["preflight_drift_healed"] = True
-                state["preflight_healed_worktree"] = worktree_path_str
+                state["preflight_healed_worktree"] = str(worktree_path)
                 state["preflight_healed_modules"] = healed
-                state["preflight_failed_heal_modules"] = failed_heal
-                # Reviewer 5th-pass (F2): record the healed *prompt paths*
-                # too. Step 10's discovery sweep below merges these with
-                # Step 9's modified prompts so docs reachable from a
-                # just-healed prompt's <include> graph still go through
-                # the doc-sync contract.
+                state["preflight_failed_heal_modules"] = failed_h
                 state["preflight_healed_prompt_paths"] = healed_prompts
                 context["preflight_healed_modules"] = ", ".join(healed) if healed else "None"
                 context["preflight_failed_heal_modules"] = (
-                    ", ".join(failed_heal) if failed_heal else "None"
+                    ", ".join(failed_h) if failed_h else "None"
+                )
+                _save_state()
+            else:
+                context["preflight_healed_modules"] = (
+                    ", ".join(state.get("preflight_healed_modules", [])) or "None"
+                )
+                context["preflight_failed_heal_modules"] = (
+                    ", ".join(state.get("preflight_failed_heal_modules", [])) or "None"
                 )
 
-        if not quiet:
-            console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
+        # ---- Pre-step-6: dependency context ----
+        if step_num == 6:
+            prompts_dir = (worktree_path or cwd) / "prompts"
+            try:
+                dep_ctx = _build_dependency_context(prompts_dir, quiet=quiet)
+            except Exception:
+                dep_ctx = ""
+            context["dependency_context"] = dep_ctx or "(no dependency graph available)"
 
-        # Before Step 10: discover associated documents for the LLM to update
+        # ---- Pre-step-10: associated documents discovery ----
+        previous_architecture: Optional[Any] = None
         if step_num == 10 and worktree_path and worktree_path.exists():
-            # Use the authoritative changed-file set for Step 10 discovery.
-            # In the Step 9 fallback path, `files_created`/`files_modified`
-            # are empty because the LLM omitted markers, but `changed_files`
-            # and `files_to_stage` contain the worktree-detected prompt(s).
-            modified_prompt_paths: Set[Path] = _prompt_paths_from_changed_file_entries(
-                [
-                    context.get("files_created", ""),
-                    context.get("files_modified", ""),
-                    context.get("files_to_stage", ""),
-                    *changed_files,
-                ],
-                worktree_path,
-            )
-
-            # Reviewer 5th-pass (F2): include preflight-healed prompts so
-            # any <include>doc.md</include> they hold reaches the doc-sync
-            # contract. Without this, Step 8.5 mutations bypass Steps
-            # 10/10.5 and a healed prompt's docs can land in the PR via
-            # `git add -A` without ever passing through verification.
-            for prompt_path_str in state.get("preflight_healed_prompt_paths", []) or []:
-                p = Path(prompt_path_str)
-                if not p.is_absolute():
-                    p = worktree_path / p
-                if p.exists():
-                    modified_prompt_paths.add(p)
-
-            if modified_prompt_paths:
-                try:
-                    docs = discover_associated_documents(
-                        modified_prompts=modified_prompt_paths,
-                        prompts_dir=worktree_path / "prompts",
-                        architecture_path=worktree_path / "architecture.json",
-                        max_depth=3,
-                    )
-                    context["associated_documents"] = ", ".join(docs) if docs else "None"
-                    # Store the discovered list for Step 10.5 contract verification
-                    context["_associated_documents_discovered"] = docs or []
-                except Exception as exc:
-                    console.print(f"[yellow]Associated document discovery failed: {exc}[/yellow]")
-                    context["associated_documents"] = "None"
-                    context["_associated_documents_discovered"] = []
-            else:
-                context["associated_documents"] = "None"
-                context["_associated_documents_discovered"] = []
-
-        # Snapshot architecture.json before Step 10 so we can revert out-of-scope mutations
-        if step_num == 10 and worktree_path:
+            # Snapshot architecture.json
             arch_path = worktree_path / "architecture.json"
             if arch_path.exists():
                 try:
-                    with open(arch_path, "r", encoding="utf-8") as f:
-                        previous_architecture = extract_modules(json.load(f))
-                except (json.JSONDecodeError, OSError):
+                    previous_architecture = json.loads(arch_path.read_text(encoding="utf-8"))
+                except Exception:
                     previous_architecture = None
 
-        template_name = f"agentic_change_step{step_num}_{name}_LLM"
-        prompt_template = load_prompt_template(template_name)
-        if not prompt_template:
-            return False, f"Missing prompt template: {template_name}", total_cost, model_used, []
-
-        # Preprocess to expand <include> tags and escape curly braces
-        # Exclude context keys from escaping so they can be substituted
-        exclude_keys = list(context.keys())
-        prompt_template = preprocess(prompt_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-
-        formatted_prompt = substitute_template_variables(prompt_template, context)
-
-        timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
-        step_success, step_output, step_cost, step_model = run_agentic_task(
-            instruction=formatted_prompt,
-            cwd=current_work_dir,
-            verbose=verbose,
-            quiet=quiet,
-            timeout=timeout,
-            label=f"step{step_num}",
-            max_retries=DEFAULT_MAX_RETRIES,
-            reasoning_time=reasoning_time,
-        )
-
-        total_cost += step_cost
-        model_used = step_model
-        state["total_cost"] = total_cost
-        state["model_used"] = model_used
-
-        if not step_success:
-            # Track consecutive provider failures for early abort
-            if "All agent providers failed" in step_output:
-                consecutive_provider_failures += 1
-                if consecutive_provider_failures >= 3:
-                    post_step_comment(
-                        repo_owner=repo_owner, repo_name=repo_name,
-                        issue_number=issue_number, step_num=step_num,
-                        total_steps=13, description=description,
-                        output=step_output, cwd=cwd,
-                    )
-                    state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
-                    save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-                    return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, model_used, []
-            else:
-                consecutive_provider_failures = 0
-
-            stop_reason = _check_hard_stop(step_num, step_output)
-            if stop_reason:
-                post_step_comment(
-                    repo_owner=repo_owner, repo_name=repo_name,
-                    issue_number=issue_number, step_num=step_num,
-                    total_steps=13, description=description,
-                    output=step_output, cwd=cwd,
+            # Build modified_prompts from authoritative changed-file set
+            sources: List[str] = []
+            sources.extend(files_created)
+            sources.extend(files_modified)
+            for s in (context.get("files_to_stage") or "").split(","):
+                s = s.strip()
+                if s:
+                    sources.append(s)
+            sources.extend(changed_files)
+            # If still empty, do worktree fallback detection
+            if not sources:
+                detected = _detect_worktree_changes(
+                    worktree_path,
+                    _parse_direct_edit_candidates(context.get("step6_output", "")),
                 )
-                if not quiet:
-                    console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-                # Clarification steps save step_num - 1 so the step re-runs on resume
-                state["last_completed_step"] = step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
-                state["step_outputs"][str(step_num)] = step_output
-                # Refresh issue_updated_at after clarification (bot comment changes the timestamp)
-                if step_num in _CLARIFICATION_STEPS:
-                    refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
-                    if refreshed:
-                        state["issue_updated_at"] = refreshed
-                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-                return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
-            console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
+                sources.extend(detected)
 
-        stop_reason = _check_hard_stop(step_num, step_output)
-        if stop_reason:
-            post_step_comment(
-                repo_owner=repo_owner, repo_name=repo_name,
-                issue_number=issue_number, step_num=step_num,
-                total_steps=13, description=description,
-                output=step_output, cwd=cwd,
+            modified_prompts: Set[Path] = set()
+            for s in sources:
+                if not s.endswith(".prompt"):
+                    continue
+                p = (worktree_path / s).resolve()
+                modified_prompts.add(p)
+
+            # Add healed prompts
+            for hp in state.get("preflight_healed_prompt_paths", []) or []:
+                try:
+                    p = Path(hp).resolve()
+                    if p.suffix == ".prompt":
+                        modified_prompts.add(p)
+                except Exception:
+                    pass
+
+            assoc_docs: List[str] = []
+            if modified_prompts:
+                try:
+                    from pdd.sync_order import discover_associated_documents
+
+                    assoc_docs = discover_associated_documents(
+                        modified_prompts=modified_prompts,
+                        prompts_dir=worktree_path / "prompts",
+                        architecture_path=arch_path if arch_path.exists() else None,
+                        max_depth=3,
+                    )
+                except Exception as e:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Associated-docs discovery failed: {e}[/yellow]"
+                        )
+                    assoc_docs = []
+            context["associated_documents"] = ", ".join(assoc_docs) if assoc_docs else "None"
+            context["_associated_documents_discovered"] = list(assoc_docs)
+
+        # ---- Load prompt template ----
+        template_name = STEP_TEMPLATE_NAMES[step_num]
+        if not quiet:
+            console.print(f"[Step {step_num}/13] {step_name}...")
+
+        try:
+            template = load_prompt_template(template_name)
+        except Exception as e:
+            if not quiet:
+                console.print(f"[red]Failed to load template {template_name}: {e}[/red]")
+            template = None
+
+        if not template:
+            err = f"Could not load template {template_name}"
+            state.setdefault("step_outputs", {})[str(step_num)] = f"FAILED: {err}"
+            _save_state()
+            try:
+                clear_agentic_progress()
+            except Exception:
+                pass
+            return (False, err, total_cost, model_used, changed_files)
+
+        formatted = _format_template(template, context)
+
+        # ---- Run agentic task ----
+        timeout = CHANGE_STEP_TIMEOUTS.get(step_num, 340.0) + timeout_adder
+        try:
+            result = run_agentic_task(
+                instruction=formatted,
+                cwd=current_work_dir,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=timeout,
+                label=f"step{step_num}",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(f"[red]Step {step_num} exception: {e}[/red]")
+            state.setdefault("step_outputs", {})[str(step_num)] = f"FAILED: {e}"
+            _save_state()
+            try:
+                clear_agentic_progress()
+            except Exception:
+                pass
+            return (False, f"Step {step_num} crashed: {e}", total_cost, model_used, changed_files)
+
+        # Unpack result (success, output, cost, model)
+        success = False
+        step_output = ""
+        step_cost = 0.0
+        step_model = model_used
+        try:
+            if isinstance(result, tuple):
+                if len(result) >= 4:
+                    success, step_output, step_cost, step_model = result[0], result[1], result[2], result[3]
+                elif len(result) == 3:
+                    success, step_output, step_cost = result
+                elif len(result) == 2:
+                    success, step_output = result
+        except Exception:
+            pass
+
+        try:
+            total_cost += float(step_cost or 0.0)
+        except Exception:
+            pass
+        if step_model and step_model != "unknown":
+            model_used = step_model
+
+        if not isinstance(step_output, str):
+            step_output = str(step_output) if step_output else ""
+
+        # Track consecutive provider failures
+        if _is_provider_failure(step_output):
+            consecutive_provider_failures += 1
+        else:
+            consecutive_provider_failures = 0
+
+        if consecutive_provider_failures >= MAX_CONSECUTIVE_PROVIDER_FAILURES:
+            msg = (
+                f"Aborting: {consecutive_provider_failures} consecutive steps failed "
+                "— agent providers unavailable"
             )
             if not quiet:
-                console.print(f"[yellow]Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
-            # Clarification steps save step_num - 1 so the step re-runs on resume
-            state["last_completed_step"] = step_num - 1 if step_num in _CLARIFICATION_STEPS else step_num
-            state["step_outputs"][str(step_num)] = step_output
-            # Refresh issue_updated_at after clarification (bot comment changes the timestamp)
-            if step_num in _CLARIFICATION_STEPS:
-                refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
-                if refreshed:
-                    state["issue_updated_at"] = refreshed
-            save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-            return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
-
-        # Step 6: Extract direct edit candidates (files without prompts that need scoped edits)
-        if step_num == 6:
-            direct_edit_candidates = _parse_direct_edit_candidates(step_output)
-            context["direct_edit_candidates"] = direct_edit_candidates
-            if direct_edit_candidates and not quiet:
-                console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
-
-        if step_num == 9:
-            extracted_files = _parse_changed_files(step_output)
-            if not extracted_files and worktree_path:
-                # Fallback: check worktree for actual file changes
-                # Pass direct_edit_candidates so those files are also detected
-                dec = context.get("direct_edit_candidates", [])
-                extracted_files = _detect_worktree_changes(worktree_path, dec)
-                if extracted_files and not quiet:
-                    console.print(f"[yellow]Note: Detected {len(extracted_files)} changed file(s) in worktree (LLM output lacked markers)[/yellow]")
-            changed_files = extracted_files
-            context["files_to_stage"] = ", ".join(changed_files)
-            # Reviewer 6th-pass (F2): same fix as the resume path above —
-            # use the multi-line + bullet-aware extractor so Step 10's
-            # discovery sweep sees the full list, not the first line.
-            context["files_created"] = ", ".join(_extract_marker_paths("FILES_CREATED", step_output))
-            context["files_modified"] = ", ".join(_extract_marker_paths("FILES_MODIFIED", step_output))
-            context["direct_edits"] = ", ".join(_extract_marker_paths("DIRECT_EDITS", step_output))
-            if not changed_files:
-                # Save step output for debugging before failing
-                # Issue #467: Mark as FAILED instead of using step_num - 1
-                state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
-                # Don't advance last_completed_step — keep it at its current value
-                save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-                return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
-
-        if step_num == 10:
-            arch_files = _parse_changed_files(step_output)
-            new_files = [f for f in arch_files if f not in changed_files]
-            changed_files.extend(new_files)
-            context["files_to_stage"] = ", ".join(changed_files)
-            if worktree_path:
-                _scope_architecture_to_changed_files(
-                    worktree_path, previous_architecture, changed_files
+                console.print(f"[red]{msg}[/red]")
+            try:
+                post_step_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=step_num,
+                    step_name=step_name,
+                    output=msg,
+                    cwd=current_work_dir,
+                    is_failure=True,
                 )
+            except Exception:
+                pass
+            state.setdefault("step_outputs", {})[str(step_num)] = f"FAILED: {step_output}"
+            _save_state()
+            try:
+                clear_agentic_progress()
+            except Exception:
+                pass
+            return (False, msg, total_cost, model_used, changed_files)
+
+        # Store output
+        state.setdefault("step_outputs", {})[str(step_num)] = (
+            step_output if success else f"FAILED: {step_output}"
+        )
+        context[f"step{step_num}_output"] = step_output
+
+        # Check hard stop conditions
+        stop_reason = _check_hard_stop(step_num, step_output)
+
+        if not quiet:
+            tail = _last_line(step_output)
+            if tail:
+                console.print(f"  -> {tail}")
+
+        # ---- Step 6 post-processing ----
+        if step_num == 6 and success:
+            context["direct_edit_candidates"] = _parse_direct_edit_candidates(step_output)
+
+        # ---- Step 9 post-processing ----
+        if step_num == 9 and success:
+            files_created = _parse_files_marker(step_output, "FILES_CREATED")
+            files_modified = _parse_files_marker(step_output, "FILES_MODIFIED")
+            direct_edits = _parse_files_marker(step_output, "DIRECT_EDITS")
+
+            # Fallback: detect from worktree
+            if not (files_created or files_modified or direct_edits) and worktree_path:
+                detected = _detect_worktree_changes(
+                    worktree_path, context.get("direct_edit_candidates")
+                )
+                # Treat all detected as modified for downstream context
+                files_modified = detected
+
+            # Build changed_files
+            seen: Set[str] = set()
+            changed_files = []
+            for f in (files_created + files_modified + direct_edits):
+                if f and f not in seen:
+                    seen.add(f)
+                    changed_files.append(f)
+
+            context["files_created"] = ", ".join(files_created) or "None"
+            context["files_modified"] = ", ".join(files_modified) or "None"
+            context["direct_edits"] = ", ".join(direct_edits) or "None"
+            context["files_to_stage"] = ", ".join(changed_files) or "None"
+
+        # ---- Step 10 post-processing ----
+        if step_num == 10 and success and worktree_path:
+            arch_files = _parse_files_marker(step_output, "ARCHITECTURE_FILES_MODIFIED")
+            docs_modified = _parse_files_marker(step_output, "ASSOCIATED_DOCS_MODIFIED")
+            docs_conflicts = _parse_files_marker(step_output, "ASSOCIATED_DOCS_CONFLICTS")
+            docs_unchanged = _parse_files_marker(step_output, "ASSOCIATED_DOCS_UNCHANGED")
+
+            for f in arch_files + docs_modified:
+                if f and f not in changed_files:
+                    changed_files.append(f)
+
+            if docs_conflicts and not quiet:
+                console.print(
+                    f"[yellow]Associated docs flagged as conflicts (need human review): "
+                    f"{', '.join(docs_conflicts)}[/yellow]"
+                )
+            if docs_unchanged and not quiet:
+                console.print(
+                    f"[dim]Associated docs unchanged: {', '.join(docs_unchanged)}[/dim]"
+                )
+
+            context["files_to_stage"] = ", ".join(changed_files) or "None"
+
+            # ---- Sanitize architecture.json ----
+            try:
                 _sanitize_architecture_dependencies(worktree_path)
-                filepath_warnings = _validate_architecture_filepaths(worktree_path)
-                interface_warnings = _sanitize_architecture_interfaces(
-                    worktree_path,
-                    previous_architecture,
+            except Exception as e:
+                if not quiet:
+                    console.print(f"[yellow]Arch dep sanitize failed: {e}[/yellow]")
+            try:
+                merge_warnings = _sanitize_architecture_interfaces(
+                    worktree_path, previous_architecture
                 )
-                all_warnings = filepath_warnings + interface_warnings
-                if all_warnings:
-                    if not quiet:
-                        for warning in all_warnings:
-                            console.print(f"[yellow]Warning: {warning}[/yellow]")
-                    step_output = (
-                        step_output.rstrip()
-                        + "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
-                        + "\n".join(f"- {warning}" for warning in all_warnings)
-                    )
+                if merge_warnings:
+                    step_output += "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
+                    for w in merge_warnings:
+                        step_output += f"- {w}\n"
+                    state["step_outputs"][str(step_num)] = step_output
+                    context[f"step{step_num}_output"] = step_output
+            except Exception as e:
+                if not quiet:
+                    console.print(f"[yellow]Arch interface sanitize failed: {e}[/yellow]")
 
-                # Auto-register untracked prompts (safety net for Step 10 LLM rule 5(b)
-                # fallthrough). Scope is narrowed to prompts TOUCHED BY THIS WORKFLOW:
-                # any .prompt file in changed_files (Step 9 FILES_CREATED/MODIFIED plus
-                # Step 10's own arch_files). We must NOT auto-register prompts outside
-                # the workflow's scope — that would silently sweep repo-wide arch.json
-                # drift into this PR and could write incorrect metadata for prompts
-                # with non-standard paths (e.g. frontend/components/*.prompt, where
-                # _infer_filepath would produce a wrong Python-style filepath).
-                only_files: set = set()
-                for fp in changed_files:
-                    normalized = fp.replace("\\", "/")
-                    prompts_idx = normalized.rfind("prompts/")
-                    if prompts_idx == -1:
+            # ---- Auto-register untracked prompts (scoped) ----
+            try:
+                only_files: Set[str] = set()
+                for f in changed_files:
+                    if not f:
                         continue
-                    rel = normalized[prompts_idx + len("prompts/"):]
+                    norm = f.replace("\\", "/")
+                    idx = norm.rfind("prompts/")
+                    if idx == -1:
+                        continue
+                    rel = norm[idx + len("prompts/"):]
                     if rel.endswith(".prompt"):
                         only_files.add(rel)
-
                 if only_files:
-                    try:
-                        reg_result = register_untracked_prompts(
-                            prompts_dir=worktree_path / "prompts",
-                            architecture_path=worktree_path / "architecture.json",
-                            dry_run=False,
-                            only_files=only_files,
-                        )
-                        registered = reg_result.get("registered", [])
-                        if registered:
-                            reg_list = ", ".join(registered)
-                            step_output += f"\n\nORCHESTRATOR_AUTO_REGISTERED: {reg_list}"
-                            if not quiet:
-                                console.print(f"[blue]Auto-registered untracked prompts in arch.json: {reg_list}[/blue]")
-                    except Exception:
-                        pass
-
-            # Step 10.5: verify associated-document contract.
-            # Every doc discover_associated_documents returned must be either
-            # modified, explicitly flagged as a conflict, or declared unchanged
-            # — and only ONE of the three per doc. Silent drops (doc in no
-            # bucket) and overlaps (doc in multiple buckets) are both workflow
-            # regressions the verifier is built to catch before the change ships.
-            discovered_docs = context.get("_associated_documents_discovered", [])
-            if discovered_docs:
-                (
-                    _docs_mod,
-                    _docs_conflict,
-                    _docs_unchanged,
-                    dropped,
-                    overlapping,
-                ) = _verify_doc_sync_contract(
-                    discovered_docs=discovered_docs,
-                    step10_output=step_output,
-                )
-                violations: List[str] = []
-                warning_lines: List[str] = []
-                marker_lines: List[str] = []
-                if dropped:
-                    drop_list = ", ".join(dropped)
-                    violations.append(f"silent drops: {drop_list}")
-                    warning_lines.extend(
-                        f"- Associated doc silently dropped by Step 10: {d}"
-                        for d in dropped
+                    reg_result = register_untracked_prompts(
+                        prompts_dir=worktree_path / "prompts",
+                        architecture_path=worktree_path / "architecture.json",
+                        dry_run=False,
+                        only_files=only_files,
                     )
-                    marker_lines.append(f"DOC_SYNC_SILENT_DROPS: {drop_list}")
-                if overlapping:
-                    overlap_list = ", ".join(overlapping)
-                    violations.append(f"contradictory state: {overlap_list}")
-                    warning_lines.extend(
-                        f"- Associated doc placed in multiple buckets by Step 10: {d}"
-                        for d in overlapping
-                    )
-                    marker_lines.append(
-                        f"DOC_SYNC_BUCKET_OVERLAPS: {overlap_list}"
-                    )
-
-                if violations:
-                    step_output = (
-                        step_output.rstrip()
-                        + "\n\nORCHESTRATOR_POSTCHECK_WARNINGS:\n"
-                        + "\n".join(warning_lines)
-                        + "\n"
-                        + "\n".join(marker_lines)
-                    )
-                    if not quiet:
-                        if dropped:
-                            console.print(
-                                f"[yellow]Step 10.5 contract check: "
-                                f"{len(dropped)} associated doc(s) silently dropped "
-                                f"by Step 10 — {', '.join(dropped)}[/yellow]"
-                            )
-                        if overlapping:
-                            console.print(
-                                f"[yellow]Step 10.5 contract check: "
-                                f"{len(overlapping)} associated doc(s) placed in "
-                                f"multiple buckets by Step 10 — "
-                                f"{', '.join(overlapping)}[/yellow]"
-                            )
-
-                    # Strict mode: when PDD_STRICT_DOC_SYNC=1, any contract
-                    # violation (silent drop or overlap) aborts the workflow
-                    # instead of being passed to the review loop. Default is
-                    # non-strict (warn-only) so the review loop has a chance
-                    # to recover.
-                    if os.environ.get("PDD_STRICT_DOC_SYNC", "").lower() in ("1", "true", "yes"):
+                    if reg_result.get("registered"):
+                        reg_list = ", ".join(reg_result["registered"])
+                        step_output += f"\n\nORCHESTRATOR_AUTO_REGISTERED: {reg_list}"
+                        state["step_outputs"][str(step_num)] = step_output
+                        context[f"step{step_num}_output"] = step_output
                         if not quiet:
                             console.print(
-                                f"[red]PDD_STRICT_DOC_SYNC=1 — aborting on "
-                                f"doc-sync contract violation(s).[/red]"
+                                f"[blue]Auto-registered untracked prompts in arch.json: "
+                                f"{reg_list}[/blue]"
+                            )
+            except Exception as e:
+                if not quiet:
+                    console.print(f"[yellow]Auto-register failed: {e}[/yellow]")
+
+            # ---- Step 10.5: Doc-sync contract verifier ----
+            discovered_docs = context.get("_associated_documents_discovered", []) or []
+            if discovered_docs:
+                try:
+                    (
+                        _mod,
+                        _conf,
+                        _unch,
+                        silently_dropped,
+                        overlapping,
+                    ) = _verify_doc_sync_contract(discovered_docs, step_output)
+                except Exception as e:
+                    if not quiet:
+                        console.print(f"[yellow]Doc-sync verifier failed: {e}[/yellow]")
+                    silently_dropped, overlapping = [], []
+
+                if silently_dropped or overlapping:
+                    warning_lines = ["", "ORCHESTRATOR_POSTCHECK_WARNINGS:"]
+                    for d in silently_dropped:
+                        warning_lines.append(f"- Associated doc silently dropped by Step 10: {d}")
+                    for d in overlapping:
+                        warning_lines.append(
+                            f"- Associated doc placed in multiple buckets by Step 10: {d}"
+                        )
+                    if silently_dropped:
+                        warning_lines.append(
+                            f"DOC_SYNC_SILENT_DROPS: {', '.join(silently_dropped)}"
+                        )
+                    if overlapping:
+                        warning_lines.append(
+                            f"DOC_SYNC_BUCKET_OVERLAPS: {', '.join(overlapping)}"
+                        )
+                    step_output += "\n".join(warning_lines)
+                    state["step_outputs"][str(step_num)] = step_output
+                    context[f"step{step_num}_output"] = step_output
+
+                    # Strict mode?
+                    strict_env = os.environ.get("PDD_STRICT_DOC_SYNC", "").lower()
+                    if strict_env in ("1", "true", "yes"):
+                        violations = []
+                        if silently_dropped:
+                            violations.append(
+                                f"silent drops: {', '.join(silently_dropped)}"
+                            )
+                        if overlapping:
+                            violations.append(
+                                f"bucket overlaps: {', '.join(overlapping)}"
+                            )
+                        if not quiet:
+                            console.print(
+                                f"[bold red]ABORT: PDD_STRICT_DOC_SYNC violation: "
+                                f"{'; '.join(violations)}[/bold red]"
                             )
                         state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
-                        save_workflow_state(
-                            cwd, issue_number, "change", state, state_dir,
-                            repo_owner, repo_name, use_github_state, github_comment_id,
-                        )
+                        _save_state()
+                        try:
+                            clear_agentic_progress()
+                        except Exception:
+                            pass
                         return (
                             False,
                             f"Stopped at step 10: PDD_STRICT_DOC_SYNC {'; '.join(violations)}",
-                            total_cost, model_used, changed_files,
+                            total_cost,
+                            model_used,
+                            changed_files,
                         )
 
-        context[f"step{step_num}_output"] = step_output
-        if step_success:
-            consecutive_provider_failures = 0
-            state["step_outputs"][str(step_num)] = step_output
+        # ---- Update last_completed_step on success ----
+        if success and not stop_reason:
             state["last_completed_step"] = step_num
-        else:
-            state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
 
-        save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-        if save_result:
-            github_comment_id = save_result
-            state["github_comment_id"] = github_comment_id
+        _save_state()
+
+        # ---- Post per-step success comment ----
+        if success and not stop_reason:
+            _post_success_comment(step_num, step_output, current_work_dir)
 
         if not quiet:
-            lines = step_output.strip().split('\n')
-            brief = lines[-1] if lines else "Done"
-            if len(brief) > 80: brief = brief[:77] + "..."
-            console.print(f"   -> {escape(brief)}")
-            if step_success:
-                console.print(f"  \u2192 Step {step_num} complete.")
+            console.print(f"  → Step {step_num} complete.")
 
-    if "files_to_stage" not in context:
-        s9_out = context.get("step9_output", "")
-        s10_out = context.get("step10_output", "")
-        c_files = _parse_changed_files(s9_out)
-        c_files.extend(_parse_changed_files(s10_out))
-        changed_files = list(set(c_files))
-        context["files_to_stage"] = ", ".join(changed_files)
+        # ---- Hard stop? ----
+        if stop_reason:
+            return _hard_stop(step_num, stop_reason, current_work_dir)
 
-    review_iteration = state.get("review_iteration", 0)
-    previous_fixes = state.get("previous_fixes", "")
-    
-    if last_completed_step < 13:
-        while review_iteration < MAX_REVIEW_ITERATIONS:
-            review_iteration += 1
-            state["review_iteration"] = review_iteration
+        # ---- Soft failure: log and continue ----
+        if not success:
             if not quiet:
-                console.print(f"[bold][Step 11/13][/bold] Identifying issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
-            s11_template = load_prompt_template("agentic_change_step11_identify_issues_LLM")
-            context["review_iteration"] = review_iteration
-            context["previous_fixes"] = previous_fixes
-            # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s11_template = preprocess(s11_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-            s11_prompt = substitute_template_variables(s11_template, context)
-            timeout11 = CHANGE_STEP_TIMEOUTS.get(11, 340.0) + timeout_adder
-            s11_success, s11_output, s11_cost, s11_model = run_agentic_task(
-                instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
+                console.print(
+                    f"[yellow]Warning: Step {step_num} reported failure but no hard stop matched; continuing.[/yellow]"
+                )
+
+    # =====================================================================
+    # REVIEW LOOP (steps 11-12)
+    # =====================================================================
+    review_iteration = int(state.get("review_iteration", 0) or 0)
+    previous_fixes = state.get("previous_fixes", "") or ""
+
+    while review_iteration < MAX_REVIEW_ITERATIONS:
+        review_iteration += 1
+        state["review_iteration"] = review_iteration
+        context["review_iteration"] = str(review_iteration)
+        context["previous_fixes"] = previous_fixes or "(none)"
+
+        # ---- Step 11 ----
+        try:
+            set_agentic_progress(
+                workflow="change",
+                current_step=11,
+                total_steps=13,
+                step_name=f"{STEP_NAMES[11]} (iter {review_iteration})",
+                completed_steps=list(range(1, 11)),
             )
-            total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
-            if _review_loop_no_issues(s11_output):
-                if not quiet: console.print("   -> No issues found. Proceeding to PR.")
-                context["step11_output"] = s11_output; break
-            if not quiet: console.print("   -> Issues found. Proceeding to fix.")
+        except Exception:
+            pass
+
+        if not quiet:
+            console.print(
+                f"[Step 11/13] {STEP_NAMES[11]} (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})..."
+            )
+
+        try:
+            template11 = load_prompt_template(STEP_TEMPLATE_NAMES[11])
+        except Exception:
+            template11 = None
+        if not template11:
             if not quiet:
-                console.print(f"[bold][Step 12/13][/bold] Fixing issues (iteration {review_iteration}/{MAX_REVIEW_ITERATIONS})...")
-            s12_template = load_prompt_template("agentic_change_step12_fix_issues_LLM")
-            context["step11_output"] = s11_output
-            # Preprocess to escape curly braces in included content
-            exclude_keys = list(context.keys())
-            s12_template = preprocess(s12_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-            s12_prompt = substitute_template_variables(s12_template, context)
-            timeout12 = CHANGE_STEP_TIMEOUTS.get(12, 600.0) + timeout_adder
-            s12_success, s12_output, s12_cost, s12_model = run_agentic_task(
-                instruction=s12_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout12, label=f"step12_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
+                console.print("[red]Failed to load step 11 template[/red]")
+            break
+        formatted11 = _format_template(template11, context)
+        try:
+            result11 = run_agentic_task(
+                instruction=formatted11,
+                cwd=current_work_dir,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=CHANGE_STEP_TIMEOUTS[11] + timeout_adder,
+                label=f"step11_iter{review_iteration}",
+                max_retries=DEFAULT_MAX_RETRIES,
             )
-            total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
-            previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
-            state["previous_fixes"] = previous_fixes
-            save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-            if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
-        if review_iteration >= MAX_REVIEW_ITERATIONS:
-            console.print("[yellow]Warning: Maximum review iterations reached. Proceeding to PR creation.[/yellow]")
+        except Exception as e:
+            if not quiet:
+                console.print(f"[red]Step 11 exception: {e}[/red]")
+            break
 
-    sync_order_script = ""; sync_order_list = "No modules to sync"
-    files_to_stage_str = context.get("files_to_stage", "")
-    file_list = [f.strip() for f in files_to_stage_str.split(",") if f.strip()]
-    modified_modules: Set[str] = set()
-    for file_path in file_list:
-        if file_path.endswith(".prompt") and ("/prompts/" in file_path or file_path.startswith("prompts/")):
-            module = extract_module_from_include(file_path)
-            if module: modified_modules.add(module)
+        success11 = False
+        out11 = ""
+        cost11 = 0.0
+        model11 = model_used
+        if isinstance(result11, tuple):
+            if len(result11) >= 4:
+                success11, out11, cost11, model11 = result11[0], result11[1], result11[2], result11[3]
+            elif len(result11) >= 2:
+                success11, out11 = result11[0], result11[1]
+        try:
+            total_cost += float(cost11 or 0.0)
+        except Exception:
+            pass
+        if model11 and model11 != "unknown":
+            model_used = model11
+        if not isinstance(out11, str):
+            out11 = str(out11) if out11 else ""
 
-    if worktree_path:
-        prompts_dir = worktree_path / "prompts"
-        if prompts_dir.exists() and modified_modules:
-            try:
-                graph = build_dependency_graph(prompts_dir)
-                sorted_modules, cycles = topological_sort(graph)
-                if cycles and not quiet:
-                    console.print(f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]")
-                cyclic_modules = set(cycles[0]) if cycles else set()
-                affected = get_affected_modules(sorted_modules, modified_modules, graph, cyclic_modules)
-                if affected:
-                    # Generate clean command list for PR body (not full bash script)
-                    sync_order_list = "\n".join([f"pdd sync {m}" for m in affected])
+        context["step11_output"] = out11
+        state.setdefault("step_outputs", {})["11"] = out11 if success11 else f"FAILED: {out11}"
+        if success11:
+            state["last_completed_step"] = 11
+        _save_state()
 
-                    # Write change-specific script to .pdd/ (NOT sync_order.sh which
-                    # may contain the full repo module list — overwriting it destroys
-                    # the original, as seen in issue #571).
-                    pdd_dir = cwd / ".pdd"
-                    pdd_dir.mkdir(parents=True, exist_ok=True)
-                    user_script_path = pdd_dir / "sync_order_change.sh"
-                    generate_sync_order_script(affected, user_script_path, worktree_path=None)
-                    sync_order_script = str(user_script_path)
+        if success11:
+            _post_success_comment(11, out11, current_work_dir)
 
-                    if not quiet:
-                        console.print(f"\n[bold]Sync commands (run after merge):[/bold]")
-                        for module in affected:
-                            console.print(f"  pdd sync {module}")
-                        console.print(f"[green]Sync script saved to: {user_script_path}[/green]")
-            except Exception as e:
-                if not quiet: console.print(f"[yellow]Warning: Could not generate sync order: {e}[/yellow]")
+        if not quiet:
+            tail = _last_line(out11)
+            if tail:
+                console.print(f"  -> {tail}")
+            console.print(f"  → Step 11 complete.")
 
-    context["sync_order_script"] = sync_order_script; context["sync_order_list"] = sync_order_list
+        if _review_loop_no_issues(out11):
+            if not quiet:
+                console.print(
+                    f"[green]Review iteration {review_iteration}: no issues found.[/green]"
+                )
+            break
 
-    # Identify test files for affected modules (#377 Bug B)
+        # ---- Step 12 ----
+        try:
+            set_agentic_progress(
+                workflow="change",
+                current_step=12,
+                total_steps=13,
+                step_name=f"{STEP_NAMES[12]} (iter {review_iteration})",
+                completed_steps=list(range(1, 12)),
+            )
+        except Exception:
+            pass
+
+        if not quiet:
+            console.print(
+                f"[Step 12/13] {STEP_NAMES[12]} (iteration {review_iteration})..."
+            )
+
+        try:
+            template12 = load_prompt_template(STEP_TEMPLATE_NAMES[12])
+        except Exception:
+            template12 = None
+        if not template12:
+            if not quiet:
+                console.print("[red]Failed to load step 12 template[/red]")
+            break
+        formatted12 = _format_template(template12, context)
+        try:
+            result12 = run_agentic_task(
+                instruction=formatted12,
+                cwd=current_work_dir,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=CHANGE_STEP_TIMEOUTS[12] + timeout_adder,
+                label=f"step12_iter{review_iteration}",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(f"[red]Step 12 exception: {e}[/red]")
+            break
+
+        success12 = False
+        out12 = ""
+        cost12 = 0.0
+        model12 = model_used
+        if isinstance(result12, tuple):
+            if len(result12) >= 4:
+                success12, out12, cost12, model12 = result12[0], result12[1], result12[2], result12[3]
+            elif len(result12) >= 2:
+                success12, out12 = result12[0], result12[1]
+        try:
+            total_cost += float(cost12 or 0.0)
+        except Exception:
+            pass
+        if model12 and model12 != "unknown":
+            model_used = model12
+        if not isinstance(out12, str):
+            out12 = str(out12) if out12 else ""
+
+        context["step12_output"] = out12
+        state.setdefault("step_outputs", {})["12"] = out12 if success12 else f"FAILED: {out12}"
+        if success12:
+            state["last_completed_step"] = 12
+
+        previous_fixes += f"\n\nIteration {review_iteration}:\n{out12}"
+        state["previous_fixes"] = previous_fixes
+        _save_state()
+
+        if success12:
+            _post_success_comment(12, out12, current_work_dir)
+
+        if not quiet:
+            tail = _last_line(out12)
+            if tail:
+                console.print(f"  -> {tail}")
+            console.print(f"  → Step 12 complete.")
+
+    if review_iteration >= MAX_REVIEW_ITERATIONS:
+        if not quiet:
+            console.print(
+                f"[yellow]Warning: Maximum review iterations ({MAX_REVIEW_ITERATIONS}) "
+                "reached; proceeding to PR creation.[/yellow]"
+            )
+
+    # =====================================================================
+    # SYNC ORDER GENERATION
+    # =====================================================================
+    sync_order_script_path = ""
+    sync_order_list = "No modules to sync"
+    try:
+        from pdd.sync_order import (
+            build_dependency_graph,
+            extract_module_from_include,
+            generate_sync_order_script,
+            get_affected_modules,
+            topological_sort,
+        )
+
+        prompts_dir_root = worktree_path or cwd
+        prompts_dir = prompts_dir_root / "prompts"
+        if prompts_dir.exists():
+            graph = build_dependency_graph(prompts_dir)
+            sorted_mods, cycles = topological_sort(graph)
+            if cycles and not quiet:
+                console.print(
+                    f"[yellow]Warning: Circular dependencies detected: {cycles}[/yellow]"
+                )
+
+            modified_modules: Set[str] = set()
+            for f in changed_files:
+                if not f:
+                    continue
+                norm = f.replace("\\", "/")
+                if "prompts/" not in norm or not norm.endswith(".prompt"):
+                    continue
+                basename = Path(norm).name
+                mod = extract_module_from_include(basename)
+                if mod:
+                    modified_modules.add(mod)
+
+            cyclic_set: Set[str] = set()
+            for cyc in cycles:
+                for c in cyc:
+                    cyclic_set.add(c)
+
+            affected = get_affected_modules(sorted_mods, modified_modules, graph, cyclic_set)
+
+            if affected:
+                # Generate clean sync command list
+                sync_lines = [f"pdd sync {shlex.quote(m)}" for m in affected]
+                sync_order_list = "\n".join(sync_lines)
+
+                # Write sync_order.sh in user's CWD AND worktree root
+                target_paths = [cwd / "sync_order.sh"]
+                if worktree_path:
+                    target_paths.append(worktree_path / "sync_order.sh")
+                for tp in target_paths:
+                    try:
+                        generate_sync_order_script(affected, tp, worktree_path)
+                    except Exception as e:
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Failed to write {tp}: {e}[/yellow]"
+                            )
+                # Add worktree's sync_order.sh to changed_files
+                if worktree_path:
+                    if "sync_order.sh" not in changed_files:
+                        changed_files.append("sync_order.sh")
+                sync_order_script_path = str(cwd / "sync_order.sh")
+    except Exception as e:
+        if not quiet:
+            console.print(f"[yellow]Sync order generation failed: {e}[/yellow]")
+
+    context["sync_order_script"] = sync_order_script_path
+    context["sync_order_list"] = sync_order_list
+    context["files_to_stage"] = ", ".join(changed_files) or "None"
+
+    # =====================================================================
+    # IMPACTED TESTS
+    # =====================================================================
+    test_dir_str = pddrc_context.get("test_dir", "tests/")
+    test_dir = (worktree_path or cwd) / test_dir_str
     impacted_tests: List[str] = []
-    test_dir_name = pddrc_context.get("test_dir", "tests/").rstrip("/")
-    test_base = cwd / test_dir_name
-    if test_base.exists():
-        for f in changed_files:
-            # Extract module basename from prompt or source filenames
-            basename = Path(f).stem
-            # Strip common suffixes to get the module name
-            for suffix in ("_python", "_typescript", "_go", "_rust", "_java"):
-                if basename.endswith(suffix):
-                    basename = basename[: -len(suffix)]
-                    break
-            # Look for matching test files
-            for test_file in test_base.glob(f"test_{glob.escape(basename)}*"):
-                rel = str(test_file.relative_to(cwd))
-                if rel not in impacted_tests:
-                    impacted_tests.append(rel)
-    if impacted_tests:
-        context["impacted_tests"] = "\n".join(impacted_tests)
-        if not quiet:
-            console.print(f"\n[bold]Impacted test files ({len(impacted_tests)}):[/bold]")
-            for tf in impacted_tests:
-                console.print(f"  {tf}")
-    else:
-        context["impacted_tests"] = "No impacted test files identified"
+    lang_suffix = pddrc_context.get("lang", "_python")
+    try:
+        if test_dir.exists():
+            for f in changed_files:
+                if not f:
+                    continue
+                base = Path(f).stem
+                # Strip language suffix
+                if base.endswith(lang_suffix):
+                    base = base[: -len(lang_suffix)]
+                # Search for test_{base}*
+                for tf in test_dir.rglob(f"test_{base}*"):
+                    try:
+                        rel = tf.relative_to(worktree_path or cwd).as_posix()
+                    except Exception:
+                        rel = str(tf)
+                    if rel not in impacted_tests:
+                        impacted_tests.append(rel)
+    except Exception:
+        pass
+    context["impacted_tests"] = ", ".join(impacted_tests) if impacted_tests else "None"
 
-    if last_completed_step < 13:
-        # Aggregate MANUAL_REVIEW lines from Step 9 and the review-loop
-        # iterations (Step 12 outputs are concatenated into `previous_fixes`).
-        # Step 10's ASSOCIATED_DOCS_CONFLICTS bucket is also funneled here:
-        # the verifier treats those entries as "handled" (no silent drop),
-        # but the spec calls them "left for human", so each conflict path
-        # must surface as a MANUAL_REVIEW line in the PR body.
-        s10_out = context.get("step10_output", "") or ""
-        s10_conflict_paths = _extract_marker_paths(
-            "ASSOCIATED_DOCS_CONFLICTS", s10_out
-        )
-        synthesized_conflict_lines = "\n".join(
-            f"MANUAL_REVIEW: {p} — Step 10 ASSOCIATED_DOCS_CONFLICTS, manual edit needed"
-            for p in s10_conflict_paths
-        )
-        context["manual_review_lines"] = _collect_manual_review_lines(
-            context.get("step9_output", "") or "",
-            previous_fixes,
-            synthesized_conflict_lines,
-        )
-        if not quiet: console.print("[bold][Step 13/13][/bold] Create PR and link to issue...")
-        s13_template = load_prompt_template("agentic_change_step13_create_pr_LLM")
-        # Preprocess to escape curly braces in included content
-        exclude_keys = list(context.keys())
-        s13_template = preprocess(s13_template, recursive=True, double_curly_brackets=True, exclude_keys=exclude_keys)
-        s13_prompt = substitute_template_variables(s13_template, context)
-        timeout13 = CHANGE_STEP_TIMEOUTS.get(13, 340.0) + timeout_adder
-        s13_success, s13_output, s13_cost, s13_model = run_agentic_task(
-            instruction=s13_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout13, label="step13", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
-        )
-        total_cost += s13_cost; model_used = s13_model; state["total_cost"] = total_cost
-        if not s13_success:
-             post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
-             console.print("[red]Step 13 (PR Creation) failed.[/red]")
-             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
-             return False, "PR Creation failed", total_cost, model_used, changed_files
-        pr_url = "Unknown"; url_match = re.search(r"https://github.com/\S+/pull/\d+", s13_output)
-        if url_match: pr_url = url_match.group(0)
+    # =====================================================================
+    # STEP 13: Create PR
+    # =====================================================================
+    cached13 = state.get("step_outputs", {}).get("13")
+    if isinstance(cached13, str) and not cached13.startswith("FAILED:"):
         if not quiet:
-            console.print("\n[green]Change workflow complete[/green]")
-            console.print(f"   Total cost: ${total_cost:.4f}")
-            console.print(f"   Files changed: {', '.join(changed_files)}")
-            console.print(f"   PR: {pr_url}")
-            console.print(f"   Review iterations: {review_iteration}")
-            console.print("\nNext steps:")
-            console.print("   1. Review and merge the PR")
-            console.print("   2. Run `./sync_order.sh` after merge (or see PR for manual commands)")
-        has_failed_steps = any(
-            str(v).startswith("FAILED:") for v in state.get("step_outputs", {}).values()
+            console.print(f"[dim][Step 13/13] {STEP_NAMES[13]}: cached[/dim]")
+            console.print(f"  → Step 13 complete.")
+        step13_output = cached13
+    else:
+        try:
+            set_agentic_progress(
+                workflow="change",
+                current_step=13,
+                total_steps=13,
+                step_name=STEP_NAMES[13],
+                completed_steps=list(range(1, 13)),
+            )
+        except Exception:
+            pass
+
+        if not quiet:
+            console.print(f"[Step 13/13] {STEP_NAMES[13]}...")
+
+        try:
+            template13 = load_prompt_template(STEP_TEMPLATE_NAMES[13])
+        except Exception:
+            template13 = None
+
+        if not template13:
+            if not quiet:
+                console.print("[red]Failed to load step 13 template[/red]")
+            try:
+                clear_agentic_progress()
+            except Exception:
+                pass
+            return (
+                False,
+                "Failed to load step 13 template",
+                total_cost,
+                model_used,
+                changed_files,
+            )
+
+        formatted13 = _format_template(template13, context)
+        try:
+            result13 = run_agentic_task(
+                instruction=formatted13,
+                cwd=current_work_dir,
+                verbose=verbose,
+                quiet=quiet,
+                timeout=CHANGE_STEP_TIMEOUTS[13] + timeout_adder,
+                label="step13",
+                max_retries=DEFAULT_MAX_RETRIES,
+            )
+        except Exception as e:
+            if not quiet:
+                console.print(f"[red]Step 13 exception: {e}[/red]")
+            try:
+                clear_agentic_progress()
+            except Exception:
+                pass
+            return (
+                False,
+                f"Step 13 crashed: {e}",
+                total_cost,
+                model_used,
+                changed_files,
+            )
+
+        success13 = False
+        step13_output = ""
+        cost13 = 0.0
+        model13 = model_used
+        if isinstance(result13, tuple):
+            if len(result13) >= 4:
+                success13, step13_output, cost13, model13 = (
+                    result13[0],
+                    result13[1],
+                    result13[2],
+                    result13[3],
+                )
+            elif len(result13) >= 2:
+                success13, step13_output = result13[0], result13[1]
+        try:
+            total_cost += float(cost13 or 0.0)
+        except Exception:
+            pass
+        if model13 and model13 != "unknown":
+            model_used = model13
+        if not isinstance(step13_output, str):
+            step13_output = str(step13_output) if step13_output else ""
+
+        state.setdefault("step_outputs", {})["13"] = (
+            step13_output if success13 else f"FAILED: {step13_output}"
         )
-        if not has_failed_steps:
-            clear_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)
-        # Clear progress on successful completion so future runs start clean.
+        if success13:
+            state["last_completed_step"] = 13
+        _save_state()
+
+        if success13:
+            _post_success_comment(13, step13_output, current_work_dir)
+
+        if not quiet:
+            tail = _last_line(step13_output)
+            if tail:
+                console.print(f"  -> {tail}")
+            console.print(f"  → Step 13 complete.")
+
+        if not success13:
+            try:
+                clear_agentic_progress()
+            except Exception:
+                pass
+            return (
+                False,
+                f"Step 13 (PR creation) failed",
+                total_cost,
+                model_used,
+                changed_files,
+            )
+
+    # =====================================================================
+    # FINAL SUMMARY
+    # =====================================================================
+    # Try to extract PR URL
+    pr_url = ""
+    pr_match = re.search(
+        r"https://github\.com/[\w.-]+/[\w.-]+/pull/\d+", step13_output or ""
+    )
+    if pr_match:
+        pr_url = pr_match.group(0)
+
+    if not quiet:
+        console.print()
+        console.print(f"[bold green]Change workflow complete[/bold green]")
+        console.print(f"  Total cost: ${total_cost:.4f}")
+        console.print(f"  Model: {model_used}")
+        console.print(f"  Files changed: {len(changed_files)}")
+        for f in changed_files:
+            console.print(f"    - {f}")
+        if pr_url:
+            console.print(f"  PR: {pr_url}")
+        console.print(f"  Review iterations: {review_iteration}")
+        if sync_order_script_path:
+            console.print(f"\n[bold]Next steps:[/bold]")
+            console.print(f"  Review the PR, then run: bash {sync_order_script_path}")
+
+    # Clear state on success
+    try:
+        clear_workflow_state(
+            cwd=cwd,
+            issue_number=issue_number,
+            workflow="change",
+            state_dir=state_dir,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+        )
+    except Exception:
+        pass
+
+    try:
         clear_agentic_progress()
-        return True, f"PR Created: {pr_url}", total_cost, model_used, changed_files
-    return True, "Workflow already completed", total_cost, model_used, changed_files
+    except Exception:
+        pass
+
+    final_message = pr_url or "Change workflow completed successfully"
+    return (True, final_message, total_cost, model_used, changed_files)
+""

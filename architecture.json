@@ -5832,7 +5832,8 @@
               "Aborts with success=False when PDD_STRICT_DOC_SYNC=1 and doc-sync violations exist",
               "Appends ORCHESTRATOR_POSTCHECK_WARNINGS with DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers to step_output on violations",
               "Persists state (local + GitHub) with preflight_drift_healed, preflight_healed_worktree, preflight_healed_modules, preflight_failed_heal_modules, preflight_healed_prompt_paths flags",
-              "Creates GitHub PR and progress comments via gh CLI"
+              "Creates GitHub PR and progress comments via gh CLI",
+              "Posts trusted per-step success comments via extract_step_report + post_step_comment_once + normalize_step_comments_state from pdd.agentic_common; step_comments state key provides resume idempotency (issue #971)"
             ]
           }
         ]

@@ -86,6 +86,45 @@ For steps 1-10 and 13:
 6. Store the output for use by subsequent steps
 7. **Save state to file** after step completes (for resumption)
 8. Accumulate cost: `total_cost += step_cost`
+9. **On step success only** (not on a hard-stop, not on a soft failure where `run_agentic_task` returned `(False, ...)`, not on a cached-output replay): invoke the per-step success-comment hook described in `% Per-Step Success Comments (Trusted Posting)`. The orchestrator owns the two-step flow:
+   1. Call `report_body = extract_step_report(step_output)`. If it returns `None` (no `<step_report>` block or malformed nesting), short-circuit — do NOT call `post_step_comment_once`, do NOT mutate `state["step_comments"]`, and continue the loop (raw output remains in `state["step_outputs"]`).
+   2. Otherwise call `post_step_comment_once(repo_owner, repo_name, issue_number, step_num, report_body, step_comments_set, cwd)` where `cwd` is the orchestrator's working directory (`current_work_dir` / worktree path). The helper internally applies `redact_secrets` and `truncate_for_github_comment` to `report_body` before shelling out to `gh issue comment`, is idempotent against `step_comments_set` (returns `True` immediately if `step_num` is already in the set, without invoking `gh`), and on a successful new post mutates `step_comments_set` in place (adds `step_num`). It returns `bool` (`True` on success-or-already-posted, `False` on `gh` failure).
+   3. After the call returns, persist the canonical sorted form: `state["step_comments"] = sorted(step_comments_set)` and re-save state. Doing this unconditionally (rather than gating on the return value) keeps the persistence step trivial and survives a contract refactor of the helper. This ordering matters: the set is persisted BEFORE the next step runs, so a crash between steps cannot cause a double-post.
+   Failures inside the hook (any exception from `extract_step_report`, the helper, or the persistence write) MUST be log-and-continue (never raise into the orchestrator loop).
+
+% Per-Step Success Comments (Trusted Posting)
+
+Successful agentic steps in `pdd change` MUST publish their per-step progress comment via the shared trusted-posting helper rather than letting the step's own LLM shell out to `gh issue comment`. The model still produces the human-facing summary, but the orchestrator (which holds the trusted GitHub credentials) is the only thing that actually calls the GitHub API for success comments.
+
+1. **Wire format the step LLM emits.** Each step's prompt template wraps its success summary in a single `<step_report>...</step_report>` block. The orchestrator does not inspect the inner Markdown — it just hands the raw step output to `extract_step_report`, which returns either the inner block content or `None` (no block found, malformed nesting, etc.). A missing or malformed block is NOT a workflow error: the raw output is still preserved in `state["step_outputs"]` and the workflow continues.
+
+2. **State key**: `state["step_comments"]` is the per-issue idempotency set of step numbers (`int`) whose trusted comment has already been posted. It is additive to the existing state schema (see `% State Persistence`); old state files without this key load as an empty set.
+
+3. **Load-time normalization.** Immediately after `load_workflow_state(...)` returns, normalize the persisted value:
+   ```python
+   step_comments_set = normalize_step_comments_state(state.get("step_comments"))
+   state["step_comments"] = sorted(step_comments_set)  # canonical on-disk form
+   ```
+   `normalize_step_comments_state` accepts `None`, missing key, malformed lists (non-int entries, duplicates, strings, garbage) and always returns a clean `Set[int]`. The orchestrator keeps the in-memory `Set[int]` for fast `in`/`add` operations and writes back a sorted `List[int]` so the JSON state stays deterministic across runs.
+
+4. **Helper to import (from `pdd.agentic_common`)** — exactly these three names, no others:
+   - `extract_step_report(step_output: str) -> Optional[str]` — returns the inner text of the first `<step_report>` block, or `None` when the block is missing/malformed. The orchestrator MUST call this BEFORE `post_step_comment_once` and short-circuit on `None` (the helper does not perform this extraction itself).
+   - `post_step_comment_once(repo_owner, repo_name, issue_number, step_num, body, posted_steps, cwd) -> bool` — the trusted-posting entry point. Behavior: if `step_num` is already in `posted_steps`, returns `True` immediately without calling `gh`; otherwise applies `redact_secrets` → `truncate_for_github_comment` to `body`, shells out to `gh issue comment` from `cwd`, and on success mutates `posted_steps` in place (adds `step_num`). Returns `True` on success-or-already-posted, `False` on `gh` failure or missing CLI. It does NOT internally invoke `extract_step_report`, and it does NOT persist state — those are the orchestrator's responsibility.
+   - `normalize_step_comments_state(raw: Any) -> Set[int]` — load-time coercer described above.
+
+   The issue's `sanitize_step_report` / `truncate_step_report` names are role descriptions, not separately-exported helpers — the redact/truncate roles live inside `post_step_comment_once` (using `redact_secrets` and `truncate_for_github_comment` from the same module). Do NOT add new imports for those role names.
+
+5. **Where the hook fires.** See `% Step Execution` item 9. Restating the gating contract here so it cannot drift:
+   - SUCCESS path only (not hard-stop, not soft `(False, ...)` failure, not cached-output replay on resume).
+   - Orchestrator short-circuits if `extract_step_report(step_output) is None` (missing block tolerated); `post_step_comment_once` is not invoked in that case.
+   - `post_step_comment_once` short-circuits internally when `step_num` is already in `step_comments_set` (idempotent resume) and returns `True` without calling `gh`.
+   - On a successful new post the helper mutates `step_comments_set` in place (adds `step_num`). The orchestrator then writes `state["step_comments"] = sorted(step_comments_set)` and re-saves state. Doing this persistence unconditionally after the call (rather than gating on the return value) is the safest pattern. This ordering matters: the set is persisted BEFORE the next step runs, so a crash between steps cannot cause a double-post.
+
+6. **Review loop (Steps 11-12) policy.** Issue review-loop steps fire once per `step_num` per workflow run — only the LATEST iteration's `<step_report>` gets posted via the trusted helper. Earlier iterations' raw output remains accumulated in `state["previous_fixes"]`, which preserves the audit trail without spamming the issue thread. Concretely: the idempotency set is keyed on `step_num`, not on `(step_num, review_iteration)`, so once step 11 posts in iteration 1 it will be skipped in iterations 2..N of the same run.
+
+7. **Failure modes are non-fatal.** Network errors, GitHub rate limits, JSON encoding errors, or any exception raised inside the trusted-posting hook must be caught, logged (yellow warning when not quiet), and dropped. The hook must NEVER abort the orchestrator loop — the workflow's job is to land the code change; per-step commentary is best-effort observability.
+
+8. **Relationship to the legacy `post_step_comment()` path.** The existing `post_step_comment()` call described under `% Early Exit Conditions (Hard Stops)` and `% Consecutive Provider Failure Tracking` is UNCHANGED. Hard-stop failure comments (steps 1-12 hard-stop conditions, 3-consecutive-provider-failure abort, strict-mode doc-sync abort) continue to flow through the legacy helper. The new `post_step_comment_once` is strictly additive — it covers the success-comment case that previously had no first-party posting path and was being filled (incorrectly) by the model invoking `gh issue comment` itself. Both helpers can coexist on the same issue thread; they post structurally distinct comments and do not interfere with each other's idempotency.
 
 % Review Loop (Steps 11-12)
 Steps 11 and 12 form a review loop that repeats until no issues are found:
@@ -238,7 +277,7 @@ The orchestrator must parse step output to detect stop conditions. Use `_check_h
 **STOP_CONDITION tag**: A universal `STOP_CONDITION: <reason>` tag is recognized on any step as a fallback. Steps 4 and 7 (clarification steps) ONLY stop via this tag (not substring matching), because LLMs sometimes use "clarification" or "architectural" in normal prose.
 
 **Hard stop behavior:**
-- Call `post_step_comment()` to post findings to GitHub
+- Call `post_step_comment()` (the legacy helper) to post findings to GitHub. Hard-stop and failure comments continue to flow through `post_step_comment()` unchanged — the new `post_step_comment_once()` is for SUCCESS comments only (see `% Per-Step Success Comments (Trusted Posting)`). Do not route hard-stop comments through `post_step_comment_once()`; they are not gated by `state["step_comments"]` and must always reach GitHub even on resume.
 - Return `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
 - Do NOT continue to subsequent steps
 
@@ -393,7 +432,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 
 1. **State file location**: `.pdd/change-state/issue-{issue_number}.json` (local cache)
 
-2. **State file structure**: JSON with keys: `workflow`, `issue_url`, `issue_number`, `last_completed_step`, `step_outputs` (dict keyed by step number string), `total_cost`, `model_used`, `worktree_path`, `github_comment_id`, `issue_updated_at`, `review_iteration`, `previous_fixes`
+2. **State file structure**: JSON with keys: `workflow`, `issue_url`, `issue_number`, `last_completed_step`, `step_outputs` (dict keyed by step number string), `total_cost`, `model_used`, `worktree_path`, `github_comment_id`, `issue_updated_at`, `review_iteration`, `previous_fixes`, `step_comments` (sorted `List[int]` of step numbers whose trusted success-comment has already been posted — see `% Per-Step Success Comments (Trusted Posting)`; absent on legacy state files and normalized to an empty set on load via `normalize_step_comments_state`)
 
 3. **Use shared functions from agentic_common**:
    - `load_workflow_state(cwd, issue_number, "change", state_dir, repo_owner, repo_name, use_github_state)` - Load from GitHub (primary) or local cache
@@ -403,6 +442,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 
 4. **Orchestrator logic**:
    - On start: Call `load_workflow_state()`, validate cached state, determine `start_step`
+   - Immediately after load, coerce `state["step_comments"]` via `normalize_step_comments_state(state.get("step_comments"))` into an in-memory `Set[int]`, and write `state["step_comments"] = sorted(set)` back so the on-disk form stays canonical. This handles missing key (fresh state), `None`, and malformed persisted values without raising.
    - Track `github_comment_id` from load result for subsequent saves
    - **State validation on load**: After loading state, call `validate_cached_state()` to find the actual last *successfully* completed step by scanning `step_outputs` for entries that do NOT start with "FAILED:". This prevents resuming past failed steps.
    - If state exists: Print `"Resuming from step {start_step} (steps 1-{last_completed_step} cached)"`
@@ -423,11 +463,11 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`, `extract_step_report`, `post_step_comment_once`, `normalize_step_comments_state`
 Import from `pdd.preprocess`: `preprocess`
 Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)
-<pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress">pdd/agentic_common.py</include></pdd.agentic_common>
+<pdd.agentic_common><include select="def:run_agentic_task,def:load_workflow_state,def:save_workflow_state,def:clear_workflow_state,def:substitute_template_variables,def:validate_cached_state,def:post_step_comment,def:set_agentic_progress,def:clear_agentic_progress,def:extract_step_report,def:post_step_comment_once,def:normalize_step_comments_state">pdd/agentic_common.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.sync_order><include select="def:build_dependency_graph,def:topological_sort,def:get_affected_modules,def:generate_sync_order_script,def:extract_module_from_include,def:discover_associated_documents">pdd/sync_order.py</include></pdd.sync_order>
 <pdd.construct_paths><include>context/construct_paths_example.py</include></pdd.construct_paths>
