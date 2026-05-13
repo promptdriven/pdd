@@ -1,3 +1,10 @@
+<pdd-reason>Implements setup functionality.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module"
+}
+</pdd-interface>
+
 % You are an expert Python Software Engineer. Your goal is to write the setup.py for setuptools for the CLI application 'pdd'.
 
 % Here is the requirements.txt file:
