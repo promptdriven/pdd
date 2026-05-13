@@ -3383,6 +3383,82 @@ def clear_workflow_state(
         github_clear_state(repo_owner, repo_name, issue_number, workflow_type, cwd)
 
 
+# ---------------------------------------------------------------------------
+# Step-comment helpers (issue #964)
+#
+# Models used to post per-step GitHub issue comments themselves via shell
+# commands embedded in their prompts. This is unreliable across providers (in
+# particular Gemini's sandboxed shell cannot read GH_TOKEN). The orchestrator
+# now owns these writes: providers emit a delimited `<step_report>…
+# </step_report>` block that the orchestrator extracts, sanitizes, truncates,
+# and posts via `post_step_comment(body=…)` using trusted credentials.
+# ---------------------------------------------------------------------------
+
+_STEP_REPORT_RE = re.compile(
+    r"<step_report>(.*?)</step_report>",
+    re.DOTALL | re.IGNORECASE,
+)
+
+_SECRET_PATTERNS: Tuple[Tuple["re.Pattern[str]", str], ...] = (
+    (re.compile(r"\bghp_[A-Za-z0-9]{20,}"),                "[REDACTED_GITHUB_TOKEN]"),
+    (re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}"),        "[REDACTED_GITHUB_TOKEN]"),
+    (re.compile(r"\b(?:gho_|ghu_|ghs_|ghr_)[A-Za-z0-9]{20,}"), "[REDACTED_GITHUB_TOKEN]"),
+    (re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}"),             "[REDACTED_GOOGLE_API_KEY]"),
+    (re.compile(r"\bxai-[A-Za-z0-9]{20,}"),                "[REDACTED_XAI_KEY]"),
+    (re.compile(r"\bsk-[A-Za-z0-9_\-]{20,}"),              "[REDACTED_OPENAI_KEY]"),
+    (re.compile(r"\bgsk_[A-Za-z0-9]{20,}"),                "[REDACTED_GROQ_KEY]"),
+)
+
+_ENV_TOKEN_RE    = re.compile(r"\b(GH_TOKEN|GITHUB_TOKEN)\s*=\s*\S+")
+_BEARER_TOKEN_RE = re.compile(r"(Authorization:\s*Bearer\s+)\S+", re.IGNORECASE)
+
+_COMMENT_MAX_CHARS = 25_000
+_TRUNCATED_MARKER = "\n\n…[truncated]"
+
+
+def _extract_step_report(text: Optional[str]) -> Optional[str]:
+    """Extract the LAST ``<step_report>…</step_report>`` block from text.
+
+    Returns ``None`` if the input is empty or no tagged block is present. The
+    extracted body has surrounding whitespace stripped so callers can rely on a
+    clean payload. The regex is DOTALL + case-insensitive so the body can span
+    multiple lines and providers can emit ``<STEP_REPORT>`` if they choose.
+    """
+    if not text:
+        return None
+    matches = _STEP_REPORT_RE.findall(text)
+    if not matches:
+        return None
+    return matches[-1].strip()
+
+
+def _sanitize_comment_body(
+    body: Optional[str],
+    max_chars: int = _COMMENT_MAX_CHARS,
+) -> str:
+    """Redact known secret formats and truncate the body.
+
+    Idempotent and conservative: only patterns that look like credentials are
+    rewritten, and the function never raises. Truncation happens AFTER redaction
+    so a secret near the end of an oversized payload still gets scrubbed.
+    """
+    if not body:
+        return body or ""
+    redacted = body
+    for pat, repl in _SECRET_PATTERNS:
+        redacted = pat.sub(repl, redacted)
+    redacted = _ENV_TOKEN_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", redacted)
+    redacted = _BEARER_TOKEN_RE.sub(lambda m: f"{m.group(1)}[REDACTED]", redacted)
+    if len(redacted) > max_chars:
+        # Reserve room for the marker so the returned length never exceeds the
+        # caller-supplied cap (codex review of PR #966). When max_chars is
+        # smaller than the marker itself, the marker won't fit either — the
+        # final slice enforces the cap unconditionally.
+        keep = max(0, max_chars - len(_TRUNCATED_MARKER))
+        redacted = (redacted[:keep] + _TRUNCATED_MARKER)[:max_chars]
+    return redacted
+
+
 def post_step_comment(
     repo_owner: str,
     repo_name: str,
@@ -3392,59 +3468,87 @@ def post_step_comment(
     description: str,
     output: str,
     cwd: Path,
+    body: Optional[str] = None,
 ) -> bool:
-    """
-    Post a fallback comment on a GitHub issue when a step fails.
+    """Post a per-step GitHub issue comment.
 
-    When the LLM agent fails (e.g., all providers unavailable), the agent never
-    runs and therefore never posts its own step comment. This function posts a
-    fallback comment so users can see which steps failed and why.
+    Two modes:
+
+    1. ``body is None`` (legacy / fallback path): used by orchestrators when
+       the LLM agent itself failed and therefore could not produce a report.
+       The body is the historical FAILED template, kept verbatim for backwards
+       compatibility with existing callers (e.g. ``agentic_change_orchestrator``
+       hard-stop paths).
+    2. ``body is not None``: the orchestrator extracted a ``<step_report>``
+       block from a successful run. The body is sanitized + truncated by the
+       orchestrator's pipeline; here we additionally strip any leading
+       duplicate ``## Step N`` header the model emitted and prepend our own
+       canonical header so framing is consistent regardless of provider.
 
     Args:
-        repo_owner: GitHub repository owner
-        repo_name: GitHub repository name
-        issue_number: Issue number to comment on
-        step_num: Current step number
-        total_steps: Total number of steps in the workflow
-        description: Human-readable step description
-        output: Error output / failure details
-        cwd: Working directory for subprocess
+        repo_owner: GitHub repository owner.
+        repo_name: GitHub repository name.
+        issue_number: Issue number to comment on.
+        step_num: Current step number.
+        total_steps: Total number of steps in the workflow.
+        description: Human-readable step description (used in the header).
+        output: Raw provider output (still used for the FAILED fallback path).
+        cwd: Working directory for the ``gh`` subprocess.
+        body: Optional pre-extracted, model-supplied report body. When set,
+            takes precedence over the FAILED template.
 
     Returns:
-        True if comment was posted successfully, False otherwise
+        True if the comment posted successfully, False otherwise (including
+        when ``gh`` is not on PATH).
     """
     if not _find_cli_binary("gh"):
         return False
 
-    # Truncate output to avoid exceeding GitHub comment size limits
-    error_detail = output[:1000] if len(output) > 1000 else output
-
-    body = (
-        f"## Step {step_num}/{total_steps}: {description}\n\n"
-        f"**Status:** FAILED\n\n"
-        f"### Error Details\n"
-        f"```\n{error_detail}\n```\n\n"
-        f"---\n"
-        f"*Automated fallback comment — agent did not execute for this step.*"
-    )
+    if body is None:
+        # Backwards-compatible fallback for agent-execution failures.
+        error_detail = _sanitize_comment_body(output or "", max_chars=1000)
+        final_body = (
+            f"## Step {step_num}/{total_steps}: {description}\n\n"
+            f"**Status:** FAILED\n\n"
+            f"### Error Details\n"
+            f"```\n{error_detail}\n```\n\n"
+            f"---\n"
+            f"*Automated fallback comment — agent did not execute for this step.*"
+        )
+    else:
+        # Strip a single leading duplicate "## Step <N>..." line so the
+        # orchestrator's canonical header isn't shadowed. Only the FIRST
+        # occurrence is removed — interior headers (e.g. inside a fenced
+        # block summarising another step) are preserved.
+        leading_dup_re = re.compile(
+            rf"^\s*##\s+Step\s+{re.escape(str(step_num))}\b[^\n]*\n+",
+        )
+        stripped = leading_dup_re.sub("", body, count=1)
+        sanitized = _sanitize_comment_body(stripped)
+        final_body = (
+            f"## Step {step_num}/{total_steps}: {description}\n\n"
+            f"{sanitized}\n\n"
+            f"---\n"
+            f"*Posted by PDD orchestrator (trusted credentials).*"
+        )
 
     try:
         result = subprocess.run(
             [
                 "gh", "issue", "comment", str(issue_number),
                 "--repo", f"{repo_owner}/{repo_name}",
-                "--body", body,
+                "--body", final_body,
             ],
             cwd=cwd,
             capture_output=True,
             text=True,
         )
         if result.returncode != 0:
-            console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {result.stderr}[/yellow]")
+            console.print(f"[yellow]Warning: Failed to post comment for step {step_num}: {result.stderr}[/yellow]")
             return False
         return True
     except Exception as e:
-        console.print(f"[yellow]Warning: Failed to post fallback comment for step {step_num}: {e}[/yellow]")
+        console.print(f"[yellow]Warning: Failed to post comment for step {step_num}: {e}[/yellow]")
         return False
 
 

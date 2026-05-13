@@ -71,8 +71,18 @@
           },
           {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd) -> bool",
+            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd, body=None) -> bool",
             "returns": "bool"
+          },
+          {
+            "name": "_extract_step_report",
+            "signature": "(text: Optional[str]) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "_sanitize_comment_body",
+            "signature": "(body: Optional[str], max_chars: int = 25_000) -> str",
+            "returns": "str"
           },
           {
             "name": "post_pr_comment",
@@ -1460,8 +1470,8 @@
     }
   },
   {
-    "reason": "Orchestrates the 11-step agentic bug workflow with E2E gate and state persistence.",
-    "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation.",
+    "reason": "Orchestrates the 12-step agentic bug workflow with E2E gate, persistent state, and orchestrator-owned GitHub step comments.",
+    "description": "Coordinates duplicate checking, documentation review, triage, API research, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation. Posts per-step progress comments to the issue and persists workflow state for crash-safe resumes.",
     "dependencies": [],
     "priority": 42,
     "filename": "agentic_bug_orchestrator_python.prompt",
@@ -1477,10 +1487,13 @@
         "functions": [
           {
             "name": "run_agentic_bug_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str) -> Tuple[bool, str, float, str, List[str]]",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]",
             "returns": "Tuple[bool, str, float, str, List[str]]",
             "sideEffects": [
-              "None"
+              "Posts GitHub issue comments via post_step_comment",
+              "Persists workflow state via save_workflow_state (local + optional GitHub state comment)",
+              "Creates/removes git worktrees and branches under .pdd/worktrees/fix-issue-{N}/",
+              "Spawns external agentic CLI subprocesses (claude/gemini/codex/opencode)"
             ]
           }
         ]
@@ -5778,18 +5791,8 @@
         "functions": [
           {
             "name": "run_agentic_change_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]",
-            "sideEffects": [
-              "Calls pdd.ci_drift_heal.detect_drift and subprocess pdd update per stale module (Step 8.5)",
-              "Writes .pdd/worktrees/change-issue-{N}/ worktree + branch change/issue-{N}",
-              "Calls pdd.sync_order.discover_associated_documents before Step 10 using files_created, files_modified, files_to_stage, and changed_files so Step 9 fallback-detected prompt changes are included",
-              "Verifies ASSOCIATED_DOCS_MODIFIED/CONFLICTS/UNCHANGED contract after Step 10 (Step 10.5)",
-              "Aborts with success=False when PDD_STRICT_DOC_SYNC=1 and doc-sync violations exist",
-              "Appends ORCHESTRATOR_POSTCHECK_WARNINGS with DOC_SYNC_SILENT_DROPS / DOC_SYNC_BUCKET_OVERLAPS markers to step_output on violations",
-              "Persists state (local + GitHub) with preflight_drift_healed, preflight_healed_worktree, preflight_healed_modules, preflight_failed_heal_modules, preflight_healed_prompt_paths flags",
-              "Creates GitHub PR and progress comments via gh CLI"
-            ]
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)",
+            "returns": "Tuple[bool, str, float, str, List[str]]"
           }
         ]
       }

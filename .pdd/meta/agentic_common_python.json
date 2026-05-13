@@ -1,9 +1,9 @@
 {
-  "pdd_version": "0.0.235",
-  "timestamp": "2026-05-13T02:44:43.481731+00:00",
-  "command": "test",
-  "prompt_hash": "938420bcb5e9484a73dfab466968b3e458383daca97b5f20ba3f30d6f3f453f7",
-  "code_hash": "fb384bea9b715b74dd9460c94e560be219410243569c6776827a702b6f6556b3",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-13T21:12:18.639728+00:00",
+  "command": "metadata_sync",
+  "prompt_hash": "0764e050c24965be44c8948bdc4b2c98c0f0b057b4d47b0798a819a350861080",
+  "code_hash": "32f8c23ee26c39af4939ea81fdfe9d3e7480e23e8f8cd453bddcc0703b81ae6d",
   "example_hash": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
   "test_hash": "6d1c3d5d1c87eafaa30153055478244d4302dfc8ac45e9a07b09e3fa80e95576",
   "test_files": {
@@ -15,6 +15,6 @@
     "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "pdd/agentic_common.py": "fb384bea9b715b74dd9460c94e560be219410243569c6776827a702b6f6556b3"
+    "pdd/agentic_common.py": "32f8c23ee26c39af4939ea81fdfe9d3e7480e23e8f8cd453bddcc0703b81ae6d"
   }
 }
