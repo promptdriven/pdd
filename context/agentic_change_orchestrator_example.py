@@ -1,166 +1,226 @@
 """
-Example usage of the agentic_change_orchestrator module.
+Example usage of pdd.agentic_change_orchestrator.run_agentic_change_orchestrator.
 
-This script demonstrates how to invoke the `run_agentic_change_orchestrator` function.
-Since the orchestrator relies on internal modules like `run_agentic_task` and `load_prompt_template`,
-this example mocks those dependencies to simulate a successful change workflow
-without making actual LLM calls or requiring a real GitHub issue.
+The orchestrator drives a 13-step agentic workflow over a GitHub issue. Each
+step shells out to an LLM (`run_agentic_task`) and accumulates context for the
+next step. This example mocks every external integration (LLM, GitHub, git
+worktree, state persistence) so the function can be exercised end-to-end with
+no network access.
 
-Scenario:
-    We simulate an issue where a user requests adding a new validation feature
-    to a user service module. The orchestrator will step through the 13-step process,
-    identifying affected dev units and modifying the relevant prompts.
+Inputs (see `run_agentic_change_orchestrator` signature):
+    - issue_url, issue_content, repo_owner, repo_name, issue_number,
+      issue_author, issue_title, issue_updated_at: identify the issue.
+    - cwd (Path): working directory; used as a sentinel — all real I/O is
+      mocked in this example.
+    - verbose (bool), quiet (bool): console-output verbosity.
+    - timeout_adder (float, seconds): added to every step's timeout.
+    - use_github_state (bool): when False, state lives only in `state_dir`.
+
+Returns:
+    (success: bool, final_message: str, total_cost: float (USD),
+     model_used: str, changed_files: List[str])
 """
 
+import os
 import sys
 import tempfile
 from pathlib import Path
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
-# Ensure the project root is in sys.path so we can import the module
-project_root = Path(__file__).resolve().parent.parent
-sys.path.append(str(project_root))
+# Put the LOCAL project ahead of any installed pdd package on sys.path so
+# `from pdd.agentic_change_orchestrator import ...` picks up the file we are
+# demonstrating. Without insert(0,...) an older site-packages version would
+# win and the API surface could mismatch.
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT))
 
-try:
-    from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator
-except ImportError:
-    print("Error: Could not import 'pdd.agentic_change_orchestrator'.")
-    print("Ensure your PYTHONPATH is set correctly or the file structure matches.")
-    sys.exit(1)
+from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator
 
 
-def mock_load_prompt_template(template_name: str) -> str:
+def mock_load_prompt_template(template_name):
+    """Return a minimal template that exercises substitute_template_variables."""
+    return f"MOCK TEMPLATE FOR {template_name}\nIssue: {{issue_content}}"
+
+
+def mock_run_agentic_task(*args, **kwargs):
+    """Return a (success, output, cost, model) 4-tuple for each step.
+
+    The label kwarg identifies the step (e.g. `step1`, `step11_iter1`).
+    The mock returns outputs containing the marker lines the orchestrator
+    parses (FILES_CREATED, FILES_MODIFIED, ARCHITECTURE_FILES_MODIFIED,
+    ASSOCIATED_DOCS_*). Step 11 returns "No Issues Found" so the review
+    loop exits after a single iteration. Cost is $0.10 per step.
     """
-    Mock implementation of load_prompt_template.
-    Returns a dummy prompt string based on the requested template name.
-    """
-    return f"MOCK PROMPT FOR: {template_name}\nContext: {{issue_content}}"
-
-
-def mock_run_agentic_task(instruction: str, cwd: Path, verbose: bool, quiet: bool, label: str, timeout: float = None, max_retries: int = 3):
-    """
-    Mock implementation of run_agentic_task.
-    Simulates the output of an LLM agent for each step of the 13-step change workflow.
-    """
-    # Handle labels like 'step11_iter1' by splitting on '_' and taking the first part
+    label = kwargs.get("label", "")
     step_part = label.replace("step", "").split("_")[0]
-    step_num = step_part
 
-    # Default return values
-    success = True
-    cost = 0.20  # Simulated cost per step
-    provider = "anthropic"
-    output = ""
-
-    if step_num == "1":
-        output = "No duplicate issues found. This is a new feature request."
-    elif step_num == "2":
-        output = "Checked documentation. This feature is not currently implemented."
-    elif step_num == "3":
-        output = "Research complete. Specifications are clear."
-    elif step_num == "4":
-        output = "Requirements verified. No clarification needed."
-    elif step_num == "5":
-        output = "Documentation updates identified: user_service.md needs validation section."
-    elif step_num == "6":
-        output = """Dev units identified:
-        - prompts/user_service_python.prompt (primary)
-        - context/user_service_example.py (needs update)
-        - prompts/validation_python.prompt (new)"""
-    elif step_num == "7":
-        output = "Architecture review passed. No major changes needed."
-    elif step_num == "8":
-        output = """Prompt changes analyzed:
-        1. user_service_python.prompt: Add requirement for email validation
-        2. validation_python.prompt: Create new module for validation utilities
-        3. user_service_example.py: Update to show validation usage"""
-    elif step_num == "9":
-        # Step 9 atomically applies drafted edits to prompts, code, and
-        # associated documents in the same commit. Per the Step 9 prompt,
-        # associated-document edits are reported in FILES_MODIFIED
-        # alongside prompt/code edits — Step 10 then classifies them into
-        # the doc-sync buckets (ASSOCIATED_DOCS_*).
-        output = (
-            "FILES_MODIFIED: prompts/user_service_python.prompt, "
-            "context/user_service_example.py, README.md, CHANGELOG.md\n"
+    cost = 0.10
+    model = "claude-sonnet-4-6"
+    outputs = {
+        "1": "Investigation complete; similar issue exists but distinct scope.",
+        "2": "Status: not yet implemented (similar code exists elsewhere).",
+        "3": "Research complete. Specifications are clear.",
+        "4": "Requirements verified. No clarification needed.",
+        "5": "Doc changes drafted: README mentions new validation hook.",
+        "6": (
+            "Dev units identified.\n\n"
+            "Direct Edit Candidates\n"
+            "| File | Edit Type | Markers |\n"
+            "| --- | --- | --- |\n"
+            "| frontend/widget.js | uncomment | // TODO(issue-239) |\n"
+        ),
+        "7": "Architecture review passed.",
+        "8": "Prompt changes analyzed; ready to implement.",
+        "9": (
             "FILES_CREATED: prompts/validation_python.prompt\n"
-            "Changes applied successfully."
-        )
-    elif step_num == "10":
-        # Step 10 ratifies the doc-sync contract for this run. Step 10.5
-        # then verifies that every associated doc returned by
-        # `discover_associated_documents` (a real-disk operation gated by
-        # the prompt graph — illustrative here) appears under exactly one
-        # of ASSOCIATED_DOCS_MODIFIED / _CONFLICTS / _UNCHANGED.
-        # architecture.json is reported via ARCHITECTURE_FILES_MODIFIED;
-        # discovery only returns .md/.rst/.txt files.
-        output = (
+            "FILES_MODIFIED: prompts/user_service_python.prompt\n"
+            "DIRECT_EDITS: frontend/widget.js\n"
+            "Implementation done."
+        ),
+        "10": (
             "ARCHITECTURE_FILES_MODIFIED: architecture.json\n"
-            "ASSOCIATED_DOCS_MODIFIED: README.md, CHANGELOG.md\n"
-            "ASSOCIATED_DOCS_UNCHANGED: \n"
+            "ASSOCIATED_DOCS_MODIFIED: README.md\n"
             "ASSOCIATED_DOCS_CONFLICTS: \n"
+            "ASSOCIATED_DOCS_UNCHANGED: \n"
             "Architecture metadata + associated docs synced."
-        )
-    elif step_num == "11":
-        output = "No Issues Found"
-    elif step_num == "12":
-        output = "Fixed issues."
-    elif step_num == "13":
-        output = "PR Created: https://github.com/example/myapp/pull/240"
-    else:
-        output = f"Unknown step executed: {step_num}"
-
-    return success, output, cost, provider
+        ),
+        "11": "No Issues Found",
+        "12": "Fixes applied.",
+        "13": "PR Created: https://github.com/example/myapp/pull/240",
+    }
+    return True, outputs.get(step_part, f"Output for {label}"), cost, model
 
 
 def main():
-    """Main function to run the agentic change orchestrator simulation."""
-    # Create a temporary directory for the simulation
-    with tempfile.TemporaryDirectory() as temp_dir:
-        temp_cwd = Path(temp_dir)
-        
-        # Define dummy issue data
-        issue_data = {
-            "issue_url": "https://github.com/example/myapp/issues/239",
-            "issue_content": "Add email validation to user registration. Should check format and domain.",
-            "repo_owner": "example",
-            "repo_name": "myapp",
-            "issue_number": 239,
-            "issue_author": "feature_requester",
-            "issue_title": "Add email validation to user service",
-            "cwd": temp_cwd,
-            "verbose": True,
-            "quiet": False
-        }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_cwd = Path(tmpdir)
 
-        print("Starting Agentic Change Orchestrator Simulation...")
-        print("-" * 60)
+        issue_kwargs = dict(
+            issue_url="https://github.com/example/myapp/issues/239",
+            issue_content="Add email validation to user registration.",
+            repo_owner="example",
+            repo_name="myapp",
+            issue_number=239,
+            issue_author="feature_requester",
+            issue_title="Add email validation",
+            issue_updated_at="2026-05-12T00:00:00Z",
+            cwd=tmp_cwd,
+            verbose=False,
+            quiet=True,
+            timeout_adder=0.0,
+            use_github_state=False,
+        )
 
-        # Patch the internal dependencies to avoid real git/filesystem operations
-        with patch("pdd.agentic_change_orchestrator.load_prompt_template", side_effect=mock_load_prompt_template), \
-             patch("pdd.agentic_change_orchestrator.run_agentic_task", side_effect=mock_run_agentic_task), \
-             patch("pdd.agentic_change_orchestrator._get_git_root", return_value=temp_cwd), \
-             patch("pdd.agentic_change_orchestrator._setup_worktree", return_value=(temp_cwd, None)), \
-             patch("pdd.agentic_change_orchestrator.load_workflow_state", return_value=(None, None)), \
-             patch("pdd.agentic_change_orchestrator.save_workflow_state", return_value=None), \
-             patch("pdd.agentic_change_orchestrator.clear_workflow_state", return_value=None), \
-             patch("pdd.agentic_change_orchestrator.build_dependency_graph", side_effect=Exception("Mocked graph")), \
-             patch("pdd.agentic_change_orchestrator.generate_sync_order_script", return_value="echo 'Mock sync'"):
+        print("Running agentic_change_orchestrator (all dependencies mocked)...")
+        print()
 
-            # Run the orchestrator
-            success, final_msg, total_cost, model, changed_files = run_agentic_change_orchestrator(
-                **issue_data
+        # We mock:
+        #   - load_prompt_template / run_agentic_task: skip LLM calls
+        #   - load_workflow_state / save_workflow_state / clear_workflow_state:
+        #       skip state I/O
+        #   - _get_git_root / _setup_worktree / _detect_worktree_changes:
+        #       skip real git
+        #   - _check_existing_pr / _fetch_issue_updated_at: skip GitHub
+        #   - clear_agentic_progress / set_agentic_progress: skip progress IPC
+        #   - post_step_comment / post_step_comment_once: skip GitHub posts
+        #   - extract_step_report: return None so the success-comment hook
+        #       short-circuits cleanly without hitting `gh`.
+        #   - pdd.sync_order.*: skip dependency-graph and script-generation.
+        patches = [
+            patch(
+                "pdd.agentic_change_orchestrator.load_prompt_template",
+                side_effect=mock_load_prompt_template,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.run_agentic_task",
+                side_effect=mock_run_agentic_task,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.load_workflow_state",
+                return_value=({}, None),
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.save_workflow_state",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.clear_workflow_state",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.validate_cached_state",
+                return_value=0,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator._check_existing_pr",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator._fetch_issue_updated_at",
+                return_value="",
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator._get_git_root",
+                return_value=tmp_cwd,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator._setup_worktree",
+                return_value=(tmp_cwd, None),
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator._detect_worktree_changes",
+                return_value=[],
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.set_agentic_progress",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.clear_agentic_progress",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.post_step_comment",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.post_step_comment_once",
+                return_value=True,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.extract_step_report",
+                return_value=None,
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator.register_untracked_prompts",
+                return_value={"registered": [], "skipped": [], "errors": []},
+            ),
+            patch(
+                "pdd.agentic_change_orchestrator._preflight_drift_heal",
+                return_value=([], [], []),
+            ),
+        ]
+
+        for p in patches:
+            p.start()
+        try:
+            success, final_msg, total_cost, model, changed_files = (
+                run_agentic_change_orchestrator(**issue_kwargs)
             )
+        finally:
+            for p in patches:
+                p.stop()
 
-        print("-" * 60)
-        print("Simulation Complete.")
-        print(f"Success: {success}")
-        print(f"Final Message: {final_msg}")
-        print(f"Total Cost: ${total_cost:.2f}")
-        print(f"Model Used: {model}")
-        print(f"Changed Files: {changed_files}")
-        print("\nNext step: Run 'pdd sync' on modified prompts to regenerate code.")
+        print("Result:")
+        print(f"  success       = {success}")
+        print(f"  final_message = {final_msg}")
+        print(f"  total_cost    = ${total_cost:.4f}")
+        print(f"  model_used    = {model}")
+        print(f"  changed_files = {changed_files}")
+        print()
+        print("Next step in real usage: review the PR, then run `bash sync_order.sh`")
+        return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())
