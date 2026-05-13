@@ -1745,12 +1745,38 @@ def run_agentic_bug_orchestrator(
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
             context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
+            # Cache Step 3 output so resume can replay the trusted step-comment
+            # post via the replay loop if posting fails here.
+            state["step_outputs"]["3"] = step_output
             state["step_outputs"]["4"] = context["step4_output"]
             state["step_outputs"]["5"] = context["step5_output"]
             state["last_completed_step"] = 5
             last_completed_step = 5
             # Recalculate start_step so the loop skips 4 and 5
             start_step = 6
+            # Issue #969: post Step 3's trusted step-report comment BEFORE the
+            # `continue` so the fast-track path does not lose the user-visible
+            # report. The common posting block at the bottom of the loop is
+            # bypassed by this `continue`, so post inline. extract_step_report
+            # returns None when no <step_report> block is present, in which
+            # case post_step_comment_once is skipped (no-op).
+            report_body = extract_step_report(step_output)
+            if report_body:
+                step_comment_body = (
+                    f"## Step {step_num}/{total_steps}: {description}\n\n"
+                    f"{report_body}"
+                )
+                post_step_comment_once(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=step_num,
+                    body=step_comment_body,
+                    posted_steps=posted_step_comments,
+                    cwd=current_work_dir,
+                )
+            # Persist posted-step indices so resume does not re-post.
+            state["step_comments"] = sorted(posted_step_comments)
             save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if not quiet:
                 console.print(f"[cyan]  → Fast-track: skipping Steps 4-5 (issue pre-diagnosed)[/cyan]")
