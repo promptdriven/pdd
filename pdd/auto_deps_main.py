@@ -182,45 +182,71 @@ def auto_deps_main(
 
         # Metadata finalization for the mutated prompt file. Errors here must
         # not mask the successful auto-deps result — log a warning and continue.
+        #
         # Identity must be derived from the *original* prompt file because the
         # default auto-deps output is `<basename>_<language>_with_deps.prompt`,
         # which would otherwise yield a bogus ``(<basename>_<language>_with,
         # deps)`` identity.
+        #
+        # Additionally, only finalize when the resolved output path refers to
+        # the *same* file as the original prompt (i.e. in-place overwrite, as
+        # used by ``pdd sync``). For the default CLI invocation the output is a
+        # separate ``*_with_deps.prompt`` file and the canonical prompt is
+        # untouched, so writing a fingerprint that hashes a non-canonical file
+        # under the canonical module identity would leave ``.pdd/meta`` in an
+        # inconsistent state.
         try:
-            basename, language = infer_module_identity(Path(prompt_file))
-            if basename is None or language is None:
+            try:
+                same_target = (
+                    Path(output_path).resolve() == Path(prompt_file).resolve()
+                )
+            except OSError:
+                # Resolution can fail if either path does not exist on disk;
+                # fall back to a textual comparison rather than guessing.
+                same_target = str(output_path) == str(prompt_file)
+
+            if not same_target:
                 if not quiet:
                     console.print(
-                        f"[yellow]Warning: could not infer module identity for "
-                        f"{prompt_file}; skipping metadata finalization.[/yellow]"
+                        "[yellow]Note: auto-deps wrote a separate output file; "
+                        "skipping metadata finalization because the canonical "
+                        "prompt is unchanged.[/yellow]"
                     )
             else:
-                # Clear stale per-module run report because the prompt changed.
-                try:
-                    clear_run_report(basename, language)
-                except Exception as exc:  # noqa: BLE001
+                basename, language = infer_module_identity(Path(prompt_file))
+                if basename is None or language is None:
                     if not quiet:
                         console.print(
-                            f"[yellow]Warning: failed to clear run report for "
-                            f"{basename}/{language}: {exc}[/yellow]"
+                            f"[yellow]Warning: could not infer module identity for "
+                            f"{prompt_file}; skipping metadata finalization.[/yellow]"
                         )
+                else:
+                    # Clear stale per-module run report because the prompt changed.
+                    try:
+                        clear_run_report(basename, language)
+                    except Exception as exc:  # noqa: BLE001
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: failed to clear run report for "
+                                f"{basename}/{language}: {exc}[/yellow]"
+                            )
 
-                # Persist the new fingerprint with current include-dependency hashes.
-                try:
-                    save_fingerprint(
-                        basename=basename,
-                        language=language,
-                        operation="auto-deps",
-                        paths={"prompt": Path(output_path)},
-                        cost=total_cost,
-                        model=model_name,
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    if not quiet:
-                        console.print(
-                            f"[yellow]Warning: failed to save fingerprint for "
-                            f"{basename}/{language}: {exc}[/yellow]"
+                    # Persist the new fingerprint with current include-dependency hashes.
+                    try:
+                        save_fingerprint(
+                            basename=basename,
+                            language=language,
+                            operation="auto-deps",
+                            paths={"prompt": Path(output_path)},
+                            cost=total_cost,
+                            model=model_name,
                         )
+                    except Exception as exc:  # noqa: BLE001
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: failed to save fingerprint for "
+                                f"{basename}/{language}: {exc}[/yellow]"
+                            )
         except Exception as exc:  # noqa: BLE001
             if not quiet:
                 console.print(
