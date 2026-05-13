@@ -6938,3 +6938,315 @@ class TestIssue814BillingErrorsPermanent:
         )
         # 3. No backoff sleep — permanent errors must NOT delay the fallback
         sleep_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Issue #969: trusted step-comment helpers
+# ---------------------------------------------------------------------------
+
+from pdd.agentic_common import (
+    extract_step_report,
+    redact_secrets,
+    truncate_for_github_comment,
+    post_step_comment_once,
+    normalize_step_comments_state,
+    MAX_STEP_COMMENT_BODY,
+    STEP_REPORT_OPEN_TAG,
+    STEP_REPORT_CLOSE_TAG,
+)
+
+
+class TestExtractStepReport:
+    """Issue #969: extract_step_report parses the first balanced <step_report>."""
+
+    def test_extracts_simple_block(self):
+        out = "preamble\n<step_report>\nHello\n</step_report>\nepilogue"
+        assert extract_step_report(out) == "Hello"
+
+    def test_strips_surrounding_whitespace(self):
+        out = "<step_report>\n\n  body  \n\n</step_report>"
+        assert extract_step_report(out) == "body"
+
+    def test_no_open_tag_returns_none(self):
+        assert extract_step_report("nothing here") is None
+
+    def test_open_tag_no_close_returns_none(self):
+        out = "<step_report>oops, no close"
+        assert extract_step_report(out) is None
+
+    def test_empty_string_returns_none(self):
+        assert extract_step_report("") is None
+
+    def test_non_string_input_returns_none(self):
+        # Required contract: never raise on non-string input.
+        assert extract_step_report(None) is None
+        assert extract_step_report(123) is None
+        assert extract_step_report({"x": 1}) is None
+
+    def test_first_block_wins_when_repeated(self):
+        # Nested or repeated reports MUST NOT be concatenated.
+        out = (
+            "<step_report>first</step_report>"
+            "<step_report>second</step_report>"
+        )
+        assert extract_step_report(out) == "first"
+
+    def test_case_sensitive(self):
+        # The constants are lowercase; a different-case variant must NOT match.
+        out = "<Step_Report>body</Step_Report>"
+        assert extract_step_report(out) is None
+
+    def test_constants_match_spec(self):
+        assert STEP_REPORT_OPEN_TAG == "<step_report>"
+        assert STEP_REPORT_CLOSE_TAG == "</step_report>"
+
+
+class TestRedactSecrets:
+    """Issue #969: redact_secrets replaces high-confidence secrets in place."""
+
+    def test_anthropic_key(self):
+        text = "key=sk-ant-abcdefghijklmnopqrstuvwxyz12345"
+        out = redact_secrets(text)
+        assert "sk-ant-" not in out
+        assert "[REDACTED]" in out
+
+    def test_generic_sk_key(self):
+        text = "OPENAI=sk-abcdefghijklmnopqrstuvwx12345"
+        out = redact_secrets(text)
+        assert "sk-abc" not in out
+        assert "[REDACTED]" in out
+
+    def test_github_token(self):
+        text = "token=ghp_abcdefghijklmnopqrstuvwxyz123456"
+        out = redact_secrets(text)
+        assert "ghp_" not in out
+
+    def test_github_fine_grained_pat(self):
+        text = "pat=github_pat_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        out = redact_secrets(text)
+        assert "github_pat_" not in out
+
+    def test_google_api_key(self):
+        text = "GOOGLE=AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ012345"
+        out = redact_secrets(text)
+        assert "AIza" not in out
+
+    def test_aws_access_key(self):
+        text = "AKIAIOSFODNN7EXAMPLE is leaked"
+        out = redact_secrets(text)
+        assert "AKIA" not in out
+
+    def test_bearer_preserves_prefix(self):
+        out = redact_secrets("Authorization header: Bearer abcdef1234567890ghijklmnop")
+        assert "Bearer [REDACTED]" in out
+        assert "abcdef1234567890" not in out
+
+    def test_authorization_header(self):
+        out = redact_secrets("Authorization: Token zzzzzzzzzzzzzzzzzzz1234")
+        # Preserve the literal Authorization: + scheme word, redact only token.
+        assert "Authorization:" in out
+        assert "[REDACTED]" in out
+        assert "zzzzzzz" not in out
+
+    def test_env_assignment_keeps_key(self):
+        out = redact_secrets("ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxxxxxxxxxxxxxx")
+        assert "ANTHROPIC_API_KEY=" in out
+        assert "[REDACTED]" in out
+
+    def test_non_string_input_coerced(self):
+        # Must not raise on non-string input.
+        assert redact_secrets(None) == ""
+        assert isinstance(redact_secrets(123), str)
+
+    def test_empty_input_returns_empty(self):
+        assert redact_secrets("") == ""
+
+    def test_no_secret_unchanged(self):
+        original = "Step 3 completed: 12 tests passed, 0 failed."
+        assert redact_secrets(original) == original
+
+
+class TestTruncateForGithubComment:
+    """Issue #969: truncate_for_github_comment keeps bodies under the cap."""
+
+    def test_short_text_unchanged(self):
+        text = "Hello, world!"
+        assert truncate_for_github_comment(text) == text
+
+    def test_long_text_truncated_with_marker(self):
+        text = "x" * (MAX_STEP_COMMENT_BODY + 100)
+        out = truncate_for_github_comment(text)
+        assert len(out) == MAX_STEP_COMMENT_BODY
+        assert out.endswith("\n\n…[truncated]")
+
+    def test_custom_max_length(self):
+        text = "abcdefghij" * 20  # 200 chars
+        out = truncate_for_github_comment(text, max_length=50)
+        assert len(out) == 50
+        assert out.endswith("…[truncated]")
+
+    def test_non_string_coerced(self):
+        out = truncate_for_github_comment(None)
+        assert out == ""
+
+    def test_pure_no_side_effects(self):
+        text = "x" * (MAX_STEP_COMMENT_BODY + 1)
+        before = text
+        truncate_for_github_comment(text)
+        assert text == before  # input unchanged
+
+    def test_max_step_comment_body_constant(self):
+        # Spec requires this safety margin under GitHub's 65536 cap.
+        assert MAX_STEP_COMMENT_BODY == 60000
+
+
+class TestNormalizeStepCommentsState:
+    """Issue #969: normalize_step_comments_state tolerates any persisted shape."""
+
+    def test_none_returns_empty_set(self):
+        assert normalize_step_comments_state(None) == set()
+
+    def test_list_of_ints(self):
+        assert normalize_step_comments_state([1, 2, 3]) == {1, 2, 3}
+
+    def test_list_of_string_digits(self):
+        assert normalize_step_comments_state(["1", "2", "3"]) == {1, 2, 3}
+
+    def test_set_input(self):
+        assert normalize_step_comments_state({4, 5, 6}) == {4, 5, 6}
+
+    def test_tuple_input(self):
+        assert normalize_step_comments_state((7, 8)) == {7, 8}
+
+    def test_json_string_serialization(self):
+        assert normalize_step_comments_state("[1, 2, 3]") == {1, 2, 3}
+
+    def test_dict_with_truthy_values(self):
+        # Older shape: {"1": true, "2": false, "3": true}
+        raw = {"1": True, "2": False, "3": True}
+        assert normalize_step_comments_state(raw) == {1, 3}
+
+    def test_drops_uncoerceable_elements(self):
+        raw = [1, "two", 3, None, 4.0]
+        # "two" and None drop silently; 4.0 coerces to int.
+        assert normalize_step_comments_state(raw) == {1, 3, 4}
+
+    def test_drops_negative_ints(self):
+        # Step numbers are non-negative — negatives are silently dropped.
+        assert normalize_step_comments_state([-1, 0, 1]) == {0, 1}
+
+    def test_malformed_json_returns_empty(self):
+        # Must not raise on garbage JSON; treat as no posted steps.
+        assert normalize_step_comments_state("not json") == set()
+
+    def test_never_raises_on_garbage(self):
+        # Object with no iter protocol — function must return empty set.
+        assert normalize_step_comments_state(object()) == set()
+
+
+class TestPostStepCommentOnce:
+    """Issue #969: post_step_comment_once enforces resume idempotency."""
+
+    def test_already_posted_short_circuits(self, tmp_path):
+        """When step_num is in posted_steps, no `gh` call is made."""
+        posted = {3}
+        with patch("pdd.agentic_common.subprocess.run") as mock_run, \
+             patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"):
+            ok = post_step_comment_once(
+                "owner", "repo", 42, 3, "body", posted, tmp_path
+            )
+        assert ok is True
+        mock_run.assert_not_called()
+        assert posted == {3}
+
+    def test_success_adds_to_posted_steps(self, tmp_path):
+        posted: set = set()
+        mock_result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("pdd.agentic_common.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"):
+            ok = post_step_comment_once(
+                "owner", "repo", 42, 5, "Step 5 report body", posted, tmp_path
+            )
+        assert ok is True
+        assert 5 in posted
+        # Verify `gh issue comment` was invoked with our repo + issue number.
+        args, _ = mock_run.call_args
+        argv = args[0]
+        assert argv[:3] == ["gh", "issue", "comment"]
+        assert "42" in argv
+        assert "owner/repo" in argv
+
+    def test_gh_failure_does_not_mark_posted(self, tmp_path):
+        posted: set = set()
+        mock_result = MagicMock(returncode=1, stdout="", stderr="boom")
+        with patch("pdd.agentic_common.subprocess.run", return_value=mock_result), \
+             patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"):
+            ok = post_step_comment_once(
+                "owner", "repo", 42, 7, "body", posted, tmp_path
+            )
+        assert ok is False
+        assert 7 not in posted
+
+    def test_missing_gh_returns_false(self, tmp_path):
+        posted: set = set()
+        with patch("pdd.agentic_common._find_cli_binary", return_value=None):
+            ok = post_step_comment_once(
+                "owner", "repo", 42, 1, "body", posted, tmp_path
+            )
+        assert ok is False
+        assert posted == set()
+
+    def test_redact_before_truncate(self, tmp_path):
+        """Secrets are redacted *before* truncation in the posted body.
+
+        Use a punctuation boundary between the secret and the bulk filler so
+        the secret-character class can't extend into the filler region.
+        """
+        posted: set = set()
+        secret = "sk-ant-" + "A" * 40
+        filler = ("y. " * (MAX_STEP_COMMENT_BODY // 3 + 1000))
+        body = secret + " " + filler
+        mock_result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("pdd.agentic_common.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"):
+            post_step_comment_once(
+                "owner", "repo", 42, 2, body, posted, tmp_path
+            )
+        argv = mock_run.call_args[0][0]
+        # The --body argument is the last element.
+        body_arg = argv[-1]
+        assert secret not in body_arg
+        assert "[REDACTED]" in body_arg
+        assert len(body_arg) <= MAX_STEP_COMMENT_BODY
+        assert body_arg.endswith("…[truncated]")
+
+    def test_resume_idempotency_full_loop(self, tmp_path):
+        """Two calls for the same step trigger exactly one gh invocation."""
+        posted: set = set()
+        mock_result = MagicMock(returncode=0, stdout="", stderr="")
+        with patch("pdd.agentic_common.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"):
+            ok1 = post_step_comment_once("o", "r", 1, 4, "b", posted, tmp_path)
+            ok2 = post_step_comment_once("o", "r", 1, 4, "b", posted, tmp_path)
+        assert ok1 is True and ok2 is True
+        assert posted == {4}
+        # Second call skipped the network entirely.
+        assert mock_run.call_count == 1
+
+
+class TestStepCommentIntegration:
+    """Round-trip: persist posted_steps and resume cleanly."""
+
+    def test_round_trip_serialize_normalize(self):
+        # Orchestrator serializes Set[int] as a sorted list; resume reads it
+        # back through normalize_step_comments_state.
+        posted: set = {1, 3, 5}
+        on_disk = sorted(posted)
+        restored = normalize_step_comments_state(on_disk)
+        assert restored == posted
+
+    def test_malformed_persisted_state_no_crash(self):
+        # If a prior crash left the field half-migrated, resume must not
+        # propagate the corruption.
+        assert normalize_step_comments_state({"not": "a step list"}) == set()
+        assert normalize_step_comments_state(12345) == set()

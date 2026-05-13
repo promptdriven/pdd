@@ -21,6 +21,9 @@ from .agentic_common import (
     set_agentic_progress,
     clear_agentic_progress,
     DEFAULT_MAX_RETRIES,
+    extract_step_report,
+    normalize_step_comments_state,
+    post_step_comment_once,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1354,6 +1357,10 @@ def run_agentic_bug_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+        # Issue #969: persisted step_comments may be in any shape (list, set, or
+        # legacy dict) — funnel through normalize_step_comments_state so resume
+        # idempotency works regardless of on-disk representation.
+        posted_step_comments = normalize_step_comments_state(state.get("step_comments"))
     else:
         state = {"step_outputs": {}}
         last_completed_step = 0
@@ -1362,6 +1369,7 @@ def run_agentic_bug_orchestrator(
         model_used = "unknown"
         github_comment_id = None
         worktree_path = None
+        posted_step_comments = set()
 
     context = {
         "issue_url": issue_url,
@@ -2315,6 +2323,32 @@ def run_agentic_bug_orchestrator(
             last_completed_step = step_num
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+
+        # Issue #969: post a trusted per-step report comment exactly once. The
+        # helper redacts secrets, truncates under GitHub's 65k cap, and skips
+        # the network call on resume when step_num is already in
+        # posted_step_comments.
+        if step_success:
+            report_body = extract_step_report(step_output)
+            if report_body:
+                step_comment_body = (
+                    f"## Step {step_num}/{total_steps}: {description}\n\n"
+                    f"{report_body}"
+                )
+                post_step_comment_once(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=step_num,
+                    body=step_comment_body,
+                    posted_steps=posted_step_comments,
+                    cwd=current_work_dir,
+                )
+
+        # Persist posted-step indices so resume can skip already-posted comments.
+        # Serialize as a sorted list for stable JSON output; in-memory shape
+        # stays Set[int] for fast membership checks.
+        state["step_comments"] = sorted(posted_step_comments)
 
         save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:
