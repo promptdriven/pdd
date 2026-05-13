@@ -1824,7 +1824,7 @@ def _extract_bracket_findings(
         r"(?P<body>.*?)(?=^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
         r"(?:(?:Finding|Findings)\s*:\s*)?"
         r"(?:\[?P[0-3]\]?|blocking|blocker|critical|high|medium|low|nit|info)"
-        r"\s*:|^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
+        r"\s*:?\s*[^\n]+?(?:\*\*)?\s*$|^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
     )
     for match in priority_pattern.finditer(output or ""):

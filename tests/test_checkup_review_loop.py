@@ -1856,6 +1856,28 @@ Checks:
         assert "token assignment" in finding.evidence
         assert "git diff --check" not in finding.evidence
 
+    def test_multiple_finding_prefix_priority_blocks_stay_separate(self) -> None:
+        """`Finding: [P*]` headings without priority colons split cleanly."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """Finding: [P1] First issue
+Evidence: [pdd/a.py:10](/tmp/w/pdd/a.py:10) detail.
+
+Finding: [P2] Second issue
+Evidence: [pdd/b.py:20](/tmp/w/pdd/b.py:20) detail.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 2
+        assert result.findings[0].severity == "critical"
+        assert result.findings[0].finding == "First issue"
+        assert result.findings[0].location == "pdd/a.py:10"
+        assert "Second issue" not in result.findings[0].evidence
+        assert result.findings[1].severity == "medium"
+        assert result.findings[1].finding == "Second issue"
+        assert result.findings[1].location == "pdd/b.py:20"
+
     def test_bold_priority_colon_bullets_keep_embedded_location(self) -> None:
         """Codex can emit '- **P1:** sentence with inline file links."""
         from pdd.checkup_review_loop import _parse_review_output
