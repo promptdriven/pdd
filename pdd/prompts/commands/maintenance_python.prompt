@@ -1,4 +1,4 @@
-<pdd-reason>Registers maintenance CLI commands: sync, auto-deps, and setup with all options.</pdd-reason>
+<pdd-reason>Registers maintenance CLI commands: sync, sync-architecture, auto-deps, and setup with all options.</pdd-reason>
 
 <pdd-interface>
 {
@@ -6,6 +6,7 @@
   "command": {
     "commands": [
       {"name": "sync", "description": "Synchronize a prompt with its code, tests, and examples"},
+      {"name": "sync-architecture", "description": "Sync architecture.json from prompt metadata tags"},
       {"name": "auto-deps", "description": "Analyze and insert dependencies into a prompt file"},
       {"name": "setup", "description": "Install shell completion and run setup utility"}
     ]
@@ -14,55 +15,102 @@
 </pdd-interface>
 
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
 
 % Role & Scope
-  This module contains maintenance and setup commands: `sync`, `auto-deps`, and `setup`.
+  This module contains maintenance and setup commands: `sync`, `sync-architecture`, `auto-deps`, and `setup`.
 
 <include>context/python_preamble.prompt</include>
 
 % Program Specification (README.md):
     <README.md>
-    <include select="section:sync,section:auto-deps,section:setup">./README.md</include>
+    <include select="section:1. sync,section:1a. sync-architecture,section:15. auto-deps,section:Post-Installation Setup (Required first step after installation)">./README.md</include>
     </README.md>
 
 % Requirements
   1. **sync**:
-     - Interface: Match the `sync` command specification in `README.md`.
+     - Interface: top-level Click command `@click.command("sync")` with `@click.pass_context` and `@track_cost` decorators. Argument: `@click.argument("basename", required=False)` (optional positional).
      - Logic: Call `sync_main` with `@track_cost` decorator.
-     - BASENAME is optional. If omitted, dispatch to `run_global_sync()` from `agentic_sync.py` for project-wide Tier 1 architecture sync. Do not treat `architecture.json` or paths ending in `/architecture.json` as global-sync aliases; with a positional value they remain normal single-module basenames. Resolve `budget` from the CLI option, then `.pddrc` default context `defaults.budget`, then the hardcoded `$20.0` default. Resolve `target_coverage` from the CLI option, then `.pddrc` default context `defaults.target_coverage`, then leave it unset so downstream defaults apply. Forward the resolved budget, resolved target coverage, `skip_verify`, `skip_tests`, `dry_run`, `agentic`, `no_steer`, `max_attempts`, `one_session`, `timeout_adder`, and the top-level `local` flag from `ctx.obj`.
+     - BASENAME is optional. If omitted, dispatch to `run_global_sync()` from `agentic_sync.py` for project-wide Tier 1 architecture sync. Do not treat `architecture.json` or paths ending in `/architecture.json` as global-sync aliases; with a positional value they remain normal single-module basenames. Resolve `budget` from the CLI option, then `.pddrc` default context `defaults.budget`, then the hardcoded `$20.0` default. Resolve `target_coverage` from the CLI option, then `.pddrc` default context `defaults.target_coverage`, then leave it unset so downstream defaults apply. Forward the resolved budget, resolved target coverage, `skip_verify`, `skip_tests`, `dry_run`, `agentic` (as `agentic_mode`), `no_steer`, `max_attempts`, `one_session`, `timeout_adder`, and the top-level `local` flag from `ctx.obj`. Do NOT forward `steer_timeout` — it is a `sync_main()`-only parameter (see the `--steer-timeout` option spec below); `run_global_sync()` does not accept it and forwarding it would raise `TypeError`.
      - URL detection: If BASENAME matches `github\.com/.+/issues/\d+`, dispatch to `run_agentic_sync()` from `agentic_sync.py` instead of `sync_main()`. Forward `dry_run` so issue sync stays read-only when the user passes `--dry-run`.
-     - Additional options for agentic sync mode: `--timeout-adder` (float, default 0.0) and `--no-github-state` (flag).
-     - `--one-session` flag (bool, default False): Run example/crash/verify/test/fix in a single agentic session. Forward to both `sync_main()` and `_run_agentic_sync_dispatch()`.
-     - Durable issue-sync options: `--durable`, `--durable-branch`, `--no-resume`, and `--durable-max-parallel`. These are valid only for GitHub issue URL syncs and must be forwarded to `run_agentic_sync()` via `_run_agentic_sync_dispatch()`. Non-durable sync behavior must remain unchanged and must not create durable branches, durable worktrees, or checkpoint commits.
-     - Helper: `_run_agentic_sync_dispatch(ctx, issue_url, ..., dry_run, one_session, durable, durable_branch, no_resume, durable_max_parallel)` handles the dispatch, displays results, raises `click.exceptions.Exit(1)` on failure. Forwards `dry_run`, `one_session`, and durable settings to `run_agentic_sync()`.
-     - Import `_is_github_issue_url`, `run_agentic_sync`, and `run_global_sync` from `..agentic_sync`.
-  2. **auto-deps**:
+     - Click options on `sync` (define each EXACTLY as listed; types and defaults are asserted by tests and downstream code):
+       - `--max-attempts` (`type=int`, `default=None`): Maximum fix attempts. Help: "Maximum number of fix attempts. Default: 3 or .pddrc value."
+       - `--budget` (`type=float`, `default=None`): Total cost cap. Help: "Maximum total cost for the sync process. Default: 20.0 or .pddrc value."
+       - `--skip-verify` (`is_flag=True`, `default=False`): Skip verification step.
+       - `--skip-tests` (`is_flag=True`, `default=False`): Skip unit test generation/fixing.
+       - `--target-coverage` (`type=float`, `default=None`): Desired coverage percentage. Help mentions "Default: 90.0 or .pddrc value."
+       - `--dry-run` (`is_flag=True`, `default=False`): Analyze sync state without executing operations.
+       - `--log` (`is_flag=True`, `default=False`, `hidden=True`): Deprecated. When set, emit `click.echo(click.style("Warning: --log is deprecated, use --dry-run instead.", fg="yellow"), err=True)` and then set `dry_run = True` before any dispatch.
+       - `--no-steer` (`is_flag=True`, `default=False`, declared via Click `"no_steer"` name): Disable interactive steering of sync operations.
+       - `--steer-timeout` (`type=float`, `default=None`): Timeout in seconds for steering prompts (default downstream: 8.0). Forward to `sync_main()` as `steer_timeout`. Not forwarded to agentic/global dispatches.
+       - `--agentic` (`is_flag=True`, `default=False`): Use agentic mode for Python. Pass to `sync_main` as `agentic_mode`.
+       - `--timeout-adder` (`type=float`, `default=0.0`): Additional seconds added on top of the per-module wall-clock cap (agentic sync mode).
+       - `--no-github-state` (`is_flag=True`, `default=False`): Disable GitHub comment updates (agentic sync mode). When forwarding to `run_agentic_sync`, pass `use_github_state=not no_github_state` (the negation is required — `no_github_state=True` means `use_github_state=False`).
+       - `--one-session/--no-one-session` (Click `flag/no-flag` syntax, `default=None`): TRI-STATE. `None` means "use the contextual default". Type-hint the parameter as `Optional[bool]`. Resolve to a concrete bool BEFORE dispatching:
+         * For GitHub issue URL sync: `effective_one_session = one_session if one_session is not None else True` (default True).
+         * For no-BASENAME global sync: `effective_one_session = one_session if one_session is not None else False` (default False).
+         * For single-module sync (basename given, not a URL): `effective_one_session = one_session if one_session is not None else False` (default False).
+         Forward the resolved `effective_one_session` to `sync_main()`, `_run_agentic_sync_dispatch()`, and `_run_global_sync_dispatch()`. The tri-state semantics + contextual default are asserted by tests and user-visible behavior — do NOT collapse this to a simple `--one-session is_flag default=False`.
+       - Durable issue-sync options (forwarded only when BASENAME is a GitHub issue URL):
+         * `--durable` (`is_flag=True`, `default=False`): Run each module in an isolated worktree and checkpoint to a durable branch.
+         * `--durable-branch` (`type=str`, `default=None`): Override the durable checkpoint branch name.
+         * `--no-resume` (`is_flag=True`, `default=False`): Ignore existing checkpoint trailers.
+         * `--durable-max-parallel` (`type=int`, `default=None`): Cap concurrent module worktrees.
+     - Durable-option validation (raise `click.UsageError` with EXACT messages — wording asserted by tests / docs):
+       * If BASENAME is omitted OR is a non-URL basename, and ANY of `durable`, `durable_branch`, `no_resume`, `durable_max_parallel is not None` is set: raise `click.UsageError("Durable sync options require a GitHub issue URL.")`.
+       * If BASENAME is a GitHub issue URL and `--durable` is NOT set but any of `durable_branch is not None`, `no_resume`, `durable_max_parallel is not None` is set: raise `click.UsageError("--durable-branch, --no-resume, and --durable-max-parallel require --durable.")`.
+     - Helper: `_run_agentic_sync_dispatch(ctx, issue_url, ..., dry_run, one_session, durable, durable_branch, no_resume, durable_max_parallel)` handles the dispatch, displays results, raises `click.exceptions.Exit(1)` on failure. Forwards `dry_run`, `one_session`, and durable settings to `run_agentic_sync()`. Passes `use_github_state=not no_github_state` (NOT `no_github_state` directly). MUST also forward `reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None` so an explicit `--time` propagates while an implicit fallback does not.
+     - Helpers: `_run_global_sync_dispatch(ctx, budget, skip_verify, skip_tests, target_coverage, dry_run, agentic, no_steer, max_attempts, one_session=False, timeout_adder=0.0)` handles the no-BASENAME case by calling `run_global_sync(...)`. It forwards `local=ctx.obj.get("local", False)` from ctx, raises `click.exceptions.Exit(1)` on failure, and re-raises `click.Abort` / `click.exceptions.Exit`.
+     - Helpers: `_resolve_global_sync_budget(budget) -> float` and `_resolve_global_sync_target_coverage(target_coverage) -> Optional[float]` read `.pddrc` via `_find_pddrc_file(Path.cwd())` and `_load_pddrc_config(...)` from `..construct_paths`. They look up `contexts.default.defaults.budget` and `contexts.default.defaults.target_coverage` respectively. Budget falls back to module-level constant `DEFAULT_SYNC_BUDGET = 20.0`; target coverage falls back to `None`. Both swallow `TypeError`/`ValueError` during float coercion.
+     - Both `_run_agentic_sync_dispatch` and `_run_global_sync_dispatch` MUST emit (when `not quiet`) exactly four lines via `click.echo` in this order: `f"Status: {'Success' if success else 'Failed'}"`, `f"Message: {message}"`, `f"Cost: ${cost:.4f}"`, `f"Model: {model}"`. This exact format is asserted by regression tests and user docs — do not reformat.
+     - Import `_is_github_issue_url`, `run_agentic_sync`, and `run_global_sync` from `..agentic_sync`. Import `_find_pddrc_file` and `_load_pddrc_config` from `..construct_paths`. Import `sync_prompts_to_architecture` from `..architecture_sync`.
+  2. **sync-architecture**:
+     - Interface: top-level Click command `@click.command("sync-architecture")` with `@click.pass_context` and `@track_cost` decorators. Defined alongside `sync` (NOT a subcommand of `sync`).
+     - Argument: `@click.argument("filenames", nargs=-1)` — zero or more prompt filenames; empty tuple means "all prompts".
+     - Option: `--dry-run` (bool flag, default False): "Analyze prompt-to-architecture sync without writing architecture.json."
+     - Logic: Call `sync_prompts_to_architecture(filenames=list(filenames) or None, dry_run=dry_run)` imported from `..architecture_sync`.
+     - Output: If not quiet (`ctx.obj.get("quiet", False)`), call `_echo_architecture_sync_result(result, dry_run=dry_run)` to render the summary.
+     - Exit policy: If `not result.get("success")`, raise `click.exceptions.Exit(1)`. On success, return the tuple `(result, 0.0, "local")` so `@track_cost` records zero cost / `"local"` model.
+     - Exception policy: re-raise `click.Abort` and `click.exceptions.Exit`; for any other exception call `handle_error(exception, "sync-architecture", quiet)` and return `None`.
+  3. **_echo_architecture_sync_result(result, *, dry_run)** helper:
+     - Prints a one-line summary. Dry-run wording: `f"Dry run: would update {result['updated_count']} module(s); skipped {result['skipped_count']}."` Non-dry-run wording: `f"Updated {result['updated_count']} module(s); skipped {result['skipped_count']}."`
+     - For each entry in `result.get("results", [])`: if `entry.get("updated")` print `f"UPDATED {entry['filename']}"`; elif `not entry.get("success")` print `f"ERROR {entry['filename']}: {entry.get('error')}"`.
+     - If `result.get("errors")` is non-empty, print `"Sync errors:"` then `f"- {error}"` per entry.
+     - Read `validation = result.get("validation", {})`. If `validation.get("errors")` is non-empty, print `"Validation errors:"` then `f"- {error['message']}"` per entry. If `validation.get("warnings")` is non-empty, print `"Validation warnings:"` then `f"- {warning['message']}"` per entry.
+  4. **auto-deps**:
      - Interface: Match the `auto-deps` command specification in `README.md`.
      - Logic: Call `auto_deps_main` with `@track_cost` decorator.
+     - Argument typing: `prompt_file` uses `click.Path(exists=True, dir_okay=False)`; `directory_path` uses `click.Path(exists=False, file_okay=False)` (existence intentionally NOT enforced so the command can manually handle quoted paths or unexpanded globs).
+     - Before invoking `auto_deps_main`, strip wrapping single and double quotes from `directory_path` (`directory_path.strip('"').strip("'")`) when it is non-empty, to handle shell-quoted paths.
+     - Stash the resolved `include_docs`, `no_dedup`, and `concurrency` values into `ctx.obj` (via `ctx.ensure_object(dict)`) under the same keys so downstream consumers can read them.
      - Additional options:
        - `--include-docs` (bool flag, default False): Include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Pass as `include_docs` to `auto_deps_main`.
        - `--no-dedup` (bool flag, default False): Disable redundant inline content removal after inserting includes. Pass as `no_dedup` to `auto_deps_main`.
        - `--concurrency` (int, default 1): Number of parallel workers for file summarization LLM calls. Pass as `concurrency` to `auto_deps_main`.
-  3. **setup**:
+  5. **setup**:
      - Interface: Match the `setup` command specification in `README.md`.
      - Logic: Install shell completion, then run setup utility.
      - No `@track_cost` (no LLM calls).
+     - Import `pdd.cli` LAZILY inside the function body via `from .. import cli as cli_module`, then call `cli_module.install_completion(quiet=quiet)`. Do NOT hoist this to a module-level import — tests mock `pdd.cli.install_completion` and rely on the late binding. Call `_run_setup_utility()` (imported from `..core.utils`) afterward. On exception, call `handle_error(e, "setup", False)`.
 
 % Dependencies
   <sync_main_example>
-  <include select="def:sync_main,def:_run_agentic_sync_dispatch">context/sync_main_example.py</include>
+  <include>context/sync_main_example.py</include>
   </sync_main_example>
   <auto_deps_main_example>
-  <include select="def:auto_deps_main">context/auto_deps_main_example.py</include>
+  <include>context/auto_deps_main_example.py</include>
   </auto_deps_main_example>
   <track_cost_example>
   <include>context/track_cost_example.py</include>
   </track_cost_example>
   <agentic_sync_example>
-  <include select="def:run_agentic_sync,def:run_global_sync,def:_is_github_issue_url">context/agentic_sync_example.py</include>
+  <include>context/agentic_sync_example.py</include>
   </agentic_sync_example>
+  <pdd.architecture_sync>
+  <include select="def:example_sync_prompts_to_architecture">context/architecture_sync_example.py</include>
+  </pdd.architecture_sync>
   <pdd.cli>
   <include select="def:install_completion">context/change/15/initial_cli.py</include>
   </pdd.cli>
