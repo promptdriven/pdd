@@ -61,7 +61,7 @@ The quantitative evidence comes from three artifact classes: the git history for
 
 **Table 1.** Outcomes of the two attempts.
 
-> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. A later reconstruction from `~/.claude/history.jsonl` recovered the developer-typed subset (3,048 vibe / 1,237 PDD prompts); this is a strict lower bound on the figures above.*
+> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. A later reconstruction from `~/.claude/history.jsonl` recovered the developer-typed subset (3,048 vibe / 1,237 PDD prompts); this is a strict lower bound on the figures above. The raw reconstructed prompt logs are retained privately rather than published as a public evidence dump.*
 
 ### 3.1 What I Held Constant
 
@@ -147,12 +147,12 @@ The simplest explanation for a non-converging project is that I did not try hard
 
 ### 5.1 Test-Driven Development Was Requested 38 Times
 
-Across the 15 days I asked Claude to do test-driven development 38 times. Vibe day 1 alone had three TDD instructions:
+Across the 15 days I asked Claude to do test-driven development 38 times. Vibe day 1 alone had three separate TDD instructions. Normalized for readability, those requests were:
 
 ```
-Vibe day 1  "also always work in test driven devlopment, create the test first..."
-Vibe day 1  "also always work in tdd format test driven development"
-Vibe day 1  "i want you to do in tdd style, first write test then code"
+Vibe day 1  Work in test-driven development: create the test first, then make the fix.
+Vibe day 1  Use a TDD workflow.
+Vibe day 1  Write the test before the implementation.
 ```
 
 Tests were added and run with `pytest` and the project's cloud integration suite. By the end of the 15 days, the suite contained 67 test functions.
@@ -177,13 +177,11 @@ So the failure was not the absence of TDD. It was that, in this attempt, the tes
 
 ### 5.3 Other Forms of Structure Were Tried
 
-TDD was not the only intervention. I also asked for regression sweeps, ran staging deployments on a dedicated staging environment, requested full system reviews, and asked for flow diagrams of the architecture. Session logs from the first attempt show the pattern:
+TDD was not the only intervention. I also asked for regression sweeps, ran staging deployments on a dedicated staging environment, requested full system reviews, and asked for flow diagrams of the architecture. Session-log summaries from the first attempt show the pattern:
 
-> *"We need to make a regression sweep, because what is currently happening is we fix one thing, it fails the other thing... we are kind of running in loop for now."*
-
-In another log entry, I tried to articulate — to Claude itself — what a workflow that would actually work might look like:
-
-> *"The problem we are running is that we writing code, but we reaching dead end, so we want to work in prompt space, code space is not working for us. Write the test and prompt first and then the code"*
+- I requested a regression sweep because fixes in one area were repeatedly causing failures elsewhere.
+- I identified the work as stuck in a loop rather than merely blocked by one unresolved bug.
+- I explicitly described the need to move from code-space patching into prompt/specification-space work.
 
 That message was reaching for what PDD would later make mechanical: prompts first, tests before code, code last. Early in the failed attempt, I had stumbled into the right idea. But the vibe coding workflow had no durable regeneration step from a saved prompt. I could edit a prompt in chat, but I then had to manually patch the generated code to match — which reintroduced exactly the drift the convergence loop was made of. The insight was correct. The workflow could not deliver on it.
 
@@ -406,24 +404,17 @@ These rules are not a substitute for a controlled experiment, but they make the 
 
 ## Appendix C — Selected Session-Log Evidence
 
-The selected quotes below come from timestamped Claude Code prompt history. Spelling and grammar are preserved from the original logs.
+The entries below summarize timestamped Claude Code prompt history. They are normalized for readability rather than presented as verbatim transcript quotes. The raw prompt history is retained privately for audit rather than published as a public prompt dump.
 
-Direct quotes from the Claude Code session logs during the vibe coding phase (selected from 38 TDD instructions in total, and other explicit process signals). Spelling and grammar are preserved from the original logs:
+Selected process signals from the vibe coding phase:
 
-```
-Vibe day 1   "also always work in test driven devlopment, create the test first
-             and then make the fix from now on"
-Vibe day 1   "also always work in tdd format test driven development"
-Vibe day 1   "i want you to do in tdd style, first write test then code"
-Vibe day 4   "we need to make a regression sweep, because what is currently
-             happening is we fix one thing, it fails the other thing"
-Vibe day 4   "so the problem we are running is that we writing code, but we
-             reaching dead end, so we want to work in prompt space"
-Vibe day 5   "i tried to vibe code, and i am stuck in loop, using vibe code to
-             fix this is not working"
-Vibe day 13  "do a full end to end analysis, we running in loops, its been
-             3 hours, make sure everything is proper and correct"
-```
+| Phase | Normalized session-log signal |
+|---|---|
+| Vibe day 1 | Requested test-driven development and test-first implementation before fixes. |
+| Vibe day 4 | Requested a regression sweep because fixing one area was causing failures elsewhere. |
+| Vibe day 4 | Identified that code-space patching had reached a dead end and that the work needed to move into prompt/specification space. |
+| Vibe day 5 | Described the vibe-coded attempt as stuck in a loop and looked for a PDD-style recovery path. |
+| Vibe day 13 | Requested a full end-to-end analysis after several hours in the same debugging loop. |
 
 Selected commit-message signals from the vibe coding phase:
 
