@@ -135,7 +135,6 @@ version = "0.0.236"
 tag_format = "v$version"
 version_files = [
     "pyproject.toml:version",
-    "pdd/setup.py:version=\"(.*?)\"",
     "README.md:Current version: (.*?)$",
     "README.md:https://img.shields.io/badge/pdd--cli-v(.*?)-blue",
     "pdd/pdd_completion.sh:# Version: (.*?)",
