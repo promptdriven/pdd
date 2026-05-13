@@ -1516,6 +1516,46 @@ def run_agentic_bug_orchestrator(
                 if not quiet:
                     console.print(f"[blue]Copied {len(repro_copied)} Step 5 reproduction test(s) to worktree[/blue]")
 
+    # Issue #969: replay cached step reports whose comment did not post in a
+    # prior run (e.g. transient `gh` failure, missing CLI). The orchestrator
+    # advances ``last_completed_step`` independently of comment-post success,
+    # so on resume any completed step whose index is absent from
+    # ``posted_step_comments`` may still owe a comment. post_step_comment_once
+    # is a no-op when ``step_num`` is already in ``posted_step_comments``,
+    # so this loop is safe to run unconditionally on every resume.
+    replay_count_before = len(posted_step_comments)
+    for _step_num, _name, _description in steps_config:
+        s_key = str(_step_num)
+        cached = step_outputs.get(s_key)
+        if not cached or cached.startswith("FAILED:"):
+            continue
+        if _step_num in posted_step_comments:
+            continue
+        report_body = extract_step_report(cached)
+        if not report_body:
+            continue
+        replay_body = (
+            f"## Step {_step_num}/{total_steps}: {_description}\n\n"
+            f"{report_body}"
+        )
+        post_step_comment_once(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=_step_num,
+            body=replay_body,
+            posted_steps=posted_step_comments,
+            cwd=cwd,
+        )
+    if len(posted_step_comments) != replay_count_before:
+        state["step_comments"] = sorted(posted_step_comments)
+        replay_save = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if replay_save:
+            github_comment_id = replay_save
+
     for step_index, (step_num, name, description) in enumerate(steps_config, 1):
         if step_num < start_step:
             continue

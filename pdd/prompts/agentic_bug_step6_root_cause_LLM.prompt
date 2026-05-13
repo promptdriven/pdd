@@ -122,13 +122,13 @@ You are working on step 6 of 12 in an agentic bug investigation workflow. Previo
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+Return your findings as a `<step_report>` block — the PDD orchestrator will post the
+comment to issue #{issue_number} using trusted credentials. Do NOT call
+`gh issue comment` yourself for this step report.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
+Wrap the markdown body shown below inside `<step_report>` and `</step_report>` tags
+(on their own lines) so the orchestrator can extract and post it. Your report should
+follow this format:
 
 ```markdown
 ## Step 6: Root Cause Analysis
@@ -223,4 +223,4 @@ Examples:
 - The fix location you recommend here directly determines which component pdd bug will create tests for — getting this wrong means tests will target the wrong code
 - If root cause is unclear, document what you learned and hypotheses
 - **Cross-cutting check**: Count how many call sites would need the same change. If 5+, stop and think about a centralized solution. A fix that patches 10 functions with the same `if not flag:` guard is a code smell — the right fix is usually one mechanism at a higher level.
-- Always post your findings as a GitHub comment before completing
+- Always emit your findings inside a `<step_report>...</step_report>` block — the PDD orchestrator posts the comment via trusted credentials
