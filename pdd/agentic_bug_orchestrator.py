@@ -2342,6 +2342,33 @@ def run_agentic_bug_orchestrator(
                 changed_files = list(set(changed_files))
                 context["files_to_stage"] = ", ".join(changed_files)
 
+        # Issue #969: post a trusted per-step report comment exactly once. The
+        # helper redacts secrets, truncates under GitHub's 65k cap, and skips
+        # the network call on resume when step_num is already in
+        # posted_step_comments. Posted BEFORE the hard-stop check so that
+        # hard-stop steps (e.g. duplicate detection, "Needs More Info") still
+        # emit their user-visible step comment — the step prompts no longer
+        # call `gh issue comment` directly, so this is the only path that
+        # writes the comment for the hard-stop case. Gated on presence of a
+        # <step_report> block rather than step_success: extract_step_report
+        # returns None when no block is present, so this is a no-op for
+        # crashes/timeouts that produce no report.
+        report_body = extract_step_report(step_output)
+        if report_body:
+            step_comment_body = (
+                f"## Step {step_num}/{total_steps}: {description}\n\n"
+                f"{report_body}"
+            )
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=step_num,
+                body=step_comment_body,
+                posted_steps=posted_step_comments,
+                cwd=current_work_dir,
+            )
+
         # Check for hard stops
         stop_reason = _check_hard_stop(step_num, step_output, files_extracted)
         if stop_reason:
@@ -2349,6 +2376,10 @@ def run_agentic_bug_orchestrator(
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             state["last_completed_step"] = step_num
             state["step_outputs"][str(step_num)] = step_output
+            # Persist posted-step indices so resume does not re-post the
+            # hard-stop comment (post_step_comment_once is idempotent
+            # in-process but a fresh resume would have an empty set).
+            state["step_comments"] = sorted(posted_step_comments)
             save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
@@ -2363,27 +2394,6 @@ def run_agentic_bug_orchestrator(
             last_completed_step = step_num
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
-
-        # Issue #969: post a trusted per-step report comment exactly once. The
-        # helper redacts secrets, truncates under GitHub's 65k cap, and skips
-        # the network call on resume when step_num is already in
-        # posted_step_comments.
-        if step_success:
-            report_body = extract_step_report(step_output)
-            if report_body:
-                step_comment_body = (
-                    f"## Step {step_num}/{total_steps}: {description}\n\n"
-                    f"{report_body}"
-                )
-                post_step_comment_once(
-                    repo_owner=repo_owner,
-                    repo_name=repo_name,
-                    issue_number=issue_number,
-                    step_num=step_num,
-                    body=step_comment_body,
-                    posted_steps=posted_step_comments,
-                    cwd=current_work_dir,
-                )
 
         # Persist posted-step indices so resume can skip already-posted comments.
         # Serialize as a sorted list for stable JSON output; in-memory shape

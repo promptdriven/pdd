@@ -1486,7 +1486,7 @@
   },
   {
     "reason": "Orchestrates the 11-step agentic bug workflow with E2E gate and state persistence.",
-    "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation.",
+    "description": "Coordinates duplicate checking, documentation review, triage, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation. Per-step user-visible comments are posted by the orchestrator under trusted PDD credentials: it extracts the <step_report> block from each step's output via extract_step_report and posts once via post_step_comment_once (before the hard-stop check so hard-stop steps still emit their comment). The set of already-posted step indices is persisted in state['step_comments'], hydrated on resume by normalize_step_comments_state, and replayed for any completed step whose comment did not land.",
     "dependencies": [],
     "priority": 42,
     "filename": "agentic_bug_orchestrator_python.prompt",
