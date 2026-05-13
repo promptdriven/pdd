@@ -61,7 +61,7 @@ The quantitative evidence comes from three artifact classes: the git history for
 
 **Table 1.** Outcomes of the two attempts.
 
-> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. The released [evidence bundle](evidence/README.md) reconstructs the developer-typed subset from `~/.claude/history.jsonl` (3,048 vibe / 1,237 PDD prompts); this is a strict lower bound on the figures above.*
+> *Note on the "Opus 4.6 developer messages" row: these totals were computed from the original Claude Code session JSONLs during the analysis phase, which captured pasted contents, command outputs, and tool-result messages in addition to typed prompts. Those raw JSONLs were subsequently auto-cleaned from local storage. A later reconstruction from `~/.claude/history.jsonl` recovered the developer-typed subset (3,048 vibe / 1,237 PDD prompts); this is a strict lower bound on the figures above.*
 
 ### 3.1 What I Held Constant
 
@@ -406,7 +406,7 @@ These rules are not a substitute for a controlled experiment, but they make the 
 
 ## Appendix C — Selected Session-Log Evidence
 
-The complete set of feature-relevant typed prompts (3,048 vibe + 1,237 PDD) is published alongside this paper in [`evidence/`](evidence/README.md). Each quote below maps to a specific timestamped entry; the line-by-line mapping is in [`evidence/quote_map.md`](evidence/quote_map.md).
+The selected quotes below come from timestamped Claude Code prompt history. Spelling and grammar are preserved from the original logs.
 
 Direct quotes from the Claude Code session logs during the vibe coding phase (selected from 38 TDD instructions in total, and other explicit process signals). Spelling and grammar are preserved from the original logs:
 
