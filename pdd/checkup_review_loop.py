@@ -107,6 +107,17 @@ EXTERNAL_STATUS_AREAS: Tuple[str, ...] = (
     "status",
     "workflow",
 )
+REVIEW_TRAILING_SECTION_NAMES = r"(?:Checks|Checks Run|Verification|Regression Checks)"
+REVIEW_TRAILING_SECTION_LOOKAHEAD = (
+    r"\n\s*(?:\*\*)?"
+    + REVIEW_TRAILING_SECTION_NAMES
+    + r"(?:\*\*)?\s*:?[^\n]*(?=\n|\Z)"
+)
+REVIEW_TRAILING_SECTION_SPLIT_RE = (
+    r"(?:^|\n)\s*(?:\*\*)?"
+    + REVIEW_TRAILING_SECTION_NAMES
+    + r"(?:\*\*)?\s*:?[^\n]*"
+)
 
 # Statuses that always mean "not clean" regardless of how a caller widens
 # `clean_reviewer_states` — provider-side outages must never silently ship.
@@ -2536,10 +2547,12 @@ def _extract_bracket_findings(
     findings: List[ReviewFinding] = []
     priority_pattern = re.compile(
         r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
-        r"\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
+        r"(?:Finding\s*:\s*)?\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
         r"(?P<body>.*?)(?=^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
         r"(?:\[?P[0-3]\]?|blocking|blocker|critical|high|medium|low|nit|info)"
-        r"\s*:|^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
+        r"\s*:|^\s*\d+[.)]\s+|"
+        + REVIEW_TRAILING_SECTION_LOOKAHEAD
+        + r"|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
     )
     for match in priority_pattern.finditer(output or ""):
@@ -2604,7 +2617,9 @@ def _extract_bracket_findings(
         )
     numbered_heading_pattern = re.compile(
         r"^\s*\d+[.)]\s+(?P<title>[^\n]+?)\s*$\n?"
-        r"(?P<body>.*?)(?=^\s*\d+[.)]\s+|\n\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*|\Z)",
+        r"(?P<body>.*?)(?=^\s*\d+[.)]\s+|"
+        + REVIEW_TRAILING_SECTION_LOOKAHEAD
+        + r"|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
     )
     for match in numbered_heading_pattern.finditer(output or ""):
@@ -2700,7 +2715,7 @@ def _finding_evidence(title: str, body: str) -> str:
 
 def _strip_review_trailing_sections(text: str) -> str:
     return re.split(
-        r"(?:^|\n)\s*\*\*(?:Checks|Checks Run|Verification|Regression Checks)\*\*",
+        REVIEW_TRAILING_SECTION_SPLIT_RE,
         text or "",
         maxsplit=1,
         flags=re.IGNORECASE,
