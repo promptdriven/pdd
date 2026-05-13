@@ -42,5 +42,6 @@ httpx==0.28.1
 pytest-asyncio
 pytest-mock
 pytest-testmon
+pytest-timeout
 pytest-xdist
 twine

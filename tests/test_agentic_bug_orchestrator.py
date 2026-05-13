@@ -42,6 +42,10 @@ from unittest.mock import MagicMock, patch, call
 from pathlib import Path
 from typing import List, Tuple
 
+# Cap per-test runtime for this real-LLM heavy module. Individual hot tests
+# may carry their own @pytest.mark.timeout override.
+pytestmark = pytest.mark.timeout(450)
+
 # Import the module under test
 from pdd.agentic_bug_orchestrator import run_agentic_bug_orchestrator
 
