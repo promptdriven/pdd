@@ -2213,7 +2213,14 @@
     "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "auto_include_python.prompt",
-      "metadata_sync_python.prompt"
+      "metadata_sync_python.prompt",
+      "construct_paths_python.prompt",
+      "config_resolution_python.prompt",
+      "get_language_python.prompt",
+      "agentic_common_python.prompt",
+      "agentic_update_python.prompt",
+      "sync_determine_operation_python.prompt",
+      "operation_log_python.prompt"
     ],
     "priority": 62,
     "filename": "update_main_python.prompt",

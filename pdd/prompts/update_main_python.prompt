@@ -1,17 +1,28 @@
 <include>context/python_preamble.prompt</include>
 <include>context/ctx_obj_params.prompt</include>
 
-<pdd-reason>CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, and optional metadata sync.</pdd-reason>
+<pdd-reason>CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.</pdd-reason>
 
 <pdd-interface>
 {
-  "type": "module",
-  "module": {
-    "functions": [
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "resolve_prompt_code_pair",
+        "signature": "(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None) -> Tuple[str, str]"
+      },
+      {
+        "name": "find_and_resolve_all_pairs",
+        "signature": "(repo_root: str, quiet: bool = False, extensions: Optional[str] = None, output_dir: Optional[str] = None) -> List[Tuple[str, str]]"
+      },
+      {
+        "name": "update_file_pair",
+        "signature": "(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo, simple: bool = False) -> Dict[str, Any]"
+      },
       {
         "name": "update_main",
-        "signature": "(ctx, input_prompt_file, modified_code_file, input_code_file, output, use_git, repo, extensions, directory, strength, temperature, simple=False, base_branch='main', budget=None, dry_run=False, sync_metadata=False)",
-        "returns": "Optional[Tuple[str, float, str]]"
+        "signature": "(ctx: click.Context, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git: bool = False, repo: bool = False, extensions: Optional[str] = None, directory: Optional[str] = None, strength: Optional[float] = None, temperature: Optional[float] = None, simple: bool = False, base_branch: str = 'main', budget: Optional[float] = None, dry_run: bool = False, sync_metadata: bool = False) -> Optional[Tuple[str, float, str]]"
       }
     ]
   }
@@ -20,6 +31,13 @@
 
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+<pdd-dependency>config_resolution_python.prompt</pdd-dependency>
+<pdd-dependency>get_language_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_update_python.prompt</pdd-dependency>
+<pdd-dependency>sync_determine_operation_python.prompt</pdd-dependency>
+<pdd-dependency>operation_log_python.prompt</pdd-dependency>
 
 % Goal
 Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on modified code, featuring repository-wide scanning, agentic routing, and post-update synchronization.
@@ -28,7 +46,7 @@ Write `pdd/update_main.py` — the CLI wrapper for updating prompts based on mod
 Supports three modes: true update, regeneration, and repository-wide updates. Routes to agentic or legacy update based on `simple` parameter and agent availability. In repo mode, detects changed files via fingerprint comparison (with git fallback) and performs post-update architecture/PRD sync.
 
 % Requirements
-1. Function: `update_main(ctx, input_prompt_file: Optional[str], modified_code_file: Optional[str], input_code_file: Optional[str], output: Optional[str], use_git, repo, extensions, directory, strength: Optional[float], temperature: Optional[float], simple: bool = False, base_branch: str = "main", budget: Optional[float] = None, dry_run: bool = False, sync_metadata: bool = False) -> Optional[Tuple[str, float, str]]`
+1. Preserve the public surface declared in `<pdd-interface>` exactly, including helper exports and default values. `repo=False`, `extensions=None`, and `directory=None` are compatibility-critical because `pdd sync` calls `update_main(..., use_git=True, strength=..., temperature=...)` without those arguments.
 2. Return (prompt, cost, model) on success, None on error.
 3. Agentic routing (when `simple=False` and agents available): try agentic first, fall back to legacy on failure — applies to all three modes.
 4. Read updated prompt file content after successful agentic update (agentic writes directly to file).
@@ -38,12 +56,24 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
 8. Without --output, overwrite input_prompt_file in place.
 9. use_git and input_code_file are mutually exclusive (raise ValueError).
 10. Before any legacy path writes generated/updated `.prompt` content, call `sanitize_prompt_output(content, destination_path)` so invalid `<include>` tags or selected includes are cleaned before a later `pdd sync` preprocess pass.
-11. **Metadata sync orchestration** (opt-in via `sync_metadata=True`):
+11. Keep these module-level imports/symbols patchable for tests and callers: `git`, `get_language`, `get_available_agents`, `calculate_sha256`, `extract_include_deps`, `read_fingerprint`, and `construct_paths`. Do not replace them with private-only wrappers that remove the public symbol from `pdd.update_main`.
+12. Use the return values from `construct_paths`: `resolved_config`, `input_strings`, and `output_file_paths`. Do not call it only for side effects. Single-file update/regeneration must continue to honor `.pddrc` context defaults and constructed output paths.
+13. Resolve `.pddrc` runtime config per target file, not once globally for repo mode. Repos with multiple `.pddrc` contexts must use each file's own strength/temperature.
+14. **Metadata sync orchestration** (opt-in via `sync_metadata=True`):
     - **Single-file & regeneration modes**: After the prompt has been written successfully, call `run_metadata_sync(prompt_path=<written prompt path>, code_path=<modified_code_file>, dry_run=False)` from `pdd.metadata_sync`. Aggregate per-stage status into a returned summary and surface any unresolved gaps in the Rich console (one line per failed stage, naming the stage). Do not run when the update itself failed or returned None. **When the orchestrator returns a `MetadataSyncResult` whose `.ok` is False (or it raises), `update_main` MUST raise `click.exceptions.Exit(1)`** — `return None` is insufficient because the Click command wrapper (`pdd/commands/modify.py:update`) treats a None return as a normal completion (`exit_code 0`). Raising `click.exceptions.Exit(1)` is the only way to make the CLI exit non-zero, which is what the preflight auto-heal subprocess keys off (`agentic_change_orchestrator.py:1009` checks `returncode == 0`). The Click command wrapper must include `click.exceptions.Exit` in its re-raise list so a bare `except Exception` does not swallow the signal back into exit 0 (#871 acceptance criterion).
     - **Repo mode**: Replace the existing post-update per-pair fingerprint + per-pair architecture-sync sequence with a single `run_metadata_sync` call per successfully updated pair. The orchestrator handles fingerprint finalization (last), architecture sync, and run-report cleanup. **PRD sync remains in `update_main`** (called once after the per-pair loop, keyed off the count of pairs whose `MetadataSyncResult.stages['architecture']` reports updates) — the orchestrator deliberately does NOT call PRD sync itself, keeping its blast radius scoped to per-prompt metadata. One pair's failure must not abort the batch — accumulate per-pair `MetadataSyncResult` and render them in the summary table. **After the summary table is printed, if any per-pair `MetadataSyncResult.ok` is False, `update_main` MUST raise `click.exceptions.Exit(1)`** — same contract as single-file mode (the success tuple is reserved for "every pair finalized cleanly"). Without this, repo-mode silently returns the success tuple and Click exits 0, which is the exact false-green automation hazard #871 was wired up to prevent.
     - **Summary table**: Add a `metadata` column showing one of `synced`, `partial:<stage>`, `failed:<stage>`, `skipped`, or `dry-run`. When `sync_metadata=False`, render `skipped` so the column is present but informative.
     - **Failure reporting**: When any stage in `MetadataSyncResult` is not `ok`, print a Rich error line per failed stage with the stage name and reason. The `metadata` column makes it obvious which layer is incomplete.
-    - **Backward compatibility**: When `sync_metadata=False` (default), behavior is unchanged — repo mode keeps its current post-update fingerprint and architecture-sync calls; single-file/regeneration modes do nothing extra.
+    - **Backward compatibility**: When `sync_metadata=False` (default), behavior is unchanged for repo mode — it keeps its current post-update fingerprint and architecture-sync calls. Single-file and regeneration modes still run the default fingerprint finalization defined in Requirement 15 (this is the only metadata write they perform by default).
+15. Default fingerprint finalization for single-file and regeneration modes:
+    - After a successful single-file or regeneration update, after the prompt has been written and before returning a non-None `(prompt, cost, model)` tuple, write a current fingerprint for the affected `(prompt, code)` pair.
+    - Reuse `infer_module_identity(prompt_path)` and `save_fingerprint(...)` from `pdd.operation_log`; do not introduce a parallel fingerprint implementation.
+    - Skip this default finalization in repo mode because repo mode already performs post-update fingerprinting.
+    - If `sync_metadata=True`, do not double-write and print `[info][metadata] Skipping fingerprint finalization: orchestrator owns fingerprint stage[/info]` unless `quiet`.
+    - If `dry_run=True`, do not finalize metadata and print `[info][metadata] Skipping fingerprint finalization: dry-run mode[/info]` unless `quiet`.
+    - If `infer_module_identity(prompt_path)` returns `(None, None)`, do not finalize metadata and print `[info][metadata] Skipping fingerprint finalization: unable to infer module identity for <prompt_path>[/info]` unless `quiet`.
+    - If `save_fingerprint` raises, keep the successful return tuple and print `[warning][metadata] Fingerprint save failed: <exc>[/warning]` unless `quiet`.
+    - Existing stale `_run.json` cleanup behavior must remain unchanged.
 
 % Modes
 1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
@@ -103,8 +133,8 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
   <construct_paths_example><include>context/construct_paths_example.py</include></construct_paths_example>
   <update_prompt_example><include>context/update_prompt_example.py</include></update_prompt_example>
   <git_update_example><include>context/git_update_example.py</include></git_update_example>
-  <agentic_common_example><include select="def:example_run_agentic_task,def:example_provider_preference">context/agentic_common_example.py</include></agentic_common_example>
-  <sync_determine_operation_example><include select="def:example_determine_operation">context/sync_determine_operation_example.py</include></sync_determine_operation_example>
+  <agentic_common_example><include>context/agentic_common_example.py</include></agentic_common_example>
+  <sync_determine_operation_example><include>context/sync_determine_operation_example.py</include></sync_determine_operation_example>
   <architecture_sync_example><include select="def:example_update_single_prompt,def:example_get_entry,def:example_sync_all,def:example_find_architecture_for_project,def:example_update_architecture_from_prompt">context/architecture_sync_example.py</include></architecture_sync_example>
   <operation_log_example><include select="def:example_save_fingerprint,def:example_infer_module_identity">context/operation_log_example.py</include></operation_log_example>
   <template_expander_example><include>context/template_expander_example.py</include></template_expander_example>
