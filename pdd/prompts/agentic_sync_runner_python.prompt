@@ -1,7 +1,24 @@
+<pdd-reason>Parallel pdd sync engine enforcing dep ordering, per-module budgets, and split-contract scope guard.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0, *, allowed_write_set: Optional[Iterable[str]] = None, companion_allowlist: Optional[Iterable[str]] = None, scope_guard_enabled: bool = True)", "returns": "AsyncSyncRunner"},
+      {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"},
+      {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
+      {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"}
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync_runner.py` module.
@@ -10,7 +27,7 @@ Write the `pdd/agentic_sync_runner.py` module.
 Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. Supports state persistence for resumability across runs, phase tracking, and graceful interrupt handling.
 
 % Requirements
-1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0)`
+1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0, *, allowed_write_set=None, companion_allowlist=None, scope_guard_enabled=True)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
    - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder
@@ -18,6 +35,9 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
    - `issue_url: Optional[str]` — GitHub issue URL for state persistence (None disables resumability)
    - `module_cwds: Optional[Dict[str, Path]]` — per-module working directories (defaults to project_root)
    - `initial_cost: float` — pre-runner cost (LLM module identification and dry-run fallback) to include in total cost display and return value (default 0.0)
+   - `allowed_write_set: Optional[Iterable[str]]` — repo-relative path strings from the issue split contract that this sync run is permitted to modify. `None` means "no contract was parseable from the issue → run in permissive mode (no enforcement)". An explicit empty iterable means "contract present but empty → reject every change as out-of-scope" (a degenerate but legal contract). Resolved against each module's `cwd`/repo root inside the runner.
+   - `companion_allowlist: Optional[Iterable[str]]` — additional glob patterns (e.g. `".pdd/meta/*.json"`) describing companion artifacts that MAY be modified outside the primary `allowed_write_set`. Defaults to `DEFAULT_SYNC_COMPANION_ALLOWLIST` from `agentic_common` (currently `(".pdd/meta/*.json",)`) when `None`. Issue contracts MAY widen the companion allowlist by passing a superset.
+   - `scope_guard_enabled: bool` — master switch (default `True`). When `False`, the runner records the parsed contract for diagnostics but performs no enforcement, no revert, and no hard-fail. Maps to the CLI `--no-scope-guard` opt-out.
    - Tracks per-module state: pending -> running -> success | failed
 2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost) where total_cost includes initial_cost + per-module costs
 3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS = 4`; when `sync_options["total_budget"]` is set, run sequentially and pass only the remaining total budget to each child process so the total budget is not multiplied per module.
@@ -43,6 +63,23 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 19. Subprocess env: include `PYTHONUNBUFFERED=1` for real-time output
 20. Forward "Successfully submitted example" messages from child stdout to parent console
 21. Heartbeat logging: during long-running syncs, print progress updates every 60s. Prefer parsed `PDD_PHASE` state — `f" — phase: {current_phase} ({len(completed_phases)} done)"` — so operators see real progress through the generate/test/fix phases instead of a stale `Preprocessing complete` line. Fall back to the last non-box-drawing stdout line only when no phase has been reported yet.
+22. **Split-Contract Scope Guard (Issue #1013)**: After each per-module `pdd sync` subprocess completes (success or failure), and **before** the runner declares that module successful or persists state, the runner MUST invoke `_enforce_scope_guard(basename, module_cwd)` when `self.scope_guard_enabled` is True AND `self.allowed_write_set is not None`. The helper:
+    - Builds the effective allow set for the module: every path in `self.allowed_write_set` resolved against the module's repo root (the git toplevel of `module_cwd`, falling back to `module_cwd` itself), plus every path under `module_cwd` that matches any glob in the effective companion allowlist (`self.companion_allowlist` ∪ `DEFAULT_SYNC_COMPANION_ALLOWLIST`).
+    - Calls `_revert_out_of_scope_changes(repo_root, allowed_paths)` from `pdd.agentic_common` to revert tracked out-of-scope modifications, AND calls `revert_out_of_scope_changes_with_dirs(repo_root, allowed_dirs=set(), allowed_files=allowed_paths)` from `pdd.agentic_common_worktree` to additionally remove untracked out-of-scope new files. The combination matches the existing scope-guard pattern used by `agentic_update`/`agentic_fix`/`agentic_crash`/`agentic_e2e_fix_orchestrator`.
+    - Diagnostic format (printed to stderr; structured for downstream parsers — checkup, review-loop reports):
+      ```
+      Scope guard reverted N out-of-scope file(s) for module '<basename>' (contract source: <source>):
+        - path/relative/to/repo
+        - another/path
+      Allowed write set:
+        - path/from/contract
+      Companion allowlist:
+        - .pdd/meta/*.json
+      ```
+    - **Hard-fail policy (Issue #1013 acceptance criteria 3 and 4)**: if any out-of-scope path was detected, the module MUST be recorded as failed with `error="Scope guard hard-fail: out-of-scope artifacts detected"` followed by the diagnostic body. This blocks the per-module success record, blocks dependent modules from scheduling, and ensures checkup/review-loop reports surface the failure rather than burying it under an apparently-successful sync. Hard-fail applies even when the underlying `pdd sync` subprocess succeeded — the contract violation is the failure mode the scope guard exists to catch.
+    - **Permissive fallback**: when `self.allowed_write_set is None` (no parseable contract on the issue), `_enforce_scope_guard` returns immediately without enforcement. Document this in a one-line dim INFO log on `run()` entry so operators understand why enforcement is off for that run.
+    - **Opt-out**: when `self.scope_guard_enabled is False`, log a one-line dim WARNING on `run()` entry ("Scope guard disabled via --no-scope-guard") and skip enforcement entirely. Even an explicit `allowed_write_set` is recorded only for diagnostics in this mode.
+    - The scope-guard step MUST run with a `threading.Lock` held around git operations on a per-`module_cwd` basis to avoid `git status` / `git checkout` races when modules share a repo root (the common shared-worktree case for non-durable issue sync).
 
 % Dataclass: `ModuleState`
 - `status: str` — "pending", "running", "success", "failed"
@@ -102,6 +139,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 - `_find_pdd_executable() -> Optional[str]`: find pdd binary (same pattern as `server/jobs.py`)
 - `_parse_cost_from_csv(csv_path: str) -> float`: sum cost column from PDD_OUTPUT_COST_PATH CSV
 - `_format_duration(start, end) -> str`: format seconds as "Xs" or "Xm Ys"
+- `_enforce_scope_guard(self, basename: str, module_cwd: Path) -> Optional[str]`: Issue #1013 scope guard. Returns `None` when the module is in scope; returns a multi-line diagnostic string (see Req 22) when out-of-scope artifacts were detected. Callers (the per-future completion handler) treat a non-None return as a module failure and replace any prior success record with it. No-ops when `self.scope_guard_enabled is False` or `self.allowed_write_set is None`. Reuses `pdd.agentic_common._revert_out_of_scope_changes` and `pdd.agentic_common_worktree.revert_out_of_scope_changes_with_dirs` rather than reimplementing git scanning.
 - `_parse_conformance_failure(stdout: str, stderr: str) -> Optional[Tuple[str, Tuple[str, ...]]]`: scan combined stdout+stderr for the line prefix `Architecture conformance error for ` and, when matched, return `(repair_directive, missing_symbols)` where `missing_symbols` is a sorted tuple of the symbols listed after any of the following inline shapes (route each into its own directive bucket — they MUST NOT be merged):
     - (a) `declared symbols missing from generated code:` — default `ArchitectureConformanceError` shape (architecture.json symbol-existence check).
     - (b) `Python code uses camelCase names (...)` parenthesised list — camelCase guard.

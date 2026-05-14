@@ -1,8 +1,25 @@
+<pdd-reason>Entry point for pdd sync orchestration over GitHub issues with split-contract scope-guard enforcement.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "run_agentic_sync", "signature": "(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None, durable: bool = False, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, scope_guard: bool = True) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "run_global_sync", "signature": "(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False, timeout_adder: float = 0.0, scope_guard: bool = True) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
+      {"name": "_is_github_issue_url", "signature": "(s: str) -> bool", "returns": "bool"},
+      {"name": "_parse_llm_response", "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]", "returns": "Tuple[List[str], bool, List[Dict]]"}
+    ]
+  }
+}
+</pdd-interface>
+
 <include>context/python_preamble.prompt</include>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>durable_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync.py` module.
@@ -13,7 +30,7 @@ Entry point for sync orchestration. Supports two public workflows:
 2. `run_global_sync(...)`: Tier 1 no-argument global sync. Triggered by the CLI when `pdd sync` is invoked with no BASENAME. Do not use PRD files, PRD fingerprinting, architecture schema migration, or agentic PRD analysis in v1.
 
 % Requirements
-1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None, durable: bool = False, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None) -> Tuple[bool, str, float, str]`
+1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None, durable: bool = False, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, scope_guard: bool = True) -> Tuple[bool, str, float, str]`
 2. Return 4-tuple: (success, message, total_cost, model_used)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number (reuse `_parse_issue_url` from `agentic_change.py`)
 4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
@@ -36,9 +53,10 @@ Entry point for sync orchestration. Supports two public workflows:
 18. If `durable=True`, dispatch to `DurableSyncRunner` instead of `AsyncSyncRunner`. Pass the issue URL, durable branch override, `no_resume` flag, and durable max-parallel setting through unchanged. Durable mode must still use the same module identification, dependency graph, dry-run validation, fingerprint filtering, sync options, and initial cost accounting as standard issue sync.
 19. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
 20. Include `one_session`, `local`, and `target_coverage` in `sync_options` dict passed to the selected runner
+21. **Split-Contract Scope Guard (Issue #1013)**: After fetching the issue body and comments and BEFORE dispatching to the runner, call `parse_issue_contract(issue_body, issue_comments)` from `pdd.agentic_common`. When the returned `IssueContract` is non-None, plumb its `allowed_paths` (as `allowed_write_set`) and the union of its `companion_allowlist` with `DEFAULT_SYNC_COMPANION_ALLOWLIST` (as `companion_allowlist`) into BOTH the `AsyncSyncRunner` and `DurableSyncRunner` constructors. Always pass `scope_guard_enabled=scope_guard` so the CLI opt-out flows through. When the contract is None (no marker in the issue), pass `allowed_write_set=None` so the runner falls back to permissive mode without enforcement. Emit one INFO line (suppressed under `quiet`) reporting which contract source was detected — for example `Sync scope guard: contract loaded from <source> (N allowed paths)` — so operators can see at a glance that an issue contract is active. When `scope_guard=False`, emit one WARNING line `Sync scope guard: disabled via --no-scope-guard` instead.
 
 % Global Sync (Tier 1)
-1. Function: `run_global_sync(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False, timeout_adder: float = 0.0) -> Tuple[bool, str, float, str]`. Forward `timeout_adder` to the runner via `sync_options['timeout_adder']`.
+1. Function: `run_global_sync(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False, timeout_adder: float = 0.0, scope_guard: bool = True) -> Tuple[bool, str, float, str]`. Forward `timeout_adder` to the runner via `sync_options['timeout_adder']`. The `scope_guard` kwarg is accepted for CLI signature parity with `run_agentic_sync`; in global mode there is no issue body to parse, so the runner is always constructed with `allowed_write_set=None` (permissive fallback) regardless of `scope_guard`. The kwarg exists so `pdd sync --no-scope-guard` does not raise a `TypeError` in global mode.
 2. Load combined architecture data using existing `_load_architecture_json(project_root)` / `load_combined_architecture_data`. Fail clearly if no architecture data exists.
 3. Extract syncable basenames from architecture `filename` values. Preserve subdirectory prefixes, e.g. `commands/maintenance_python.prompt` becomes `commands/maintenance`; skip non-syncable filenames such as `_LLM.prompt`.
 4. For each architecture module, resolve cwd/context/prompts_dir with the same nearest-config behavior used by issue sync, then call `sync_determine_operation(..., log_mode=True, read_only=True, ...)` from the module's resolved cwd for each detected language. Suppress info-level logs from `pdd.sync_determine_operation` around the read-only calls so global dry-run output stays readable and metadata files are never changed during analysis.
