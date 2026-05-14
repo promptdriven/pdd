@@ -534,6 +534,31 @@ class TestGlobalSyncHelpers:
         assert graph["examples/demo:report"] == ["examples/demo:models"]
         assert warnings == []
 
+    def test_scoped_global_dep_graph_warns_on_unresolved_dependency(self, tmp_path):
+        """Dangling dep edges (e.g., typo'd filenames in architecture.json)
+        must emit a warning so operators don't get a silently-clean dry-run."""
+        module = _global_module(
+            "app",
+            tmp_path,
+            key="app",
+            entry={
+                "filename": "app_python.prompt",
+                "dependencies": ["missing_python.prompt"],
+            },
+        )
+
+        graph, warnings = _build_scoped_global_dep_graph(
+            [module],
+            ["app"],
+            tmp_path,
+        )
+
+        assert graph == {"app": []}
+        assert len(warnings) == 1
+        assert "app" in warnings[0]
+        assert "missing_python.prompt" in warnings[0]
+        assert "unresolved dependency" in warnings[0]
+
 
 class TestRunGlobalSync:
     @patch("pdd.agentic_sync._find_project_root")

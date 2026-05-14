@@ -780,6 +780,12 @@ def _build_scoped_global_dep_graph(
                 (module.architecture_path.resolve(), dep_basename)
             )
             if dep_key is None:
+                warnings.append(
+                    f"combined architecture data under {project_root}: module "
+                    f"'{key}' declares unresolved dependency '{dep}'; no module "
+                    "with that filename in the same architecture scope; edge "
+                    "omitted from schedule"
+                )
                 continue
             if dep_key in target_set:
                 graph[key].append(dep_key)
