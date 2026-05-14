@@ -760,13 +760,28 @@ def _build_scoped_global_dep_graph(
     target_keys: List[str],
     project_root: Path,
 ) -> Tuple[Dict[str, List[str]], List[str]]:
-    """Build a dependency graph for scoped global-sync module keys."""
+    """Build a dependency graph for scoped global-sync module keys.
+
+    Dep resolution proceeds in two passes:
+
+    1. Same-architecture scope: prefer a module declared in the same
+       architecture.json as the depending module.
+    2. Cross-architecture fallback: if no same-arch match exists, look across
+       all loaded modules by basename. An unambiguous match (exactly one
+       module across all archs with that basename) is accepted to preserve
+       the prior combined-architecture behaviour. Ambiguous cross-arch
+       basenames (multiple matches) emit a warning and drop the edge.
+    """
     target_set = set(target_keys)
     module_by_key = {module.key: module for module in modules}
     key_by_scope_basename = {
         (module.architecture_path.resolve(), module.basename): module.key
         for module in modules
     }
+    # Global basename index used for unambiguous cross-arch fallback.
+    keys_by_basename: Dict[str, List[str]] = {}
+    for module in modules:
+        keys_by_basename.setdefault(module.basename, []).append(module.key)
     graph: Dict[str, List[str]] = {key: [] for key in target_keys}
     warnings: List[str] = []
 
@@ -785,13 +800,31 @@ def _build_scoped_global_dep_graph(
                 (module.architecture_path.resolve(), dep_basename)
             )
             if dep_key is None:
-                warnings.append(
-                    f"combined architecture data under {project_root}: module "
-                    f"'{key}' declares unresolved dependency '{dep}'; no module "
-                    "with that filename in the same architecture scope; edge "
-                    "omitted from schedule"
-                )
-                continue
+                # Same-architecture lookup missed. Fall back to a global
+                # basename lookup so cross-arch edges (preserved by the old
+                # combined-architecture builder) still resolve when the
+                # basename is unambiguous across the loaded modules.
+                candidate_keys = keys_by_basename.get(dep_basename, [])
+                if len(candidate_keys) == 1:
+                    dep_key = candidate_keys[0]
+                elif len(candidate_keys) > 1:
+                    warnings.append(
+                        f"combined architecture data under {project_root}: "
+                        f"module '{key}' declares ambiguous cross-arch "
+                        f"dependency '{dep}' (basename '{dep_basename}' "
+                        f"matches multiple modules: "
+                        f"{', '.join(sorted(candidate_keys))}); "
+                        "edge omitted from schedule"
+                    )
+                    continue
+                else:
+                    warnings.append(
+                        f"combined architecture data under {project_root}: "
+                        f"module '{key}' declares unresolved dependency "
+                        f"'{dep}'; no module with that filename in the same "
+                        "architecture scope; edge omitted from schedule"
+                    )
+                    continue
             if dep_key in target_set:
                 graph[key].append(dep_key)
             else:

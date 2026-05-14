@@ -559,6 +559,106 @@ class TestGlobalSyncHelpers:
         assert "missing_python.prompt" in warnings[0]
         assert "unresolved dependency" in warnings[0]
 
+    def test_scoped_global_dep_graph_resolves_unambiguous_cross_arch_dep(self, tmp_path):
+        """When a dep doesn't match in the same arch but is unambiguous globally,
+        the edge resolves (preserving the prior combined-architecture behaviour)."""
+        root_arch = tmp_path / "architecture.json"
+        nested_arch_dir = tmp_path / "examples" / "demo"
+        nested_arch_dir.mkdir(parents=True)
+        nested_arch = nested_arch_dir / "architecture.json"
+
+        # Module 'app' lives in root arch and depends on 'helper'.
+        app_module = GlobalSyncModule(
+            key="app",
+            basename="app",
+            cwd=tmp_path,
+            architecture_path=root_arch,
+            entry={
+                "filename": "app_python.prompt",
+                "dependencies": ["helper_python.prompt"],
+            },
+        )
+        # Module 'helper' lives in a different (nested) arch.
+        helper_module = GlobalSyncModule(
+            key="examples/demo:helper",
+            basename="helper",
+            cwd=nested_arch_dir,
+            architecture_path=nested_arch,
+            entry={
+                "filename": "helper_python.prompt",
+                "dependencies": [],
+            },
+        )
+
+        graph, warnings = _build_scoped_global_dep_graph(
+            [app_module, helper_module],
+            ["app", "examples/demo:helper"],
+            tmp_path,
+        )
+
+        assert graph["app"] == ["examples/demo:helper"]
+        assert graph["examples/demo:helper"] == []
+        assert warnings == []
+
+    def test_scoped_global_dep_graph_warns_on_ambiguous_cross_arch_dep(self, tmp_path):
+        """When a cross-arch basename is ambiguous (claimed by multiple modules),
+        emit a warning and drop the edge rather than guess."""
+        root_arch = tmp_path / "architecture.json"
+        nested_arch1_dir = tmp_path / "examples" / "alpha"
+        nested_arch2_dir = tmp_path / "examples" / "beta"
+        nested_arch1_dir.mkdir(parents=True)
+        nested_arch2_dir.mkdir(parents=True)
+        nested_arch1 = nested_arch1_dir / "architecture.json"
+        nested_arch2 = nested_arch2_dir / "architecture.json"
+
+        # Module 'app' in root depends on 'helper'.
+        app_module = GlobalSyncModule(
+            key="app",
+            basename="app",
+            cwd=tmp_path,
+            architecture_path=root_arch,
+            entry={
+                "filename": "app_python.prompt",
+                "dependencies": ["helper_python.prompt"],
+            },
+        )
+        # Two modules named 'helper' in two different nested archs.
+        helper_alpha = GlobalSyncModule(
+            key="examples/alpha:helper",
+            basename="helper",
+            cwd=nested_arch1_dir,
+            architecture_path=nested_arch1,
+            entry={
+                "filename": "helper_python.prompt",
+                "dependencies": [],
+            },
+        )
+        helper_beta = GlobalSyncModule(
+            key="examples/beta:helper",
+            basename="helper",
+            cwd=nested_arch2_dir,
+            architecture_path=nested_arch2,
+            entry={
+                "filename": "helper_python.prompt",
+                "dependencies": [],
+            },
+        )
+
+        graph, warnings = _build_scoped_global_dep_graph(
+            [app_module, helper_alpha, helper_beta],
+            ["app", "examples/alpha:helper", "examples/beta:helper"],
+            tmp_path,
+        )
+
+        # Ambiguous → edge dropped.
+        assert graph["app"] == []
+        assert any("ambiguous cross-arch dependency" in w for w in warnings)
+        # The warning should name both candidates for operator visibility.
+        assert any(
+            "examples/alpha:helper" in w and "examples/beta:helper" in w
+            for w in warnings
+        )
+
 
 class TestArchitectureSyncModules:
     """Tests for ``_architecture_sync_modules`` and its nested .pddrc handling."""
