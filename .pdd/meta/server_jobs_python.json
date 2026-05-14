@@ -1,8 +1,8 @@
 {
-  "pdd_version": "0.0.231",
-  "timestamp": "2026-05-08T21:23:44.571476+00:00",
-  "command": "fix",
-  "prompt_hash": "0e9e0e584f70825743a2ff11ea0d73cdc43df6030ef9707b385fb23475348f61",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:30.159234+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "c79d067d505a37c8d69ffb22ca520baa6ab385be61cd489b9e63627393585dd1",
   "code_hash": "975aa1aaab1500f7ad8e0dfe667842fb43a5b44e045ebd4e2a7cd177aa0af3e7",
   "example_hash": "7694bd486d012fd9d52543c5f79a289f61dac3ed0f8c94c2ea9fd25ed6333f12",
   "test_hash": "0027ff985ee28e4f4cc9823f793f737c3b1b6e9cb7a526a58f2d7fa6f42945e5",
@@ -10,7 +10,7 @@
     "test_jobs.py": "0027ff985ee28e4f4cc9823f793f737c3b1b6e9cb7a526a58f2d7fa6f42945e5"
   },
   "include_deps": {
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/server/jobs_example.py": "7694bd486d012fd9d52543c5f79a289f61dac3ed0f8c94c2ea9fd25ed6333f12",
     "context/server/models_example.py": "223a832718e72ca6640728e4bd700da58edb89667931085d7d949774d8fbc228"
   }

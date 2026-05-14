@@ -1,0 +1,13 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:27.072588+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "8cebd725317bc64200d12fe193a9554ac60c5ac661b60658b5981c261ee1720f",
+  "code_hash": "c93f8ba95264a3ea199df498e6366cd107306a9fbc6acf18d25d77abb61ed5cc",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": {},
+  "include_deps": {
+    "pdd/frontend/types.ts": "f6d60506e61cfa3c565477f0af7f4598108acee5326daa3487ca094fb4fd9972"
+  }
+}

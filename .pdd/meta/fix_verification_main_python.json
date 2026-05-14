@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:05.131295+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "92af22bfa3ead8a3c2427a077d777dc1e40bc9146a4621357b36bf1b98a3f27d",
+  "code_hash": "7647fcca70da0882a9eda11e1b222e8d1160c56c6a85da18348da17cb0028853",
+  "example_hash": "6490f398aca6df47b1a95e46a4ecfc0aabe299b5022de5c31ebc436e1bc3e459",
+  "test_hash": "e67998c377e5f50222458fa6da9eec72a9873f4b5181af641963b45632ded190",
+  "test_files": {
+    "test_fix_verification_main.py": "e67998c377e5f50222458fa6da9eec72a9873f4b5181af641963b45632ded190"
+  },
+  "include_deps": {
+    "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
+    "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
+    "context/fix_verification_errors_example.py": "087d89544db864fe4c8025124ce2fd3fdf9f621c988bd415ba9a0ba942d2f497",
+    "context/fix_verification_errors_loop_example.py": "0212e6010a7c163c476c3df095f6ca99414829f73df34c60651afae83633d307",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

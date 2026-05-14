@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:07.765396+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "96d4f6e85940a3581dfee210a3da73ca1a0b7844a7ee8b8080f6fa4b794a8e21",
+  "code_hash": "add508e807f11ea3bf90b1a1038307c2f491fdc7cbf338029e097b987aff3ae2",
+  "example_hash": "662ecde39d05a5345533c4ae74c6b1031f016916ec2ff4764d34a26f7ec26172",
+  "test_hash": "12d1162a4485fd58f8c122251c4929884b3f6ec4a60943c5f1fa6315698f01e1",
+  "test_files": {
+    "test_bug_main.py": "12d1162a4485fd58f8c122251c4929884b3f6ec4a60943c5f1fa6315698f01e1"
+  },
+  "include_deps": {
+    "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/agentic_bug_example.py": "96e35df4e8425a9173ff6a30281892c2bd8b81361cff72b732e488172ddf52f5",
+    "context/bug_to_unit_test_example.py": "ab1d665923937f6599f78c0cac82f5d7c04a7afa092e7767d67e417e067a8817",
+    "context/cloud_function_call.py": "62ac7724ce2e3eddbba2b743bd7aa5790dbed34eae01e77e0252c4cc6358c95e",
+    "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca"
+  }
+}

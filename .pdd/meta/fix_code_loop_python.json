@@ -1,10 +1,10 @@
 {
-  "pdd_version": "0.0.228",
-  "timestamp": "2026-05-06T03:28:21.485952+00:00",
-  "command": "regenerate-public",
-  "prompt_hash": "947f0f0d054800b620cc2174bf96a8658fa4687190e9e4e50f23e39d1f91c1d0",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:07.873458+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "6a32dcc711f1e24de6b23d4a498bd00b1d41ab058d4fd64dfc3b76ea42d8dc94",
   "code_hash": "3bff0fb82111513ed5aa32c33bd80578c7178e871f818be1b01635b7a2b185b1",
-  "example_hash": null,
+  "example_hash": "c512f0f317474550a9ed74b5211ae0eab62c3f04115db14af67a88033aacfa87",
   "test_hash": "bc1f4f81af211623bcb2539cc4761f7e5ccb6926aebf86cc6aefa3b152557400",
   "test_files": {
     "test_fix_code_loop.py": "bc1f4f81af211623bcb2539cc4761f7e5ccb6926aebf86cc6aefa3b152557400"
@@ -14,6 +14,6 @@
     "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
     "context/fix_code_module_errors_example.py": "f35244d6e920711044fee92ade984f3e820a0fbfe766fd3d49718cbcfe793e60",
     "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }

@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:17.260578+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "927e364658c144a804f6a88dd29bb8607e82b2efe0464ccdb58425e728c32ef6",
+  "code_hash": "e60160f06f0f28cb492e449c395f7c3800f24212cc9f0eab25fd29a99c408906",
+  "example_hash": "5b6a8af940fe44241889a279c1a8d3c978fe0c6ec3afc648510d8e33ffa7b18c",
+  "test_hash": "f76041e4a4e313d3005d5961e76c3b08bfc26549e498d341cefe31560c328ebd",
+  "test_files": {
+    "test_sync_animation.py": "f76041e4a4e313d3005d5961e76c3b08bfc26549e498d341cefe31560c328ebd",
+    "test_sync_animation_0.py": "f76041e4a4e313d3005d5961e76c3b08bfc26549e498d341cefe31560c328ebd"
+  },
+  "include_deps": {
+    "README.md": "66373548e8648ef5009c429465b41bab478b9f5f7e8ec197b6c2241568e80ca9",
+    "context/logo_animation_example.py": "f32a5cc330235c3b61fb16ac62d3ae7531c7c6dbc11af077fc79054736f0944d",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

@@ -134,7 +134,7 @@
     ],
     "priority": 8,
     "filename": "cli_Python.prompt",
-    "filepath": "src/cli/main.py",
+    "filepath": "src/cli/cli.py",
     "tags": [
       "cli"
     ],
@@ -151,7 +151,7 @@
     ],
     "priority": 9,
     "filename": "backend_api_Python.prompt",
-    "filepath": "src/backend/api.py",
+    "filepath": "src/backend/backend_api.py",
     "tags": [
       "backend",
       "api"
@@ -169,7 +169,7 @@
     ],
     "priority": 10,
     "filename": "frontend_streamlit_Python.prompt",
-    "filepath": "src/frontend/streamlit_app.py",
+    "filepath": "src/frontend/frontend_streamlit.py",
     "tags": [
       "frontend",
       "ui"

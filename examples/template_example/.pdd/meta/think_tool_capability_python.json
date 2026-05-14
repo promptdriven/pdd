@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T19:07:01.406493+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "ebfad77ea48bd12d14e35bc90bf170bc8588a29f993c56d71a58d3962149489a",
+  "code_hash": "1caebf63b6e45a45e2b7c9461fa9d573b2e2b6b42cc6262f6afd5ac7d7dc9f1d",
+  "example_hash": "93f3d5637fa14ab3f88a8514f47fd769460e7274b089fe6fdc037371768ffb2a",
+  "test_hash": "8896e17d4ed00a64e647e5068d2d663dd17180e793d2ec57e062548a060c3952",
+  "test_files": {
+    "test_think_tool_capability.py": "8896e17d4ed00a64e647e5068d2d663dd17180e793d2ec57e062548a060c3952"
+  },
+  "include_deps": {
+    "../../examples/template_example/architecture.json": "0af0c82a680ab440c411acc71e93bd219775eab3e63f63273e9691948704ca02",
+    "../../examples/template_example/src/edit_file_tool/core.py": "11ef9ba5ee90dfb6612cb71e786e808b34cdee20f8fbbbf32bf6e461db0fdbda",
+    "../../examples/template_example/src/edit_file_tool/cost_tracker_utility.py": "d40aaf9eff2665e4886a89d7451da476f2b800426c8425bfc6e0cda0086ca25a",
+    "src/examples/core_example.py": "1dfd121f69bdf2ddc5da7019bd93c6d32a4f44389807a42bbceeaa9498e8b7f6",
+    "src/examples/cost_tracker_utility_example.py": "67317736c404293c53fb646eb1babfd5504590b68d15caacb17c22270c974280",
+    "src/examples/think_tool_capability_example.py": "93f3d5637fa14ab3f88a8514f47fd769460e7274b089fe6fdc037371768ffb2a"
+  }
+}

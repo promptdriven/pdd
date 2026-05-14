@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:26.843490+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "4b6fd7f43fe644b281feeff8b24a64548d2f809d24d9fb66cf808c4e07976f8b",
+  "code_hash": "6e3ceeee2e4231b9a91a62a7ff40b0a0320329b803c799a03e2033acff09b9ac",
+  "example_hash": "4b2db39fec015e750d59894877e7dc630152aff56fe262dee275f03ba2c6f97d",
+  "test_hash": "af453280824608c14b3959faf3ff9dd067dcc2ef47d896232d15711c36a7ebb8",
+  "test_files": {
+    "test_fix.py": "af453280824608c14b3959faf3ff9dd067dcc2ef47d896232d15711c36a7ebb8"
+  },
+  "include_deps": {
+    "context/agentic_e2e_fix_example.py": "79fd30a0fa6d8a5b9e23b34f7328ba3f95089a0ebb83e8244dae79ea68cff33a",
+    "context/fix_main_example.py": "29f88d8bfcc2256ebebe6efcb611f9487eb5ca6d8781286a6dd98689f92bca7a",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/track_cost_example.py": "30c33d5c1c945e0e8f0c0f9861f8b952d1eb4f22e6cbc8c05089b160b1a4c8eb"
+  }
+}

@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.231",
-  "timestamp": "2026-05-08T21:41:58.077642+00:00",
-  "command": "fix",
-  "prompt_hash": "4cd1b5303f81d3a83d89d7d0db110249b5d0df506be8cc51f7ad66b220fc6249",
-  "code_hash": "41e48c6eaf1e09d6014087d408f43085c24547478d20f2944a9b1f198994fd84",
-  "example_hash": "38bb30c917ff37adb23461036b0b8a9c8ffbe9b5d94b982b378b7c7355c4fea3",
-  "test_hash": "d7f875160c4f1b898534699198690eacea2ba41325f8ad9675caa6335c7f78a5",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:07.842204+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "ffe38cbf8aa753cea8c74177180935775bb888e2031d12c183b3c337438c3900",
+  "code_hash": "ca307714259c0c882a3481cedf2d42fda210f1d9042cb3c9a8b93c18f32e7fe7",
+  "example_hash": "679590f0913600886d99469d8ece23fbbfe6bea2e626b0d5d2ab5fdcdc079b80",
+  "test_hash": "d6230aec798c6dff7b5478f591fe04640f9e3ed9fdd3b9ad39514f7d300eff5e",
   "test_files": {
-    "test_code_generator_main.py": "d7f875160c4f1b898534699198690eacea2ba41325f8ad9675caa6335c7f78a5"
+    "test_code_generator_main.py": "d6230aec798c6dff7b5478f591fe04640f9e3ed9fdd3b9ad39514f7d300eff5e"
   },
   "include_deps": {
     "context/__init__example.py": "84208a445d03a336e465709ec0687eb969c8d865e6739bf8b79f2c8a8aad351a",
@@ -15,7 +15,7 @@
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
     "pdd/code_generator.py": "607d1276fce391063de28ed1e4edb870c10077d5d85caaf968f707f32a7aa330",
     "pdd/construct_paths.py": "d9519b4809c7ac14fa6b47a816d50bc86e3941c630c6fb8af48993e5d0b50c1b",
-    "pdd/core/cloud.py": "ba9a9df53edd5b1b17f855992d9144187b5fc76231af8b9a9ac1c6fe66511b73",
+    "pdd/core/cloud.py": "0487c0b989996af144df3af1c818a6eeafe52fd209710e5a54eb43990c89ae97",
     "pdd/incremental_code_generator.py": "a6b82218d633362775f67027d9464a2b48f39efa5de58667f5907babde2877b4",
     "pdd/preprocess.py": "d20cdfe2dbc9224537f190b8ae1bbeed1be63f7bc663d7832ff1f291c13d4e50",
     "pdd/python_env_detector.py": "cbe4044a83cd88a683f36d6ecfca245fef6a03ea2abc7f5c407636fccc051f35"

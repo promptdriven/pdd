@@ -1,0 +1,22 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T19:09:33.637514+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "9bb87b26ad0ad2422da9093b98256ae41b5aa1870912f1a859f7112e6d70410a",
+  "code_hash": "98c093a0a52610b29fa1eab5c8515eeaf1b22b59b576569f0c80a5d95975d47e",
+  "example_hash": "506c0a932002013e179412c039d4ad6e233d4dba869a6b0350b56c7d19b9e038",
+  "test_hash": "b400b2dc113521b773923545692a9185afd31ddeb7851ea48bd7a2d8af40d35e",
+  "test_files": {
+    "test_cli.py": "b400b2dc113521b773923545692a9185afd31ddeb7851ea48bd7a2d8af40d35e"
+  },
+  "include_deps": {
+    "examples/cli_example.py": "506c0a932002013e179412c039d4ad6e233d4dba869a6b0350b56c7d19b9e038",
+    "examples/fix_example.py": "fa14d48e5e99b79afdc54fccac84571997c8f7efa2b658078948a886d324622c",
+    "examples/models_example.py": "a0f057933a42f652791de1a22d56b0de7e55e9796292b970aa2bda10752a3a57",
+    "examples/pipeline_example.py": "f6d991c75cb36e3903c3055d98bd52a1c60b5de5ea5b9cac131a0325b38b1853",
+    "examples/report_example.py": "1a135235ee23d2e7c9a6bb3e331800f9aa5f9d934ad29d94595d078efd1589f5",
+    "src/utils/models.py": "f7e7b46fb1149b22c79a4583fd28eed9731ddf9e61ad4e00984541ce922fc394",
+    "src/utils/pipeline.py": "ff54c235528e8d4c8c285fdb639ef4e4c919458c4991e936c95dd1f0db392af8",
+    "src/utils/report.py": "40fef205880492524a0063020c98ff02996a1891f1fff495bd7a01620109a0eb"
+  }
+}

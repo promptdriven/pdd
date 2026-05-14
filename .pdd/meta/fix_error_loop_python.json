@@ -1,0 +1,23 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:08.127162+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "59de4cf5005ed321b85781e9ecf854687b59cafee8e230d14920a9be68654f02",
+  "code_hash": "ce0af7533af07bc53499a36765361c968bd20af6465cfb74a11a211e980b8494",
+  "example_hash": "09aeef3c02612c54ba643feca7e2e692adaa1cec9fa1217a61507fec031929cc",
+  "test_hash": "09cea135235e32312b34df35fc1235aa0164bd9f203699a6bf4b74362a6853c8",
+  "test_files": {
+    "test_fix_error_loop.py": "09cea135235e32312b34df35fc1235aa0164bd9f203699a6bf4b74362a6853c8",
+    "test_fix_error_loop_failure_aware.py": "47dbd8fe19186a2e931a2e8d59ecdd5e6d953c07dac67ef034289c309224dbfe"
+  },
+  "include_deps": {
+    "context/agentic_fix_example.py": "bb345abe8e84836b3cd88f78649d0fe0441aaf42584d6d6a89a24df7a6aefae2",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/core/cloud_example.py": "8a14ae9e69dbccfbbfffd9bde1ea11192334a10aaf9d5b5e6dba5ac23ba0dd90",
+    "context/fix_errors_from_unit_tests_example.py": "df6c93b3ae585af13827cf3edb398e7c0da75648b34ff0477044b659df85a117",
+    "context/get_language_example.py": "8b09af25b96fa49e2dcf5ff307bbeb0bc83e84b64618971d393397772a2fafab",
+    "context/pytest_example.py": "f13c02d911d386ac5bab8e3d4aae64a768e4a7e960803c80fcac14e9ba5975cb",
+    "context/python_env_detector_example.py": "65619b3e8bad0509f1ccf54d81b5c3760f423b6fc1925c932fc7968da78a172e",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

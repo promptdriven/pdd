@@ -1,0 +1,19 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T18:48:11.257395+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "b155cb5cdc65fa5e868d959b50e169b91cb75c381a1edd5515b6b2a058f46bc1",
+  "code_hash": "ff54c235528e8d4c8c285fdb639ef4e4c919458c4991e936c95dd1f0db392af8",
+  "example_hash": "f6d991c75cb36e3903c3055d98bd52a1c60b5de5ea5b9cac131a0325b38b1853",
+  "test_hash": "62e15ca01c78033d50297bfcd6d425ad46e431ddf4be49e19d36c897213d5a93",
+  "test_files": {
+    "test_pipeline.py": "62e15ca01c78033d50297bfcd6d425ad46e431ddf4be49e19d36c897213d5a93"
+  },
+  "include_deps": {
+    "examples/fix_example.py": "fa14d48e5e99b79afdc54fccac84571997c8f7efa2b658078948a886d324622c",
+    "examples/helpers_example.py": "4bb026344e39f1595d272134af6fe54e71e9d755ac08d86668583604c1529935",
+    "examples/llm_example.py": "82d9d81cb1659c1b95f1861a205360f2384838cd849f31e06ab3f9ab0010bf23",
+    "examples/models_example.py": "a0f057933a42f652791de1a22d56b0de7e55e9796292b970aa2bda10752a3a57",
+    "examples/rules_example.py": "757ce4cce320aeae46ad3c6b846a60fb6ec3b0b13e1b21618291a809639218cb"
+  }
+}

@@ -1,17 +1,17 @@
 {
-  "pdd_version": "0.0.228",
-  "timestamp": "2026-05-06T03:28:21.639062+00:00",
-  "command": "regenerate-public",
-  "prompt_hash": "e72e5e77e584584087eab387348fde20d1e8bbbb84a9be9dfac78a5f027141e2",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:05.156833+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "572f68edf65517d4adf4b61661b052e7c07ae75ac5bb38314788c668f425c603",
   "code_hash": "ca810925f80b85596c0f1f84b4a7c052ff19a8530d24ed6989730467df2a3f17",
-  "example_hash": null,
+  "example_hash": "811304cee2cb890879ee68a816aed49dff2e7b50cfdca3125e16e0ae99819574",
   "test_hash": "5522f599ed1b3734d7e8097160813671f9ed10e7224fec8f46799a8389ff6ba8",
   "test_files": {
     "test_git_update.py": "5522f599ed1b3734d7e8097160813671f9ed10e7224fec8f46799a8389ff6ba8"
   },
   "include_deps": {
     "context/agentic_update_example.py": "dafed5c5980cce43f16f6828ef45f76e3fdd4ee8a41d21e53cea846b2b6dca33",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/update_prompt_example.py": "56b9d8c7aa823c2996a3dc5741a47844e223bfd088366d74e48b6a099b5a11c4"
   }
 }

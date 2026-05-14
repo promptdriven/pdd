@@ -1,17 +1,17 @@
 {
-  "pdd_version": "0.0.234",
-  "timestamp": "2026-05-12T02:53:56.362536+00:00",
-  "command": "fix",
-  "prompt_hash": "b9b900ce1b0cf9e50b73c4aad750e2231f632beda3c286c0469f21c0dc3a8475",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:08.303147+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "2a3ee8596d4fd7d00f11cd47ed3148616bbdd62707aefc32d613bbf725728837",
   "code_hash": "7ef19b3e7eafd7abd0f54c9de74b7c4d8be5559d84b2673f1c60cb9313d4842e",
   "example_hash": "cc1313a948946026d418c85a07e5bf0eedeb5915c44d630440e489979755e1f7",
-  "test_hash": "3fce96bc02b851cc3e2d00001b0de3a2436f687c65a53d5e423212ac5c6d2517",
+  "test_hash": "14db461ed44b7112060860a6a4a8812fa86e1623f2652e460d985d236f7482d1",
   "test_files": {
-    "test_sync_orchestration.py": "3fce96bc02b851cc3e2d00001b0de3a2436f687c65a53d5e423212ac5c6d2517"
+    "test_sync_orchestration.py": "14db461ed44b7112060860a6a4a8812fa86e1623f2652e460d985d236f7482d1"
   },
   "include_deps": {
     "docs/whitepaper.md": "25b87d4af53ba35e7fa80b12f6bf09d12e16b8b952341df94cf8b47160886adf",
-    "README.md": "b572bb7bf64f3d9473845a45b8c942fc66b527bc516c960059bc538e574ae4bc",
+    "README.md": "66373548e8648ef5009c429465b41bab478b9f5f7e8ec197b6c2241568e80ca9",
     "context/auto_deps_main_example.py": "9b9c36c18d39494b6e31b46f6e4758c25135b6fa3d1672fbb7365844f7d2de04",
     "context/cmd_test_main_example.py": "0774984ee29f70407429f1eff4a1b76287715b7ddd6adf2bc149e874c9b844bb",
     "context/code_generator_main_example.py": "679590f0913600886d99469d8ece23fbbfe6bea2e626b0d5d2ab5fdcdc079b80",
@@ -20,10 +20,8 @@
     "context/fix_main_example.py": "29f88d8bfcc2256ebebe6efcb611f9487eb5ca6d8781286a6dd98689f92bca7a",
     "context/fix_verification_main_example.py": "6490f398aca6df47b1a95e46a4ecfc0aabe299b5022de5c31ebc436e1bc3e459",
     "context/get_extension_example.py": "def9c34c1416259a0a031a996b96aeff5e73a7012adff6af1cc557e74ba97cc8",
-    "context/get_run_command_example.py": "4d187e844adb255c2738274556f4828728d0d73d84ebf8bda885d51d4be9414f",
     "context/get_test_command_example.py": "33b16476536f8c9424d3222ffc4a5cd5ecee6ad0589b2c66a4f3c7f1e265106c",
     "context/operation_log_example.py": "6cd7962ab255d6080aeb97897175250f987ce936cf7333e7601f10834405a940",
-    "context/pytest_output_example.py": "6f0cd68e3c4440081267c716651caec4fbdd7d9c4516f967517f02ae2a853920",
     "context/python_env_detector_example.py": "65619b3e8bad0509f1ccf54d81b5c3760f423b6fc1925c932fc7968da78a172e",
     "context/sync_determine_operation_example.py": "94a333b37d9875bcc9b39e22d4d00de1b196ad2f7e0fa997e6f638e153dbdfad",
     "context/update_main_example.py": "b318834c648f25e6141d81f3ecac1d9da592a6bb4740500983f2b07b8a10d902"
