@@ -267,6 +267,22 @@ def _resolve_paths(basename: str, language: str) -> Dict[str, Optional[Any]]:
     return {}
 
 
+def _path_exists(path: Optional[Any]) -> bool:
+    """Return True when a path-like object exists."""
+    if path is None:
+        return False
+    try:
+        exists = getattr(path, "exists", None)
+        if callable(exists):
+            return bool(exists())
+    except Exception:
+        return False
+    try:
+        return Path(str(path)).exists()
+    except Exception:
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Drift detection
 # ---------------------------------------------------------------------------
@@ -339,6 +355,35 @@ def detect_drift(
     prompt_drifts: List[DriftInfo] = []
     example_drifts: List[DriftInfo] = []
     repo_root = _repo_root()
+
+    if parsed is not None:
+        discovered_names = {basename for basename, _language, _prompt_path in discovered}
+        for basename in parsed:
+            if basename in discovered_names:
+                continue
+            language = "python"
+            paths = _resolve_paths(basename, language)
+            code_path_raw = paths.get("code")
+            prompt_path_raw = paths.get("prompt")
+            if _path_exists(code_path_raw) and not _path_exists(prompt_path_raw):
+                prompt_drifts.append(
+                    DriftInfo(
+                        basename=basename,
+                        language=language,
+                        operation="update",
+                        reason="Code exists without prompt — needs pdd update",
+                        prompt_path=None,
+                        code_path=str(code_path_raw),
+                        example_path=str(paths.get("example")) if paths.get("example") else None,
+                        dependency_dir=(
+                            str(paths.get("dependency_dir"))
+                            if paths.get("dependency_dir")
+                            else None
+                        ),
+                        diff_base=diff_base,
+                        original_operation="update",
+                    )
+                )
 
     for basename, language, prompt_path in discovered:
         try:

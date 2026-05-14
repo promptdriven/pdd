@@ -6,21 +6,21 @@ prompt and example drift in PDD modules.
 """
 
 import os
+import sys
 from unittest.mock import patch
 
-# Import the module so we can patch attributes by attribute access.
-import pdd.ci_drift_heal as ci_drift_heal
-from pdd.ci_drift_heal import DriftInfo, HealResult
+# Import the functions from the module
+from pdd.ci_drift_heal import main, detect_drift, DriftInfo
 
 
-def demonstrate_detect_drift() -> None:
+def demonstrate_detect_drift():
     """
-    Demonstrates how detect_drift returns two lists of DriftInfo records:
-    one for modules whose prompts need updates, and one for modules whose
-    examples (or new code) need to be regenerated.
+    Demonstrates how to call detect_drift directly to get lists of drifted modules.
     """
     print("--- Demonstrating detect_drift ---")
-
+    
+    # Mock the internal detection to return some dummy drift data
+    # so this example runs without a real PDD workspace.
     mock_prompt_drifts = [
         DriftInfo(
             basename="example_module",
@@ -28,7 +28,7 @@ def demonstrate_detect_drift() -> None:
             operation="update",
             reason="Code changed without prompt changes",
             code_path="pdd/example_module.py",
-            prompt_path="prompts/example_module_python.prompt",
+            prompt_path="prompts/example_module_python.prompt"
         )
     ]
     mock_example_drifts = [
@@ -39,52 +39,40 @@ def demonstrate_detect_drift() -> None:
             reason="Prompt changed, example needs refresh",
             code_path="pdd/another_module.py",
             prompt_path="prompts/another_module_python.prompt",
-            example_path="context/another_module_example.py",
+            example_path="context/another_module_example.py"
         )
     ]
-
-    # Patch the module attribute and call through the module so the patch is honoured.
-    with patch.object(
-        ci_drift_heal, "detect_drift", return_value=(mock_prompt_drifts, mock_example_drifts)
-    ):
-        prompt_drifts, example_drifts = ci_drift_heal.detect_drift(
-            modules=None, diff_base="main"
-        )
-
+    
+    with patch("pdd.ci_drift_heal.detect_drift", return_value=(mock_prompt_drifts, mock_example_drifts)):
+        prompt_drifts, example_drifts = detect_drift(modules=None, diff_base="main")
+        
         print(f"Detected {len(prompt_drifts)} modules needing prompt updates:")
         for drift in prompt_drifts:
             print(f"  - {drift.basename}: {drift.reason}")
-
+            
         print(f"Detected {len(example_drifts)} modules needing example updates:")
         for drift in example_drifts:
             print(f"  - {drift.basename}: {drift.reason}")
 
 
-def demonstrate_heal_result() -> None:
+def demonstrate_main():
     """
-    Demonstrates the HealResult dataclass returned by heal_module.
-    """
-    print("\n--- Demonstrating HealResult ---")
-    result = HealResult(basename="example_module", success=True, cost=0.12)
-    print(f"Result: basename={result.basename}, success={result.success}, "
-          f"cost={result.cost}, error={result.error!r}")
-
-
-def demonstrate_main() -> None:
-    """
-    Demonstrates the main entry point. We patch the module-level main so this
-    example does not invoke real git or LLM operations.
+    Demonstrates how to run the main entry point which detects drift, heals it,
+    and commits the changes.
     """
     print("\n--- Demonstrating main entry point ---")
-
-    with patch.object(ci_drift_heal, "main", return_value=0) as mock_main:
-        exit_code = ci_drift_heal.main(
-            modules=["example_module"],
-            budget_cap=5.0,
-            skip_ci=True,
-            diff_base="main",
+    
+    # We mock main so it doesn't actually try to run git commands or LLM calls in this example.
+    with patch("pdd.ci_drift_heal.main", return_value=0) as mock_main:
+        # Run main with a budget cap of $5.00, in push-to-main mode (skip_ci=True)
+        # and comparing against the 'main' branch (diff_base='main')
+        exit_code = main(
+            modules=["example_module"],  # Only heal specific modules
+            budget_cap=5.0,              # $5.00 limit for LLM costs
+            skip_ci=True,                # Add [skip ci] to commit message
+            diff_base="main"             # Base branch for drift detection
         )
-
+        
         print(f"Main function returned exit code: {exit_code}")
         print(f"Main was called with arguments: {mock_main.call_args}")
 
@@ -93,12 +81,11 @@ if __name__ == "__main__":
     # Ensure output directory exists for any file operations
     output_dir = os.path.join(os.path.dirname(__file__), "..", "output")
     os.makedirs(output_dir, exist_ok=True)
-
+    
     print("PDD CI Drift Heal Example")
     print("=========================")
-
+    
     demonstrate_detect_drift()
-    demonstrate_heal_result()
     demonstrate_main()
-
+    
     print("\nExample completed successfully.")

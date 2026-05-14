@@ -176,6 +176,30 @@ class TestDetectDrift:
         assert len(prompt_drifts) == 1
         assert len(example_drifts) == 0
 
+    def test_module_filter_detects_code_without_prompt(self):
+        """A requested module with code but no prompt still becomes update drift."""
+        code_path = MagicMock()
+        code_path.exists.return_value = True
+        code_path.__str__ = lambda self: "pdd/newmod.py"
+        prompt_path = MagicMock()
+        prompt_path.exists.return_value = False
+        prompt_path.__str__ = lambda self: "pdd/prompts/newmod_python.prompt"
+        fake_paths = {"code": code_path, "prompt": prompt_path}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=[]), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=fake_paths), \
+             patch("pdd.sync_determine_operation.sync_determine_operation") as mock_sync:
+            prompt_drifts, example_drifts = detect_drift(modules=["newmod"])
+
+        assert example_drifts == []
+        assert len(prompt_drifts) == 1
+        drift = prompt_drifts[0]
+        assert drift.basename == "newmod"
+        assert drift.operation == "update"
+        assert drift.prompt_path is None
+        assert drift.code_path == "pdd/newmod.py"
+        mock_sync.assert_not_called()
+
     def test_infer_identity_error_skips_module(self):
         """Modules that fail identity inference are skipped gracefully."""
         mock_files = [Path("prompts/bad_python.prompt")]
