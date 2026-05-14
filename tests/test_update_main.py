@@ -2254,6 +2254,17 @@ class TestFindPrdFile:
 class TestStrengthTemperatureResolution:
     """Tests for strength/temperature parameter resolution."""
 
+    @staticmethod
+    def _fake_resolve_runtime_config(
+        ctx, *, prompt_file=None, code_file=None, resolved_config=None,
+        strength=None, temperature=None,
+    ):
+        """Bypass .pddrc loading while honoring explicit-param override semantics."""
+        return {
+            "strength": strength if strength is not None else ctx.obj.get("strength"),
+            "temperature": temperature if temperature is not None else ctx.obj.get("temperature"),
+        }
+
     def test_explicit_params_override_ctx(self):
         """Explicit strength/temperature should override ctx.obj values."""
         ctx = click.Context(click.Command("update"))
@@ -2271,6 +2282,8 @@ class TestStrengthTemperatureResolution:
         with patch("pdd.update_main.get_available_agents", return_value=[]), \
              patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
              patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
+             patch("pdd.update_main._resolve_update_runtime_config",
+                   side_effect=self._fake_resolve_runtime_config), \
              patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
             update_main(
                 ctx=ctx,
@@ -2283,6 +2296,7 @@ class TestStrengthTemperatureResolution:
                 simple=True,
             )
 
+        assert mock_up.call_args is not None, "update_prompt was not called"
         kwargs = mock_up.call_args.kwargs
         assert kwargs["strength"] == 0.9
         assert kwargs["temperature"] == 0.5
@@ -2307,6 +2321,8 @@ class TestStrengthTemperatureResolution:
         with patch("pdd.update_main.get_available_agents", return_value=[]), \
              patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
              patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
+             patch("pdd.update_main._resolve_update_runtime_config",
+                   side_effect=self._fake_resolve_runtime_config), \
              patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
             update_main(
                 ctx=ctx,
@@ -2319,6 +2335,10 @@ class TestStrengthTemperatureResolution:
                 simple=True,
             )
 
+        assert mock_up.call_args is not None, "update_prompt was not called"
+        kwargs = mock_up.call_args.kwargs
+        assert kwargs["strength"] == 0.7
+        assert kwargs["temperature"] == 0.3
         assert ctx.obj["strength"] == 0.7
         assert ctx.obj["temperature"] == 0.3
 
