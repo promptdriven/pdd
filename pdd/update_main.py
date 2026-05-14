@@ -882,6 +882,7 @@ def _run_repo_mode(
     output_dir: Optional[str],
     sync_metadata: bool,
     dry_run: bool,
+    budget: Optional[float] = None,
 ) -> Optional[Tuple[str, float, str]]:
     obj = ctx.obj or {}
     quiet = obj.get("quiet", False)
@@ -948,6 +949,20 @@ def _run_repo_mode(
             console.print("[success]Everything is in sync — no updates needed.[/success]")
         return None
 
+    if dry_run:
+        if not quiet:
+            console.print(
+                f"[info]Dry run: {len(changed_pairs)} pair(s) would be updated "
+                f"(no LLM calls, no prompt writes, no architecture/PRD sync).[/info]"
+            )
+            for prompt_file, code_file in changed_pairs:
+                console.print(f"  [path]{code_file}[/path] -> [path]{prompt_file}[/path]")
+        return (
+            f"Dry run: {len(changed_pairs)} prompt(s) would be updated (no changes made).",
+            0.0,
+            "N/A",
+        )
+
     if not quiet:
         console.print(
             f"[info]Updating {len(changed_pairs)} pair(s)…[/info]"
@@ -973,6 +988,13 @@ def _run_repo_mode(
             "Updating pairs", total=len(changed_pairs), cost=0.0
         )
         for prompt_file, code_file in changed_pairs:
+            if budget is not None and total_cost >= budget:
+                if not quiet:
+                    console.print(
+                        f"[info]Budget cap reached (${budget:.2f}); "
+                        f"stopping with {len(results)} pair(s) processed.[/info]"
+                    )
+                break
             res = update_file_pair(prompt_file, code_file, ctx, repo=True, simple=simple)
             results.append(res)
             total_cost += float(res.get("cost") or 0.0)
@@ -1159,10 +1181,27 @@ def _run_single_file_mode(
     regeneration_mode = input_prompt_file is None
 
     if regeneration_mode:
+        # Distinguish --output values that name a destination prompt file from
+        # those that name an output directory. Treating an explicit file path
+        # as a directory creates a phantom sub-prompt and then fails the
+        # final write because the directory entry shadows the requested path.
+        output_is_explicit_file = (
+            output is not None
+            and not os.path.isdir(output)
+            and not output.endswith(("/", os.sep))
+        )
         try:
-            prompt_path, code_path = resolve_prompt_code_pair(
-                Path(modified_code_file), quiet=quiet, output_dir=output
-            )
+            if output_is_explicit_file:
+                explicit_path = Path(output).resolve()
+                explicit_path.parent.mkdir(parents=True, exist_ok=True)
+                if not explicit_path.exists():
+                    explicit_path.write_text("", encoding="utf-8")
+                prompt_path = explicit_path
+                code_path = Path(modified_code_file).resolve()
+            else:
+                prompt_path, code_path = resolve_prompt_code_pair(
+                    Path(modified_code_file), quiet=quiet, output_dir=output
+                )
         except Exception as exc:
             if not quiet:
                 console.print(f"[error]Failed to resolve prompt for code:[/error] {exc}")
@@ -1332,12 +1371,12 @@ def update_main(
     modified_code_file: Optional[str],
     input_code_file: Optional[str],
     output: Optional[str],
-    use_git: bool,
-    repo: bool,
-    extensions: Optional[Tuple[str, ...]],
-    directory: Optional[str],
-    strength: Optional[float],
-    temperature: Optional[float],
+    use_git: bool = False,
+    repo: bool = False,
+    extensions: Optional[Tuple[str, ...]] = None,
+    directory: Optional[str] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
     simple: bool = False,
     base_branch: str = "main",
     budget: Optional[float] = None,
@@ -1379,6 +1418,7 @@ def update_main(
                 output_dir=output,
                 sync_metadata=sync_metadata,
                 dry_run=dry_run,
+                budget=budget,
             )
 
         if not modified_code_file:
