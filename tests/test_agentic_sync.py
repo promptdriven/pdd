@@ -560,6 +560,95 @@ class TestGlobalSyncHelpers:
         assert "unresolved dependency" in warnings[0]
 
 
+class TestArchitectureSyncModules:
+    """Tests for ``_architecture_sync_modules`` and its nested .pddrc handling."""
+
+    @staticmethod
+    def _write_pddrc(path: Path, contexts: Dict[str, Any]) -> None:
+        import yaml
+
+        path.write_text(yaml.dump({"contexts": contexts}), encoding="utf-8")
+
+    def test_root_arch_module_picks_up_nested_pddrc_cwd(self, tmp_path):
+        """A root architecture.json entry whose basename is owned by a nested
+        .pddrc must resolve its cwd to the nested directory, not project_root.
+
+        Regression test for the no-arg global sync path: previously
+        _architecture_sync_modules set cwd=arch_path.parent unconditionally,
+        which broke modules whose prompts live under a nested .pddrc.
+        """
+        # Root architecture declares one entry: src/services/orchestrator.
+        root_arch = tmp_path / "architecture.json"
+        root_arch.write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "src/services/orchestrator_python.prompt",
+                        "filepath": "src/services/orchestrator.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        # Nested .pddrc claims that prompt with a specific path pattern.
+        nested_dir = tmp_path / "extensions" / "app"
+        nested_dir.mkdir(parents=True)
+        prompts_dir = nested_dir / "prompts" / "src" / "services"
+        prompts_dir.mkdir(parents=True)
+        (prompts_dir / "orchestrator_python.prompt").write_text(
+            "% nested prompt", encoding="utf-8"
+        )
+        self._write_pddrc(
+            nested_dir / ".pddrc",
+            {
+                "services": {
+                    "paths": ["src/services/**", "prompts/src/services/**"],
+                    "defaults": {"prompts_dir": "prompts/src/services"},
+                }
+            },
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+
+        # Exactly one module should be returned.
+        assert len(modules) == 1
+        module = modules[0]
+        assert module.basename == "src/services/orchestrator"
+        # The nested .pddrc must have claimed ownership: cwd should be the
+        # nested directory, not project_root.
+        assert module.cwd == nested_dir, (
+            f"Expected nested dir {nested_dir}, got {module.cwd}. "
+            "Root-arch module owned by nested .pddrc should resolve to "
+            "nested cwd, not project_root."
+        )
+
+    def test_nested_arch_module_without_pddrc_defaults_to_arch_dir(self, tmp_path):
+        """When no .pddrc claims a basename, cwd defaults to the arch file's
+        own directory (preserves nested-arch isolation)."""
+        nested_dir = tmp_path / "examples" / "demo"
+        nested_dir.mkdir(parents=True)
+        nested_arch = nested_dir / "architecture.json"
+        nested_arch.write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "widget_python.prompt",
+                        "filepath": "widget.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+
+        assert len(modules) == 1
+        assert modules[0].basename == "widget"
+        assert modules[0].cwd == nested_dir
+
+
 class TestRunGlobalSync:
     @patch("pdd.agentic_sync._find_project_root")
     @patch("pdd.agentic_sync._architecture_sync_modules", return_value=([], [], Path("/tmp/architecture.json")))

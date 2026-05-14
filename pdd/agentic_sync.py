@@ -472,7 +472,7 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
         except (json.JSONDecodeError, OSError):
             continue
 
-        cwd = arch_path.parent
+        arch_dir = arch_path.parent
         for entry in extract_modules(data):
             basename = _basename_from_architecture_filename(entry.get("filename", ""))
             if not basename:
@@ -482,6 +482,11 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
                 continue
             seen.add(dedupe_key)
             architecture.append(entry)
+            # Consult _resolve_module_cwd so a nested .pddrc whose context owns
+            # this basename wins over the arch file's own directory. The
+            # resolver scans subdirectories of arch_dir for .pddrc files and
+            # falls back to arch_dir when no nested config claims the basename.
+            cwd = _resolve_module_cwd(basename, arch_dir)
             raw_modules.append((basename, cwd, arch_path, entry))
 
     counts: Dict[str, int] = {}
