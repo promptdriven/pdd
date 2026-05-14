@@ -712,10 +712,21 @@ def _run_metadata_sync_safe(
             paths = get_pdd_file_paths(basename, language)
             if not paths or not paths.get("prompt") or not paths.get("code"):
                 raise ValueError("authoritative prompt/code paths unavailable")
+            # Preserve the previous user-facing command so the released
+            # `sync_determine_operation._is_workflow_complete` (which only
+            # accepts verify/test/fix/update as complete) keeps recognizing
+            # the workflow as synced after this internal refresh.
+            prev_fp_for_cmd = read_fingerprint(basename, language)
+            prev_cmd = getattr(prev_fp_for_cmd, "command", None) if prev_fp_for_cmd else None
+            preserved_command = (
+                prev_cmd
+                if prev_cmd in ("verify", "test", "fix", "update")
+                else "fix"
+            )
             save_fingerprint(
                 basename=basename,
                 language=language,
-                operation="metadata_sync",
+                operation=preserved_command,
                 paths=paths,
                 cost=0.0,
                 model="metadata_sync",

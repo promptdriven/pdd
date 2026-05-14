@@ -484,10 +484,24 @@ def run_metadata_sync(
                 )
                 _stage_log_exit("fingerprint", "dry_run", detail)
             else:
+                # Preserve the previous user-facing command so
+                # `sync_determine_operation._is_workflow_complete` (which only
+                # recognizes verify/test/fix/update as complete) still sees the
+                # workflow as synced after this internal finalization step.
+                # Falls back to "fix" when no prior fingerprint exists or the
+                # prior fingerprint was itself written by metadata_sync.
+                from .sync_determine_operation import read_fingerprint
+                _prev_fp = read_fingerprint(basename, language)
+                _prev_cmd = getattr(_prev_fp, "command", None) if _prev_fp else None
+                _preserved_command = (
+                    _prev_cmd
+                    if _prev_cmd in ("verify", "test", "fix", "update")
+                    else "fix"
+                )
                 save_fingerprint(
                     basename=basename,
                     language=language,
-                    operation="metadata_sync",
+                    operation=_preserved_command,
                     paths=paths,
                     cost=0.0,
                     model="metadata_sync",
