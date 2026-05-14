@@ -1497,8 +1497,8 @@ class TestMain:
         mock_commit.assert_not_called()
         assert result == 1
 
-    def test_push_partial_failure_can_commit_without_checkpoint(self):
-        """Push-to-main mode remains advisory but never creates a PR checkpoint."""
+    def test_push_partial_failure_skips_commit_but_returns_zero(self):
+        """Push-to-main failures stay advisory but do not stage failed-module artifacts."""
         drifts = (
             [
                 DriftInfo("auth", "python", "update", "changed"),
@@ -1516,9 +1516,7 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             result = main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(
-            ["auth"], True, checkpoint=False, finalized_modules=[]
-        )
+        mock_commit.assert_not_called()
         assert result == 0
 
     def test_pr_skipped_module_after_success_skips_commit_checkpoint(self):

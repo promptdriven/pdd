@@ -1350,7 +1350,8 @@ def main(
     # PR mode: partial success (any failed or skipped alongside healed)
     # skips the commit to avoid creating a bad checkpoint (Req 15).
     pr_partial_success = is_pr_mode and has_healed and (has_failures or has_skipped)
-    if has_healed and not pr_partial_success:
+    push_partial_failure = (not is_pr_mode) and has_healed and has_failures
+    if has_healed and not pr_partial_success and not push_partial_failure:
         checkpoint = is_pr_mode and not has_failures and not has_skipped
         committed = commit_and_push(
             healed,
