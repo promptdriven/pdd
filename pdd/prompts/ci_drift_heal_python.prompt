@@ -11,7 +11,7 @@
       {"name": "main", "signature": "(modules: Optional[List[str]], budget_cap: Optional[float], skip_ci: bool, diff_base: Optional[str])", "returns": "int"},
       {"name": "detect_drift", "signature": "(modules: Optional[List[str]], diff_base: Optional[str])", "returns": "Tuple[List[DriftInfo], List[DriftInfo]]"},
       {"name": "heal_module", "signature": "(drift: DriftInfo, env: Dict[str, str])", "returns": "Optional[bool]"},
-      {"name": "commit_and_push", "signature": "(healed_modules: List[str], skip_ci: bool, checkpoint: bool)", "returns": "bool"}
+      {"name": "commit_and_push", "signature": "(healed_modules: List[str], skip_ci: bool, checkpoint: bool, finalized_modules: Optional[List[Tuple[str, str]]] = None)", "returns": "bool"}
     ]
   }
 }
