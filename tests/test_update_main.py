@@ -3160,6 +3160,63 @@ def test_default_single_file_update_writes_real_fingerprint_to_disk(
     assert fingerprint_data["prompt_hash"] == expected_prompt_hash
 
 
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_default_single_file_update_clears_stale_run_report(
+    mock_resolve_pair,
+    mock_update_prompt,
+    tmp_path,
+    monkeypatch,
+):
+    # Issue #1007 / PR #1009 follow-up: when the finalizer writes a fresh
+    # fingerprint, any pre-existing <basename>_<language>_run.json must be
+    # cleared in the same step so later sync decisions do not trust a
+    # successful run report from before the update.
+    import json
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("old prompt content\n")
+    code_path = tmp_path / "foo.py"
+    code_path.write_text("def foo(): return 1\n")
+
+    monkeypatch.chdir(tmp_path)
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    run_report_path = meta_dir / "foo_python_run.json"
+    run_report_path.write_text(json.dumps({"passed": True, "stale": True}))
+
+    ctx = click.Context(click.Command("update"))
+    ctx.params = {"force": False, "quiet": True}
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "quiet": True,
+    }
+
+    mock_update_prompt.return_value = ("new prompt\n", 0.0, "test-model")
+    mock_resolve_pair.return_value = (str(prompt_path), str(code_path))
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]):
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_path),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert result is not None
+    assert not run_report_path.exists(), (
+        "Stale run report must be cleared when the finalizer writes a fresh "
+        "fingerprint for the (prompt, code) pair."
+    )
+    assert (meta_dir / "foo_python.json").exists()
+
+
 def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
     mock_ctx,
     minimal_input_files,

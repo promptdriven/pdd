@@ -1103,7 +1103,11 @@ def _finalize_single_file_fingerprint(
             )
         return
 
-    from .operation_log import save_fingerprint, infer_module_identity
+    from .operation_log import (
+        clear_run_report,
+        infer_module_identity,
+        save_fingerprint,
+    )
     basename, language = infer_module_identity(prompt_path)
     if not (basename and language):
         if not quiet:
@@ -1112,6 +1116,14 @@ def _finalize_single_file_fingerprint(
                 f"unable to infer module identity for {prompt_path}[/info]"
             )
         return
+
+    try:
+        clear_run_report(basename, language)
+    except Exception as exc:
+        if not quiet:
+            rprint(
+                f"[warning][metadata] Run report clear failed: {exc}[/warning]"
+            )
 
     try:
         save_fingerprint(
