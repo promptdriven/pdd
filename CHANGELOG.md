@@ -1,3 +1,16 @@
+## v0.0.237 (2026-05-13)
+
+### Fix
+
+- **tests**: re-import pdd.core.* after sys.modules pop to keep parent attrs in sync
+- handle PRD sync agent tuple output
+- **#964**: orchestrator owns visible step comments (start with pdd bug)
+- **checkup**: split codex finding prefix blocks
+- **checkup**: harden PR-head rebase recovery
+- **checkup**: avoid force-pushing advanced PR heads
+- **checkup**: harden review loop automation
+- **ci**: restrict pytest CI to Google Vertex gemini rows (no opus) (#984)
+
 ## v0.0.236 (2026-05-12)
 
 ### CI
