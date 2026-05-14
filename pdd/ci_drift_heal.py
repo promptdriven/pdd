@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from rich.console import Console
+from rich.table import Table
 
 console = Console()
 
@@ -1183,6 +1184,34 @@ def commit_and_push(
 
 
 # ---------------------------------------------------------------------------
+# Console output
+# ---------------------------------------------------------------------------
+
+
+def _print_drift_summary(drifts: List[DriftInfo]) -> None:
+    """Print a compact summary of detected drift before healing."""
+    table = Table(title="Drift summary")
+    table.add_column("Module")
+    table.add_column("Operation")
+    table.add_column("Reason")
+    for drift in drifts:
+        table.add_row(drift.basename, drift.operation, drift.reason or "")
+    console.print(table)
+
+
+def _print_final_summary(
+    healed: List[str],
+    failed: List[str],
+    skipped: List[str],
+) -> None:
+    """Print final heal counts."""
+    console.print(
+        f"Auto-heal summary: healed={len(healed)} "
+        f"failed={len(failed)} skipped={len(skipped)}"
+    )
+
+
+# ---------------------------------------------------------------------------
 # CLI argument parser
 # ---------------------------------------------------------------------------
 
@@ -1225,6 +1254,7 @@ def main(
     all_drifts: List[DriftInfo] = list(prompt_drifts) + list(example_drifts)
     if not all_drifts:
         return 0
+    _print_drift_summary(all_drifts)
 
     # Create per-run cost CSV.
     fd, cost_path = tempfile.mkstemp(prefix="pdd_ci_drift_heal_cost_", suffix=".csv")
@@ -1303,6 +1333,7 @@ def main(
     has_healed = bool(healed)
     has_skipped = bool(skipped)
     is_pr_mode = not skip_ci
+    _print_final_summary(healed, failed, skipped)
 
     if revert_blocks_commit:
         return 1

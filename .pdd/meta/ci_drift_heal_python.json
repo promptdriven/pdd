@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.230",
-  "timestamp": "2026-05-14T19:23:49.032374+00:00",
+  "timestamp": "2026-05-14T19:30:21.198602+00:00",
   "command": "metadata_sync",
   "prompt_hash": "2f25c72f2b98d8c07b6be9f8fc96fce76a24b3072d67cf5c38ab18cecf8525f0",
-  "code_hash": "28c137f48d82fee5fd1cb6f87ad5a209073e781c81240f89a6bd11135c6af98a",
+  "code_hash": "17c1f87103c7d7935868623194e6de1f3d464c185eff14f40929d84c4b1832dc",
   "example_hash": "d587ecf2e5a8b620b51409f1b1f37f270838403da4299a5262fa6eef167c8f7e",
-  "test_hash": "8c9286f60133396734480f2e8fc5b0a544f1245092fc47fabcb9b410f87f34c8",
+  "test_hash": "ccae3bedb37c5f25b69242d9c8764734e6f05b544624d038694424a2b7dd6bb2",
   "test_files": {
-    "test_ci_drift_heal.py": "8c9286f60133396734480f2e8fc5b0a544f1245092fc47fabcb9b410f87f34c8"
+    "test_ci_drift_heal.py": "ccae3bedb37c5f25b69242d9c8764734e6f05b544624d038694424a2b7dd6bb2"
   },
   "include_deps": {
     "context/operation_log_example.py": "6cd7962ab255d6080aeb97897175250f987ce936cf7333e7601f10834405a940",

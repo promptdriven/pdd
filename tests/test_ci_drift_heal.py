@@ -1358,7 +1358,7 @@ class TestMain:
             result = main()
         assert result == 1
 
-    def test_successful_heal_and_commit(self):
+    def test_successful_heal_and_commit(self, capsys):
         """Successful heal + commit returns 0."""
         drifts = ([DriftInfo("auth", "python", "update", "changed")], [])
 
@@ -1372,6 +1372,9 @@ class TestMain:
             result = main()
 
         assert result == 0
+        out = capsys.readouterr().out
+        assert "Drift summary" in out
+        assert "Auto-heal summary: healed=1 failed=0 skipped=0" in out
         mock_commit.assert_called_once_with(
             ["auth"], False, checkpoint=True, finalized_modules=[]
         )
