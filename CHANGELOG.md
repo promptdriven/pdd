@@ -1,49 +1,35 @@
 ## v0.0.236 (2026-05-12)
 
+### CI
+
+- **cloud-batch**: harden the image contract with plugin and pytest-config preflights, build images under `$BUILD_ID` before retagging `:latest`, remove the double-`:latest` tag path, and fix the entrypoint parser preflight that was causing all 77 Batch tasks to exit early.
+- **cloud-batch**: record GNU `timeout` exit 124 as a failed result instead of leaving a result gap, stop retrying timeout-killed tasks, lower Batch retries, extend sync-regression command headroom, and relax two flaky real-LLM timeout ceilings.
+- **release**: add a manual GitHub Actions workflow that builds, checks, and publishes artifacts to TestPyPI with trusted publishing.
+
 ### Fix
 
-- **ci**: relax timeouts for two real-LLM cases that flaked in the post-PR-962 release gate (#982)
-- **ci**: entrypoint preflight — replace broken heredoc with python -c (all 77 Cloud Batch tasks were failing exit 2) (#981)
-- **ci**: drop :latest from AR_IMAGE so cloudbuild.yaml's :$BUILD_ID tag doesn't double up (#980)
-- **ci_drift_heal**: revert prompt/arch changes per Greg's P1 review
-- **ci_detect**: collapse prompt to bare path and add example to satisfy auto-heal skip
-- **ci_detect**: exclude path-qualified basename for self prompt
-- **ci_detect,arch**: address PR #930 review — newline include-many, prompt drift, ci_drift_heal arch deps
-- **tests**: align test_ci_drift_heal with main impl after merge
-- **ci**: skip untouched clean-ci auto-deps drift
-- **ci**: scope reverse dependency detection to changed include defs
-- **ci_drift_heal**: code-only phantom crash → update drift, not example
-- **ci_drift_heal**: fail closed on phantom crash with unknown touch state
-- **ci_drift_heal**: pin git-lookup failure semantics + PR/push example shape
-- **ci_drift_heal,docs**: return None on git failure + require --diff-base in CI
-- **ci_drift_heal**: scope phantom-crash filter to actually-untouched modules
-- **prompts,docs**: pin phantom-crash detect filter, caveat sync-arch validation
-- **prompts**: drop steer_timeout from global-sync forward list, add init metadata
-- **architecture**: drop unmatched deps on commands/__init__ entry
-- **architecture**: backfill commands/__init__ entry
-- **ci_drift_heal**: filter phantom run-report crash at detection
-- **ci_drift_heal**: skip phantom crash drift from missing run_report on clean CI
-- **prompts**: pin sync option types/tri-state + match __init__ order
-- **prompts**: complete maintenance drift backfill
-- **prompts**: backfill commands/maintenance and commands/__init__ drift
-- classify Anthropic billing errors as permanent
-- refuse device-flow auth in CI
-- parse codex finding priority prefix
-- **checkup**: address PR #932 Greg review — dedupe completions, portable adapter test
-- **checkup**: address PR #932 review — contract drift, fingerprints, example
-- **checkup**: align contract example with live ReviewLoopConfig (#922)
-- **checkup**: preserve diagnostics across parse-repair + lock positional order (#922)
-- **checkup**: scrub github_pat_ + discover cloud adapter portably (#922)
-- **checkup**: scrub provider envvar dumps and bare AIza/xai/gsk tokens (#922)
-- **checkup**: example sys.path, zsh/fish completion artifacts, signature ordering (#922)
-- **checkup**: defang every pipe-prefixed diagnostics line (#922)
-- **checkup**: defang pipe-table findings + fallback mode docs (#922)
-- **checkup**: expand diagnostics defang to every adapter trip-wire (#922)
-- **checkup**: address PR #932 review — scrubber, prompt drift, examples (#922)
-- **checkup**: defang line-leading 'Error:' to keep cloud adapter from downgrading verdict (#922 round 4)
-- **checkup**: defang severity tags + budget guard + verifier docstring + final-state diagnostics (#922 round 3)
-- **checkup**: keep verdict adapter from short-circuiting on fallback success (#922 follow-up)
-- **checkup**: surface reviewer diagnostics and add opt-in fallback reviewer (#922)
+- **checkup**: add the opt-in `--fallback-reviewer-on-failure` path, preserve failed-reviewer diagnostics in final artifacts, and let a clean fallback reviewer supersede a primary-reviewer outage without losing the original failure context.
+- **checkup**: scrub reviewer diagnostic tails for provider secrets and defang adapter-sensitive text (`[SEV]`, line-leading `Error:`, status markers, budget markers, pipe-table rows, and related headings) so logs cannot leak credentials or become synthetic findings in the cloud verdict adapter.
+- **checkup**: parse Codex priority findings such as `[P1]` / `[P2]` from numbered and bold Markdown forms without duplicating trailing checks or verification text; keep all valid findings actionable while using blocking severities only as priority guidance.
+- **agentic**: classify Anthropic billing and credit-exhaustion errors as permanent, preserve `api_error_status` from Claude Code error envelopes, and print a safe provider-skip classification instead of retrying unrecoverable provider failures.
+- **auth**: refuse interactive GitHub device-flow auth in CI and other explicit noninteractive contexts after JWT cache and keyring refresh checks, while still honoring `PDD_JWT_TOKEN` and stored refresh tokens.
+- **llm**: wrap LiteLLM token counting and context-limit probes with a timeout and tiktoken fallback so provider-detection or device-code OAuth hangs cannot wedge LLM invocation.
+- **ci_detect**: make auto-heal module detection selector-aware, support newline-delimited `<include-many>` entries, scan both `prompts/` and `pdd/prompts/`, ignore prose that mentions include tags, and exclude the detector/helper modules from headless auto-heal.
+- **ci_drift_heal**: tighten diff-base and phantom-crash handling so untouched clean modules are skipped, code-only crashes update drift instead of examples, and failed sync/example regeneration rolls back only the affected module metadata.
+- **prompts/architecture**: backfill command registration and maintenance prompt drift, restore the `commands/__init__` architecture entry, align `sync` option metadata, and keep prompt/example/completion metadata in sync.
+
+### Build
+
+- Bump package metadata, README/PyPI version references, and shell completions from 0.0.235 to 0.0.236.
+- Add `pytest-timeout`, default pytest timeouts, strict marker/config validation, and the missing marker registrations used by the public test suite.
+
+### Docs
+
+- Document `sync-architecture`, update CI auto-heal docs to match the GitHub Actions dispatcher plus Cloud Build ownership model, and clarify metadata-sync rollback behavior.
+
+### Test
+
+- Add and expand regression coverage for checkup fallback/report parsing/secret scrubbing, noninteractive auth, Anthropic billing classification, selector-aware CI detection, token-counter timeouts, pytest marker isolation, and Cloud Batch timeout behavior.
 
 ## v0.0.235 (2026-05-12)
 
