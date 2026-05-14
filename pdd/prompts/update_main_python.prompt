@@ -18,7 +18,7 @@
       },
       {
         "name": "update_file_pair",
-        "signature": "(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo, simple: bool = False) -> Dict[str, Any]"
+        "signature": "(prompt_file: str, code_file: str, ctx: click.Context, repo: git.Repo, simple: bool = False, strength: Optional[float] = None, temperature: Optional[float] = None) -> Dict[str, Any]"
       },
       {
         "name": "update_main",
