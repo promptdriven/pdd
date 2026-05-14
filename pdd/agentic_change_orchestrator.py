@@ -1017,6 +1017,7 @@ def _preflight_drift_heal(
                 if (
                     "metadata finalization failed" in combined_output
                     or "metadata staging verification failed" in combined_output
+                    or "[metadata-sync]" in combined_output
                 ):
                     raise RuntimeError(
                         f"preflight metadata finalization failed for {drift.basename}"

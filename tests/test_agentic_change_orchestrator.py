@@ -5209,7 +5209,7 @@ def test_preflight_drift_heal_metadata_failure_is_hard_failure(tmp_path):
         args=["pdd"],
         returncode=1,
         stdout="",
-        stderr="metadata finalization failed for auth: metadata sync returned false",
+        stderr="[metadata-sync] fingerprint: failed",
     )
 
     with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
