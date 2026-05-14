@@ -2802,7 +2802,21 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
     mock_update_prompt,
     mock_open_file,
 ):
-    # Legacy true-update path: assert orchestrator is invoked after update_prompt
+    # Legacy true-update path: assert orchestrator is invoked after update_prompt.
+    # Override the construct_paths mock so the written output path matches the
+    # canonical source prompt — otherwise the redirected-output guard skips the
+    # orchestrator (#1007 follow-up).
+    canonical_prompt = minimal_input_files["input_prompt_file"]
+    mock_construct_paths.return_value = (
+        {},
+        {
+            "input_prompt_file": "prompt content",
+            "modified_code_file": "def modified_code(): pass",
+            "input_code_file": "def original_code(): pass",
+        },
+        {"output": canonical_prompt},
+        None,
+    )
     call_order = []
     mock_update_prompt.side_effect = lambda **kw: (call_order.append("update_prompt") or ("updated prompt text", 0.123, "test-model"))
 
@@ -2815,10 +2829,10 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
 
         result = update_main(
             ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
+            input_prompt_file=canonical_prompt,
             modified_code_file=minimal_input_files["modified_code_file"],
             input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
+            output=None,
             use_git=False,
             sync_metadata=True,
         )
@@ -2826,7 +2840,7 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
     assert result == ("updated prompt text", 0.123, "test-model")
     assert mock_sync.call_count == 1
     kwargs = mock_sync.call_args.kwargs
-    assert kwargs["prompt_path"] == Path("updated_prompt.prompt")
+    assert kwargs["prompt_path"] == Path(canonical_prompt)
     assert kwargs["code_path"] == Path(minimal_input_files["modified_code_file"])
     assert kwargs["dry_run"] is False
     # update_prompt must run before run_metadata_sync
@@ -2839,14 +2853,17 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
     mock_git_update,
     mock_open_file,
 ):
-    # Legacy git-update path: orchestrator runs after git_update succeeds
+    # Legacy git-update path: orchestrator runs after git_update succeeds.
+    # Output path must match the canonical source prompt so the
+    # redirected-output guard does not skip the orchestrator (#1007 follow-up).
+    canonical_prompt = "some_prompt_file.prompt"
     mock_construct_paths.return_value = (
         {},
         {
             "input_prompt_file": "prompt content",
             "modified_code_file": "def git_modified_code(): pass",
         },
-        {"output": "updated_prompt_git.prompt"},
+        {"output": canonical_prompt},
         None,
     )
     call_order = []
@@ -2861,10 +2878,10 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
 
         result = update_main(
             ctx=mock_ctx,
-            input_prompt_file="some_prompt_file.prompt",
+            input_prompt_file=canonical_prompt,
             modified_code_file="modified_code.py",
             input_code_file=None,
-            output="git_output.prompt",
+            output=None,
             use_git=True,
             sync_metadata=True,
         )
@@ -2872,7 +2889,7 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
     assert result == ("updated prompt from git", 0.5, "git-model")
     assert mock_sync.call_count == 1
     kwargs = mock_sync.call_args.kwargs
-    assert kwargs["prompt_path"] == Path("updated_prompt_git.prompt")
+    assert kwargs["prompt_path"] == Path(canonical_prompt)
     assert kwargs["code_path"] == Path("modified_code.py")
     assert kwargs["dry_run"] is False
     assert call_order == ["git_update", "run_metadata_sync"]
@@ -3207,6 +3224,41 @@ def test_default_single_file_update_skips_fingerprint_when_output_redirected(
     mock_infer.assert_not_called()
 
 
+def test_sync_metadata_true_with_redirected_output_skips_orchestrator(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+    capsys,
+):
+    # Issue #1007 / PR #1009 follow-up: with `--sync-metadata --output <other>`
+    # the metadata sync orchestrator MUST also be skipped, not only the default
+    # fingerprint finalizer. The orchestrator's fingerprint stage would
+    # otherwise save a fingerprint against the redirected path and reintroduce
+    # the stale-state class the issue is closing — the canonical source prompt
+    # was never overwritten in true-update redirected-output mode.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="some_prompt_file.prompt",
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="other_prompt.prompt",
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    mock_sync.assert_not_called()
+    mock_save_fp.assert_not_called()
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "output redirected" in out
+
+
 def test_sync_metadata_true_skips_default_fingerprint_finalization(
     mock_ctx,
     minimal_input_files,
@@ -3216,16 +3268,30 @@ def test_sync_metadata_true_skips_default_fingerprint_finalization(
 ):
     # When the orchestrator runs (sync_metadata=True), the default fingerprint
     # write must be skipped so we do not double-write the same fingerprint.
+    # The orchestrator is only invoked when the written prompt path matches
+    # the canonical source — pass output=None so the legacy path overwrites
+    # the input prompt in place and the redirected-output skip does not fire.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
-         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.update_main.construct_paths") as mock_cp:
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": "prompt content",
+                "modified_code_file": "def modified_code(): pass",
+                "input_code_file": "def original_code(): pass",
+            },
+            {"output": minimal_input_files["input_prompt_file"]},
+            None,
+        )
         mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
         result = update_main(
             ctx=mock_ctx,
             input_prompt_file=minimal_input_files["input_prompt_file"],
             modified_code_file=minimal_input_files["modified_code_file"],
             input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
+            output=None,
             use_git=False,
             sync_metadata=True,
         )
@@ -3248,15 +3314,28 @@ def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     # the subprocess returncode) does not mark a half-synced update as
     # healed (#871 acceptance criterion). The helper still logs the
     # orchestrator error before propagating.
+    # Pass output=None so the orchestrator is actually invoked — otherwise the
+    # redirected-output guard skips the sync stage before it can raise.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")):
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")), \
+         patch("pdd.update_main.construct_paths") as mock_cp:
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": "prompt content",
+                "modified_code_file": "def modified_code(): pass",
+                "input_code_file": "def original_code(): pass",
+            },
+            {"output": minimal_input_files["input_prompt_file"]},
+            None,
+        )
         with pytest.raises(click.exceptions.Exit) as excinfo:
             update_main(
                 ctx=mock_ctx,
                 input_prompt_file=minimal_input_files["input_prompt_file"],
                 modified_code_file=minimal_input_files["modified_code_file"],
                 input_code_file=minimal_input_files["input_code_file"],
-                output="custom_output.prompt",
+                output=None,
                 use_git=False,
                 sync_metadata=True,
             )
@@ -3293,15 +3372,28 @@ def test_sync_metadata_failed_stage_propagates_failure(
             stages=failed_stages,
         )
 
+    # Pass output=None so the orchestrator is actually invoked — otherwise the
+    # redirected-output guard skips the sync stage before it can fail.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync):
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync), \
+         patch("pdd.update_main.construct_paths") as mock_cp:
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": "prompt content",
+                "modified_code_file": "def modified_code(): pass",
+                "input_code_file": "def original_code(): pass",
+            },
+            {"output": minimal_input_files["input_prompt_file"]},
+            None,
+        )
         with pytest.raises(click.exceptions.Exit) as excinfo:
             update_main(
                 ctx=mock_ctx,
                 input_prompt_file=minimal_input_files["input_prompt_file"],
                 modified_code_file=minimal_input_files["modified_code_file"],
                 input_code_file=minimal_input_files["input_code_file"],
-                output="custom_output.prompt",
+                output=None,
                 use_git=False,
                 sync_metadata=True,
             )

@@ -1003,6 +1003,26 @@ def _find_prd_file(project_root: Path) -> Optional[Path]:
     return None
 
 
+def _is_output_redirected(written_prompt_path: Path, source_prompt_path: Path) -> bool:
+    """Return True when ``--output`` redirected the write away from the canonical source prompt.
+
+    Single-file true-update paths accept ``--output <other_prompt>`` so the
+    user can preview an update without overwriting the canonical source. In
+    that case the written prompt does not represent the module's canonical
+    state, so neither the metadata sync orchestrator nor the default
+    fingerprint finalizer must record a fingerprint against it (#1007 stale
+    state class — a redirected fingerprint can let later sync detection treat
+    a still-stale canonical prompt as in sync).
+    """
+    try:
+        written_resolved = Path(written_prompt_path).resolve()
+        source_resolved = Path(source_prompt_path).resolve()
+    except OSError:
+        written_resolved = Path(written_prompt_path)
+        source_resolved = Path(source_prompt_path)
+    return written_resolved != source_resolved
+
+
 def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
     """Run metadata sync for a single (prompt, code) pair.
 
@@ -1073,20 +1093,15 @@ def _finalize_single_file_fingerprint(
                 "[info][metadata] Skipping fingerprint finalization: dry-run mode[/info]"
             )
         return
-    if source_prompt_path is not None:
-        try:
-            written_resolved = Path(prompt_path).resolve()
-            source_resolved = Path(source_prompt_path).resolve()
-        except OSError:
-            written_resolved = Path(prompt_path)
-            source_resolved = Path(source_prompt_path)
-        if written_resolved != source_resolved:
-            if not quiet:
-                rprint(
-                    "[info][metadata] Skipping fingerprint finalization: "
-                    "output redirected[/info]"
-                )
-            return
+    if source_prompt_path is not None and _is_output_redirected(
+        Path(prompt_path), Path(source_prompt_path)
+    ):
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                "output redirected[/info]"
+            )
+        return
 
     from .operation_log import save_fingerprint, infer_module_identity
     basename, language = infer_module_identity(prompt_path)
@@ -1717,7 +1732,16 @@ def update_main(
                         rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
 
                     if sync_metadata:
-                        if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
+                        if _is_output_redirected(
+                            Path(agentic_prompt_file),
+                            Path(actual_input_prompt_file),
+                        ):
+                            if not quiet:
+                                rprint(
+                                    "[info][metadata] Skipping metadata sync orchestrator: "
+                                    "output redirected[/info]"
+                                )
+                        elif not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
                             raise click.exceptions.Exit(1)
 
                     _finalize_single_file_fingerprint(
@@ -1835,7 +1859,16 @@ def update_main(
                 rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
 
             if sync_metadata:
-                if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
+                if _is_output_redirected(
+                    Path(output_file_paths["output"]),
+                    Path(actual_input_prompt_file),
+                ):
+                    if not quiet:
+                        rprint(
+                            "[info][metadata] Skipping metadata sync orchestrator: "
+                            "output redirected[/info]"
+                        )
+                elif not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
                     raise click.exceptions.Exit(1)
 
             _finalize_single_file_fingerprint(
