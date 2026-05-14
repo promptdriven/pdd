@@ -1038,6 +1038,7 @@ def _finalize_single_file_fingerprint(
     quiet: bool,
     cost: float,
     model: str,
+    source_prompt_path: Optional[Path] = None,
 ) -> None:
     """Default fingerprint finalization for single-file/regeneration update modes.
 
@@ -1045,11 +1046,19 @@ def _finalize_single_file_fingerprint(
     `pdd.operation_log` helpers so a successful `pdd update <code>` is not
     re-detected as changed on the next run (issue #1007 / PR #1009
     Requirement 15). Skips with an `[info]` log line — unless `quiet` — for
-    the three intentional skip cases (sync_metadata orchestrator owns the
-    stage, dry-run mode, or `infer_module_identity` cannot derive
+    the intentional skip cases (sync_metadata orchestrator owns the stage,
+    dry-run mode, `--output` redirected the write away from the canonical
+    source prompt, or `infer_module_identity` cannot derive
     basename/language). All failures are best-effort: a `save_fingerprint`
     exception surfaces as a `[warning]` line but never breaks the caller's
     success tuple.
+
+    ``source_prompt_path`` is the canonical input prompt for the module. When
+    callers pass a redirected output path via ``--output``, the written file
+    no longer represents the module's canonical prompt, so finalizing a
+    fingerprint against it would let later sync detection treat unrelated
+    canonical prompts as in sync (issue #1007 stale-state class). Skip in
+    that case.
     """
     if sync_metadata:
         if not quiet:
@@ -1064,6 +1073,20 @@ def _finalize_single_file_fingerprint(
                 "[info][metadata] Skipping fingerprint finalization: dry-run mode[/info]"
             )
         return
+    if source_prompt_path is not None:
+        try:
+            written_resolved = Path(prompt_path).resolve()
+            source_resolved = Path(source_prompt_path).resolve()
+        except OSError:
+            written_resolved = Path(prompt_path)
+            source_resolved = Path(source_prompt_path)
+        if written_resolved != source_resolved:
+            if not quiet:
+                rprint(
+                    "[info][metadata] Skipping fingerprint finalization: "
+                    "output redirected[/info]"
+                )
+            return
 
     from .operation_log import save_fingerprint, infer_module_identity
     basename, language = infer_module_identity(prompt_path)
@@ -1705,6 +1728,7 @@ def update_main(
                         quiet=quiet,
                         cost=agentic_cost,
                         model=provider,
+                        source_prompt_path=Path(actual_input_prompt_file),
                     )
 
                     return updated_prompt, agentic_cost, provider
@@ -1822,6 +1846,7 @@ def update_main(
                 quiet=quiet,
                 cost=total_cost,
                 model=model_name,
+                source_prompt_path=Path(actual_input_prompt_file),
             )
 
             return modified_prompt, total_cost, model_name

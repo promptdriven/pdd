@@ -3047,7 +3047,6 @@ def test_default_single_file_update_writes_fresh_fingerprint(
 @patch("pdd.update_main.resolve_prompt_code_pair")
 def test_default_single_file_update_writes_real_fingerprint_to_disk(
     mock_resolve_pair,
-    mock_ctx,
     mock_update_prompt,
     tmp_path,
     monkeypatch,
@@ -3057,6 +3056,11 @@ def test_default_single_file_update_writes_real_fingerprint_to_disk(
     # leaves save_fingerprint unmocked and asserts the user-visible
     # .pdd/meta/<basename>_<language>.json file is actually written and that
     # its prompt_hash / code_hash reflect the post-update files on disk.
+    #
+    # Build a plain ctx after monkeypatch.chdir instead of using the mock_ctx
+    # fixture: mock_ctx enters CliRunner().isolated_filesystem(), and chdir'ing
+    # to tmp_path on top of it leaves monkeypatch trying to restore into the
+    # isolated dir after the fixture has already removed it.
     import hashlib
     import json
 
@@ -3071,7 +3075,15 @@ def test_default_single_file_update_writes_real_fingerprint_to_disk(
 
     # save_fingerprint resolves META_DIR relative to cwd.
     monkeypatch.chdir(tmp_path)
-    mock_ctx.obj["quiet"] = True
+
+    ctx = click.Context(click.Command("update"))
+    ctx.params = {"force": False, "quiet": True}
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "quiet": True,
+    }
 
     new_prompt_text = "new updated prompt content\n"
     mock_update_prompt.return_value = (new_prompt_text, 0.123456, "test-model")
@@ -3079,7 +3091,7 @@ def test_default_single_file_update_writes_real_fingerprint_to_disk(
 
     with patch("pdd.update_main.get_available_agents", return_value=[]):
         result = update_main(
-            ctx=mock_ctx,
+            ctx=ctx,
             input_prompt_file=None,
             modified_code_file=str(code_path),
             input_code_file=None,
@@ -3120,16 +3132,17 @@ def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
 ):
     # When infer_module_identity returns (None, None) the finalizer must
     # skip save_fingerprint (and emit an info log when not quiet), preserving
-    # the successful return tuple.
+    # the successful return tuple. Use the canonical input path so the
+    # output-redirected guard does not shadow the identity-unknown branch.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.operation_log.infer_module_identity", return_value=(None, None)), \
          patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
         result = update_main(
             ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
+            input_prompt_file="updated_prompt.prompt",
             modified_code_file=minimal_input_files["modified_code_file"],
             input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
+            output="updated_prompt.prompt",
             use_git=False,
         )
 
@@ -3145,20 +3158,53 @@ def test_default_single_file_update_swallows_fingerprint_save_failure(
     mock_open_file,
 ):
     # A save_fingerprint exception must not break the success return — the
-    # update tuple is the contract; fingerprint write is best-effort.
+    # update tuple is the contract; fingerprint write is best-effort. Use the
+    # canonical input path so the output-redirected guard does not skip
+    # save_fingerprint before the OSError can be raised.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
          patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")), \
          patch("pdd.operation_log.save_fingerprint", side_effect=OSError("disk full")):
         result = update_main(
             ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
+            input_prompt_file="updated_prompt.prompt",
             modified_code_file=minimal_input_files["modified_code_file"],
             input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
+            output="updated_prompt.prompt",
             use_git=False,
         )
 
     assert result == ("updated prompt text", 0.123456, "test-model")
+
+
+def test_default_single_file_update_skips_fingerprint_when_output_redirected(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # Issue #1007 / PR #1009 follow-up: a successful
+    # `pdd update --output <other_prompt>` must NOT finalize a fingerprint
+    # against the redirected output path, because the canonical source prompt
+    # for the module was never overwritten. Writing a fresh fingerprint
+    # against the redirected file would let later sync detection treat the
+    # canonical prompt as in-sync via the matching code hash and leave it
+    # stale (the same stale-state class the issue is closing).
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")) as mock_infer, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="some_prompt_file.prompt",
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="other_prompt.prompt",
+            use_git=False,
+        )
+
+    assert result is not None
+    mock_save_fp.assert_not_called()
+    mock_infer.assert_not_called()
 
 
 def test_sync_metadata_true_skips_default_fingerprint_finalization(
