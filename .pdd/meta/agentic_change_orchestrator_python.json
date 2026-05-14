@@ -1,14 +1,12 @@
 {
-  "pdd_version": "0.0.236",
-  "timestamp": "2026-05-13T18:00:49.544816+00:00",
-  "command": "fix",
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-14T18:05:54.335961+00:00",
+  "command": "metadata_sync",
   "prompt_hash": "aacd8a9c94d808fd49acaa5739ba7b2ff072afb8b374777d434e7350610e217f",
-  "code_hash": "e3a6ba1bb3d1b3588777f0beb267e4b737af0293179932e3a66b1e9c477ada0e",
-  "example_hash": "64214eeba81aac7ed6747e3f0278db17c406068d7e83deddaf7592e538c7794e",
-  "test_hash": "fb122add0a99d5453e165f5b60603cc82e6f815fb27b53217c015520149320c3",
-  "test_files": {
-    "test_agentic_change_orchestrator.py": "fb122add0a99d5453e165f5b60603cc82e6f815fb27b53217c015520149320c3"
-  },
+  "code_hash": null,
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
   "include_deps": {
     "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
     "context/get_extension_example.py": "def9c34c1416259a0a031a996b96aeff5e73a7012adff6af1cc557e74ba97cc8",
