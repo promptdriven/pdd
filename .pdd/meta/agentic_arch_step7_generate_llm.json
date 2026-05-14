@@ -1,0 +1,14 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:32.839588+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "d9c9fe21ff9ddb715b8a525225104320db875a9d23bd37d6dec414a8bb5d8fd7",
+  "code_hash": "a2402ee17ea4f71801b547bd9a5d7d1555c211dd0233227867e44c4a6e189777",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": {},
+  "include_deps": {
+    "pdd/templates/architecture/architecture_json.prompt": "0bcfe290986a51235184a8e857e11c534bba710fa32dbff2909cfce5b9188a85",
+    "pdd/templates/architecture/example_nextjs_task_notes.prompt": "7b4c3a01ff6806678627c3fb403c1ecde7635ab6e3784d31b52cd68defc255fe"
+  }
+}

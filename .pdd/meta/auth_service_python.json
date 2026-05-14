@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:23.866828+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "f78505eb6667a42e4995a591d706334faf15fa7f164b659877bb5c7f343d2df0",
+  "code_hash": "a4b689e00ad7106bb775f1b365d67b3d5106f5e4c7021d7ac751468652d7693c",
+  "example_hash": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
+  "test_hash": "82838601cf50ad78807070aa07b5433bbd964c49102ba3215a696e8d7683522c",
+  "test_files": {
+    "test_auth_service.py": "82838601cf50ad78807070aa07b5433bbd964c49102ba3215a696e8d7683522c"
+  },
+  "include_deps": {
+    "context/_keyring_timeout_example.py": "41f83d5ef117caba86b788f69b519f7e88f3d7dc2a641a017d74a7cee9be6ed1",
+    "context/get_jwt_token_example.py": "76a87c8257cb1f4cfdc2edff6225c752432afb3a5e352fcb016d08d8eae16e01",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

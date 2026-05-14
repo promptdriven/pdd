@@ -1,0 +1,17 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:04.938182+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "3b6707b7e34a804b0cd11b6b82c15c93aaa95f60a6d7861d628b559411f6910f",
+  "code_hash": "e417371d19bb8b3fd78c177340870c6fc2a871443c3c42c8d8d3791b0e1a99de",
+  "example_hash": "3b4606a0ac11cb728a5aa657d457312c83f2d710f53f4ac94d35675f7e911f60",
+  "test_hash": "8d570ad1fe176540c224224a3aa75bc3ab84cc021a87af67c652ce6e6f54400a",
+  "test_files": {
+    "test_xml_tagger.py": "8d570ad1fe176540c224224a3aa75bc3ab84cc021a87af67c652ce6e6f54400a"
+  },
+  "include_deps": {
+    "context/llm_invoke_example.py": "d749aa00a35c88c254c4aaa9e1280d85342d71214710e2f3f7a2bd9388a92168",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

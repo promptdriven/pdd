@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:23.529924+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "9b0141bfc47c2d36e88c4b48a088c3ff5c44fe85bbaa929ae58c186c5b17a015",
+  "code_hash": "e75623979763f3d77f6635c5f3c667947e3cf71634ed73100172735c119bb2ee",
+  "example_hash": "1d8b490a2b0ff53a8b786c6c95faeecc4efd0becf837b35273508bae19fac3ab",
+  "test_hash": "be4303a40f7e6dfbedfae6f7e622e065e5f4c223f80a9ff82d27ab020bdf4b1c",
+  "test_files": {
+    "test_agentic_test.py": "be4303a40f7e6dfbedfae6f7e622e065e5f4c223f80a9ff82d27ab020bdf4b1c",
+    "test_agentic_test_generate.py": "8672294af1e8e773f0d7d2546a5373bf5076f2c60ccc8f97841cff4420677693",
+    "test_agentic_test_orchestrator.py": "cddc3e0c04c270150427c3e18f3aad5b66c3fd6a0cbe08ebde9103973fa3a427"
+  },
+  "include_deps": {
+    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/agentic_test_orchestrator_example.py": "473901f6f62844c81a047fa69387c4116d91a522c62d5c6ad30188e2e99dfaa5",
+    "context/cmd_test_main_example.py": "0774984ee29f70407429f1eff4a1b76287715b7ddd6adf2bc149e874c9b844bb",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+  }
+}

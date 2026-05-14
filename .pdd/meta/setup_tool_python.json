@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:14.527509+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "4cca0c94bf034ccf776107dcb4ec93d51af507063bff9cde469a4f63a52c486b",
+  "code_hash": "872dcc51c7cb956ce06c51279955d12ab25f1e4e0e8616e80791b1d623c68312",
+  "example_hash": "83e9150eb35b3240a1b28083e3f195ad2bddd6f8019bccb2d4b9e1495451e0eb",
+  "test_hash": "d710d9ad844f4b059a38319ed968c2019fb0b7e063d81f5431e1e7a2a89006b5",
+  "test_files": {
+    "test_setup_tool.py": "d710d9ad844f4b059a38319ed968c2019fb0b7e063d81f5431e1e7a2a89006b5"
+  },
+  "include_deps": {
+    "context/cli_detector_example.py": "c7ebfe594f1193ea11d73be6a5213e55306b7b0b144081ca26dcb8fa3300bb72",
+    "context/model_tester_example.py": "9d33f093cdac4c100bf671e891a68c7f83e2e09e74cd65f6b53cb567d77d3cd0",
+    "context/pddrc_initializer_example.py": "3ba502fa9e2a2f438aaa890f0b654a98e5b8665253e10446acafda90f7eedad9",
+    "context/provider_manager_example.py": "cc2bbe6cefff4ad24af4365b0c4bc2c99e672f825d12edaca7307de9c04ecfb8"
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T18:38:33.018025+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "90b55d0b4b08b4fe03398062184330c933349e516c52fc67b18d4a2db9a75cf0",
+  "code_hash": "a17b2f09033b2fe7063f484a2efb59184f7cb2fba822ee25605a93bbe5905941",
+  "example_hash": "223a832718e72ca6640728e4bd700da58edb89667931085d7d949774d8fbc228",
+  "test_hash": "df4d2f5cebc4b26915c7120e12f4168d71741c59eda7dd29202c141c9aabac8d",
+  "test_files": {
+    "test_models.py": "df4d2f5cebc4b26915c7120e12f4168d71741c59eda7dd29202c141c9aabac8d"
+  },
+  "include_deps": {
+    "context/fastapi_example.py": "4b3d64175b8f46b48a4387e9cf98ed4024fd74a57413bd2f8a55c5d9c3dd0108",
+    "context/job_manager_example.py": "e421698fdf16c5dfebf97eb3f2cb7210878efa1869804f871100489e35102543",
+    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/websocket_example.py": "6f50399fd41177e47da3f170a1cc84380f8f266036e8f510f7807a916265ab0f"
+  }
+}

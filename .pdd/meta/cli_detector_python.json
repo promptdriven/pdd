@@ -1,0 +1,13 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:14.553972+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "916aa86477dd9d288d5833ebdc348218eb7b96802fd18ca914cbe4e7c44eb9aa",
+  "code_hash": "0c548e159ab969c0447810d5ef080cbd06a1bfa7bcd31e238c02e5c3ed402cc5",
+  "example_hash": "c7ebfe594f1193ea11d73be6a5213e55306b7b0b144081ca26dcb8fa3300bb72",
+  "test_hash": "1e824579dffc2d2e7e43f33491c51c93b91e98f52cdb78b1916578c2b1a31e68",
+  "test_files": {
+    "test_cli_detector.py": "1e824579dffc2d2e7e43f33491c51c93b91e98f52cdb78b1916578c2b1a31e68"
+  },
+  "include_deps": {}
+}

@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.235",
-  "timestamp": "2026-05-12T19:29:56.065468+00:00",
-  "command": "fix",
-  "prompt_hash": "096daf229d47161746862f7f56fd26e28b0374ce34b1f27e3ec1545af94354ba",
-  "code_hash": "7a93ac61d1e07c26ffb48d28e4b620793463c90d75f989e2584faeeaa9febaf1",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:27.100278+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "155baa8f82e9a2bf09c25f3d75842f6b989509512ec511add131b23e28822387",
+  "code_hash": "cabdcd69f26311414613b4fd61951d322a8c65ea6b37970a0c71b0d239e15cb5",
   "example_hash": "d587ecf2e5a8b620b51409f1b1f37f270838403da4299a5262fa6eef167c8f7e",
-  "test_hash": "8367c781cb4022294e84876c170ccb806ec2171eb8e2c7b5a32f12d9e6c2ac2d",
+  "test_hash": "469b8a3ef650f61098a8701656c1e5f16cbf3a7ab24f8d4234a99ba725341dad",
   "test_files": {
-    "test_ci_drift_heal.py": "8367c781cb4022294e84876c170ccb806ec2171eb8e2c7b5a32f12d9e6c2ac2d"
+    "test_ci_drift_heal.py": "469b8a3ef650f61098a8701656c1e5f16cbf3a7ab24f8d4234a99ba725341dad"
   },
   "include_deps": {
     "context/operation_log_example.py": "6cd7962ab255d6080aeb97897175250f987ce936cf7333e7601f10834405a940",

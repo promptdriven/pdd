@@ -1,0 +1,14 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:17.537178+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "2c9c70c851e1af7c0af70a9c9ce960f96a6c3bcce7edadef570457bed96987d4",
+  "code_hash": "09dd7b12d48fc7c0c0888157a5b366c42a077cd21b880f477ec763bca06edf28",
+  "example_hash": "f82ea3f16297c0cd0f7993549054bc9213953ebe03144aa5abc7bd74ba707e13",
+  "test_hash": "c15c58d2200e68f2db1c31c387d5f7c992e89623e037f47cf37042a5a43484de",
+  "test_files": {
+    "test_agentic_architecture.py": "c15c58d2200e68f2db1c31c387d5f7c992e89623e037f47cf37042a5a43484de",
+    "test_agentic_architecture_orchestrator.py": "30049fa3b4706221c111095cbbb9992f3335bd9ec6d51d6068bcd0cc2f9cf9f5"
+  },
+  "include_deps": {}
+}

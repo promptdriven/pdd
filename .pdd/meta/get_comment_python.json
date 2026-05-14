@@ -1,10 +1,10 @@
 {
-  "pdd_version": "0.0.228",
-  "timestamp": "2026-05-06T03:28:21.545972+00:00",
-  "command": "regenerate-public",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:17.176849+00:00",
+  "command": "reconcile-metadata",
   "prompt_hash": "8ed03ff72edaea977592d8c37140fddb51fe19866589dfd9d2b5d0fcdbde5420",
   "code_hash": "53e70fe3e4f7ba637f7c754d95a751e068754eb06d265b1e95636349c118a883",
-  "example_hash": null,
+  "example_hash": "3293b4631db7c783d87745abf36a79996d5c182b74e8bee885a2e522550db851",
   "test_hash": "8bdc2cf2b963f5277960f1703ea4d90780923bfb2e37aec38322324dd3870151",
   "test_files": {
     "test_get_comment.py": "8bdc2cf2b963f5277960f1703ea4d90780923bfb2e37aec38322324dd3870151"

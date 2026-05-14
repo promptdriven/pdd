@@ -1,8 +1,8 @@
 {
   "pdd_version": "0.0.230",
-  "timestamp": "2026-05-07T22:56:39.108172+00:00",
-  "command": "fix",
-  "prompt_hash": "f00e7085128ae23be67d1969542748cee0b0035552a1bf9ee3601a7e4497a3d1",
+  "timestamp": "2026-05-14T21:07:17.483214+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "77dac1e42ffbebf7a06cd047430ee4cad07a8d37fd7288c5d50198240619c7c4",
   "code_hash": "a782f86dda46bdb22d9dc90a48049428b07e38f791dc55c1ac10b47e78156eab",
   "example_hash": "aad78130a96907c5d1bd197a7bca53d6d1bdcf5775776860993f9e5c68635867",
   "test_hash": "30049fa3b4706221c111095cbbb9992f3335bd9ec6d51d6068bcd0cc2f9cf9f5",
@@ -11,7 +11,7 @@
   },
   "include_deps": {
     "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f",
-    "context/python_preamble.prompt": "57a3e51f529024ec0cb9658cd6ac61a7c8051ba0c8e887b31cf00b2e78a07d83",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/render_mermaid_example.py": "193a57bc4191595f252881c016ba7168c27c27c01ff192128d98cf76ce5f842b"
   }
 }

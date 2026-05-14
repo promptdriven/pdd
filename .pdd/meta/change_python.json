@@ -1,0 +1,20 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:05.077461+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "535c92d5de0d68b2b6e4541f6020e166a33eae3c5f02275f07438bc30f803f98",
+  "code_hash": "d66d22f9ef9e6a80574d91b115bf72aac534d238dd8a8085d5744e1a8c1562a3",
+  "example_hash": "cc5f850c8e41a8c5b82c94b6667975d1811dff1f51888bb8caf4ff69815f8352",
+  "test_hash": "1bab7571601fbb32b1d86fd1100129c94cf40a09b9d26b3890249d76d398a74c",
+  "test_files": {
+    "test_change.py": "1bab7571601fbb32b1d86fd1100129c94cf40a09b9d26b3890249d76d398a74c",
+    "test_change_call_site_and_retry.py": "109c4abd1375a81e593fc940c37c4a73e7e824cb58527a82589836dee6ef08b7",
+    "test_change_main.py": "e9ac02d36249f401b9c3267f23faae26d147d0ba0cfb82cfe2b9c9ad08934585"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/change/12/initial_postprocess.py": "845d5ada84654630518eda1f06e372bd2af87a230077ce8078efc543b9286714",
+    "context/change/14/initial_change.py": "fec3fba35a4710e02375bdb017bcf33882c2a3b690733fc9d5c6021c1602785c",
+    "context/load_prompt_template_example.py": "a1cd6619182c6c951f5856dda4070e202875a5884bbfab9cc191d24de2f4951f"
+  }
+}

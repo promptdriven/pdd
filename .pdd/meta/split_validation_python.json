@@ -1,0 +1,16 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:29.832230+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "6bfe50410ea9ea1142d294d24f4b26ca80ad88ac9d3e9981f312392c16fb7aa0",
+  "code_hash": "daded787caf0714e697cceb18e40e81321615871792e17539b3114974616e7ae",
+  "example_hash": "007c34d78c7605bb0ddfc3cb2df14095e387159b3ea746056e34cb304547a358",
+  "test_hash": "38159d3460e22b00859f413a841dbc515563bbeaf6c8e1c5b8671f9ba5a6ec98",
+  "test_files": {
+    "test_split_validation.py": "38159d3460e22b00859f413a841dbc515563bbeaf6c8e1c5b8671f9ba5a6ec98"
+  },
+  "include_deps": {
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/prompts/get_lint_commands_python.prompt": "d8c47a583973f8fd15353b01a4744b6ac7d31949beff51af7c917c9aac7736b7"
+  }
+}

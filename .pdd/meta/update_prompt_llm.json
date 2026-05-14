@@ -1,0 +1,11 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:17.129683+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "e726ac6b0c19957f81fd7f1123e3fc8bd28528c901a7d25c4f7c60723d64e446",
+  "code_hash": "e726ac6b0c19957f81fd7f1123e3fc8bd28528c901a7d25c4f7c60723d64e446",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": {},
+  "include_deps": {}
+}

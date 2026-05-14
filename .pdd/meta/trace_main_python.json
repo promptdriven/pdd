@@ -1,0 +1,18 @@
+{
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T21:07:04.909095+00:00",
+  "command": "reconcile-metadata",
+  "prompt_hash": "671fb068cfc23b40067480dc294c73a36b0fa13b7cacf5e3f234133b5414a3a9",
+  "code_hash": "48e9cc107b5af5668c031ba532b93a685a2399ae2d8bad482ef269dcd561a5b8",
+  "example_hash": "c1f43ebf55c05af801640f5f8331ee7a674aef9e3f383b0e5ffee7abc7246fe1",
+  "test_hash": "b36552a48543bb90256f2d5eebd344dd57be51b49c7fcfeaffb8ff3d35f6bd2d",
+  "test_files": {
+    "test_trace_main.py": "b36552a48543bb90256f2d5eebd344dd57be51b49c7fcfeaffb8ff3d35f6bd2d"
+  },
+  "include_deps": {
+    "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
+    "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "context/trace_example.py": "de4d5d1ca347ea7ef9acd11dc80e86188917f61355e68db9c397ca6fd5108f99"
+  }
+}
