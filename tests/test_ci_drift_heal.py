@@ -1083,6 +1083,8 @@ class TestHealModule:
         # state is inconsistent — don't let the failed module piggy-back on
         # other modules' commits.
         assert result is False
+        assert drift.metadata_finalization_failed is True
+        assert drift.metadata_finalization_error == "prompt_path unresolvable post-update"
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
         assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "update", "/repo/auth.py"]]
 
@@ -2730,6 +2732,25 @@ class TestMetadataFinalizationBoundary:
 
         with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
              patch("pdd.ci_drift_heal.heal_module", side_effect=heal_side_effect), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=True)
+
+        assert result == 1
+        mock_commit.assert_not_called()
+
+    def test_unresolvable_prompt_after_update_returns_nonzero_in_skip_ci_mode(self):
+        """Successful pdd update followed by missing prompt resolution is a
+        metadata-finalization hard failure in preflight/push-to-main mode."""
+        drift = self._drift("auth")
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = "prompt_path unresolvable post-update"
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+             patch("pdd.ci_drift_heal.heal_module", return_value=False), \
              patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
              patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
              patch("pdd.ci_drift_heal.os.close"), \

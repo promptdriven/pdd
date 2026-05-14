@@ -917,6 +917,8 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
             console.print(
                 f"[red]heal failed for {drift.basename}: prompt_path unresolvable post-update[/red]"
             )
+            drift.metadata_finalization_failed = True
+            drift.metadata_finalization_error = "prompt_path unresolvable post-update"
             return False
         drift.prompt_path = str(candidate)
         prompt_path = drift.prompt_path
