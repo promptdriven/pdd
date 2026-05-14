@@ -621,7 +621,6 @@ graph TB
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
 - **[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from prompt metadata tags
-- **[`reconcile-metadata`](#1b-reconcile-metadata)**: Refreshes trusted `.pdd/meta` fingerprints without LLM calls
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
@@ -1086,30 +1085,6 @@ Options:
 The command prints updated prompt entries and validation errors or warnings. It exits non-zero when validation fails, even if it was able to write requested metadata updates before validation.
 
 > Note: Validation is repo-wide and runs even when you target a single prompt. If your `architecture.json` already has unrelated missing-dependency errors elsewhere, the exit code stays non-zero on `--dry-run` even for an otherwise-clean target prompt. Fix the repo-wide errors (or scope your check) before relying on the exit code in scripts.
-
-### 1b. reconcile-metadata
-
-Refresh `.pdd/meta/*_{language}.json` fingerprints for files you have already reviewed and accepted as the current source of truth. This command does not call an LLM, regenerate code, update prompts, run verification, or run tests.
-
-```bash
-# Preview metadata fields that would change
-pdd reconcile-metadata --dry-run update_main --language python
-
-# Trust the current prompt/code/example/test state for a module
-pdd reconcile-metadata update_main --language python
-
-# Reconcile from explicit paths
-pdd reconcile-metadata pdd/update_main.py pdd/prompts/update_main_python.prompt
-```
-
-Arguments:
-- `TARGETS`: One or more basenames, code paths, or prompt paths.
-
-Options:
-- `--language LANGUAGE`: Language for basename targets, such as `python`.
-- `--dry-run`: Show changed fingerprint fields without writing metadata.
-
-Use this when stale or missing fingerprints make `pdd sync --dry-run` noisy after you have independently confirmed the current files are correct.
 
 ### 2. generate
 

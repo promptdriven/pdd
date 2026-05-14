@@ -2848,24 +2848,6 @@ class TestAllFilesExistWorkflowIncomplete:
             f"got '{decision.operation}' with reason: {decision.reason}"
         )
 
-    def test_reconciled_metadata_returns_nothing(self, all_files_env):
-        """A reconciled trusted fingerprint should not queue verify/test again."""
-        env = all_files_env
-        self._create_fingerprint(env, command='reconcile-metadata')
-
-        decision = sync_determine_operation(
-            basename=BASENAME,
-            language=LANGUAGE,
-            target_coverage=TARGET_COVERAGE,
-            log_mode=True
-        )
-
-        assert decision.operation == 'nothing', (
-            f"Expected 'nothing' for reconciled metadata, "
-            f"got '{decision.operation}' with reason: {decision.reason}"
-        )
-
-
 # --- Part 6: PDD Doctrine - Derived Artifacts Tests ---
 
 @patch('sync_determine_operation.construct_paths')

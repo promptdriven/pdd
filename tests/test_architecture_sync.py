@@ -871,42 +871,6 @@ def test_sync_all_prompts_to_architecture():
         assert len(result['results']) == 3
 
 
-def test_sync_architecture_dry_run_validates_registered_prompts():
-    """Dry-run validation should include prompt entries it would auto-register."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        tmppath = Path(tmpdir)
-        prompts_dir = tmppath / "prompts"
-        prompts_dir.mkdir()
-
-        (prompts_dir / "consumer_python.prompt").write_text(
-            "<pdd-reason>Consumer</pdd-reason>\n"
-            "<pdd-dependency>provider_python.prompt</pdd-dependency>\n"
-        )
-        (prompts_dir / "provider_python.prompt").write_text("% no metadata tags yet\n")
-
-        arch_file = tmppath / "architecture.json"
-        arch_file.write_text(json.dumps([
-            {
-                "filename": "consumer_python.prompt",
-                "filepath": "pdd/consumer.py",
-                "reason": "Old",
-                "description": "Consumer",
-                "dependencies": ["provider_python.prompt"],
-                "priority": 1,
-                "tags": [],
-            }
-        ], indent=2))
-
-        result = sync_prompts_to_architecture(
-            prompts_dir=prompts_dir,
-            architecture_path=arch_file,
-            dry_run=True,
-        )
-
-        assert result["success"] is True
-        assert result["validation"]["errors"] == []
-
-
 # --- Test validate_dependencies ---
 
 def test_validate_dependencies_valid():
@@ -2636,89 +2600,6 @@ def test_register_untracked_prompts_dry_run():
         assert 'cli_detector_python.prompt' in result['registered']
         # File should be unchanged
         assert json.loads(arch_path.read_text()) == []
-
-
-def test_register_untracked_prompts_only_files_does_not_register_out_of_scope_dependencies(tmp_path):
-    """Scoped registration must not pull unrelated dependency prompts into the PR."""
-    prompts_dir = tmp_path / "prompts"
-    prompts_dir.mkdir()
-    arch_path = tmp_path / "architecture.json"
-
-    (prompts_dir / "in_scope_python.prompt").write_text(
-        "<pdd-reason>Scoped module</pdd-reason>\n"
-        "<pdd-dependency>out_of_scope_python.prompt</pdd-dependency>\n"
-        "% body\n",
-        encoding="utf-8",
-    )
-    (prompts_dir / "out_of_scope_python.prompt").write_text(
-        "<pdd-reason>Unrelated dependency</pdd-reason>\n% body\n",
-        encoding="utf-8",
-    )
-    arch_path.write_text(json.dumps([], indent=2) + "\n", encoding="utf-8")
-
-    result = register_untracked_prompts(
-        prompts_dir=prompts_dir,
-        architecture_path=arch_path,
-        only_files={"in_scope_python.prompt"},
-    )
-
-    assert result["registered"] == ["in_scope_python.prompt"]
-    assert "out_of_scope_python.prompt" in result["skipped"]
-    updated = json.loads(arch_path.read_text(encoding="utf-8"))
-    assert [entry["filename"] for entry in updated] == ["in_scope_python.prompt"]
-
-
-def test_sync_prompts_write_mode_validates_persisted_architecture(tmp_path):
-    """Write mode must not report success for in-memory-only dependency normalization."""
-    prompts_dir = tmp_path / "prompts"
-    nested_dir = prompts_dir / "nested"
-    nested_dir.mkdir(parents=True)
-    arch_path = tmp_path / "architecture.json"
-
-    (prompts_dir / "consumer_python.prompt").write_text(
-        "<pdd-reason>Consumer</pdd-reason>\n% body\n",
-        encoding="utf-8",
-    )
-    (nested_dir / "dep_python.prompt").write_text(
-        "<pdd-reason>Nested dependency</pdd-reason>\n% body\n",
-        encoding="utf-8",
-    )
-    arch_path.write_text(
-        json.dumps(
-            [
-                {
-                    "filename": "consumer_python.prompt",
-                    "filepath": "pdd/consumer.py",
-                    "reason": "Consumer",
-                    "dependencies": ["dep_python.prompt"],
-                    "priority": 2,
-                },
-                {
-                    "filename": "nested/dep_python.prompt",
-                    "filepath": "pdd/nested/dep.py",
-                    "reason": "Nested dependency",
-                    "dependencies": [],
-                    "priority": 1,
-                },
-            ],
-            indent=2,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-
-    result = sync_prompts_to_architecture(
-        prompts_dir=prompts_dir,
-        architecture_path=arch_path,
-        dry_run=False,
-    )
-
-    assert result["success"] is False
-    assert any(
-        error["type"] == "missing_dependency"
-        and error["modules"] == ["consumer_python.prompt", "dep_python.prompt"]
-        for error in result["validation"]["errors"]
-    )
 
 
 def test_sync_all_auto_registers_before_syncing():
