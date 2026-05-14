@@ -2821,6 +2821,31 @@ class TestMetadataFinalizationBoundary:
 
         assert ok is False
 
+    def test_commit_and_push_aborts_when_finalized_module_has_empty_index(self):
+        """An empty staged index is not success when metadata was finalized."""
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 0  # no staged changes
+            elif cmd[0:2] == ["git", "commit"]:
+                raise AssertionError("commit must not run when metadata is missing")
+            elif cmd == ["git", "push"]:
+                raise AssertionError("push must not run when metadata is missing")
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["auth"], skip_ci=False, checkpoint=False,
+                finalized_modules=[("auth", "python")],
+            )
+
+        assert ok is False
+
     def test_commit_and_push_succeeds_when_fingerprint_staged(self):
         """commit_and_push proceeds when the finalized module's fingerprint
         is present in the staged set."""

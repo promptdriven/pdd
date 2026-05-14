@@ -1115,6 +1115,13 @@ def commit_and_push(
         console.print(f"[red]git diff --cached failed: {exc}[/red]")
         return False
     if diff.returncode == 0:
+        if finalized_modules:
+            for basename, language in finalized_modules:
+                expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+                console.print(
+                    f"[red]metadata staging verification failed: missing {expected}[/red]"
+                )
+            return False
         # Nothing staged.
         return True
 
