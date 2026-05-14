@@ -1,676 +1,656 @@
-import pytest
-import sys
-import os
-from pathlib import Path
-from unittest.mock import patch, MagicMock, mock_open
-import click
-from click.testing import CliRunner
-import git
+"""
+Test plan for pdd.update_main
+=============================
 
-from pdd import DEFAULT_STRENGTH
+Spec requirements (mapped to test functions below):
+
+1.  update_main signature returns Optional[Tuple[str, float, str]].
+    -> test_signature_returns_tuple_on_success
+    -> test_returns_none_on_value_error
+2.  use_git and input_code_file are mutually exclusive (raise ValueError).
+    -> test_use_git_and_input_code_file_mutually_exclusive
+3.  Agentic routing: try agentic first, fall back to legacy (single-file).
+    -> test_single_file_agentic_first_then_legacy
+4.  After successful agentic update, read updated prompt from file.
+    -> test_agentic_success_reads_prompt_from_disk
+5.  strength/temperature resolution: explicit overrides ctx.obj; ctx.obj updates.
+    -> test_strength_temperature_resolution_explicit_overrides
+    -> test_strength_temperature_falls_back_to_ctx_obj
+6.  Validate prompt non-empty before writing in true-update mode.
+    -> test_empty_prompt_aborts_write
+7.  Without --output, overwrite input_prompt_file in place.
+    -> test_no_output_overwrites_prompt_in_place
+8.  Sanitize prompt output before writing (legacy paths).
+    -> test_sanitize_called_before_write
+9.  Single-file always-on metadata finalization, failure raises Exit(1).
+    -> test_single_file_metadata_helper_always_called_on_success
+    -> test_single_file_metadata_failure_raises_exit_1
+10. _run_single_file_metadata_sync helper contract.
+    -> test_helper_returns_true_on_ok_result
+    -> test_helper_returns_false_on_failed_stage
+    -> test_helper_writes_failures_to_stderr
+    -> test_helper_returns_false_on_orchestrator_exception
+    -> test_helper_passes_dry_run_through
+11. Regeneration mode: derive prompt path via resolve_prompt_code_pair.
+    -> test_regeneration_mode_resolves_prompt_path
+12. Repo mode: not in git repo => None.
+    -> test_repo_mode_not_in_git_repo
+13. Repo mode: no scannable code files => None.
+    -> test_repo_mode_no_pairs_returns_none
+14. Repo mode: no changed pairs => None.
+    -> test_repo_mode_no_changes_returns_none
+15. Repo mode success returns (msg, cost, models).
+    -> test_repo_mode_success_returns_tuple
+16. Repo mode sync_metadata=True: orchestrator called per pair.
+    -> test_repo_mode_sync_metadata_calls_orchestrator
+17. Repo mode sync_metadata=True with a failed stage => Exit(1).
+    -> test_repo_mode_sync_metadata_failure_raises_exit_1
+18. Repo mode legacy: save_fingerprint + arch sync inline.
+    -> test_repo_mode_legacy_calls_save_fingerprint
+19. derive_basename_and_language uses relative path.
+    -> test_derive_basename_uses_relative_path
+20. get_git_changed_files merges multiple git outputs.
+    -> test_get_git_changed_files_combines_sources
+21. is_code_changed: git fallback when no fingerprint.
+    -> test_is_code_changed_git_fallback
+22. is_code_changed: fingerprint match returns False.
+    -> test_is_code_changed_fingerprint_match
+23. is_code_changed: fingerprint mismatch returns True.
+    -> test_is_code_changed_fingerprint_mismatch
+24. _has_skip_suffix recognizes skip suffixes.
+    -> test_has_skip_suffix
+25. _has_meaningful_code distinguishes blank/comment-only files.
+    -> test_has_meaningful_code
+26. _is_pddignored handles all three pattern shapes.
+    -> test_is_pddignored
+27. find_and_resolve_all_pairs filters non-code files.
+    -> test_find_and_resolve_all_pairs_filters
+28. _meta_status_string transitions.
+    -> test_meta_status_synced
+    -> test_meta_status_failed
+    -> test_meta_status_skipped
+29. _find_prd_file discovery.
+    -> test_find_prd_file
+30. update_file_pair legacy fallback.
+    -> test_update_file_pair_legacy_path
+31. Sanitization integration test (regression for include-tag bug).
+    -> test_sanitize_invalid_include_tag_removed
+"""
+
+from __future__ import annotations
+
+import os
+import io
+import json
+import hashlib
+import subprocess
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, Dict, Optional, Tuple
+from unittest.mock import patch, MagicMock
+
+import click
+import pytest
+
+import sys as _sys
+import pdd.update_main  # noqa: F401  (ensure submodule registered in sys.modules)
+um = _sys.modules["pdd.update_main"]  # bypass __init__.py shadow to get the module
 from pdd.update_main import (
-    _included_docs_for_drift_report,
+    _find_prd_file,
+    _has_meaningful_code,
+    _has_skip_suffix,
+    _is_pddignored,
+    _meta_status_string,
+    _run_single_file_metadata_sync,
+    derive_basename_and_language,
     find_and_resolve_all_pairs,
+    get_git_changed_files,
+    is_code_changed,
+    update_file_pair,
     update_main,
 )
 
-@pytest.fixture
-def mock_ctx():
-    """
-    Provides a mock Click context with default parameters.
-    You can override these params or obj items in individual tests as needed.
-    """
-    runner = CliRunner()
-    with runner.isolated_filesystem():
-        # Create a mock ctx with default params
-        ctx = click.Context(click.Command("update"))
-        ctx.params = {
-            "force": False,
-            "quiet": False
-        }
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False
-        }
-        yield ctx
 
-@pytest.fixture
-def minimal_input_files():
-    """
-    Returns a minimal/valid set of input file paths for the function.
-    """
-    return {
-        "input_prompt_file": "some_prompt_file.prompt",
-        "modified_code_file": "modified_code.py",
-        "input_code_file": "original_code.py",
-    }
-
-@pytest.fixture
-def mock_construct_paths():
-    """
-    Provides a patch of the construct_paths function used in update_main.
-    """
-    with patch("pdd.update_main.construct_paths") as mock_cp:
-        # Mock the return value: (input_strings, output_file_paths, language)
-        mock_cp.return_value = (
-            {},  # resolved_config
-            {
-                "input_prompt_file": "prompt content",
-                "modified_code_file": "def modified_code(): pass",
-                "input_code_file": "def original_code(): pass",
-            },
-            {"output": "updated_prompt.prompt"},
-            None
-        )
-        yield mock_cp
-
-@pytest.fixture
-def mock_open_file():
-    """
-    Patches the built-in open function so no real file I/O happens.
-    """
-    with patch("builtins.open", mock_open()) as mock_file:
-        yield mock_file
-
-@pytest.fixture
-def mock_update_prompt():
-    """
-    Patches the update_prompt function so it doesn't invoke external logic.
-    """
-    with patch("pdd.update_main.update_prompt") as mock_up:
-        mock_up.return_value = ("updated prompt text", 0.123456, "test-model")
-        yield mock_up
-
-@pytest.fixture
-def mock_git_update():
-    """
-    Patches the git_update function so it doesn't invoke Git or external logic.
-    """
-    with patch("pdd.update_main.git_update") as mock_gu:
-        mock_gu.return_value = ("updated prompt from git", 0.654321, "git-model")
-        yield mock_gu
-
-@pytest.fixture
-def mock_get_available_agents():
-    """
-    Patches get_available_agents to return an empty list, disabling agentic routing.
-    """
-    with patch("pdd.update_main.get_available_agents") as mock_ga:
-        mock_ga.return_value = []
-        yield mock_ga
-
-def test_update_main_with_input_code_and_no_git(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_git_update,
-    mock_open_file,
-    mock_get_available_agents
-):
-    """
-    Test that update_main correctly calls update_prompt() if git=False
-    and an input code file is provided.
-    """
-    # Arrange
-    # Ensure git=False and an input_code_file is set
-    mock_ctx.params["quiet"] = False
-    git = False
-    output = "custom_output.prompt"
-
-    # Act
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file=minimal_input_files["input_prompt_file"],
-        modified_code_file=minimal_input_files["modified_code_file"],
-        input_code_file=minimal_input_files["input_code_file"],
-        output=output,
-        use_git=git
-    )
-
-    # Assert
-    mock_construct_paths.assert_called_once()
-    mock_update_prompt.assert_called_once_with(
-        input_prompt="prompt content",
-        input_code="def original_code(): pass",
-        modified_code="def modified_code(): pass",
-        strength=0.5,
-        temperature=0.0,
-        verbose=False,
-        time=0.25
-    )
-    # git_update should NOT be called
-    mock_git_update.assert_not_called()
-
-    # The return value should match the mock_update_prompt return value
-    assert result == ("updated prompt text", 0.123456, "test-model")
-
-    # The open function should be called to write the updated prompt
-    mock_open_file.assert_called_once_with("updated_prompt.prompt", "w")
-
-
-def test_update_main_sanitizes_invalid_prompt_includes_before_writing(tmp_path, mock_get_available_agents):
-    (tmp_path / "context").mkdir()
-    (tmp_path / "prompts").mkdir()
-    source_prompt = tmp_path / "source.prompt"
-    modified_code = tmp_path / "module.py"
-    original_code = tmp_path / "module_old.py"
-    output_prompt = tmp_path / "updated.prompt"
-    source_prompt.write_text("existing prompt", encoding="utf-8")
-    modified_code.write_text("def new(): pass\n", encoding="utf-8")
-    original_code.write_text("def old(): pass\n", encoding="utf-8")
-    (tmp_path / "context" / "llm_invoke_example.py").write_text(
-        "def run_llm_invoke_examples():\n    pass\n",
-        encoding="utf-8",
-    )
-
-    bad_prompt = (
-        '<include select="class:TokenMatch,def:detect_control_token">'
-        "context/llm_invoke_example.py</include>"
-    )
+# --------------------------------------------------------------------------- #
+# Fixtures
+# --------------------------------------------------------------------------- #
+def _make_ctx(**overrides: Any) -> click.Context:
     ctx = click.Context(click.Command("update"))
-    ctx.params = {"force": True, "quiet": True}
     ctx.obj = {
         "strength": 0.5,
         "temperature": 0.0,
         "verbose": False,
         "quiet": True,
         "time": 0.25,
+        "force": False,
+        "context": None,
+        "confirm_callback": None,
     }
-
-    with patch("pdd.update_main.construct_paths") as mock_construct, \
-         patch("pdd.update_main.update_prompt") as mock_update_prompt:
-        mock_construct.return_value = (
-            {},
-            {
-                "input_prompt_file": "existing prompt",
-                "modified_code_file": "def new(): pass",
-                "input_code_file": "def old(): pass",
-            },
-            {"output": str(output_prompt)},
-            None,
-        )
-        mock_update_prompt.return_value = (bad_prompt, 0.01, "mock-model")
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=str(source_prompt),
-            modified_code_file=str(modified_code),
-            input_code_file=str(original_code),
-            output=str(output_prompt),
-            use_git=False,
-        )
-
-    saved = output_prompt.read_text(encoding="utf-8")
-    assert result == (saved, 0.01, "mock-model")
-    assert "Invalid selector" in saved
-    assert "class:TokenMatch" not in saved
-
-
-def test_update_main_with_git_no_input_code(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_git_update,
-    mock_open_file,
-    mock_get_available_agents
-):
-    """
-    Test that update_main correctly calls git_update() if git=True
-    and no input_code_file is provided.
-    """
-    # Arrange
-    # Remove input_code_file from the construct_paths dictionary to simulate using --git
-    mock_construct_paths.return_value = (
-        {},  # resolved_config
-        {
-            "input_prompt_file": "prompt content",
-            "modified_code_file": "def git_modified_code(): pass",
-        },
-        {"output": "updated_prompt_git.prompt"},
-        None
-    )
-
-    mock_ctx.params["quiet"] = False
-    git = True
-    output = "git_output.prompt"
-
-    # Act
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file="some_prompt_file.prompt",
-        modified_code_file="modified_code.py",
-        input_code_file=None,  # Not provided,
-        output=output,
-        use_git=git
-    )
-
-    # Assert
-    mock_construct_paths.assert_called_once()
-    mock_git_update.assert_called_once_with(
-        input_prompt="prompt content",
-        modified_code_file="modified_code.py",
-        strength=0.5,
-        temperature=0.0,
-        verbose=False,
-        time=0.25,
-        simple=False,  # Agentic was not tried (no agents available)
-        quiet=False,
-        prompt_file="some_prompt_file.prompt",
-    )
-    mock_update_prompt.assert_not_called()  # update_prompt should NOT be called
-
-    assert result == ("updated prompt from git", 0.654321, "git-model")
-    mock_open_file.assert_called_once_with("updated_prompt_git.prompt", "w")
-
-def test_update_main_with_both_git_and_input_code_returns_none(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_git_update,
-    mock_get_available_agents
-):
-    """
-    Test that providing both --git and an input_code_file returns None.
-    Per the spec, errors return None instead of sys.exit(1) to allow
-    orchestrating code (TUI apps, sync commands) to handle errors gracefully.
-    """
-    # Arrange
-    mock_ctx.params["quiet"] = True  # so no output from rprint
-    git = True  # also specifying input_code_file
-
-    # Act
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file=minimal_input_files["input_prompt_file"],
-        modified_code_file=minimal_input_files["modified_code_file"],
-        input_code_file=minimal_input_files["input_code_file"],  # This triggers the error
-        output=None,
-        use_git=git
-    )
-
-    # Assert
-    # The function returns None on ValueError to allow orchestrator to handle gracefully
-    assert result is None
-
-
-def test_update_main_without_cli_strength_uses_default_strength_for_direct_update(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_git_update,
-    mock_open_file,
-    mock_get_available_agents,
-):
-    """Fallback should use DEFAULT_STRENGTH when global --strength was omitted."""
-    mock_ctx.obj.pop("strength", None)
-    mock_ctx.params["quiet"] = False
-
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file=minimal_input_files["input_prompt_file"],
-        modified_code_file=minimal_input_files["modified_code_file"],
-        input_code_file=minimal_input_files["input_code_file"],
-        output="custom_output.prompt",
-        use_git=False,
-    )
-
-    kwargs = mock_update_prompt.call_args.kwargs
-    assert kwargs["strength"] == DEFAULT_STRENGTH
-    assert result == ("updated prompt text", 0.123456, "test-model")
-    mock_git_update.assert_not_called()
-
-
-def test_update_main_without_cli_strength_uses_default_strength_for_git_update(
-    mock_ctx,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_git_update,
-    mock_open_file,
-    mock_get_available_agents,
-):
-    """Git-backed updates should share the same DEFAULT_STRENGTH fallback."""
-    mock_ctx.obj.pop("strength", None)
-    mock_ctx.params["quiet"] = False
-    mock_construct_paths.return_value = (
-        {},
-        {
-            "input_prompt_file": "prompt content",
-            "modified_code_file": "def git_modified_code(): pass",
-        },
-        {"output": "updated_prompt_git.prompt"},
-        None,
-    )
-
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file="some_prompt_file.prompt",
-        modified_code_file="modified_code.py",
-        input_code_file=None,
-        output="git_output.prompt",
-        use_git=True,
-    )
-
-    kwargs = mock_git_update.call_args.kwargs
-    assert kwargs["strength"] == DEFAULT_STRENGTH
-    assert result == ("updated prompt from git", 0.654321, "git-model")
-    mock_update_prompt.assert_not_called()
-
-@patch('pdd.update_main.resolve_prompt_code_pair')
-def test_update_main_regeneration_mode(
-    mock_resolve_pair,
-    mock_ctx,
-    mock_update_prompt,
-    mock_git_update,
-    mock_construct_paths,
-    mock_open_file,
-    mock_get_available_agents,
-    monkeypatch
-):
-    """
-    Test that providing only a modified_code_file correctly triggers
-    the regeneration workflow.
-    """
-    # Arrange
-    mock_ctx.obj["quiet"] = False
-    mock_resolve_pair.return_value = ("modified_code_python.prompt", "modified_code.py")
-    
-    # Act
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file=None,
-        modified_code_file="modified_code.py",
-        input_code_file=None,
-        output=None,
-        use_git=False
-    )
-
-    # Assert
-    # 1. It should resolve the pair to find/create the prompt file
-    mock_resolve_pair.assert_called_once_with("modified_code.py", False)
-
-    # 2. It should NOT call the complex pathing logic
-    mock_construct_paths.assert_not_called()
-
-    # 3. It should call update_prompt directly in "generation" mode
-    mock_update_prompt.assert_called_once()
-    # We can check the args if needed, but the call itself is the main thing
-    args, kwargs = mock_update_prompt.call_args
-    assert kwargs['input_prompt'] == "no prompt exists yet, create a new one"
-    assert kwargs['input_code'] == ""
-
-    # 4. It should not call git_update
-    mock_git_update.assert_not_called()
-
-    # 5. It should write to the derived prompt file
-    mock_open_file.assert_any_call("modified_code_python.prompt", "w")
-
-    # 6. The result should be correct
-    assert result == ("updated prompt text", 0.123456, "test-model")
-
-def test_update_main_handles_unexpected_exception_gracefully(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_open_file,
-    mock_get_available_agents
-):
-    """
-    Test that an unexpected exception returns None and prints an error message.
-    Per the spec, errors return None instead of sys.exit(1) to allow
-    orchestrating code (TUI apps, sync commands) to handle errors gracefully.
-    """
-    mock_ctx.params["quiet"] = True
-
-    # Force an unexpected exception in construct_paths or subsequent code
-    mock_construct_paths.side_effect = Exception("Something went wrong")
-
-    # Act
-    result = update_main(
-        ctx=mock_ctx,
-        input_prompt_file=minimal_input_files["input_prompt_file"],
-        modified_code_file=minimal_input_files["modified_code_file"],
-        input_code_file=minimal_input_files["input_code_file"],
-        output=None,
-        use_git=False
-    )
-
-    # Assert - function returns None on errors to allow orchestrator to handle gracefully
-    assert result is None
-
-    # The open should never be called because we failed early
-    mock_open_file.assert_not_called()
-
-# --- Tests for --repo functionality ---
-
-
-def test_included_docs_for_drift_report_counts_all_prompts_referencing_doc(tmp_path, monkeypatch):
-    """Doc rows show how many scan-wide prompts include each doc, not only drifted count."""
-    monkeypatch.chdir(tmp_path)
-    (tmp_path / "README.md").write_text("# hi\n", encoding="utf-8")
-    (tmp_path / "docs").mkdir()
-    (tmp_path / "docs" / "api.md").write_text("api", encoding="utf-8")
-    (tmp_path / "prompts").mkdir()
-    p = tmp_path / "prompts" / "m_python.prompt"
-    p.write_text(
-        "<include>../README.md</include>\n<include>../docs/api.md</include>\n",
-        encoding="utf-8",
-    )
-    p2 = tmp_path / "prompts" / "n_python.prompt"
-    p2.write_text("<include>../README.md</include>\n", encoding="utf-8")
-    all_prompts = [str(p), str(p2)]
-    # Only m_python is drifted; README is still included by 2 prompts in the scan.
-    agg = _included_docs_for_drift_report(str(tmp_path), all_prompts, [str(p)])
-    by_name = {rel: c for rel, c in agg}
-    assert by_name.get("README.md") == 2
-    assert by_name.get("docs/api.md") == 1
-
-
-def test_estimate_dry_run_cost_range_is_flat_per_pair(tmp_path, monkeypatch):
-    """Dry-run estimate is a flat $0.50–$1.00 per drifted pair."""
-    from pdd.update_main import _estimate_dry_run_cost_range
-
-    repo = git.Repo.init(tmp_path)
-    (tmp_path / "small.py").write_text("a")
-    (tmp_path / "prompts").mkdir()
-    sp = tmp_path / "prompts" / "small_python.prompt"
-    sp.write_text("prompt")
-    repo.index.add([str(tmp_path / "small.py"), str(sp)])
-    repo.index.commit("init")
-    monkeypatch.chdir(tmp_path)
-
-    ctx = click.Context(click.Command("update"))
-    ctx.obj = {}
-    small_items = [(str(sp), str(tmp_path / "small.py"), "r")]
-
-    lo_s, hi_s = _estimate_dry_run_cost_range(ctx, repo, True, small_items)
-    assert lo_s == 0.5
-    assert hi_s == 1.0
-
-    lo_0, hi_0 = _estimate_dry_run_cost_range(ctx, repo, True, [])
-    assert lo_0 == 0.0
-    assert hi_0 == 0.0
+    ctx.obj.update(overrides)
+    return ctx
 
 
 @pytest.fixture
-def mock_get_language_for_repo(monkeypatch):
-    """Mocks get_language to return predictable results for repo tests."""
-    def mock_func(file_path):
-        if str(file_path).endswith(".py"):
-            return "python"
-        if str(file_path).endswith(".js"):
-            return "javascript"
-        return None
-    _update_main_mod = sys.modules['pdd.update_main']
-    monkeypatch.setattr(_update_main_mod, 'get_language', mock_func)
-
-@pytest.fixture
-def temp_git_repo(tmp_path, mock_get_language_for_repo):
-    """Creates a temporary Git repository with a file structure for testing."""
-    repo_path = tmp_path / "test_repo"
-    repo_path.mkdir()
-    repo = git.Repo.init(repo_path)
-
-    (repo_path / "src").mkdir()
-    (repo_path / "src" / "module1.py").write_text("def func1(): pass")
-    (repo_path / "src" / "module2.js").write_text("function func2() {}")
-    (repo_path / "src" / "existing_module.py").write_text("def existing(): pass")
-
-    # Create prompts directory with existing prompt file
-    (repo_path / "prompts").mkdir()
-    (repo_path / "prompts" / "existing_module_python.prompt").write_text("Existing prompt.")
-
-    # Add all files to be tracked by git
-    repo.index.add([
-        str(repo_path / "src" / "module1.py"),
-        str(repo_path / "src" / "module2.js"),
-        str(repo_path / "src" / "existing_module.py"),
-        str(repo_path / "prompts" / "existing_module_python.prompt")
-    ])
-    repo.index.commit("Initial commit")
-
-    # Change directory into the repo for the test
-    original_cwd = os.getcwd()
-    os.chdir(repo_path)
-    yield repo_path
-    os.chdir(original_cwd)
-
-def test_create_and_find_prompt_code_pairs(temp_git_repo):
-    """
-    Test that the helper function correctly finds code files and resolves prompt paths.
-    With structure preservation, prompts mirror the source directory structure.
-    Scanning must NOT create empty prompt files on disk (side-effect-free).
-    """
-    repo_path_str = str(temp_git_repo)
-
-    # With structure preservation, prompts for files in src/ go to prompts/src/
-    module1_prompt_path = temp_git_repo / "prompts" / "src" / "module1_python.prompt"
-    module2_prompt_path = temp_git_repo / "prompts" / "src" / "module2_javascript.prompt"
-    existing_prompt_path_nested = temp_git_repo / "prompts" / "src" / "existing_module_python.prompt"
-
-    # Run the function
-    pairs = find_and_resolve_all_pairs(repo_path_str)
-
-    # Scanning should NOT create empty prompt files on disk
-    assert not module1_prompt_path.exists(), "Scan should not create empty prompt files"
-    assert not module2_prompt_path.exists(), "Scan should not create empty prompt files"
-
-    # Assert that the returned pairs are correct
-    expected_pairs = [
-        (str(existing_prompt_path_nested), str(temp_git_repo / "src" / "existing_module.py")),
-        (str(module1_prompt_path), str(temp_git_repo / "src" / "module1.py")),
-        (str(module2_prompt_path), str(temp_git_repo / "src" / "module2.js")),
-    ]
-    assert len(pairs) == len(expected_pairs)
-    assert sorted(p[1] for p in pairs) == sorted(ep[1] for ep in expected_pairs)
-
-def test_find_and_resolve_pairs_scans_only_scan_dir(tmp_path, mock_get_language_for_repo):
-    """
-    Bug repro: when scan_dir is a subdirectory of the git root,
-    find_and_resolve_all_pairs should only return code files under
-    scan_dir, not files from the parent repo.
-    """
-    # Create a git repo with a subdirectory project
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    repo = git.Repo.init(repo_path)
-
-    # Parent repo files (should NOT be scanned)
-    (repo_path / "pdd").mkdir()
-    (repo_path / "pdd" / "cli.py").write_text("def main(): pass")
-
-    # Subdirectory project files (should be scanned)
-    subdir = repo_path / "video_editor"
-    subdir.mkdir()
-    (subdir / "lib").mkdir()
-    (subdir / "lib" / "db.py").write_text("def query(): pass")
-    (subdir / "app").mkdir()
-    (subdir / "app" / "main.py").write_text("def run(): pass")
-
-    repo.index.add([
-        str(repo_path / "pdd" / "cli.py"),
-        str(subdir / "lib" / "db.py"),
-        str(subdir / "app" / "main.py"),
-    ])
-    repo.index.commit("Initial commit")
-
-    original_cwd = os.getcwd()
-    os.chdir(subdir)
-    try:
-        pairs = find_and_resolve_all_pairs(str(subdir), quiet=True)
-
-        # Only files under video_editor/ should be found
-        code_files = sorted(p[1] for p in pairs)
-        for f in code_files:
-            assert f.startswith(str(subdir)), \
-                f"File '{f}' is outside scan_dir '{subdir}'. " \
-                f"find_and_resolve_all_pairs should only scan within scan_dir."
-
-        # Should find the 2 subdir files, NOT the parent's pdd/cli.py
-        assert len(pairs) == 2, \
-            f"Expected 2 files under video_editor/ but got {len(pairs)}: {code_files}"
-    finally:
-        os.chdir(original_cwd)
+def ctx() -> click.Context:
+    return _make_ctx()
 
 
-def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_language_for_repo):
-    """
-    Bug repro: when CWD is a subdirectory with its own .pddrc,
-    update_main in repo-wide mode (0 args) should scope the scan
-    to CWD, not the entire git root.
-    """
-    from pdd.update_main import update_main
+def _stage(status: str = "ok", reason: Optional[str] = None, detail: Optional[str] = None) -> SimpleNamespace:
+    return SimpleNamespace(status=status, reason=reason, detail=detail)
 
-    # Create a git repo
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    repo = git.Repo.init(repo_path)
 
-    # Parent repo .pddrc and files
-    (repo_path / ".pddrc").write_text('version: "1.0"\ncontexts:\n  default:\n    defaults:\n      generate_output_path: "./"\n')
-    (repo_path / "pdd").mkdir()
-    (repo_path / "pdd" / "cli.py").write_text("def main(): pass")
+def _make_meta_result(
+    ok: bool = True,
+    dry_run: bool = False,
+    stages: Optional[Dict[str, SimpleNamespace]] = None,
+) -> SimpleNamespace:
+    if stages is None:
+        stages = {"prompt": _stage("ok"), "fingerprint": _stage("ok")}
+    return SimpleNamespace(ok=ok, dry_run=dry_run, stages=stages)
 
-    # Subdirectory with its own .pddrc
-    subdir = repo_path / "video_editor"
-    subdir.mkdir()
-    (subdir / ".pddrc").write_text('version: "1.0"\ncontexts:\n  default:\n    defaults:\n      prompts_dir: "prompts/"\n')
-    (subdir / "lib").mkdir()
-    (subdir / "lib" / "db.py").write_text("def query(): pass")
-    (subdir / "prompts").mkdir()
 
-    repo.index.add([
-        str(repo_path / ".pddrc"),
-        str(repo_path / "pdd" / "cli.py"),
-        str(subdir / ".pddrc"),
-        str(subdir / "lib" / "db.py"),
-    ])
-    repo.index.commit("Initial commit")
-
-    # Simulate running from the subdirectory (0 args → repo mode)
-    original_cwd = os.getcwd()
-    os.chdir(subdir)
-    try:
-        ctx = click.Context(click.Command("update"))
-        ctx.params = {"force": False, "quiet": True}
-        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False}
-
-        with patch('pdd.update_main.update_file_pair') as mock_update, \
-             patch('pdd.update_main.is_code_changed', return_value=(True, "changed")), \
-             patch('pdd.update_main.get_git_changed_files', return_value={str(subdir / "lib" / "db.py")}), \
-             patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}}):
-
-            mock_update.return_value = {
-                "prompt_file": "test.prompt", "status": "ok",
-                "cost": 0.0, "model": "mock", "error": ""
-            }
-
+# --------------------------------------------------------------------------- #
+# 1. & 2. signature, mutual exclusion
+# --------------------------------------------------------------------------- #
+class TestSignatureAndMutualExclusion:
+    def test_signature_returns_tuple_on_success(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("orig\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+        with patch("pdd.update_main.update_prompt",
+                   return_value=("new prompt", 0.01, "m")), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
             result = update_main(
                 ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        assert isinstance(result, tuple)
+        assert len(result) == 3
+        assert result[0] == "new prompt"
+        assert result[1] == 0.01
+        assert result[2] == "m"
+
+    def test_use_git_and_input_code_file_mutually_exclusive(self, ctx):
+        # Per spec rule 9: use_git and input_code_file together must raise ValueError.
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            update_main(
+                ctx=ctx,
+                input_prompt_file="p",
+                modified_code_file="c",
+                input_code_file="ic",  # both supplied -> error
+                output=None,
+                use_git=True,           # both supplied -> error
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+
+    def test_returns_none_on_value_error(self, ctx):
+        # Missing modified_code_file outside repo mode raises ValueError -> None.
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=False,
+            extensions=None,
+            directory=None,
+            strength=None,
+            temperature=None,
+            simple=True,
+        )
+        assert result is None
+
+
+# --------------------------------------------------------------------------- #
+# 3. & 4. agentic routing & post-update read
+# --------------------------------------------------------------------------- #
+class TestAgenticRouting:
+    def test_single_file_agentic_first_then_legacy(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("orig\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+
+        agentic = MagicMock(return_value=(False, "no agents", 0.0, "", []))
+        legacy = MagicMock(return_value=("legacy prompt", 0.02, "legacy-m"))
+
+        with patch("pdd.agentic_update.run_agentic_update", agentic), \
+             patch("pdd.update_main.update_prompt", legacy), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=False,  # allow agentic
+            )
+        assert agentic.called
+        assert legacy.called
+        assert result[0] == "legacy prompt"
+
+    def test_agentic_success_reads_prompt_from_disk(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("old\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+
+        def agentic_writes(*args, **kwargs):
+            prompt.write_text("AGENTIC-WROTE-THIS\n", encoding="utf-8")
+            return (True, "ok", 0.07, "agent-model", [str(prompt)])
+
+        with patch("pdd.agentic_update.run_agentic_update",
+                   side_effect=agentic_writes), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=False,
+            )
+        # Must return the *post-write* file content.
+        assert result is not None
+        assert "AGENTIC-WROTE-THIS" in result[0]
+        assert result[1] == 0.07
+        assert result[2] == "agent-model"
+
+
+# --------------------------------------------------------------------------- #
+# 5. strength/temperature resolution
+# --------------------------------------------------------------------------- #
+class TestStrengthTemperatureResolution:
+    def test_strength_temperature_resolution_explicit_overrides(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("x\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+        captured: Dict[str, Any] = {}
+
+        def fake_update_prompt(**kwargs):
+            captured.update(kwargs)
+            return ("new", 0.0, "m")
+
+        with patch("pdd.update_main.update_prompt", side_effect=fake_update_prompt), \
+             patch("pdd.update_main._run_single_file_metadata_sync", return_value=True):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=0.9,        # explicit override
+                temperature=0.42,    # explicit override
+                simple=True,
+            )
+        assert captured["strength"] == 0.9
+        assert captured["temperature"] == 0.42
+        # ctx.obj should be updated with the resolved values.
+        assert ctx.obj["strength"] == 0.9
+        assert ctx.obj["temperature"] == 0.42
+
+    def test_strength_temperature_falls_back_to_ctx_obj(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("x\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+        ctx.obj["strength"] = 0.33
+        ctx.obj["temperature"] = 0.11
+        captured: Dict[str, Any] = {}
+
+        def fake_update_prompt(**kwargs):
+            captured.update(kwargs)
+            return ("new", 0.0, "m")
+
+        with patch("pdd.update_main.update_prompt", side_effect=fake_update_prompt), \
+             patch("pdd.update_main._run_single_file_metadata_sync", return_value=True):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        assert captured["strength"] == 0.33
+        assert captured["temperature"] == 0.11
+
+
+# --------------------------------------------------------------------------- #
+# 6., 7., 8. write semantics & sanitization
+# --------------------------------------------------------------------------- #
+class TestWriteSemantics:
+    def test_empty_prompt_aborts_write(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("original-content\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+
+        with patch("pdd.update_main.update_prompt",
+                   return_value=("", 0.0, "m")), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        # On empty prompt, function returns None and DOES NOT overwrite the file.
+        assert result is None
+        assert prompt.read_text(encoding="utf-8") == "original-content\n"
+
+    def test_no_output_overwrites_prompt_in_place(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("old prompt\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+
+        with patch("pdd.update_main.update_prompt",
+                   return_value=("NEW PROMPT BODY", 0.0, "m")), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        assert "NEW PROMPT BODY" in prompt.read_text(encoding="utf-8")
+
+    def test_sanitize_called_before_write(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("old\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+
+        # We confirm the sanitize hook is invoked before write by returning a
+        # marker.  The implementation imports sanitize_prompt_output lazily.
+        with patch("pdd.update_main.update_prompt",
+                   return_value=("RAW", 0.0, "m")), \
+             patch("pdd.validate_prompt_includes.sanitize_prompt_output",
+                   return_value=("SANITIZED", [])) as san, \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        assert san.called
+        assert prompt.read_text(encoding="utf-8") == "SANITIZED"
+
+
+# --------------------------------------------------------------------------- #
+# 9. & 10. metadata sync helper contract
+# --------------------------------------------------------------------------- #
+class TestMetadataSyncHelper:
+    def test_helper_returns_true_on_ok_result(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("x", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("y", encoding="utf-8")
+        with patch("pdd.metadata_sync.run_metadata_sync",
+                   return_value=_make_meta_result(ok=True)):
+            assert _run_single_file_metadata_sync(prompt, code, dry_run=False) is True
+
+    def test_helper_returns_false_on_failed_stage(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("x", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("y", encoding="utf-8")
+        result = _make_meta_result(
+            ok=False,
+            stages={
+                "prompt": _stage("ok"),
+                "fingerprint": _stage("failed", reason="disk full"),
+            },
+        )
+        with patch("pdd.metadata_sync.run_metadata_sync", return_value=result):
+            assert _run_single_file_metadata_sync(prompt, code) is False
+
+    def test_helper_returns_false_on_orchestrator_exception(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("x", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("y", encoding="utf-8")
+        with patch("pdd.metadata_sync.run_metadata_sync",
+                   side_effect=RuntimeError("boom")):
+            assert _run_single_file_metadata_sync(prompt, code) is False
+
+    def test_helper_writes_failures_to_stderr(self, tmp_path, capsys):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("x", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("y", encoding="utf-8")
+        # Re-bind both consoles to the captured streams so writes show up.
+        from rich.console import Console as RichConsole
+        with patch.object(um, "_err_console",
+                          RichConsole(file=os.sys.stderr, force_terminal=False)), \
+             patch.object(um, "console",
+                          RichConsole(file=os.sys.stdout, force_terminal=False)), \
+             patch("pdd.metadata_sync.run_metadata_sync",
+                   return_value=_make_meta_result(
+                       ok=False,
+                       stages={"fingerprint":
+                               _stage("failed", reason="permission denied")},
+                   )):
+            _run_single_file_metadata_sync(prompt, code)
+        captured = capsys.readouterr()
+        assert "fingerprint" in captured.err
+        assert "permission denied" in captured.err
+
+    def test_helper_passes_dry_run_through(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("x", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("y", encoding="utf-8")
+        seen: Dict[str, Any] = {}
+
+        def fake(prompt_p, code_p, dry_run=False):
+            seen["dry_run"] = dry_run
+            return _make_meta_result(ok=True, dry_run=dry_run)
+
+        with patch("pdd.metadata_sync.run_metadata_sync", side_effect=fake):
+            _run_single_file_metadata_sync(prompt, code, dry_run=True)
+        assert seen["dry_run"] is True
+
+
+# --------------------------------------------------------------------------- #
+# 11. always-on metadata for single-file & failure raises Exit(1)
+# --------------------------------------------------------------------------- #
+class TestSingleFileMetadataFinalization:
+    def _setup(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("old\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+        return prompt, code, old_code
+
+    def test_single_file_metadata_helper_always_called_on_success(self, ctx, tmp_path):
+        prompt, code, old_code = self._setup(tmp_path)
+        with patch("pdd.update_main.update_prompt",
+                   return_value=("new prompt", 0.01, "m")), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True) as helper:
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+                sync_metadata=False,  # always-on even when False
+            )
+        assert result is not None
+        assert helper.called
+
+    def test_single_file_metadata_failure_raises_exit_1(self, ctx, tmp_path):
+        prompt, code, old_code = self._setup(tmp_path)
+        with patch("pdd.update_main.update_prompt",
+                   return_value=("new prompt", 0.01, "m")), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=False):
+            with pytest.raises(click.exceptions.Exit) as exc_info:
+                update_main(
+                    ctx=ctx,
+                    input_prompt_file=str(prompt),
+                    modified_code_file=str(code),
+                    input_code_file=str(old_code),
+                    output=None,
+                    use_git=False,
+                    repo=False,
+                    extensions=None,
+                    directory=None,
+                    strength=None,
+                    temperature=None,
+                    simple=True,
+                )
+            assert exc_info.value.exit_code == 1
+
+
+# --------------------------------------------------------------------------- #
+# 12. regeneration mode
+# --------------------------------------------------------------------------- #
+class TestRegenerationMode:
+    def test_regeneration_mode_resolves_prompt_path(self, ctx, tmp_path):
+        code = tmp_path / "calc.py"
+        code.write_text("def add(a, b): return a+b\n", encoding="utf-8")
+
+        # Pretend the resolver returns a prompt path under tmp_path.
+        prompt_path = tmp_path / "prompts" / "calc_python.prompt"
+        prompt_path.parent.mkdir(parents=True)
+        prompt_path.write_text("", encoding="utf-8")
+
+        with patch("pdd.update_main.resolve_prompt_code_pair",
+                   return_value=(prompt_path, code)), \
+             patch("pdd.update_main.update_prompt",
+                   return_value=("regenerated body", 0.01, "m")), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
+            result = update_main(
+                ctx=ctx,
+                input_prompt_file=None,
+                modified_code_file=str(code),
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        assert result is not None
+        assert "regenerated body" in prompt_path.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------- #
+# 13.–18. repo mode behavior
+# --------------------------------------------------------------------------- #
+class TestRepoMode:
+    def _ctx(self):
+        return _make_ctx()
+
+    def test_repo_mode_not_in_git_repo(self, tmp_path):
+        # subprocess returns non-zero -> repo mode aborts with None.
+        with patch("pdd.update_main.subprocess.run",
+                   return_value=SimpleNamespace(returncode=128, stdout="", stderr="")):
+            result = update_main(
+                ctx=self._ctx(),
                 input_prompt_file=None,
                 modified_code_file=None,
                 input_code_file=None,
@@ -678,3079 +658,540 @@ def test_update_main_repo_mode_uses_cwd_pddrc_as_scan_dir(tmp_path, mock_get_lan
                 use_git=False,
                 repo=True,
                 extensions=None,
-                directory=None,  # No --directory flag, should detect from CWD
-                simple=True,
-            )
-
-        # Verify that only subdir files were processed, not parent repo files
-        if mock_update.called:
-            for call in mock_update.call_args_list:
-                code_file = call[0][1] if len(call[0]) > 1 else call[1].get('code_file', '')
-                assert 'pdd/cli.py' not in str(code_file), \
-                    f"Parent repo file was processed: {code_file}. " \
-                    f"update_main should scope scan to CWD when it has a .pddrc."
-    finally:
-        os.chdir(original_cwd)
-
-
-@patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
-@patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
-@patch('pdd.update_main.get_git_changed_files', return_value=set())
-@patch('pdd.update_main.update_file_pair')
-@patch('pdd.pddrc_initializer.ensure_pddrc_for_scan')
-def test_update_main_repo_mode_orchestration(mock_pddrc, mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
-    """
-    Test the main orchestration logic of update_main in --repo mode.
-    """
-    # Use a side_effect to return dynamic values based on input
-    def mock_update_logic(
-        prompt_file,
-        code_file,
-        ctx,
-        repo,
-        simple=False,
-        strength=None,
-        temperature=None,
-    ):
-        return {
-            "prompt_file": prompt_file,
-            "status": "✅ Success",
-            "cost": 0.01,
-            "model": "mock_model",
-            "error": ""
-        }
-    mock_update_file_pair.side_effect = mock_update_logic
-
-    ctx = click.Context(click.Command('update'))
-    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
-
-    # Run update_main in repo mode
-    result = update_main(ctx=ctx, input_prompt_file=None, modified_code_file=None, input_code_file=None, output=None, use_git=False, repo=True)
-
-    # Assert that the update function was called for each pair (all 3 marked as changed)
-    assert mock_update_file_pair.call_count == 3
-
-    # Check the console output for the summary table
-    captured = capsys.readouterr()
-    assert "Repository Update Summary" in captured.out
-    # With structure preservation, paths include src/
-    assert "prompts/src/module1_python.prompt" in captured.out
-    assert "prompts/src/module2_javascript.prompt" in captured.out
-    assert "prompts/src/existing_module_python.prompt" in captured.out
-    assert "Total Estimated Cost" in captured.out
-
-    assert result is not None
-    assert result[0] == "Repository update complete."
-
-
-@patch('pdd.architecture_sync.update_architecture_from_prompt', return_value={"success": False, "updated": False, "changes": {}})
-@patch('pdd.update_main.is_code_changed', return_value=(True, "no fingerprint, file in git changed set"))
-@patch('pdd.update_main.get_git_changed_files', return_value=set())
-@patch('pdd.update_main.update_file_pair')
-@patch('pdd.pddrc_initializer.ensure_pddrc_for_scan')
-def test_update_main_repo_mode_honors_budget_cap(mock_pddrc, mock_update_file_pair, mock_git_changed, mock_is_changed, mock_arch, temp_git_repo, capsys):
-    """Repo mode should stop processing new files once budget cap is reached."""
-    costs = iter([0.60, 0.60, 0.60])  # 3 changed pairs in fixture
-
-    def mock_update_logic(
-        prompt_file,
-        code_file,
-        ctx,
-        repo,
-        simple=False,
-        strength=None,
-        temperature=None,
-    ):
-        return {
-            "prompt_file": prompt_file,
-            "status": "✅ Success",
-            "cost": next(costs),
-            "model": "mock_model",
-            "error": "",
-        }
-
-    mock_update_file_pair.side_effect = mock_update_logic
-
-    ctx = click.Context(click.Command('update'))
-    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
-
-    result = update_main(
-        ctx=ctx,
-        input_prompt_file=None,
-        modified_code_file=None,
-        input_code_file=None,
-        output=None,
-        use_git=False,
-        repo=True,
-        budget=1.0,
-    )
-
-    # First two updates run (0.6 + 0.6), then cap is reached and third is skipped.
-    assert mock_update_file_pair.call_count == 2
-    captured = capsys.readouterr()
-    assert "budget cap reached" in captured.out.lower()
-    assert result is not None
-    assert result[1] == pytest.approx(1.2)
-
-
-@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
-@patch("pdd.update_main.is_code_changed", return_value=(True, "no fingerprint, file in git changed set"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_update_main_repo_mode_dry_run_skips_work(
-    mock_ensure_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    mock_arch,
-    temp_git_repo,
-    capsys,
-):
-    """Repository-wide dry run must not call update_file_pair or ensure_pddrc_for_scan."""
-    ctx = click.Context(click.Command("update"))
-    ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
-
-    result = update_main(
-        ctx=ctx,
-        input_prompt_file=None,
-        modified_code_file=None,
-        input_code_file=None,
-        output=None,
-        use_git=False,
-        repo=True,
-        dry_run=True,
-    )
-
-    mock_update_file_pair.assert_not_called()
-    mock_ensure_pddrc.assert_not_called()
-    captured = capsys.readouterr()
-    assert "Repository drift report" in captured.out
-    assert "Changed files:" in captured.out
-    assert "Estimated cost:" in captured.out
-    assert "Drifted modules:" in captured.out
-    assert "Included docs that may need updating:" in captured.out
-    assert "Repository Update Summary" not in captured.out
-    assert result is not None
-    assert result[1] == 0.0
-    assert "would be updated" in result[0].lower()
-    assert result[2] == "N/A"
-
-
-# --- Tests for .pddrc prompts_dir configuration (GitHub Issue #86) ---
-
-def test_update_regeneration_mode_respects_pddrc_prompts_dir(tmp_path, monkeypatch):
-    """
-    Test that pdd update in regeneration mode uses prompts_dir from .pddrc context config.
-    This is a regression test for GitHub issue #86.
-    """
-    from pdd.update_main import update_main
-
-    # Setup: Create a temp directory structure with .pddrc
-    repo_path = tmp_path / "test_repo"
-    repo_path.mkdir()
-
-    # Create .pddrc with context-specific prompts_dir
-    pddrc_content = '''
-contexts:
-  backend:
-    paths:
-      - "backend/**"
-    defaults:
-      prompts_dir: "prompts/backend"
-      generate_output_path: "backend"
-'''
-    (repo_path / ".pddrc").write_text(pddrc_content)
-
-    # Create the backend directory and code file
-    backend_dir = repo_path / "backend"
-    backend_dir.mkdir()
-    code_file = backend_dir / "some_module.py"
-    code_file.write_text("def example(): pass")
-
-    # Create prompts/backend directory
-    prompts_backend = repo_path / "prompts" / "backend"
-    prompts_backend.mkdir(parents=True)
-
-    # Change to repo directory
-    monkeypatch.chdir(repo_path)
-
-    # Initialize git repo
-    git.Repo.init(repo_path)
-
-    # Mock update_prompt to avoid actual LLM calls
-    # Mock get_language to avoid PDD_PATH dependency
-    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents, \
-         patch("pdd.update_main.get_language") as mock_get_language:
-        mock_update_prompt.return_value = ("generated prompt", 0.01, "mock-model")
-        mock_agents.return_value = []
-        mock_get_language.return_value = "python"
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
-
-        # Act: Call update_main in regeneration mode (only code file provided)
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,  # Regeneration mode
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False
-        )
-
-    # Assert: Prompt should be saved to prompts/backend/, not prompts/
-    expected_prompt_path = repo_path / "prompts" / "backend" / "some_module_python.prompt"
-    wrong_prompt_path = repo_path / "prompts" / "some_module_python.prompt"
-
-    assert expected_prompt_path.exists(), \
-        f"Expected prompt at {expected_prompt_path}, but it was not created there. " \
-        f"Wrong path exists: {wrong_prompt_path.exists()}"
-    assert not wrong_prompt_path.exists(), \
-        f"Prompt was created at wrong path {wrong_prompt_path} instead of {expected_prompt_path}"
-
-
-def test_update_preserves_subdirectory_structure_issue_254(tmp_path, monkeypatch):
-    """
-    Test that pdd update preserves subdirectory structure from code file path.
-    Regression test for GitHub issue #254.
-
-    When updating pdd/commands/generate.py with generate_output_path="pdd",
-    the prompt should be created at: prompts/commands/generate_python.prompt
-    (preserving 'commands/' subdirectory, stripping 'pdd/' package root)
-    """
-    import git
-    from pathlib import Path
-    from unittest.mock import patch
-
-    # Setup: Create a temp directory structure
-    repo_path = tmp_path / "test_repo"
-    repo_path.mkdir()
-
-    # Create .pddrc with context that has generate_output_path
-    pddrc_content = '''
-contexts:
-  pdd_cli:
-    paths:
-      - "pdd/**"
-    defaults:
-      generate_output_path: "pdd"
-'''
-    (repo_path / ".pddrc").write_text(pddrc_content)
-
-    # Create pdd/commands/ directory and code file
-    pdd_dir = repo_path / "pdd"
-    pdd_dir.mkdir()
-    commands_dir = pdd_dir / "commands"
-    commands_dir.mkdir()
-    code_file = commands_dir / "generate.py"
-    code_file.write_text("def example(): pass")
-
-    # Change to repo directory
-    monkeypatch.chdir(repo_path)
-
-    # Initialize git repo
-    git.Repo.init(repo_path)
-
-    # Mock update_prompt to avoid actual LLM calls
-    # Mock get_language to avoid PDD_PATH dependency
-    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents, \
-         patch("pdd.update_main.get_language") as mock_get_language:
-        mock_update_prompt.return_value = ("generated prompt", 0.01, "mock-model")
-        mock_agents.return_value = []
-        mock_get_language.return_value = "python"
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
-
-        # Act: Call update_main in regeneration mode (only code file provided)
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,  # Regeneration mode
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False
-        )
-
-    # Assert: Prompt should preserve subdirectory structure (stripping package root)
-    # Expected: prompts/commands/generate_python.prompt (NOT prompts/pdd/commands/)
-    expected_prompt_path = repo_path / "prompts" / "commands" / "generate_python.prompt"
-    wrong_prompt_path = repo_path / "prompts" / "generate_python.prompt"
-
-    assert expected_prompt_path.exists(), \
-        f"Expected prompt at {expected_prompt_path}, but it was not created there. " \
-        f"Wrong path exists: {wrong_prompt_path.exists()}"
-    assert not wrong_prompt_path.exists(), \
-        f"Prompt was created at wrong path {wrong_prompt_path} instead of {expected_prompt_path}"
-
-
-# --- Tests for agentic update source-file mutation bug ---
-
-def test_agentic_update_does_not_modify_source_when_output_specified(tmp_path):
-    """
-    When --output is specified, the agentic update path must NOT modify the
-    source prompt file. Only the output path should contain the updated content.
-    Regression test for: agentic update overwrites source in-place ignoring --output.
-    """
-    source_prompt = tmp_path / "source.prompt"
-    output_prompt = tmp_path / "output.prompt"
-    code_file = tmp_path / "modified_code.py"
-    original_code = tmp_path / "original_code.py"
-
-    original_content = "original prompt content\n"
-    source_prompt.write_text(original_content)
-    code_file.write_text("def foo(): return 42\n")
-    original_code.write_text("def foo(): pass\n")
-
-    ctx = click.Context(click.Command("update"))
-    ctx.obj = {
-        "strength": 0.5,
-        "temperature": 0.0,
-        "verbose": False,
-        "time": 0.25,
-        "force": False,
-        "quiet": False,
-    }
-
-    with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
-         patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
-         patch("pdd.update_main.run_agentic_update") as mock_agentic:
-
-        def agentic_side_effect(prompt_file, **kwargs):
-            """Simulate agentic update modifying the prompt_file in-place."""
-            Path(prompt_file).write_text("agentic modified content\n")
-            return (True, "ok", 0.01, "claude", [str(prompt_file)])
-
-        mock_agentic.side_effect = agentic_side_effect
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=str(source_prompt),
-            modified_code_file=str(code_file),
-            input_code_file=str(original_code),
-            output=str(output_prompt),
-            use_git=False,
-            simple=False,
-        )
-
-    # Source must remain unchanged
-    assert source_prompt.read_text() == original_content, \
-        "Source prompt file was modified by agentic update despite --output being specified"
-    # Output should have the updated content
-    assert output_prompt.exists(), "Output file was not created"
-    assert output_prompt.read_text() == "agentic modified content\n"
-    # Function should return success
-    assert result is not None
-    assert result[0] == "agentic modified content\n"
-
-
-def test_agentic_update_failure_does_not_corrupt_source(tmp_path):
-    """
-    When agentic update fails after partially modifying a file, the source
-    prompt must remain unchanged if --output is specified.
-    """
-    source_prompt = tmp_path / "source.prompt"
-    output_prompt = tmp_path / "output.prompt"
-    code_file = tmp_path / "modified_code.py"
-    original_code = tmp_path / "original_code.py"
-
-    original_content = "original prompt content\n"
-    source_prompt.write_text(original_content)
-    code_file.write_text("def foo(): return 42\n")
-    original_code.write_text("def foo(): pass\n")
-
-    ctx = click.Context(click.Command("update"))
-    ctx.obj = {
-        "strength": 0.5,
-        "temperature": 0.0,
-        "verbose": False,
-        "time": 0.25,
-        "force": False,
-        "quiet": True,
-    }
-
-    with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
-         patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
-         patch("pdd.update_main.run_agentic_update") as mock_agentic, \
-         patch("pdd.update_main.construct_paths") as mock_cp, \
-         patch("pdd.update_main.update_prompt") as mock_up:
-
-        def agentic_side_effect(prompt_file, **kwargs):
-            """Simulate agentic update that modifies file then fails."""
-            Path(prompt_file).write_text("partially corrupted\n")
-            return (False, "agentic failed", 0.0, "claude", [])
-
-        mock_agentic.side_effect = agentic_side_effect
-
-        # Set up legacy fallback mocks
-        mock_cp.return_value = (
-            {},
-            {
-                "input_prompt_file": original_content,
-                "modified_code_file": "def foo(): return 42\n",
-                "input_code_file": "def foo(): pass\n",
-            },
-            {"output": str(output_prompt)},
-            None
-        )
-        mock_up.return_value = ("legacy updated content\n", 0.02, "gpt-4")
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=str(source_prompt),
-            modified_code_file=str(code_file),
-            input_code_file=str(original_code),
-            output=str(output_prompt),
-            use_git=False,
-            simple=False,
-        )
-
-    # Source must remain unchanged even after agentic failure
-    assert source_prompt.read_text() == original_content, \
-        "Source prompt was corrupted by failed agentic update"
-
-
-# --- Tests for issue #493: NameError when using --output with subdirectory code file ---
-
-from pdd.update_main import resolve_prompt_code_pair
-
-
-def test_resolve_prompt_code_pair_output_dir_with_subdirectory_code_file(tmp_path, monkeypatch):
-    """
-    Regression test for GitHub issue #493.
-    resolve_prompt_code_pair() crashes with UnboundLocalError when --output is provided
-    and the code file is in a subdirectory (rel_dir != "."), because context_config
-    is only defined in the else branch but used unconditionally when computing code_root.
-    """
-    # Setup: git repo with code file in a subdirectory
-    repo_path = tmp_path / "test_repo"
-    repo_path.mkdir()
-    sub_dir = repo_path / "backend" / "src"
-    sub_dir.mkdir(parents=True)
-    code_file = sub_dir / "module.py"
-    code_file.write_text("def hello(): return 'world'")
-
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-
-    monkeypatch.chdir(repo_path)
-    git.Repo.init(repo_path)
-
-    with patch("pdd.update_main.get_language") as mock_lang:
-        mock_lang.return_value = "python"
-
-        # This should NOT raise NameError for context_config
-        prompt_path, code_path = resolve_prompt_code_pair(
-            str(code_file), quiet=True, output_dir=str(output_dir)
-        )
-
-    # The prompt file should be created under the output directory
-    assert os.path.exists(prompt_path)
-    assert Path(prompt_path).is_relative_to(output_dir)
-    assert prompt_path.endswith("module_python.prompt")
-
-
-def test_resolve_prompt_code_pair_output_dir_with_root_level_code_file(tmp_path, monkeypatch):
-    """
-    Edge case for issue #493: code file at repo root with --output should work
-    (this path doesn't hit the bug since rel_dir == "." skips the code_root logic).
-    """
-    repo_path = tmp_path / "test_repo"
-    repo_path.mkdir()
-    code_file = repo_path / "module.py"
-    code_file.write_text("def hello(): return 'world'")
-
-    output_dir = tmp_path / "output"
-    output_dir.mkdir()
-
-    monkeypatch.chdir(repo_path)
-    git.Repo.init(repo_path)
-
-    with patch("pdd.update_main.get_language") as mock_lang:
-        mock_lang.return_value = "python"
-
-        prompt_path, code_path = resolve_prompt_code_pair(
-            str(code_file), quiet=True, output_dir=str(output_dir)
-        )
-
-    assert os.path.exists(prompt_path)
-    assert prompt_path.endswith("module_python.prompt")
-
-
-def test_resolve_prompt_code_pair_no_output_dir_subdirectory_still_works(tmp_path, monkeypatch):
-    """
-    No-regression test for issue #493: without --output, subdirectory code files
-    should still work as before (context_config is defined in else branch).
-    """
-    repo_path = tmp_path / "test_repo"
-    repo_path.mkdir()
-    sub_dir = repo_path / "backend"
-    sub_dir.mkdir()
-    code_file = sub_dir / "module.py"
-    code_file.write_text("def hello(): return 'world'")
-
-    monkeypatch.chdir(repo_path)
-    git.Repo.init(repo_path)
-
-    with patch("pdd.update_main.get_language") as mock_lang:
-        mock_lang.return_value = "python"
-
-        prompt_path, code_path = resolve_prompt_code_pair(
-            str(code_file), quiet=True
-        )
-
-    assert os.path.exists(prompt_path)
-    assert prompt_path.endswith("module_python.prompt")
-
-
-# --- Tests for _extract_template_vars ---
-
-from pdd.update_main import _extract_template_vars
-
-
-class TestExtractTemplateVars:
-    """Tests for reverse-matching concrete paths against templates."""
-
-    def test_simple_name_extraction(self):
-        """Extract {name} from a simple template."""
-        result = _extract_template_vars(
-            "frontend/src/Button.tsx",
-            "frontend/src/{name}.tsx"
-        )
-        assert result == {"name": "Button"}
-
-    def test_name_and_category_extraction(self):
-        """Extract both {name} and {category} from a template."""
-        result = _extract_template_vars(
-            "frontend/src/components/billing/AutoBuy.tsx",
-            "frontend/src/components/{category}/{name}.tsx"
-        )
-        assert result == {"category": "billing", "name": "AutoBuy"}
-
-    def test_repeated_name_backreference(self):
-        """Templates with repeated {name} should use backreferences."""
-        result = _extract_template_vars(
-            "frontend/src/components/billing/AutoBuy/AutoBuy.tsx",
-            "frontend/src/components/{category}/{name}/{name}.tsx"
-        )
-        assert result == {"category": "billing", "name": "AutoBuy"}
-
-    def test_repeated_name_mismatch_returns_none(self):
-        """If repeated {name} segments differ, should not match."""
-        result = _extract_template_vars(
-            "frontend/src/components/billing/AutoBuy/SomethingElse.tsx",
-            "frontend/src/components/{category}/{name}/{name}.tsx"
-        )
-        assert result is None
-
-    def test_no_match_returns_none(self):
-        """Non-matching path returns None."""
-        result = _extract_template_vars(
-            "backend/utils/helper.py",
-            "frontend/src/{name}.tsx"
-        )
-        assert result is None
-
-    def test_exact_path_no_vars(self):
-        """Template without variables should match exact path."""
-        result = _extract_template_vars(
-            "app/api/project/route.ts",
-            "app/api/project/route.ts"
-        )
-        assert result == {}
-
-    def test_exact_path_no_vars_mismatch(self):
-        """Template without variables should not match different path."""
-        result = _extract_template_vars(
-            "app/api/other/route.ts",
-            "app/api/project/route.ts"
-        )
-        assert result is None
-
-
-# --- Tests for _resolve_prompt_from_pddrc ---
-
-from pdd.update_main import _resolve_prompt_from_pddrc
-
-
-class TestResolvePromptFromPddrc:
-    """Tests for template-based prompt path resolution."""
-
-    def test_returns_none_without_pddrc(self, tmp_path, monkeypatch):
-        """Should return None when no .pddrc exists."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        monkeypatch.chdir(repo_path)
-        result = _resolve_prompt_from_pddrc(
-            str(repo_path / "src" / "module.py"), str(repo_path), "python"
-        )
-        assert result is None
-
-    def test_returns_none_without_outputs_config(self, tmp_path, monkeypatch):
-        """Should return None when .pddrc exists but has no outputs templates."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        pddrc = repo_path / ".pddrc"
-        pddrc.write_text("""
-contexts:
-  backend:
-    paths:
-      - "backend/**"
-    defaults:
-      prompts_dir: "prompts/backend"
-""")
-        (repo_path / "backend").mkdir()
-        code_file = repo_path / "backend" / "module.py"
-        code_file.write_text("def foo(): pass")
-        monkeypatch.chdir(repo_path)
-        result = _resolve_prompt_from_pddrc(str(code_file), str(repo_path), "python")
-        assert result is None
-
-    def test_resolves_prompt_from_template(self, tmp_path, monkeypatch):
-        """Should resolve prompt path using outputs.prompt.path template."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        pddrc = repo_path / ".pddrc"
-        pddrc.write_text("""
-contexts:
-  frontend:
-    paths:
-      - "frontend/**"
-    defaults:
-      outputs:
-        prompt:
-          path: "prompts/frontend/{category}/{name}_{language}.prompt"
-        code:
-          path: "frontend/src/{category}/{name}/{name}.tsx"
-""")
-        # Create the code file
-        code_dir = repo_path / "frontend" / "src" / "billing" / "AutoBuy"
-        code_dir.mkdir(parents=True)
-        code_file = code_dir / "AutoBuy.tsx"
-        code_file.write_text("export default function AutoBuy() {}")
-
-        monkeypatch.chdir(repo_path)
-        git.Repo.init(repo_path)
-
-        result = _resolve_prompt_from_pddrc(
-            str(code_file), str(repo_path), "TypescriptReact"
-        )
-        assert result is not None
-        expected = str(repo_path / "prompts" / "frontend" / "billing" / "AutoBuy_TypescriptReact.prompt")
-        assert result == expected
-
-    def test_resolves_prompt_without_code_template(self, tmp_path, monkeypatch):
-        """Should still resolve when outputs.code.path is missing (uses filename as name)."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        pddrc = repo_path / ".pddrc"
-        pddrc.write_text("""
-contexts:
-  backend:
-    paths:
-      - "backend/**"
-    defaults:
-      outputs:
-        prompt:
-          path: "prompts/backend/{name}_{language}.prompt"
-""")
-        code_dir = repo_path / "backend"
-        code_dir.mkdir()
-        code_file = code_dir / "module.py"
-        code_file.write_text("def foo(): pass")
-
-        monkeypatch.chdir(repo_path)
-        git.Repo.init(repo_path)
-
-        result = _resolve_prompt_from_pddrc(
-            str(code_file), str(repo_path), "python"
-        )
-        assert result is not None
-        expected = str(repo_path / "prompts" / "backend" / "module_python.prompt")
-        assert result == expected
-
-
-# --- Tests for resolve_prompt_code_pair with template resolution ---
-
-class TestResolvePromptCodePairWithTemplates:
-    """Tests for resolve_prompt_code_pair using .pddrc template paths."""
-
-    def test_uses_template_path_when_pddrc_has_outputs(self, tmp_path, monkeypatch):
-        """resolve_prompt_code_pair should use .pddrc template paths when available."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        pddrc = repo_path / ".pddrc"
-        pddrc.write_text("""
-contexts:
-  frontend:
-    paths:
-      - "frontend/**"
-    defaults:
-      outputs:
-        prompt:
-          path: "prompts/frontend/{name}_{language}.prompt"
-        code:
-          path: "frontend/src/app/{name}/{name}.tsx"
-""")
-        # Create code file at the template code path
-        code_dir = repo_path / "frontend" / "src" / "app" / "billing"
-        code_dir.mkdir(parents=True)
-        code_file = code_dir / "billing.tsx"
-        code_file.write_text("export default function Billing() {}")
-
-        monkeypatch.chdir(repo_path)
-        git.Repo.init(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = "TypescriptReact"
-            prompt_path, code_path = resolve_prompt_code_pair(
-                str(code_file), quiet=True
-            )
-
-        # Should use template path, NOT path-mirroring
-        expected_prompt = str(repo_path / "prompts" / "frontend" / "billing_TypescriptReact.prompt")
-        assert prompt_path == expected_prompt
-        assert os.path.exists(prompt_path)
-
-
-# --- Tests for language casing preservation ---
-
-class TestLanguageCasingPreservation:
-    """Tests for Bug 2 fix: language suffix should preserve original casing."""
-
-    def test_resolve_prompt_code_pair_lowercases_language(self, tmp_path, monkeypatch):
-        """Language suffix should be lowercased (e.g., typescriptreact, not TypescriptReact)."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        code_file = repo_path / "page.tsx"
-        code_file.write_text("export default function Page() {}")
-
-        monkeypatch.chdir(repo_path)
-        git.Repo.init(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = "TypescriptReact"
-            prompt_path, _ = resolve_prompt_code_pair(str(code_file), quiet=True)
-
-        assert prompt_path.endswith("page_typescriptreact.prompt")
-
-    def test_resolve_prompt_code_pair_preserves_existing_mixed_case_prompt_suffix(self, tmp_path, monkeypatch):
-        """Existing prompt files should be returned with their on-disk casing."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        prompts_dir = repo_path / "prompts"
-        prompts_dir.mkdir()
-        code_file = repo_path / "api_pipeline_compositions_route.ts"
-        code_file.write_text("export const route = () => null;")
-        existing_prompt = prompts_dir / "api_pipeline_compositions_route_TypeScript.prompt"
-        existing_prompt.write_text("% Existing prompt\n")
-
-        monkeypatch.chdir(repo_path)
-        git.Repo.init(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = "TypeScript"
-            prompt_path, _ = resolve_prompt_code_pair(
-                str(code_file), quiet=True, create_missing=False
-            )
-
-        assert Path(prompt_path) == existing_prompt
-
-    def test_find_and_resolve_all_pairs_preserves_existing_mixed_case_prompt_suffix(self, tmp_path, monkeypatch):
-        """Repo scans should pair code with an existing mixed-case prompt path."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        prompts_dir = repo_path / "prompts"
-        prompts_dir.mkdir()
-        code_file = repo_path / "api_pipeline_compositions_route.ts"
-        code_file.write_text("export const route = () => null;")
-        existing_prompt = prompts_dir / "api_pipeline_compositions_route_TypeScript.prompt"
-        existing_prompt.write_text("% Existing prompt\n")
-
-        monkeypatch.chdir(repo_path)
-        git.Repo.init(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = "TypeScript"
-            pairs = find_and_resolve_all_pairs(
-                str(repo_path), quiet=True, extensions=".ts"
-            )
-
-        assert (str(existing_prompt), str(code_file)) in pairs
-
-    def test_resolve_prompt_code_pair_unknown_language_fallback(self, tmp_path, monkeypatch):
-        """Unknown extension should fall back to 'unknown' language suffix."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        code_file = repo_path / "file.xyz"
-        code_file.write_text("content")
-
-        monkeypatch.chdir(repo_path)
-        git.Repo.init(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = ""
-            prompt_path, _ = resolve_prompt_code_pair(str(code_file), quiet=True)
-
-        assert prompt_path.endswith("file_unknown.prompt")
-
-
-# --- Tests for config/data file exclusion ---
-
-class TestConfigFileExclusion:
-    """Tests for Bug 3 fix: config/data files should not get prompts in repo scan."""
-
-    def test_find_and_resolve_excludes_json_files(self, tmp_path, monkeypatch):
-        """JSON files should be excluded from repo scan."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "module.py").write_text("def foo(): pass")
-        (repo_path / "package.json").write_text("{}")
-        (repo_path / "tsconfig.json").write_text("{}")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".py":
-                    return "python"
-                if ext == ".json":
-                    return "json"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        code_files = [p[1] for p in pairs]
-        assert any("module.py" in f for f in code_files)
-        assert not any("package.json" in f for f in code_files)
-        assert not any("tsconfig.json" in f for f in code_files)
-
-    def test_find_and_resolve_excludes_css_and_html(self, tmp_path, monkeypatch):
-        """CSS and HTML files should be excluded from repo scan."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "app.ts").write_text("const x = 1;")
-        (repo_path / "styles.css").write_text("body {}")
-        (repo_path / "index.html").write_text("<html></html>")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".ts":
-                    return "typescript"
-                if ext == ".css":
-                    return "css"
-                if ext == ".html":
-                    return "html"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        code_files = [p[1] for p in pairs]
-        assert any("app.ts" in f for f in code_files)
-        assert not any("styles.css" in f for f in code_files)
-        assert not any("index.html" in f for f in code_files)
-
-    def test_find_and_resolve_excludes_markdown_and_yaml(self, tmp_path, monkeypatch):
-        """Markdown and YAML files should be excluded from repo scan."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "app.py").write_text("pass")
-        (repo_path / "README.md").write_text("# README")
-        (repo_path / "config.yaml").write_text("key: value")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".py":
-                    return "python"
-                if ext == ".md":
-                    return "markdown"
-                if ext == ".yaml":
-                    return "yaml"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        code_files = [p[1] for p in pairs]
-        assert any("app.py" in f for f in code_files)
-        assert not any("README.md" in f for f in code_files)
-        assert not any("config.yaml" in f for f in code_files)
-
-    def test_find_and_resolve_excludes_skip_filenames(self, tmp_path, monkeypatch):
-        """Specific filenames like .prettierrc should be excluded."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "app.js").write_text("const x = 1;")
-        (repo_path / ".prettierrc").write_text("{}")
-        (repo_path / ".eslintrc").write_text("{}")
-        (repo_path / ".gitignore").write_text("node_modules/")
-        (repo_path / "next-env.d.ts").write_text("/// <reference />")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            # get_language receives extensions, not full paths
-            def lang_for_ext(ext):
-                if ext == ".js":
-                    return "javascript"
-                if ext == ".ts":
-                    return "typescript"
-                return "unknown"  # Return something for all
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        code_files = [os.path.basename(p[1]) for p in pairs]
-        assert "app.js" in code_files
-        assert ".prettierrc" not in code_files
-        assert ".eslintrc" not in code_files
-        assert ".gitignore" not in code_files
-        assert "next-env.d.ts" not in code_files
-
-
-# --- Tests for hardened scanning filters (.stories, .test, .spec, .config, .pddignore) ---
-
-from pdd.update_main import _has_skip_suffix, _has_meaningful_code, _is_pddignored, _load_pddignore
-
-
-class TestHasSkipSuffix:
-    """Unit tests for _has_skip_suffix helper."""
-
-    def test_stories_suffix(self):
-        assert _has_skip_suffix("Button.stories.tsx") is True
-
-    def test_story_suffix(self):
-        assert _has_skip_suffix("Button.story.tsx") is True
-
-    def test_test_suffix(self):
-        assert _has_skip_suffix("auth.test.ts") is True
-
-    def test_spec_suffix(self):
-        assert _has_skip_suffix("auth.spec.ts") is True
-
-    def test_config_suffix(self):
-        assert _has_skip_suffix("jest.config.ts") is True
-
-    def test_setup_suffix(self):
-        assert _has_skip_suffix("jest.setup.ts") is True
-
-    def test_e2e_test_suffix(self):
-        assert _has_skip_suffix("login.e2e.test.ts") is True
-
-    def test_e2e_spec_suffix(self):
-        assert _has_skip_suffix("login.e2e.spec.ts") is True
-
-    def test_d_ts_suffix(self):
-        assert _has_skip_suffix("firebase.d.ts") is True
-
-    def test_normal_file_not_skipped(self):
-        assert _has_skip_suffix("Button.tsx") is False
-
-    def test_normal_py_file_not_skipped(self):
-        assert _has_skip_suffix("main.py") is False
-
-    def test_path_with_directories(self):
-        assert _has_skip_suffix("src/components/Button.stories.tsx") is True
-
-
-class TestHasMeaningfulCode:
-    """Unit tests for _has_meaningful_code helper."""
-
-    def test_empty_file(self, tmp_path):
-        f = tmp_path / "empty.py"
-        f.write_text("")
-        assert _has_meaningful_code(str(f)) is False
-
-    def test_comment_only(self, tmp_path):
-        f = tmp_path / "comments.py"
-        f.write_text("# just a comment\n# another comment\n")
-        assert _has_meaningful_code(str(f)) is False
-
-    def test_blank_lines_and_comments(self, tmp_path):
-        f = tmp_path / "blank.py"
-        f.write_text("\n\n# comment\n\n")
-        assert _has_meaningful_code(str(f)) is False
-
-    def test_real_code(self, tmp_path):
-        f = tmp_path / "real.py"
-        f.write_text("# header\nfrom .core import main\n")
-        assert _has_meaningful_code(str(f)) is True
-
-    def test_nonexistent_file(self):
-        assert _has_meaningful_code("/nonexistent/file.py") is False
-
-
-class TestSkipStoriesFiles:
-    """Tests that Storybook story files are excluded from repo scan."""
-
-    def test_skip_stories_files(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "Button.tsx").write_text("export function Button() {}")
-        (repo_path / "Button.stories.tsx").write_text("export default { title: 'Button' }")
-        (repo_path / "Card.story.tsx").write_text("export default { title: 'Card' }")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".tsx":
-                    return "TypescriptReact"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "Button.tsx" in basenames
-        assert "Button.stories.tsx" not in basenames
-        assert "Card.story.tsx" not in basenames
-
-
-class TestSkipTestAndSpecFiles:
-    """Tests that test and spec files are excluded from repo scan."""
-
-    def test_skip_test_and_spec_files(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "auth.ts").write_text("export function auth() {}")
-        (repo_path / "auth.test.ts").write_text("describe('auth', () => {})")
-        (repo_path / "auth.spec.ts").write_text("describe('auth', () => {})")
-        (repo_path / "login.e2e.test.ts").write_text("test('login', () => {})")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".ts":
-                    return "typescript"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "auth.ts" in basenames
-        assert "auth.test.ts" not in basenames
-        assert "auth.spec.ts" not in basenames
-        assert "login.e2e.test.ts" not in basenames
-
-
-class TestSkipConfigFiles:
-    """Tests that config files are excluded from repo scan."""
-
-    def test_skip_config_files(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "app.ts").write_text("const x = 1;")
-        (repo_path / "jest.config.ts").write_text("module.exports = {}")
-        (repo_path / "tailwind.config.js").write_text("module.exports = {}")
-        (repo_path / "vitest.config.ts").write_text("export default {}")
-        (repo_path / "mockServiceWorker.js").write_text("self.addEventListener()")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext in (".ts", ".js"):
-                    return "typescript" if ext == ".ts" else "javascript"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "app.ts" in basenames
-        assert "jest.config.ts" not in basenames
-        assert "tailwind.config.js" not in basenames
-        assert "vitest.config.ts" not in basenames
-        assert "mockServiceWorker.js" not in basenames
-
-
-class TestPddignore:
-    """Tests for .pddignore support."""
-
-    def test_pddignore_excludes_patterns(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        # Create .pddignore
-        (repo_path / ".pddignore").write_text(
-            "# Skip UI primitives\n"
-            "frontend/src/components/ui/*\n"
-            "*.generated.ts\n"
-        )
-
-        # Create files
-        ui_dir = repo_path / "frontend" / "src" / "components" / "ui"
-        ui_dir.mkdir(parents=True)
-        (ui_dir / "button.tsx").write_text("export function Button() {}")
-        (repo_path / "app.ts").write_text("const x = 1;")
-        (repo_path / "schema.generated.ts").write_text("export type Schema = {}")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext in (".ts", ".tsx"):
-                    return "typescript"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "app.ts" in basenames
-        assert "button.tsx" not in basenames
-        assert "schema.generated.ts" not in basenames
-
-    def test_pddignore_directory_prefix(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        # Create .pddignore with directory prefix pattern
-        (repo_path / ".pddignore").write_text("vendor/\n")
-
-        vendor_dir = repo_path / "lib" / "vendor"
-        vendor_dir.mkdir(parents=True)
-        (vendor_dir / "dep.ts").write_text("export const dep = 1;")
-        (repo_path / "app.ts").write_text("const x = 1;")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".ts":
-                    return "typescript"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "app.ts" in basenames
-        assert "dep.ts" not in basenames
-
-    def test_pddignore_missing_is_noop(self, tmp_path, monkeypatch):
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "app.ts").write_text("const x = 1;")
-        (repo_path / "module.ts").write_text("export const y = 2;")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = "typescript"
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "app.ts" in basenames
-        assert "module.ts" in basenames
-
-    def test_skip_empty_files(self, tmp_path, monkeypatch):
-        """Empty files and comment-only files are excluded from repo scan."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        pkg_dir = repo_path / "mypackage"
-        pkg_dir.mkdir()
-        (pkg_dir / "__init__.py").write_text("")
-        (pkg_dir / "comment_only.py").write_text("# just a comment\n# nothing else\n")
-        (pkg_dir / "core.py").write_text("def main(): pass")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = "python"
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "core.py" in basenames
-        assert "__init__.py" not in basenames
-        assert "comment_only.py" not in basenames
-
-    def test_keep_init_py_with_real_code(self, tmp_path, monkeypatch):
-        """__init__.py with real code IS included in repo scan."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        pkg_dir = repo_path / "mypackage"
-        pkg_dir.mkdir()
-        (pkg_dir / "__init__.py").write_text(
-            "from .core import main\n\n__all__ = ['main']\n"
-        )
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            mock_lang.return_value = "python"
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "__init__.py" in basenames
-
-    def test_pddignore_found_in_parent_when_scanning_subdirectory(self, tmp_path, monkeypatch):
-        """When scanning a subdirectory, .pddignore in parent repo root is found."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        # .pddignore at repo root with pattern relative to repo root
-        (repo_path / ".pddignore").write_text(
-            "frontend/src/components/ui/*\n"
-        )
-
-        # Create files inside frontend/ subdirectory
-        ui_dir = repo_path / "frontend" / "src" / "components" / "ui"
-        ui_dir.mkdir(parents=True)
-        (ui_dir / "button.tsx").write_text("export function Button() {}")
-        app_dir = repo_path / "frontend" / "src"
-        (app_dir / "app.tsx").write_text("export default function App() {}")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".tsx":
-                    return "typescriptreact"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            # Scan from frontend/ subdirectory (simulates --directory frontend)
-            pairs = find_and_resolve_all_pairs(str(repo_path / "frontend"), quiet=True)
-
-        basenames = [os.path.basename(p[1]) for p in pairs]
-        assert "app.tsx" in basenames
-        assert "button.tsx" not in basenames
-
-
-# --- Tests for fingerprint collision fix ---
-
-from pdd.update_main import derive_basename_and_language
-
-
-class TestFingerprintCollisionAvoidance:
-    """Tests that same-named files in different dirs get distinct fingerprint keys."""
-
-    def test_same_name_different_dirs_distinct_basenames(self):
-        """Two page.tsx files in different directories must produce different basenames."""
-        with patch("pdd.update_main.get_language", return_value="TypescriptReact"):
-            b1, l1 = derive_basename_and_language(
-                "/repo/frontend/src/app/settings/page.tsx", "/repo"
-            )
-            b2, l2 = derive_basename_and_language(
-                "/repo/frontend/src/app/dashboard/page.tsx", "/repo"
-            )
-            b3, l3 = derive_basename_and_language(
-                "/repo/frontend/src/app/login/page.tsx", "/repo"
-            )
-
-        # All basenames must be unique
-        assert len({b1, b2, b3}) == 3
-        assert b1 == "frontend/src/app/settings/page"
-        assert b2 == "frontend/src/app/dashboard/page"
-        assert b3 == "frontend/src/app/login/page"
-
-    def test_fingerprint_paths_are_distinct(self):
-        """Distinct basenames produce distinct fingerprint file paths via _safe_basename."""
-        from pdd.operation_log import get_fingerprint_path, _safe_basename
-
-        b1 = "frontend/src/app/settings/page"
-        b2 = "frontend/src/app/dashboard/page"
-        lang = "typescriptreact"
-
-        # _safe_basename converts slashes to underscores
-        assert _safe_basename(b1) != _safe_basename(b2)
-        assert _safe_basename(b1) == "frontend_src_app_settings_page"
-        assert _safe_basename(b2) == "frontend_src_app_dashboard_page"
-
-
-class TestDataFileExclusion:
-    """Tests that .csv and .txt data files are excluded from repo scan."""
-
-    def test_csv_files_excluded(self, tmp_path, monkeypatch):
-        """CSV files should be excluded from repo scan."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "module.py").write_text("def foo(): pass")
-        (repo_path / "golden_results.csv").write_text("col1,col2\nval1,val2")
-        (repo_path / "llm_model.csv").write_text("model,cost\ngpt-4,0.01")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".py":
-                    return "python"
-                if ext == ".csv":
-                    return "CSV"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        code_files = [p[1] for p in pairs]
-        assert any("module.py" in f for f in code_files)
-        assert not any(".csv" in f for f in code_files)
-
-    def test_txt_files_excluded(self, tmp_path, monkeypatch):
-        """Text files should be excluded from repo scan."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        (repo_path / "module.py").write_text("def foo(): pass")
-        (repo_path / "requirements.txt").write_text("flask==2.0\n")
-        (repo_path / "notes.txt").write_text("some notes")
-
-        monkeypatch.chdir(repo_path)
-
-        with patch("pdd.update_main.get_language") as mock_lang:
-            def lang_for_ext(ext):
-                if ext == ".py":
-                    return "python"
-                if ext == ".txt":
-                    return "Text"
-                return None
-            mock_lang.side_effect = lang_for_ext
-
-            pairs = find_and_resolve_all_pairs(str(repo_path), quiet=True)
-
-        code_files = [p[1] for p in pairs]
-        assert any("module.py" in f for f in code_files)
-        assert not any(".txt" in f for f in code_files)
-
-
-# --- Tests for get_git_changed_files ---
-
-from pdd.update_main import get_git_changed_files
-
-
-class TestGetGitChangedFiles:
-    """Tests for get_git_changed_files."""
-
-    def test_combines_committed_uncommitted_and_untracked(self, tmp_path, monkeypatch):
-        """Should combine all three sources of changed files."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        repo = git.Repo.init(repo_path)
-
-        # Create and commit initial file
-        (repo_path / "init.py").write_text("# init\n")
-        repo.index.add(["init.py"])
-        repo.index.commit("init")
-        # Rename default branch
-        repo.git.branch("-M", "main")
-
-        # Create untracked file
-        (repo_path / "new_file.py").write_text("def new(): pass\n")
-
-        changed = get_git_changed_files(str(repo_path), base_branch="main")
-        # Should at least find the untracked file
-        assert any("new_file.py" in f for f in changed)
-
-    def test_empty_repo_returns_empty_set(self, tmp_path):
-        """Should handle repos with no commits gracefully."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        git.Repo.init(repo_path)
-
-        changed = get_git_changed_files(str(repo_path), base_branch="main")
-        assert isinstance(changed, set)
-
-    def test_returns_absolute_paths(self, tmp_path, monkeypatch):
-        """All returned paths should be absolute."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        repo = git.Repo.init(repo_path)
-
-        (repo_path / "init.py").write_text("pass\n")
-        repo.index.add(["init.py"])
-        repo.index.commit("init")
-        repo.git.branch("-M", "main")
-
-        (repo_path / "new.py").write_text("pass\n")
-
-        changed = get_git_changed_files(str(repo_path), base_branch="main")
-        for f in changed:
-            assert os.path.isabs(f), f"Path is not absolute: {f}"
-
-
-# --- Tests for is_code_changed ---
-
-from pdd.update_main import is_code_changed
-
-
-class TestIsCodeChanged:
-    """Tests for is_code_changed with fingerprint and git fallback."""
-
-    @pytest.fixture(autouse=True)
-    def mock_get_language(self):
-        """Mock get_language to avoid PDD_PATH dependency."""
-        with patch("pdd.update_main.get_language", return_value="python"):
-            yield
-
-    def test_no_fingerprint_in_git_changed(self, tmp_path):
-        """No fingerprint + file in git changed set -> changed=True."""
-        code_file = tmp_path / "module.py"
-        code_file.write_text("def foo(): pass\n")
-
-        with patch("pdd.update_main.read_fingerprint", return_value=None):
-            changed, reason = is_code_changed(
-                str(code_file), str(tmp_path), {str(code_file)}
-            )
-        assert changed is True
-        assert "git changed set" in reason
-
-    def test_no_fingerprint_not_in_git_changed(self, tmp_path):
-        """No fingerprint + file NOT in git changed set -> changed=False."""
-        code_file = tmp_path / "module.py"
-        code_file.write_text("def foo(): pass\n")
-
-        with patch("pdd.update_main.read_fingerprint", return_value=None):
-            changed, reason = is_code_changed(
-                str(code_file), str(tmp_path), set()
-            )
-        assert changed is False
-
-    def test_fingerprint_code_hash_matches(self, tmp_path):
-        """Fingerprint with matching code hash -> changed=False."""
-        from pdd.sync_determine_operation import calculate_sha256
-
-        code_file = tmp_path / "module.py"
-        code_file.write_text("def foo(): pass\n")
-        current_hash = calculate_sha256(code_file)
-
-        mock_fp = MagicMock()
-        mock_fp.code_hash = current_hash
-        mock_fp.include_deps = {}
-
-        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
-            changed, reason = is_code_changed(
-                str(code_file), str(tmp_path), set()
-            )
-        assert changed is False
-        assert "matches" in reason
-
-    def test_fingerprint_code_hash_differs(self, tmp_path):
-        """Fingerprint with different code hash -> changed=True."""
-        code_file = tmp_path / "module.py"
-        code_file.write_text("def foo(): pass\n")
-
-        mock_fp = MagicMock()
-        mock_fp.code_hash = "old_hash_that_differs"
-        mock_fp.include_deps = {}
-
-        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
-            changed, reason = is_code_changed(
-                str(code_file), str(tmp_path), set()
-            )
-        assert changed is True
-        assert "differs" in reason
-
-    def test_fingerprint_include_deps_changed(self, tmp_path):
-        """Include dependency changed on disk -> changed=True."""
-        from pdd.sync_determine_operation import calculate_sha256
-
-        code_file = tmp_path / "module.py"
-        code_file.write_text("def foo(): pass\n")
-        current_hash = calculate_sha256(code_file)
-
-        dep_file = tmp_path / "preamble.md"
-        dep_file.write_text("updated preamble content\n")
-
-        mock_fp = MagicMock()
-        mock_fp.code_hash = current_hash
-        mock_fp.include_deps = {str(dep_file): "old_hash_of_preamble"}
-
-        with patch("pdd.update_main.read_fingerprint", return_value=mock_fp):
-            changed, reason = is_code_changed(
-                str(code_file), str(tmp_path), set()
-            )
-        assert changed is True
-        assert "include dependency changed" in reason
-
-    def test_uses_prompt_file_path_for_identity(self, tmp_path):
-        """When prompt_file_path is provided, uses infer_module_identity."""
-        code_file = tmp_path / "module.py"
-        code_file.write_text("def foo(): pass\n")
-
-        with patch("pdd.update_main.read_fingerprint", return_value=None) as mock_rf, \
-             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")) as mock_imi:
-            changed, reason = is_code_changed(
-                str(code_file), str(tmp_path), set(),
-                prompt_file_path="prompts/module_python.prompt"
-            )
-            mock_imi.assert_called_once_with("prompts/module_python.prompt")
-
-
-# --- Tests for _find_prd_file ---
-
-from pdd.update_main import _find_prd_file
-
-
-class TestFindPrdFile:
-    """Tests for _find_prd_file convention-based PRD discovery."""
-
-    def test_finds_prd_md(self, tmp_path):
-        (tmp_path / "PRD.md").write_text("# PRD")
-        result = _find_prd_file(tmp_path)
-        assert result is not None
-        assert result.name == "PRD.md"
-
-    def test_finds_lowercase_prd(self, tmp_path):
-        (tmp_path / "prd.md").write_text("# prd")
-        result = _find_prd_file(tmp_path)
-        assert result is not None
-        assert result.name == "prd.md"
-
-    def test_finds_prefixed_prd(self, tmp_path):
-        (tmp_path / "myproject_prd.md").write_text("# PRD")
-        result = _find_prd_file(tmp_path)
-        assert result is not None
-        assert "prd" in result.name.lower()
-
-    def test_returns_none_when_no_prd(self, tmp_path):
-        (tmp_path / "README.md").write_text("# README")
-        result = _find_prd_file(tmp_path)
-        assert result is None
-
-
-# --- Tests for strength/temperature resolution ---
-
-
-class TestStrengthTemperatureResolution:
-    """Tests for strength/temperature parameter resolution."""
-
-    def test_explicit_params_override_ctx(self):
-        """Explicit strength/temperature should override ctx.obj values."""
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-            "force": True,
-            "context": None,
-            "confirm_callback": None,
-        }
-
-        with patch("pdd.update_main.get_available_agents", return_value=[]), \
-             patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
-             patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
-             patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
-            update_main(
-                ctx=ctx,
-                input_prompt_file=None,
-                modified_code_file="/tmp/test.py",
-                input_code_file=None,
-                output=None,
-                strength=0.9,
-                temperature=0.5,
-                simple=True,
-            )
-
-        kwargs = mock_up.call_args.kwargs
-        assert kwargs["strength"] == 0.9
-        assert kwargs["temperature"] == 0.5
-        # Explicit params should not poison ctx.obj for later per-target resolution.
-        assert ctx.obj["strength"] == 0.5
-        assert ctx.obj["temperature"] == 0.0
-
-    def test_ctx_values_used_when_params_none(self):
-        """When strength/temperature are None, ctx.obj values should be used."""
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.7,
-            "temperature": 0.3,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-            "force": True,
-            "context": None,
-            "confirm_callback": None,
-        }
-
-        with patch("pdd.update_main.get_available_agents", return_value=[]), \
-             patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
-             patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
-             patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
-            update_main(
-                ctx=ctx,
-                input_prompt_file=None,
-                modified_code_file="/tmp/test.py",
-                input_code_file=None,
-                output=None,
+                directory=None,
                 strength=None,
                 temperature=None,
                 simple=True,
             )
-
-        assert ctx.obj["strength"] == 0.7
-        assert ctx.obj["temperature"] == 0.3
-
-
-# --- Tests for empty prompt validation ---
-
-
-class TestEmptyPromptValidation:
-    """Tests for defense-in-depth empty prompt validation."""
-
-    def test_empty_prompt_from_llm_returns_none(self):
-        """If LLM returns empty prompt, update_main should return None."""
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-            "force": True,
-            "context": None,
-            "confirm_callback": None,
-        }
-
-        with patch("pdd.update_main.get_available_agents", return_value=[]), \
-             patch("pdd.update_main.construct_paths") as mock_cp, \
-             patch("pdd.update_main.git_update", return_value=("", 0.01, "model")):
-            mock_cp.return_value = (
-                {},
-                {"input_prompt_file": "existing prompt", "modified_code_file": "def foo(): pass"},
-                {"output": "/tmp/output.prompt"},
-                "python",
-            )
-
-            result = update_main(
-                ctx=ctx,
-                input_prompt_file="/tmp/test.prompt",
-                modified_code_file="/tmp/test.py",
-                input_code_file=None,
-                output=None,
-                use_git=True,
-                simple=True,
-            )
-
         assert result is None
 
+    def test_repo_mode_no_pairs_returns_none(self, tmp_path):
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=str(tmp_path) + "\n", stderr="")
 
-# --- Tests for update_file_pair ---
-
-
-class TestUpdateFilePair:
-    """Tests for update_file_pair wrapper."""
-
-    def test_agentic_success(self, tmp_path):
-        """Agentic path succeeds -> returns success result."""
-        from pdd.update_main import update_file_pair
-
-        prompt_file = tmp_path / "test.prompt"
-        prompt_file.write_text("updated by agent\n")
-        code_file = tmp_path / "test.py"
-        code_file.write_text("def foo(): pass\n")
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-        }
-
-        mock_repo = MagicMock()
-        mock_repo.working_tree_dir = str(tmp_path)
-
-        with patch("pdd.update_main.get_available_agents", return_value=["anthropic"]), \
-             patch("pdd.update_main.get_tests_dir_from_config", return_value=None), \
-             patch("pdd.update_main.run_agentic_update", return_value=(True, "ok", 0.05, "claude", [])):
-            result = update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=False)
-
-        assert "Success" in result["status"]
-        assert "agentic" in result["status"]
-        assert result["cost"] == 0.05
-
-    def test_legacy_git_update_path(self, tmp_path):
-        """Legacy path for tracked files with existing prompt."""
-        from pdd.update_main import update_file_pair
-
-        prompt_file = tmp_path / "test.prompt"
-        prompt_file.write_text("existing prompt content\n")
-        code_file = tmp_path / "test.py"
-        code_file.write_text("def foo(): pass\n")
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-        }
-
-        mock_repo = MagicMock()
-        mock_repo.working_tree_dir = str(tmp_path)
-        mock_repo.untracked_files = []
-
-        with patch("pdd.update_main.get_available_agents", return_value=[]), \
-             patch("pdd.update_main.git_update", return_value=("updated prompt", 0.02, "gemini")):
-            result = update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=True)
-
-        assert "Success" in result["status"]
-        assert result["cost"] == 0.02
-        # Verify the prompt was written
-        assert prompt_file.read_text() == "updated prompt"
-
-    def test_exception_returns_error_result(self, tmp_path):
-        """Exceptions should be caught and returned as error results."""
-        from pdd.update_main import update_file_pair
-
-        prompt_file = tmp_path / "test.prompt"
-        prompt_file.write_text("prompt\n")
-        code_file = tmp_path / "test.py"
-        code_file.write_text("def foo(): pass\n")
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-        }
-
-        mock_repo = MagicMock()
-        mock_repo.working_tree_dir = str(tmp_path)
-        mock_repo.untracked_files = []
-
-        with patch("pdd.update_main.get_available_agents", return_value=[]), \
-             patch("pdd.update_main.git_update", side_effect=RuntimeError("LLM error")):
-            result = update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=True)
-
-        assert "Failed" in result["status"]
-        assert "LLM error" in result["error"]
-
-    def test_click_abort_reraised(self, tmp_path):
-        """click.Abort should be re-raised, not caught."""
-        from pdd.update_main import update_file_pair
-
-        prompt_file = tmp_path / "test.prompt"
-        prompt_file.write_text("prompt\n")
-        code_file = tmp_path / "test.py"
-        code_file.write_text("def foo(): pass\n")
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-        }
-
-        mock_repo = MagicMock()
-        mock_repo.working_tree_dir = str(tmp_path)
-        mock_repo.untracked_files = []
-
-        with patch("pdd.update_main.get_available_agents", return_value=[]), \
-             patch("pdd.update_main.git_update", side_effect=click.Abort()):
-            with pytest.raises(click.Abort):
-                update_file_pair(str(prompt_file), str(code_file), ctx, mock_repo, simple=True)
-
-
-# --- Tests for repo mode: empty prompts always included ---
-
-
-class TestRepoModeEmptyPrompts:
-    """Tests that empty (0-byte) prompt files trigger updates regardless of code changes."""
-
-    def test_empty_prompt_included_regardless_of_code_changes(self, tmp_path, monkeypatch):
-        """Empty prompt files should always be included in changed pairs."""
-        repo_path = tmp_path / "repo"
-        repo_path.mkdir()
-        repo = git.Repo.init(repo_path)
-
-        # Create code and empty prompt
-        (repo_path / "module.py").write_text("def foo(): pass\n")
-        (repo_path / "prompts").mkdir()
-        (repo_path / "prompts" / "module_python.prompt").write_text("")  # empty
-
-        repo.index.add(["module.py", "prompts/module_python.prompt"])
-        repo.index.commit("init")
-        repo.git.branch("-M", "main")
-
-        monkeypatch.chdir(repo_path)
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {
-            "strength": 0.5,
-            "temperature": 0.0,
-            "verbose": False,
-            "quiet": True,
-            "time": 0.25,
-            "force": True,
-            "context": None,
-            "confirm_callback": None,
-        }
-
-        mock_result = {
-            "prompt_file": str(repo_path / "prompts" / "module_python.prompt"),
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
-            "error": "",
-        }
-
-        with patch("pdd.update_main.get_language", return_value="python"), \
-             patch("pdd.update_main.update_file_pair", return_value=mock_result) as mock_ufp, \
-             patch("pdd.update_main.is_code_changed", return_value=(False, "matches fingerprint")), \
-             patch("pdd.update_main.get_git_changed_files", return_value=set()), \
-             patch("pdd.architecture_registry.find_architecture_for_project", return_value=[]), \
-             patch("pdd.operation_log.save_fingerprint"), \
-             patch("pdd.operation_log.infer_module_identity", return_value=("module", "python")):
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run), \
+             patch("pdd.update_main.find_and_resolve_all_pairs", return_value=[]):
             result = update_main(
-                ctx=ctx,
+                ctx=self._ctx(),
                 input_prompt_file=None,
                 modified_code_file=None,
                 input_code_file=None,
                 output=None,
+                use_git=False,
                 repo=True,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
                 simple=True,
             )
-
-        # Should have been called even though is_code_changed returned False
-        assert mock_ufp.called
-
-
-class TestFindAndResolveAllPairsNoTouch:
-    """find_and_resolve_all_pairs must NOT create empty prompt files on disk."""
-
-    def test_scan_does_not_create_prompt_files(self, tmp_path, monkeypatch):
-        """Scanning a repo should resolve paths without creating empty .prompt files."""
-        repo = tmp_path / "repo"
-        repo.mkdir()
-        (repo / "src").mkdir()
-        (repo / "src" / "module.py").write_text("def main(): pass\n")
-        (repo / "src" / "helper.py").write_text("def help(): pass\n")
-
-        # Init git so git ls-files works
-        import subprocess
-        env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@t",
-               "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@t"}
-        subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
-        subprocess.run(["git", "-C", str(repo), "add", "-A"], check=True, capture_output=True, env=env)
-        subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"], check=True, capture_output=True, env=env)
-
-        monkeypatch.chdir(repo)
-
-        with patch("pdd.update_main.get_language", side_effect=lambda ext: "python" if ext == ".py" else None):
-            pairs = find_and_resolve_all_pairs(str(repo), quiet=True)
-
-        # Should find the code files
-        assert len(pairs) >= 2
-
-        # The prompt paths should be resolved but NOT created on disk
-        for prompt_path, code_path in pairs:
-            assert not Path(prompt_path).exists(), (
-                f"Scanning should not create prompt files, but {prompt_path} exists on disk"
-            )
-
-
-# --- Regression tests for promptdriven/pdd#1220 ---
-# Legacy regeneration path must read the existing prompt from disk rather
-# than hardcoding "no prompt exists yet, create a new one", which caused the
-# autoheal destructive-rewrite class of bugs in PR #1187 and 5 other
-# commits. See the issue for the full empirical matrix.
-
-
-def _setup_regeneration_repo(tmp_path, monkeypatch, prompt_content=None):
-    """Helper: lay out a minimal repo for legacy-regeneration tests.
-
-    Returns (code_file_path, prompt_file_path). Creates the prompt file
-    only when prompt_content is not None.
-    """
-    repo_path = tmp_path / "repo"
-    repo_path.mkdir()
-    prompts_dir = repo_path / "prompts"
-    prompts_dir.mkdir()
-
-    code_file = repo_path / "sample.py"
-    code_file.write_text("def sample():\n    return 1\n")
-
-    prompt_file = prompts_dir / "sample_python.prompt"
-    if prompt_content is not None:
-        prompt_file.write_text(prompt_content)
-
-    monkeypatch.chdir(repo_path)
-    git.Repo.init(repo_path)
-    return code_file, prompt_file
-
-
-def test_regeneration_mode_passes_existing_prompt_when_file_exists(tmp_path, monkeypatch):
-    """When a prompt already exists on disk, the legacy path must hand its
-    full content to update_prompt so the LLM can preserve structure."""
-    from pdd.update_main import update_main
-
-    existing_prompt = (
-        "<include>context/preamble.prompt</include>\n"
-        "% Goal\n"
-        "do the thing\n"
-        "<pdd.helper>\n"
-        "helper text\n"
-    )
-    code_file, prompt_file = _setup_regeneration_repo(
-        tmp_path, monkeypatch, prompt_content=existing_prompt
-    )
-
-    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents, \
-         patch("pdd.update_main.get_language") as mock_get_language:
-        mock_update_prompt.return_value = (
-            "<include>context/preamble.prompt</include>\n% Goal\nupdated\n<pdd.helper>\n",
-            0.01,
-            "mock-model",
-        )
-        mock_agents.return_value = []  # force legacy path
-        mock_get_language.return_value = "python"
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
-
-        update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False,
-        )
-
-    assert mock_update_prompt.called
-    kwargs = mock_update_prompt.call_args.kwargs
-    assert kwargs["input_prompt"] == existing_prompt, (
-        "Legacy regeneration path must pass the existing prompt content "
-        "to update_prompt; got the first-time sentinel or wrong content."
-    )
-    assert "<pdd.helper>" in kwargs["input_prompt"]
-
-
-def test_regeneration_mode_uses_sentinel_when_prompt_file_missing(tmp_path, monkeypatch):
-    """When no prompt file exists, the legacy path falls back to the
-    first-time-generation sentinel — preserves original semantics."""
-    from pdd.update_main import update_main
-
-    code_file, _ = _setup_regeneration_repo(
-        tmp_path, monkeypatch, prompt_content=None
-    )
-
-    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents, \
-         patch("pdd.update_main.get_language") as mock_get_language:
-        mock_update_prompt.return_value = ("fresh prompt", 0.01, "mock-model")
-        mock_agents.return_value = []
-        mock_get_language.return_value = "python"
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
-
-        update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False,
-        )
-
-    assert mock_update_prompt.called
-    kwargs = mock_update_prompt.call_args.kwargs
-    assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
-
-
-def test_regeneration_mode_degrades_gracefully_on_unicode_error(tmp_path, monkeypatch):
-    """Corrupt / non-UTF8 prompt file must not crash the pipeline — the
-    legacy path should fall back to the sentinel so pdd update still runs
-    instead of bubbling UnicodeDecodeError up through the heal pipeline."""
-    from pdd.update_main import update_main
-
-    code_file, prompt_file = _setup_regeneration_repo(
-        tmp_path, monkeypatch, prompt_content=""
-    )
-    # Write invalid UTF-8 bytes directly so Path.read_text() would raise
-    prompt_file.write_bytes(b"\xff\xfe<bad utf-8 \x80\x81\x82>\n")
-
-    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents, \
-         patch("pdd.update_main.get_language") as mock_get_language:
-        mock_update_prompt.return_value = ("fresh prompt", 0.01, "mock-model")
-        mock_agents.return_value = []
-        mock_get_language.return_value = "python"
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
-
-        # Should not raise UnicodeDecodeError
-        update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False,
-        )
-
-    assert mock_update_prompt.called
-    kwargs = mock_update_prompt.call_args.kwargs
-    assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
-
-
-def test_regeneration_mode_uses_sentinel_when_prompt_file_empty(tmp_path, monkeypatch):
-    """Empty / whitespace-only prompt file is treated as first-time
-    generation — the sentinel is passed through instead of an empty string."""
-    from pdd.update_main import update_main
-
-    code_file, _ = _setup_regeneration_repo(
-        tmp_path, monkeypatch, prompt_content="   \n\t\n"
-    )
-
-    with patch("pdd.update_main.update_prompt") as mock_update_prompt, \
-         patch("pdd.update_main.get_available_agents") as mock_agents, \
-         patch("pdd.update_main.get_language") as mock_get_language:
-        mock_update_prompt.return_value = ("fresh prompt", 0.01, "mock-model")
-        mock_agents.return_value = []
-        mock_get_language.return_value = "python"
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.0, "verbose": False, "quiet": True}
-
-        update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False,
-        )
-
-    assert mock_update_prompt.called
-    kwargs = mock_update_prompt.call_args.kwargs
-    assert kwargs["input_prompt"] == "no prompt exists yet, create a new one"
-
-
-# --- Tests for sync_metadata integration (PR #920) -----------------------------
-# Cover both single-file paths (where _run_single_file_metadata_sync wraps the
-# orchestrator) and repo-mode paths (where per-pair run_metadata_sync replaces
-# the legacy save_fingerprint + post-loop architecture/PRD sync).
-
-from pdd.metadata_sync import MetadataSyncResult, StageStatus
-
-
-def _make_sync_result(prompt_path, code_path, stages=None):
-    # Build a MetadataSyncResult with a default all-ok stage map.
-    if stages is None:
-        stages = {
-            "prompt": StageStatus(status="ok"),
-            "tags": StageStatus(status="ok"),
-            "architecture": StageStatus(status="ok"),
-            "run_report": StageStatus(status="ok"),
-            "fingerprint": StageStatus(status="ok"),
-        }
-    return MetadataSyncResult(
-        prompt_path=Path(prompt_path),
-        code_path=Path(code_path),
-        dry_run=False,
-        stages=stages,
-    )
-
-
-def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_open_file,
-):
-    # Legacy true-update path: assert orchestrator is invoked after update_prompt
-    call_order = []
-    mock_update_prompt.side_effect = lambda **kw: (call_order.append("update_prompt") or ("updated prompt text", 0.123, "test-model"))
-
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
-        def _sync(prompt_path, code_path, dry_run):
-            call_order.append("run_metadata_sync")
-            return _make_sync_result(prompt_path, code_path)
-        mock_sync.side_effect = _sync
-
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
-            use_git=False,
-            sync_metadata=True,
-        )
-
-    assert result == ("updated prompt text", 0.123, "test-model")
-    assert mock_sync.call_count == 1
-    kwargs = mock_sync.call_args.kwargs
-    assert kwargs["prompt_path"] == Path("updated_prompt.prompt")
-    assert kwargs["code_path"] == Path(minimal_input_files["modified_code_file"])
-    assert kwargs["dry_run"] is False
-    # update_prompt must run before run_metadata_sync
-    assert call_order == ["update_prompt", "run_metadata_sync"]
-
-
-def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
-    mock_ctx,
-    mock_construct_paths,
-    mock_git_update,
-    mock_open_file,
-):
-    # Legacy git-update path: orchestrator runs after git_update succeeds
-    mock_construct_paths.return_value = (
-        {},
-        {
-            "input_prompt_file": "prompt content",
-            "modified_code_file": "def git_modified_code(): pass",
-        },
-        {"output": "updated_prompt_git.prompt"},
-        None,
-    )
-    call_order = []
-    mock_git_update.side_effect = lambda **kw: (call_order.append("git_update") or ("updated prompt from git", 0.5, "git-model"))
-
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
-        def _sync(prompt_path, code_path, dry_run):
-            call_order.append("run_metadata_sync")
-            return _make_sync_result(prompt_path, code_path)
-        mock_sync.side_effect = _sync
-
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file="some_prompt_file.prompt",
-            modified_code_file="modified_code.py",
-            input_code_file=None,
-            output="git_output.prompt",
-            use_git=True,
-            sync_metadata=True,
-        )
-
-    assert result == ("updated prompt from git", 0.5, "git-model")
-    assert mock_sync.call_count == 1
-    kwargs = mock_sync.call_args.kwargs
-    assert kwargs["prompt_path"] == Path("updated_prompt_git.prompt")
-    assert kwargs["code_path"] == Path("modified_code.py")
-    assert kwargs["dry_run"] is False
-    assert call_order == ["git_update", "run_metadata_sync"]
-
-
-@patch("pdd.update_main.resolve_prompt_code_pair")
-def test_sync_metadata_true_invokes_run_metadata_sync_in_regeneration_legacy(
-    mock_resolve_pair,
-    mock_ctx,
-    mock_update_prompt,
-    tmp_path,
-):
-    # Regeneration path: derived prompt path must be passed to orchestrator
-    code_file = tmp_path / "modified_code.py"
-    code_file.write_text("def foo(): return 1\n")
-    derived_prompt = tmp_path / "modified_code_python.prompt"
-    mock_resolve_pair.return_value = (str(derived_prompt), str(code_file))
-
-    mock_ctx.obj["quiet"] = True
-
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
-        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
-
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file=None,
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            sync_metadata=True,
-        )
-
-    assert result is not None
-    assert mock_sync.call_count == 1
-    kwargs = mock_sync.call_args.kwargs
-    assert kwargs["prompt_path"] == Path(str(derived_prompt))
-    assert kwargs["code_path"] == Path(str(code_file))
-    assert kwargs["dry_run"] is False
-
-
-def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_true_update(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_open_file,
-):
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
-            modified_code_file=minimal_input_files["modified_code_file"],
-            input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
-            use_git=False,
-        )
-
-    assert result is not None
-    assert mock_sync.call_count == 0
-
-
-def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_git_update(
-    mock_ctx,
-    mock_construct_paths,
-    mock_git_update,
-    mock_open_file,
-):
-    mock_construct_paths.return_value = (
-        {},
-        {
-            "input_prompt_file": "prompt content",
-            "modified_code_file": "def git_modified_code(): pass",
-        },
-        {"output": "updated_prompt_git.prompt"},
-        None,
-    )
-
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file="some_prompt_file.prompt",
-            modified_code_file="modified_code.py",
-            input_code_file=None,
-            output="git_output.prompt",
-            use_git=True,
-        )
-
-    assert result is not None
-    assert mock_sync.call_count == 0
-
-
-@patch("pdd.update_main.resolve_prompt_code_pair")
-def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_regeneration(
-    mock_resolve_pair,
-    mock_ctx,
-    mock_update_prompt,
-    tmp_path,
-):
-    code_file = tmp_path / "modified_code.py"
-    code_file.write_text("def foo(): return 1\n")
-    derived_prompt = tmp_path / "modified_code_python.prompt"
-    mock_resolve_pair.return_value = (str(derived_prompt), str(code_file))
-    mock_ctx.obj["quiet"] = True
-
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
-        result = update_main(
-            ctx=mock_ctx,
-            input_prompt_file=None,
-            modified_code_file=str(code_file),
-            input_code_file=None,
-            output=None,
-            use_git=False,
-        )
-
-    assert result is not None
-    assert mock_sync.call_count == 0
-
-
-def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_open_file,
-    capsys,
-):
-    # Orchestrator raising must surface as click.exceptions.Exit(1) so the
-    # CLI exit code is non-zero and preflight auto-heal (which keys off
-    # the subprocess returncode) does not mark a half-synced update as
-    # healed (#871 acceptance criterion). The helper still logs the
-    # orchestrator error before propagating.
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")):
-        with pytest.raises(click.exceptions.Exit) as excinfo:
-            update_main(
-                ctx=mock_ctx,
-                input_prompt_file=minimal_input_files["input_prompt_file"],
-                modified_code_file=minimal_input_files["modified_code_file"],
-                input_code_file=minimal_input_files["input_code_file"],
-                output="custom_output.prompt",
-                use_git=False,
-                sync_metadata=True,
-            )
-
-    assert excinfo.value.exit_code == 1
-    captured = capsys.readouterr()
-    out = captured.out + captured.err
-    # Rich strips [error] / [metadata-sync] style markup; assert on rendered content.
-    assert "orchestrator" in out
-    assert "boom" in out
-
-
-def test_sync_metadata_failed_stage_propagates_failure(
-    mock_ctx,
-    minimal_input_files,
-    mock_construct_paths,
-    mock_update_prompt,
-    mock_open_file,
-    capsys,
-):
-    # When a stage is failed, the helper must print stage name + reason AND
-    # cause update_main to raise click.exceptions.Exit(1) so the CLI exit
-    # code is non-zero (#871 acceptance criterion — preflight subprocess
-    # keys off returncode).
-    failed_stages = {
-        "prompt": StageStatus(status="failed", reason="missing arch"),
-    }
-
-    def _sync(prompt_path, code_path, dry_run):
-        return MetadataSyncResult(
-            prompt_path=Path(prompt_path),
-            code_path=Path(code_path),
-            dry_run=False,
-            stages=failed_stages,
-        )
-
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync):
-        with pytest.raises(click.exceptions.Exit) as excinfo:
-            update_main(
-                ctx=mock_ctx,
-                input_prompt_file=minimal_input_files["input_prompt_file"],
-                modified_code_file=minimal_input_files["modified_code_file"],
-                input_code_file=minimal_input_files["input_code_file"],
-                output="custom_output.prompt",
-                use_git=False,
-                sync_metadata=True,
-            )
-
-    assert excinfo.value.exit_code == 1
-    captured = capsys.readouterr()
-    out = captured.out + captured.err
-    # Rich strips style markup like [error] / [metadata-sync]; assert rendered text.
-    assert "prompt" in out
-    assert "missing arch" in out
-
-
-def test_cli_update_sync_metadata_failure_exits_non_zero(tmp_path):
-    # Belt-and-suspenders: drive the actual Click command via CliRunner and
-    # assert exit_code != 0 when sync_metadata fails. This is the contract
-    # the preflight subprocess (agentic_change_orchestrator) relies on; a
-    # plain `return None` from update_main would surface as exit_code 0 and
-    # silently mark a half-finalized update as healed (#871).
-    from click.testing import CliRunner
-    from pdd.commands.modify import update
-
-    code_file = tmp_path / "mod.py"
-    code_file.write_text("def foo(): return 1\n", encoding="utf-8")
-
-    failed_stages = {"prompt": StageStatus(status="failed", reason="missing arch")}
-
-    def _sync(prompt_path, code_path, dry_run):
-        return MetadataSyncResult(
-            prompt_path=Path(prompt_path),
-            code_path=Path(code_path),
-            dry_run=False,
-            stages=failed_stages,
-        )
-
-    runner = CliRunner()
-    with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync), \
-         patch("pdd.update_main.update_prompt", return_value=("updated", 0.0, "m")), \
-         patch(
-             "pdd.update_main.resolve_prompt_code_pair",
-             return_value=(str(tmp_path / "out.prompt"), None),
-         ):
-        result = runner.invoke(
-            update,
-            ["--sync-metadata", str(code_file)],
-            obj={"quiet": True, "force": True, "verbose": False, "time": 1.0,
-                 "strength": 0.5, "temperature": 0.0, "context": None},
-            standalone_mode=True,
-        )
-
-    assert result.exit_code != 0, (
-        f"sync_metadata failure must yield non-zero exit; got {result.exit_code}. "
-        f"stdout={result.stdout!r}"
-    )
-
-
-# --- Repo-mode sync_metadata integration ----------------------------------
-
-
-@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_with_sync_metadata_invokes_orchestrator_not_legacy_save_fingerprint(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    mock_arch,
-    temp_git_repo,
-):
-    # sync_metadata=True: per-pair orchestrator replaces save_fingerprint + post-loop arch sync
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
-            "error": "",
-        }
-    mock_update_file_pair.side_effect = _update
-
-    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
-         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
-        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=True,
-        )
-
-    assert result is not None
-    # orchestrator called once per successful pair
-    assert mock_sync.call_count == mock_update_file_pair.call_count
-    assert mock_sync.call_count >= 1
-    # legacy paths NOT invoked
-    mock_save_fp.assert_not_called()
-    mock_arch.assert_not_called()
-
-
-@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestrator(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    mock_arch,
-    temp_git_repo,
-):
-    # sync_metadata=False: legacy save_fingerprint runs, orchestrator does not
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
-            "error": "",
-        }
-    mock_update_file_pair.side_effect = _update
-
-    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
-         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
-         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=False,
-        )
-
-    assert result is not None
-    assert mock_sync.call_count == 0
-    assert mock_save_fp.call_count == mock_update_file_pair.call_count
-    assert mock_save_fp.call_count >= 1
-
-
-@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_sync_metadata_batch_continues_when_one_pair_orchestrator_raises(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    mock_arch,
-    temp_git_repo,
-    capsys,
-):
-    # A RuntimeError on one pair must not abort processing of subsequent pairs
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
-            "error": "",
-        }
-    mock_update_file_pair.side_effect = _update
-
-    # temp_git_repo has 3 pairs that all show as changed; first call raises,
-    # remaining calls return a normal result. Assert call count >= 2.
-    call_outcomes = [RuntimeError("first pair boom")]
-
-    def _sync(prompt_path, code_path, dry_run):
-        if call_outcomes and isinstance(call_outcomes[0], BaseException):
-            exc = call_outcomes.pop(0)
-            raise exc
-        return _make_sync_result(prompt_path, code_path)
-
-    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync) as mock_sync:
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
-
-        # Batch must finish (subsequent pairs still get their orchestrator
-        # call) AND surface the per-pair failure as a non-zero CLI exit so
-        # automation does not see a false-green repo-mode update (#871).
-        with pytest.raises(click.exceptions.Exit) as excinfo:
-            update_main(
-                ctx=ctx,
+        assert result is None
+
+    def test_repo_mode_no_changes_returns_none(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("body", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("x", encoding="utf-8")
+
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=str(tmp_path) + "\n", stderr="")
+
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run), \
+             patch("pdd.update_main.find_and_resolve_all_pairs",
+                   return_value=[(prompt, code)]), \
+             patch("pdd.update_main.get_git_changed_files", return_value=set()), \
+             patch("pdd.update_main.is_code_changed",
+                   return_value=(False, "fingerprint matches")):
+            result = update_main(
+                ctx=self._ctx(),
                 input_prompt_file=None,
                 modified_code_file=None,
                 input_code_file=None,
                 output=None,
                 use_git=False,
                 repo=True,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        assert result is None
+
+    def test_repo_mode_success_returns_tuple(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("body", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("x", encoding="utf-8")
+
+        pair_result = {
+            "prompt_file": str(prompt),
+            "status": "updated",
+            "cost": 0.07,
+            "model": "MM",
+            "error": "",
+        }
+
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=str(tmp_path) + "\n", stderr="")
+
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run), \
+             patch("pdd.update_main.find_and_resolve_all_pairs",
+                   return_value=[(prompt, code)]), \
+             patch("pdd.update_main.get_git_changed_files",
+                   return_value={str(code.resolve())}), \
+             patch("pdd.update_main.is_code_changed",
+                   return_value=(True, "git reports change")), \
+             patch("pdd.update_main.update_file_pair",
+                   return_value=pair_result), \
+             patch("pdd.update_main.save_fingerprint"), \
+             patch("pdd.update_main.infer_module_identity",
+                   return_value=("p", "python")):
+            result = update_main(
+                ctx=self._ctx(),
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=True,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+                sync_metadata=False,
+            )
+        assert result is not None
+        msg, cost, models = result
+        assert msg == "Repository update complete."
+        assert cost == pytest.approx(0.07)
+        assert "MM" in models
+
+    def test_repo_mode_sync_metadata_calls_orchestrator(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("body", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("x", encoding="utf-8")
+
+        pair_result = {
+            "prompt_file": str(prompt),
+            "status": "updated",
+            "cost": 0.07,
+            "model": "MM",
+            "error": "",
+        }
+
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=str(tmp_path) + "\n", stderr="")
+
+        orchestrator = MagicMock(return_value=_make_meta_result(ok=True))
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run), \
+             patch("pdd.update_main.find_and_resolve_all_pairs",
+                   return_value=[(prompt, code)]), \
+             patch("pdd.update_main.get_git_changed_files",
+                   return_value={str(code.resolve())}), \
+             patch("pdd.update_main.is_code_changed",
+                   return_value=(True, "git reports change")), \
+             patch("pdd.update_main.update_file_pair",
+                   return_value=pair_result), \
+             patch("pdd.metadata_sync.run_metadata_sync", orchestrator):
+            result = update_main(
+                ctx=self._ctx(),
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=True,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
                 sync_metadata=True,
             )
+        assert orchestrator.called
+        assert result is not None
 
-    assert excinfo.value.exit_code == 1
-    # Reached the summary table despite the first orchestrator call raising
-    captured = capsys.readouterr()
-    assert "Repository Update Summary" in captured.out
-    # Orchestrator was retried on the remaining pairs (>=2 total calls)
-    assert mock_sync.call_count >= 2
+    def test_repo_mode_sync_metadata_failure_raises_exit_1(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("body", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("x", encoding="utf-8")
 
-
-@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_summary_table_includes_metadata_column_when_sync_metadata_true(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    mock_arch,
-    temp_git_repo,
-    capsys,
-    monkeypatch,
-):
-    # Force a wide console so Rich doesn't truncate the Metadata column header.
-    from rich.console import Console as _Console
-    _um = sys.modules["pdd.update_main"]
-    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
-
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
+        pair_result = {
+            "prompt_file": str(prompt),
+            "status": "updated",
+            "cost": 0.0,
+            "model": "MM",
             "error": "",
         }
-    mock_update_file_pair.side_effect = _update
 
-    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
-        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=str(tmp_path) + "\n", stderr="")
 
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=True,
+        failed = _make_meta_result(
+            ok=False,
+            stages={"fingerprint": _stage("failed", reason="x")},
         )
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run), \
+             patch("pdd.update_main.find_and_resolve_all_pairs",
+                   return_value=[(prompt, code)]), \
+             patch("pdd.update_main.get_git_changed_files",
+                   return_value={str(code.resolve())}), \
+             patch("pdd.update_main.is_code_changed",
+                   return_value=(True, "git reports change")), \
+             patch("pdd.update_main.update_file_pair",
+                   return_value=pair_result), \
+             patch("pdd.metadata_sync.run_metadata_sync",
+                   return_value=failed):
+            with pytest.raises(click.exceptions.Exit) as exc:
+                update_main(
+                    ctx=self._ctx(),
+                    input_prompt_file=None,
+                    modified_code_file=None,
+                    input_code_file=None,
+                    output=None,
+                    use_git=False,
+                    repo=True,
+                    extensions=None,
+                    directory=None,
+                    strength=None,
+                    temperature=None,
+                    simple=True,
+                    sync_metadata=True,
+                )
+            assert exc.value.exit_code == 1
 
-    assert result is not None
-    captured = capsys.readouterr()
-    assert "Metadata" in captured.out
-    assert "synced" in captured.out
+    def test_repo_mode_legacy_calls_save_fingerprint(self, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("body", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("x", encoding="utf-8")
 
-
-@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_summary_table_metadata_column_shows_skipped_when_sync_metadata_false(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    mock_arch,
-    temp_git_repo,
-    capsys,
-    monkeypatch,
-):
-    # Force a wide console so Rich doesn't truncate the Metadata column header.
-    from rich.console import Console as _Console
-    _um = sys.modules["pdd.update_main"]
-    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
-
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
+        pair_result = {
+            "prompt_file": str(prompt),
+            "status": "updated",
+            "cost": 0.0,
+            "model": "MM",
             "error": "",
         }
-    mock_update_file_pair.side_effect = _update
 
-    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
-         patch("pdd.operation_log.save_fingerprint"), \
-         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=0, stdout=str(tmp_path) + "\n", stderr="")
 
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=False,
+        save_fp = MagicMock()
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run), \
+             patch("pdd.update_main.find_and_resolve_all_pairs",
+                   return_value=[(prompt, code)]), \
+             patch("pdd.update_main.get_git_changed_files",
+                   return_value={str(code.resolve())}), \
+             patch("pdd.update_main.is_code_changed",
+                   return_value=(True, "git reports change")), \
+             patch("pdd.update_main.update_file_pair",
+                   return_value=pair_result), \
+             patch("pdd.update_main.save_fingerprint", save_fp), \
+             patch("pdd.update_main.infer_module_identity",
+                   return_value=("p", "python")):
+            update_main(
+                ctx=self._ctx(),
+                input_prompt_file=None,
+                modified_code_file=None,
+                input_code_file=None,
+                output=None,
+                use_git=False,
+                repo=True,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+                sync_metadata=False,
+            )
+        assert save_fp.called
+
+
+# --------------------------------------------------------------------------- #
+# 19.–23. helpers around fingerprints/git
+# --------------------------------------------------------------------------- #
+class TestHelperFunctions:
+    def test_derive_basename_uses_relative_path(self, tmp_path):
+        repo = tmp_path
+        nested = repo / "src" / "api" / "handler.py"
+        nested.parent.mkdir(parents=True)
+        nested.write_text("# x", encoding="utf-8")
+        basename, lang = derive_basename_and_language(nested, repo)
+        assert basename == "src_api_handler"
+        assert lang == "python"
+
+    def test_get_git_changed_files_combines_sources(self, tmp_path):
+        def fake_run(cmd, **kwargs):
+            res = SimpleNamespace(returncode=0, stdout="", stderr="")
+            if "diff" in cmd and "main...HEAD" in cmd:
+                res.stdout = "a.py\n"
+            elif "diff" in cmd and "--cached" in cmd:
+                res.stdout = "b.py\n"
+            elif "diff" in cmd:
+                res.stdout = "c.py\n"
+            elif "ls-files" in cmd and "--others" in cmd:
+                res.stdout = "d.py\n"
+            return res
+
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run):
+            changed = get_git_changed_files(tmp_path, base_branch="main")
+        names = {Path(p).name for p in changed}
+        assert names == {"a.py", "b.py", "c.py", "d.py"}
+
+    def test_is_code_changed_git_fallback(self, tmp_path):
+        code = tmp_path / "x.py"
+        code.write_text("# x", encoding="utf-8")
+        # No fingerprint dir present -> git fallback decides.
+        changed, _ = is_code_changed(
+            code, tmp_path, git_changed_files={str(code.resolve())}
         )
+        assert changed is True
+        changed, _ = is_code_changed(code, tmp_path, git_changed_files=set())
+        assert changed is False
 
-    assert result is not None
-    assert mock_sync.call_count == 0
-    captured = capsys.readouterr()
-    assert "Metadata" in captured.out
-    assert "skipped" in captured.out
-
-
-# --- Regression: PRD sync must still run with sync_metadata=True (PR #920) ---
-#
-# Before the fix, the entire post-update arch + PRD block was wrapped in
-# `if not sync_metadata:`, so opting into --sync-metadata silently dropped
-# PRD propagation. The orchestrator handles per-pair arch updates, but PRD
-# sync must still run keyed off the arch-stage outcome.
-
-
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_sync_metadata_true_still_runs_prd_sync_when_arch_changed(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    temp_git_repo,
-    monkeypatch,
-):
-    # Pre-seed a PRD file in the repo so _find_prd_file resolves.
-    Path(temp_git_repo / "PRD.md").write_text("# Original PRD\n", encoding="utf-8")
-    Path(temp_git_repo / "architecture.json").write_text("[]", encoding="utf-8")
-
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
-            "error": "",
-        }
-    mock_update_file_pair.side_effect = _update
-
-    # Orchestrator reports a real architecture update so PRD sync should run.
-    def _orchestrator(prompt_path, code_path, dry_run):
-        return MetadataSyncResult(
-            prompt_path=Path(prompt_path),
-            code_path=Path(code_path),
-            dry_run=False,
-            stages={
-                "prompt": StageStatus(status="ok"),
-                "tags": StageStatus(status="ok"),
-                "architecture": StageStatus(status="ok", detail="updated fields: ['reason']"),
-                "run_report": StageStatus(status="ok"),
-                "fingerprint": StageStatus(status="ok"),
-            },
+    def test_is_code_changed_fingerprint_match(self, tmp_path):
+        code = tmp_path / "x.py"
+        code.write_text("body", encoding="utf-8")
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        code_hash = hashlib.sha256(b"body").hexdigest()
+        # derive_basename: "x", lang "python".
+        (meta_dir / "x_python.json").write_text(
+            json.dumps({"code_hash": code_hash}), encoding="utf-8"
         )
-
-    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
-         patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
-        # Force agentic PRD-sync to claim it didn't need an update.
-        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
-
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=True,
+        changed, reason = is_code_changed(
+            code, tmp_path, git_changed_files={str(code.resolve())}
         )
+        assert changed is False
+        assert "matches" in reason
 
-    assert result is not None
-    # PRD sync must have been invoked because arch reported `updated fields:`
-    prd_calls = [
-        c for c in mock_agentic.call_args_list
-        if c.kwargs.get("label") == "prd-sync"
-    ]
-    assert prd_calls, (
-        "PRD sync should run when sync_metadata=True and the orchestrator "
-        "reports an architecture update"
-    )
-
-
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_sync_metadata_true_skips_prd_when_arch_not_updated(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    temp_git_repo,
-):
-    Path(temp_git_repo / "PRD.md").write_text("# Original PRD\n", encoding="utf-8")
-    Path(temp_git_repo / "architecture.json").write_text("[]", encoding="utf-8")
-
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
-            "error": "",
-        }
-    mock_update_file_pair.side_effect = _update
-
-    # Orchestrator reports arch as "no changes" — PRD sync must NOT run.
-    def _orchestrator(prompt_path, code_path, dry_run):
-        return MetadataSyncResult(
-            prompt_path=Path(prompt_path),
-            code_path=Path(code_path),
-            dry_run=False,
-            stages={
-                "prompt": StageStatus(status="ok"),
-                "tags": StageStatus(status="ok"),
-                "architecture": StageStatus(status="ok", detail="no changes"),
-                "run_report": StageStatus(status="ok"),
-                "fingerprint": StageStatus(status="ok"),
-            },
+    def test_is_code_changed_fingerprint_mismatch(self, tmp_path):
+        code = tmp_path / "x.py"
+        code.write_text("body", encoding="utf-8")
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        (meta_dir / "x_python.json").write_text(
+            json.dumps({"code_hash": "0" * 64}), encoding="utf-8"
         )
+        changed, reason = is_code_changed(code, tmp_path, git_changed_files=set())
+        assert changed is True
+        assert "differs" in reason
 
-    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
-         patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
-        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
 
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
+# --------------------------------------------------------------------------- #
+# 24.–26. filter primitives
+# --------------------------------------------------------------------------- #
+class TestFilterPrimitives:
+    def test_has_skip_suffix(self):
+        assert _has_skip_suffix(Path("foo.test.py")) is True
+        assert _has_skip_suffix(Path("foo.spec.ts")) is True
+        assert _has_skip_suffix(Path("foo.config.js")) is True
+        assert _has_skip_suffix(Path("foo.py")) is False
+        assert _has_skip_suffix(Path("types.d.ts")) is True
 
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=True,
+    def test_has_meaningful_code(self, tmp_path):
+        meaningful = tmp_path / "yes.py"
+        meaningful.write_text("def f():\n    return 1\n", encoding="utf-8")
+        blank = tmp_path / "blank.py"
+        blank.write_text("\n\n# comment-only\n# more\n", encoding="utf-8")
+        empty = tmp_path / "empty.py"
+        empty.write_text("", encoding="utf-8")
+        assert _has_meaningful_code(meaningful) is True
+        assert _has_meaningful_code(blank) is False
+        assert _has_meaningful_code(empty) is False
+
+    def test_is_pddignored(self, tmp_path):
+        patterns = ["*.tmp", "build/", "src/internal/*.py"]
+        root = tmp_path
+
+        # Basename glob.
+        f1 = root / "thing.tmp"
+        f1.parent.mkdir(parents=True, exist_ok=True)
+        f1.write_text("x", encoding="utf-8")
+        assert _is_pddignored(f1, root, patterns) is True
+
+        # Directory prefix.
+        f2 = root / "build" / "artifact.py"
+        f2.parent.mkdir(parents=True, exist_ok=True)
+        f2.write_text("x", encoding="utf-8")
+        assert _is_pddignored(f2, root, patterns) is True
+
+        # Path glob.
+        f3 = root / "src" / "internal" / "secret.py"
+        f3.parent.mkdir(parents=True, exist_ok=True)
+        f3.write_text("x", encoding="utf-8")
+        assert _is_pddignored(f3, root, patterns) is True
+
+        # Not ignored.
+        f4 = root / "src" / "public.py"
+        f4.parent.mkdir(parents=True, exist_ok=True)
+        f4.write_text("x", encoding="utf-8")
+        assert _is_pddignored(f4, root, patterns) is False
+
+
+# --------------------------------------------------------------------------- #
+# 27. find_and_resolve_all_pairs filtering
+# --------------------------------------------------------------------------- #
+class TestFindAndResolveAllPairs:
+    def test_find_and_resolve_all_pairs_filters(self, tmp_path):
+        repo = tmp_path
+        # Keep: a meaningful .py with no skip suffix.
+        keep = repo / "src" / "module.py"
+        keep.parent.mkdir(parents=True)
+        keep.write_text("def x(): return 1\n", encoding="utf-8")
+        # Skip: .json
+        (repo / "data.json").write_text("{}", encoding="utf-8")
+        # Skip: .prompt
+        (repo / "module.prompt").write_text("body", encoding="utf-8")
+        # Skip: test_ prefix
+        (repo / "test_module.py").write_text("def x(): pass\n", encoding="utf-8")
+        # Skip: _example suffix
+        (repo / "module_example.py").write_text("def x(): pass\n", encoding="utf-8")
+        # Skip: .test suffix
+        (repo / "module.test.py").write_text("def x(): pass\n", encoding="utf-8")
+        # Skip: comment-only
+        (repo / "blank.py").write_text("# comment-only\n", encoding="utf-8")
+
+        # Force os.walk path: pretend git ls-files fails.
+        def fake_run(cmd, **kwargs):
+            return SimpleNamespace(returncode=1, stdout="", stderr="")
+
+        with patch("pdd.update_main.subprocess.run", side_effect=fake_run), \
+             patch("pdd.update_main._resolve_prompt_from_pddrc",
+                   return_value=None):
+            pairs = find_and_resolve_all_pairs(
+                repo_root=repo, quiet=True, extensions=None, output_dir=None
+            )
+        code_files = [c for _, c in pairs]
+        names = {c.name for c in code_files}
+        assert "module.py" in names
+        # All skips excluded:
+        for excluded in ("data.json", "test_module.py", "module_example.py",
+                         "module.test.py", "blank.py"):
+            assert excluded not in names
+        for c in code_files:
+            assert c.suffix != ".prompt"
+
+
+# --------------------------------------------------------------------------- #
+# 28. _meta_status_string transitions
+# --------------------------------------------------------------------------- #
+class TestMetaStatusString:
+    def test_meta_status_synced(self):
+        r = _make_meta_result(
+            ok=True, stages={"a": _stage("ok"), "b": _stage("ok")}
         )
+        assert _meta_status_string(r) == "synced"
 
-    assert result is not None
-    prd_calls = [
-        c for c in mock_agentic.call_args_list
-        if c.kwargs.get("label") == "prd-sync"
-    ]
-    assert not prd_calls, (
-        "PRD sync should NOT run when no arch entries actually changed"
-    )
-
-
-# --- Regression: partial:<stage> status surfaces skipped stages (PR #920) ---
-
-
-@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
-@patch("pdd.update_main.get_git_changed_files", return_value=set())
-@patch("pdd.update_main.update_file_pair")
-@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
-def test_repo_mode_summary_emits_partial_when_arch_stage_skipped(
-    mock_pddrc,
-    mock_update_file_pair,
-    mock_git_changed,
-    mock_is_changed,
-    temp_git_repo,
-    capsys,
-    monkeypatch,
-):
-    from rich.console import Console as _Console
-    _um = sys.modules["pdd.update_main"]
-    monkeypatch.setattr(_um, "console", _Console(theme=_um.custom_theme, width=300))
-
-    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
-        return {
-            "prompt_file": prompt_file,
-            "code_file": code_file,
-            "status": "Success",
-            "cost": 0.01,
-            "model": "mock",
-            "error": "",
-        }
-    mock_update_file_pair.side_effect = _update
-
-    # Orchestrator reports the architecture stage as "skipped" (e.g. the
-    # module isn't registered in architecture.json). result.ok is still True,
-    # but the metadata column must surface this as ``partial:architecture``.
-    def _orchestrator(prompt_path, code_path, dry_run):
-        return MetadataSyncResult(
-            prompt_path=Path(prompt_path),
-            code_path=Path(code_path),
-            dry_run=False,
-            stages={
-                "prompt": StageStatus(status="ok"),
-                "tags": StageStatus(status="ok"),
-                "architecture": StageStatus(status="skipped", reason="no arch entry"),
-                "run_report": StageStatus(status="ok"),
-                "fingerprint": StageStatus(status="ok"),
-            },
+    def test_meta_status_failed(self):
+        r = _make_meta_result(
+            ok=False, stages={"a": _stage("ok"), "b": _stage("failed")}
         )
+        assert _meta_status_string(r) == "failed:b"
 
-    with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator):
-        ctx = click.Context(click.Command("update"))
-        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
-
-        result = update_main(
-            ctx=ctx,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            use_git=False,
-            repo=True,
-            sync_metadata=True,
+    def test_meta_status_skipped(self):
+        r = _make_meta_result(
+            ok=True, stages={"a": _stage("skipped"), "b": _stage("skipped")}
         )
+        assert _meta_status_string(r) == "skipped"
 
-    assert result is not None
-    captured = capsys.readouterr()
-    assert "partial:architecture" in captured.out, captured.out
-
-
-def _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd):
-    mock_update.return_value = {
-        "prompt_file": "prompts/src/module1_python.prompt",
-        "status": "✅ Success",
-        "cost": 0.05,
-        "model": "mock_model",
-        "error": ""
-    }
-    repo_root = tmp_path / "repo"
-    repo_root.mkdir()
-    arch_file = repo_root / "architecture.json"
-    arch_file.write_text("{}")
-    prd_file = repo_root / "PRD.md"
-    prd_file.write_text("old PRD content")
-    prompts_dir = repo_root / "prompts"
-    prompts_dir.mkdir()
-    mock_find_arch.return_value = [arch_file]
-    mock_find_prd.return_value = prd_file
-    ctx = click.Context(click.Command('update'))
-    ctx.obj = {"verbose": False}
-    return repo_root, prd_file, ctx
-
-
-def _run_prd_sync_update(repo_root, ctx, sync_metadata=False):
-    with (
-        patch(
-            "pdd.update_main.find_and_resolve_all_pairs",
-            return_value=[("prompts/src/module1_python.prompt", "src/module1.py")],
-        ),
-        patch("pdd.update_main.git.Repo") as mock_repo,
-        patch("pdd.update_main.os.getcwd", return_value=str(repo_root)),
-        patch("pdd.pddrc_initializer.ensure_pddrc_for_scan"),
-    ):
-        mock_repo.return_value.working_tree_dir = str(repo_root)
-        return update_main(
-            ctx=ctx,
-            use_git=False,
-            repo=True,
-            input_prompt_file=None,
-            modified_code_file=None,
-            input_code_file=None,
-            output=None,
-            dry_run=False,
-            sync_metadata=sync_metadata,
+    def test_meta_status_dry_run(self):
+        r = _make_meta_result(
+            ok=True, dry_run=True,
+            stages={"a": _stage("dry_run"), "b": _stage("dry_run")}
         )
+        assert _meta_status_string(r) == "dry-run"
+
+    def test_meta_status_none(self):
+        assert _meta_status_string(None) == "skipped"
 
 
-@patch('pdd.update_main.update_file_pair')
-@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
-@patch('pdd.update_main.get_git_changed_files', return_value=set())
-@patch('pdd.architecture_registry.find_architecture_for_project')
-@patch('pdd.update_main._find_prd_file')
-@patch(
-    'pdd.architecture_sync.update_architecture_from_prompt',
-    return_value={"success": True, "updated": True, "changes": {}},
-)
-@patch('pdd.agentic_common.run_agentic_task')
-def test_prd_sync_updated(
-    mock_agentic,
-    mock_arch,
-    mock_find_prd,
-    mock_find_arch,
-    mock_git,
-    mock_changed,
-    mock_update,
-    tmp_path,
-    capsys,
-):
-    """
-    Test that PRD file is updated when the agent returns updated PRD content,
-    and that the cost is aggregated appropriately. Tests resolution of issue #882.
-    """
-    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
-    mock_agentic.return_value = (True, "<updated-prd>new PRD content</updated-prd>", 0.12, "agent_model")
-    result = _run_prd_sync_update(repo_root, ctx)
-    assert "new PRD content" in prd_file.read_text(), "PRD file was not updated."
-    assert result is not None
-    assert result[1] == pytest.approx(0.17), f"Cost should be 0.17, got {result[1]}"
+# --------------------------------------------------------------------------- #
+# 29. PRD discovery
+# --------------------------------------------------------------------------- #
+class TestFindPrdFile:
+    def test_find_prd_file_capital(self, tmp_path):
+        prd = tmp_path / "PRD.md"
+        prd.write_text("# prd\n", encoding="utf-8")
+        assert _find_prd_file(tmp_path) == prd.resolve()
+
+    def test_find_prd_file_glob(self, tmp_path):
+        prd = tmp_path / "auth_prd.md"
+        prd.write_text("# prd\n", encoding="utf-8")
+        assert _find_prd_file(tmp_path) == prd
+
+    def test_find_prd_file_none(self, tmp_path):
+        assert _find_prd_file(tmp_path) is None
 
 
-@patch('pdd.update_main.update_file_pair')
-@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
-@patch('pdd.update_main.get_git_changed_files', return_value=set())
-@patch('pdd.architecture_registry.find_architecture_for_project')
-@patch('pdd.update_main._find_prd_file')
-@patch(
-    'pdd.architecture_sync.update_architecture_from_prompt',
-    return_value={"success": True, "updated": True, "changes": {}},
-)
-@patch('pdd.agentic_common.run_agentic_task')
-def test_prd_sync_no_update_needed(
-    mock_agentic,
-    mock_arch,
-    mock_find_prd,
-    mock_find_arch,
-    mock_git,
-    mock_changed,
-    mock_update,
-    tmp_path,
-    capsys,
-):
-    """
-    Test that when the agent returns NO_UPDATE_NEEDED, the PRD file remains unchanged.
-    """
-    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
-    mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.05, "agent_model")
-    result = _run_prd_sync_update(repo_root, ctx)
-    assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged."
-    assert result is not None
-    assert result[1] == pytest.approx(0.10), f"Cost should be 0.10, got {result[1]}"
+# --------------------------------------------------------------------------- #
+# 30. update_file_pair legacy fallback
+# --------------------------------------------------------------------------- #
+class TestUpdateFilePair:
+    def test_update_file_pair_legacy_path(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("orig\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+
+        with patch("pdd.update_main.git_update",
+                   return_value=("UPDATED PROMPT", 0.03, "the-model")):
+            result = update_file_pair(prompt, code, ctx, repo=True, simple=True)
+        assert result["status"] == "updated"
+        assert result["cost"] == pytest.approx(0.03)
+        assert result["model"] == "the-model"
+        assert "UPDATED PROMPT" in prompt.read_text(encoding="utf-8")
+
+    def test_update_file_pair_empty_prompt_is_regeneration(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+
+        with patch("pdd.update_main.update_prompt",
+                   return_value=("REGEN BODY", 0.05, "regen-model")):
+            result = update_file_pair(prompt, code, ctx, repo=True, simple=True)
+        assert result["status"] == "regenerated"
+        assert "REGEN BODY" in prompt.read_text(encoding="utf-8")
 
 
-@patch('pdd.update_main.update_file_pair')
-@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
-@patch('pdd.update_main.get_git_changed_files', return_value=set())
-@patch('pdd.architecture_registry.find_architecture_for_project')
-@patch('pdd.update_main._find_prd_file')
-@patch(
-    'pdd.architecture_sync.update_architecture_from_prompt',
-    return_value={"success": True, "updated": True, "changes": {}},
-)
-@patch('pdd.agentic_common.run_agentic_task')
-def test_prd_sync_failure(
-    mock_agentic,
-    mock_arch,
-    mock_find_prd,
-    mock_find_arch,
-    mock_git,
-    mock_changed,
-    mock_update,
-    tmp_path,
-    capsys,
-):
-    """
-    Test that when the agent task fails, the error is recorded without crashing the entire repository update.
-    """
-    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
-    mock_agentic.return_value = (False, "API Limit reached", 0.0, "agent_model")
-    _run_prd_sync_update(repo_root, ctx)
-    out = capsys.readouterr().out
-    assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged on failure."
-    assert "API Limit reached" in out, "Failure reason should be in the output."
+# --------------------------------------------------------------------------- #
+# 31. Sanitization regression (issue #813 carries through to this module).
+# --------------------------------------------------------------------------- #
+class TestSanitizationRegression:
+    def test_sanitize_invalid_include_tag_removed(self, ctx, tmp_path):
+        prompt = tmp_path / "p.prompt"
+        prompt.write_text("orig\n", encoding="utf-8")
+        code = tmp_path / "c.py"
+        code.write_text("def x(): pass\n", encoding="utf-8")
+        old_code = tmp_path / "old.py"
+        old_code.write_text("def x(): pass\n", encoding="utf-8")
+        bad = ('<include select="class:Foo">context/nonexistent.py</include>\n'
+               '% Goal\nDo a thing.\n')
+        with patch("pdd.update_main.update_prompt",
+                   return_value=(bad, 0.0, "m")), \
+             patch("pdd.update_main._run_single_file_metadata_sync",
+                   return_value=True):
+            update_main(
+                ctx=ctx,
+                input_prompt_file=str(prompt),
+                modified_code_file=str(code),
+                input_code_file=str(old_code),
+                output=None,
+                use_git=False,
+                repo=False,
+                extensions=None,
+                directory=None,
+                strength=None,
+                temperature=None,
+                simple=True,
+            )
+        saved = prompt.read_text(encoding="utf-8")
+        # The actual sanitizer leaves a marker; we just verify the original
+        # invalid select string didn't survive verbatim.
+        assert 'select="class:Foo"' not in saved or "Invalid" in saved

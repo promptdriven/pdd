@@ -1,1047 +1,1343 @@
-import fnmatch
-import re
-import subprocess
-import sys
-from collections import Counter, defaultdict
-from typing import Tuple, Optional, List, Dict, Any, Set
-import click
-from rich import print as rprint
+from __future__ import annotations
+
 import os
+import re
+import json
+import hashlib
+import fnmatch
+import subprocess
 from pathlib import Path
-import git
+from typing import Optional, Tuple, Dict, List, Set, Any
+
+import click
 from rich.console import Console
+from rich.theme import Theme
+from rich.table import Table
 from rich.progress import (
     Progress,
     SpinnerColumn,
-    TextColumn,
     BarColumn,
+    TextColumn,
     TimeRemainingColumn,
+    TaskProgressColumn,
 )
-from rich.table import Table
-from rich.theme import Theme
 
-from .construct_paths import (
-    construct_paths,
-    get_tests_dir_from_config,
-    detect_context_for_file,
-    resolve_effective_config as resolve_target_context,
-)
-from .config_resolution import resolve_effective_config as resolve_command_config
-from .get_language import get_language
+from . import DEFAULT_STRENGTH, DEFAULT_TIME
+from .construct_paths import construct_paths
 from .update_prompt import update_prompt
 from .git_update import git_update
-from .agentic_common import get_available_agents
-from .agentic_update import run_agentic_update
-from .sync_determine_operation import calculate_sha256, extract_include_deps, read_fingerprint
-from .validate_prompt_includes import sanitize_prompt_output
-from . import DEFAULT_TIME
+from .get_language import get_language
+from .operation_log import (
+    infer_module_identity,
+    save_fingerprint,
+)
 
-# Config/data files that should not get prompts in repo-scan mode.
-# Users can still target these explicitly with single-file mode.
-_SKIP_EXTENSIONS = {
-    '.json', '.jsonl', '.yaml', '.yml', '.md', '.toml', '.ini',
-    '.css', '.html', '.lock', '.svg', '.png', '.jpg', '.gif',
-    '.ico', '.woff', '.woff2', '.ttf', '.eot', '.map',
-    '.csv', '.txt',
+
+# ---------------------------------------------------------------------------
+# Module-level Rich Console with custom theme.
+# ---------------------------------------------------------------------------
+_THEME = Theme(
+    {
+        "info": "cyan",
+        "warning": "yellow",
+        "error": "bold red",
+        "success": "green",
+        "path": "dim blue",
+    }
+)
+console = Console(theme=_THEME)
+# Stderr-bound console for failure lines (issue #1005 acceptance criterion).
+_err_console = Console(stderr=True, theme=_THEME)
+
+
+# ---------------------------------------------------------------------------
+# Repo-mode exclusion sets.
+# ---------------------------------------------------------------------------
+_SKIP_EXTENSIONS: Set[str] = {
+    ".json", ".jsonl", ".yaml", ".yml", ".md", ".toml", ".ini", ".css",
+    ".html", ".lock", ".svg", ".png", ".jpg", ".gif", ".ico", ".woff",
+    ".woff2", ".ttf", ".eot", ".map", ".csv", ".txt",
 }
-_SKIP_FILENAMES = {
-    'package-lock.json', '.prettierrc', '.eslintrc', '.gitignore',
-    'tsconfig.json', 'next-env.d.ts',
-    'jest.config.js', 'jest.config.ts', 'jest.setup.js', 'jest.setup.ts',
-    'next.config.js', 'next.config.ts', 'next.config.mjs',
-    'tailwind.config.js', 'tailwind.config.ts',
-    'playwright.config.ts', 'playwright.config.js',
-    'vitest.config.ts', 'vitest.config.js', 'vitest.config.unit.ts',
-    'postcss.config.js', 'postcss.config.mjs', 'postcss.config.cjs',
-    'babel.config.js', 'babel.config.json',
-    '.eslintrc.js', '.eslintrc.json', '.eslintrc.cjs',
-    '.prettierrc.js', '.prettierrc.json', '.prettierrc.cjs',
-    'setupTests.ts', 'setupTests.js',
-    'mockServiceWorker.js',
+_SKIP_FILENAMES: Set[str] = {
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml",
+    "jest.config.js", "tailwind.config.js", "postcss.config.js",
+    "next.config.js", "vite.config.js", "rollup.config.js",
+    "babel.config.js", "webpack.config.js",
+    "mockServiceWorker.js", "next-env.d.ts",
+    "setup.py", "conftest.py",
 }
-
-_SKIP_BASENAME_SUFFIXES = {
-    '.config', '.setup',
-    '.stories', '.story',
-    '.test', '.spec',
-    '.e2e.test', '.e2e.spec',
-    '.d',
+_SKIP_BASENAME_SUFFIXES: Tuple[str, ...] = (
+    ".config", ".setup", ".stories", ".story",
+    ".test", ".spec", ".e2e.test", ".e2e.spec", ".d",
+)
+_WALK_IGNORE_DIRS: Set[str] = {
+    ".git", ".idea", ".vscode", "__pycache__", "node_modules",
+    ".venv", "venv", "dist", "build", ".next", ".nuxt", ".output",
+    ".cache", ".turbo", ".parcel-cache", "coverage", ".pdd",
 }
 
 
-def _has_skip_suffix(filepath: str) -> bool:
-    """Check if file stem has a skip suffix like .test, .stories, .config."""
-    stem = os.path.splitext(os.path.basename(filepath))[0]
-    for suffix in _SKIP_BASENAME_SUFFIXES:
-        if stem.endswith(suffix):
+# ---------------------------------------------------------------------------
+# Sanitization helper for prompt outputs.
+# ---------------------------------------------------------------------------
+def _sanitize_for_write(content: str, destination_path: Path) -> str:
+    """
+    Run sanitize_prompt_output before writing prompt content to disk.
+
+    Wrapped in try/except so that a missing/optional validator never blocks
+    the legacy update path; we just write the raw content if sanitization
+    is unavailable.
+    """
+    try:
+        from .validate_prompt_includes import sanitize_prompt_output
+
+        sanitized, _removed = sanitize_prompt_output(content, destination_path)
+        return sanitized
+    except Exception:
+        return content
+
+
+# ---------------------------------------------------------------------------
+# .pddrc template-path helpers.
+# ---------------------------------------------------------------------------
+def _extract_template_vars(concrete_path: str, template: str) -> Optional[Dict[str, str]]:
+    """
+    Reverse-match a path against a template like
+    ``"src/{category}/{name}/{name}.py"`` to extract variable bindings.
+
+    Repeated variables generate regex backreferences, so the same `{name}`
+    must match the same captured value.
+    """
+    var_pattern = re.compile(r"\{([a-zA-Z_][a-zA-Z0-9_]*)\}")
+    seen: Dict[str, int] = {}
+    regex_parts: List[str] = []
+    last_end = 0
+    var_order: List[str] = []
+    for m in var_pattern.finditer(template):
+        regex_parts.append(re.escape(template[last_end:m.start()]))
+        var_name = m.group(1)
+        if var_name in seen:
+            regex_parts.append(f"\\{seen[var_name]}")
+        else:
+            group_index = len(seen) + 1
+            seen[var_name] = group_index
+            regex_parts.append(f"(?P<{var_name}>[^/]+)")
+            var_order.append(var_name)
+        last_end = m.end()
+    regex_parts.append(re.escape(template[last_end:]))
+    regex = "^" + "".join(regex_parts) + "$"
+    match = re.match(regex, concrete_path)
+    if not match:
+        return None
+    return {name: match.group(name) for name in var_order}
+
+
+def _resolve_prompt_from_pddrc(
+    code_file_path: Path,
+    repo_root: Path,
+    language: str,
+) -> Optional[str]:
+    """
+    Resolve a prompt path by consulting `.pddrc` matching contexts.
+
+    Returns the expanded prompt path (string) or None if no matching
+    context produces a prompt template we can resolve.
+    """
+    try:
+        from .pddrc_loader import load_pddrc, find_matching_context
+        from .template_expander import expand_template
+    except Exception:
+        return None
+
+    search_dirs: List[Path] = []
+    parent = code_file_path.parent.resolve()
+    while True:
+        search_dirs.append(parent)
+        if parent == parent.parent:
+            break
+        parent = parent.parent
+    if repo_root.resolve() not in search_dirs:
+        search_dirs.append(repo_root.resolve())
+
+    pddrc_data = None
+    for d in search_dirs:
+        candidate = d / ".pddrc"
+        if candidate.exists():
+            try:
+                pddrc_data = load_pddrc(candidate)
+                break
+            except Exception:
+                continue
+    if pddrc_data is None:
+        return None
+
+    try:
+        rel_code_path = str(code_file_path.resolve().relative_to(repo_root.resolve()))
+    except ValueError:
+        rel_code_path = str(code_file_path)
+
+    try:
+        ctx = find_matching_context(pddrc_data, rel_code_path)
+    except Exception:
+        ctx = None
+    if not ctx:
+        return None
+
+    outputs = (ctx or {}).get("outputs") or {}
+    prompt_cfg = outputs.get("prompt") or {}
+    template = prompt_cfg.get("path")
+    if not template:
+        return None
+
+    # Try to extract vars from a configured code-output template if present.
+    code_template = (outputs.get("code") or {}).get("path")
+    variables: Dict[str, str] = {"language": language}
+    basename = code_file_path.stem
+    variables.setdefault("name", basename)
+    variables.setdefault("module", basename)
+    if code_template:
+        extracted = _extract_template_vars(rel_code_path, code_template)
+        if extracted:
+            variables.update(extracted)
+
+    try:
+        expanded = expand_template(template, variables)
+    except Exception:
+        return None
+
+    if not os.path.isabs(expanded):
+        expanded = str((repo_root / expanded).resolve())
+    return expanded
+
+
+def _resolve_existing_prompt_path_case_insensitive(prompt_path: Path) -> Path:
+    """
+    Preserve the on-disk casing of an existing prompt file, if any.
+
+    On case-sensitive filesystems, callers may construct prompt paths that
+    differ only in case from an already-present file. We don't want to
+    create a second sibling file — return the existing path verbatim.
+    """
+    parent = prompt_path.parent
+    if not parent.exists():
+        return prompt_path
+    target_lower = prompt_path.name.lower()
+    try:
+        for entry in parent.iterdir():
+            if entry.is_file() and entry.name.lower() == target_lower:
+                return entry
+    except OSError:
+        pass
+    return prompt_path
+
+
+# ---------------------------------------------------------------------------
+# .pddrc helpers for repo scanning.
+# ---------------------------------------------------------------------------
+def _find_nearest_pddrc_for_file(file_path: Path, repo_root: Path) -> Optional[Path]:
+    """Walk upward from file_path's parent to repo_root looking for `.pddrc`."""
+    parent = file_path.parent.resolve()
+    root = repo_root.resolve()
+    while True:
+        candidate = parent / ".pddrc"
+        if candidate.exists():
+            return candidate
+        if parent == root or parent == parent.parent:
+            return None
+        parent = parent.parent
+
+
+def resolve_prompt_code_pair(
+    code_file_path: Path,
+    quiet: bool,
+    output_dir: Optional[str] = None,
+) -> Tuple[Path, Path]:
+    """
+    Derive the prompt file path for a given code file.
+
+    1. If no `output_dir` override, try `.pddrc` template resolution.
+    2. Otherwise fall back to a `prompts/` sibling layout, preserving any
+       sub-directory structure relative to repo root.
+
+    Always preserves on-disk case for an existing prompt file and creates
+    missing directories / empty prompt files so downstream code can read
+    and overwrite them.
+    """
+    code_path = code_file_path.resolve()
+    language = get_language(str(code_path)) or "python"
+
+    # Find a repo root (git or fallback to walking up).
+    repo_root: Path
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(code_path.parent),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            repo_root = Path(result.stdout.strip()).resolve()
+        else:
+            repo_root = Path.cwd().resolve()
+    except Exception:
+        repo_root = Path.cwd().resolve()
+
+    prompt_path: Optional[Path] = None
+    if not output_dir:
+        resolved = _resolve_prompt_from_pddrc(code_path, repo_root, language)
+        if resolved:
+            prompt_path = Path(resolved)
+
+    if prompt_path is None:
+        # Fallback: prompts/<rel_dir>/<basename>_<lang>.prompt
+        try:
+            rel = code_path.relative_to(repo_root)
+        except ValueError:
+            rel = Path(code_path.name)
+        # Strip generate_output_path prefix if it matches the first segment.
+        rel_parts = list(rel.parts[:-1])
+        # Best-effort strip of common code-output dirs.
+        for prefix in ("src", "pdd", "lib"):
+            if rel_parts and rel_parts[0] == prefix:
+                rel_parts = rel_parts[1:]
+                break
+        sub_dir = Path(*rel_parts) if rel_parts else Path()
+        base_dir = Path(output_dir) if output_dir else (repo_root / "prompts")
+        prompt_dir = base_dir / sub_dir
+        prompt_name = f"{code_path.stem}_{language}.prompt"
+        prompt_path = prompt_dir / prompt_name
+
+    # Preserve existing-on-disk casing.
+    prompt_path = _resolve_existing_prompt_path_case_insensitive(prompt_path)
+
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    if not prompt_path.exists():
+        prompt_path.write_text("", encoding="utf-8")
+        if not quiet:
+            console.print(f"[info]Created empty prompt file:[/info] [path]{prompt_path}[/path]")
+
+    return prompt_path, code_path
+
+
+# ---------------------------------------------------------------------------
+# .pddignore handling.
+# ---------------------------------------------------------------------------
+def _load_pddignore(scan_root: Path) -> Tuple[List[str], Optional[Path]]:
+    """
+    Walk upward from `scan_root` to find `.pddignore`.
+
+    Stops at the git root if reached. Returns a list of patterns and the
+    directory containing the file (used as the anchor for relative-path
+    matches). When no `.pddignore` is found, returns ([], None).
+    """
+    current = scan_root.resolve()
+    git_root: Optional[Path] = None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(current),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            git_root = Path(result.stdout.strip()).resolve()
+    except Exception:
+        git_root = None
+
+    while True:
+        candidate = current / ".pddignore"
+        if candidate.exists():
+            try:
+                lines = candidate.read_text(encoding="utf-8").splitlines()
+            except Exception:
+                return [], None
+            patterns = [
+                ln.strip()
+                for ln in lines
+                if ln.strip() and not ln.strip().startswith("#")
+            ]
+            return patterns, current
+        if git_root is not None and current == git_root:
+            return [], None
+        if current == current.parent:
+            return [], None
+        current = current.parent
+
+
+def _is_pddignored(filepath: Path, pddignore_root: Optional[Path], patterns: List[str]) -> bool:
+    """
+    Match `filepath` against `.pddignore` patterns.
+
+    Supports:
+      - directory-prefix patterns (ending in `/`)
+      - relative-path glob patterns
+      - bare basename glob patterns
+    """
+    if not patterns or pddignore_root is None:
+        return False
+    try:
+        rel = filepath.resolve().relative_to(pddignore_root.resolve())
+    except ValueError:
+        return False
+    rel_str = str(rel).replace(os.sep, "/")
+    base = filepath.name
+    for pat in patterns:
+        if pat.endswith("/"):
+            prefix = pat.rstrip("/")
+            if rel_str == prefix or rel_str.startswith(prefix + "/"):
+                return True
+        elif "/" in pat:
+            if fnmatch.fnmatch(rel_str, pat):
+                return True
+        else:
+            if fnmatch.fnmatch(base, pat):
+                return True
+    return False
+
+
+def _has_skip_suffix(filepath: Path) -> bool:
+    """Return True if the file stem ends with one of the skip suffixes."""
+    stem = filepath.stem.lower()
+    name_lower = filepath.name.lower()
+    for suf in _SKIP_BASENAME_SUFFIXES:
+        # Suffixes like ".d" need stem-end matching against a leading dot.
+        if stem.endswith(suf) or name_lower.endswith(suf):
             return True
     return False
 
 
-def _load_pddignore(scan_root: str) -> Tuple[List[str], str]:
-    """Load .pddignore patterns, searching upward from *scan_root* to git root.
-
-    Returns (patterns, pddignore_dir) where *pddignore_dir* is the directory
-    containing the .pddignore file (used as the base for relative-path matching).
-    If no file is found, returns ([], scan_root).
-    """
-    # Walk upward from scan_root to find .pddignore
-    current = os.path.abspath(scan_root)
-    while True:
-        candidate = os.path.join(current, '.pddignore')
-        if os.path.isfile(candidate):
-            patterns: List[str] = []
-            with open(candidate, 'r') as f:
-                for line in f:
-                    line = line.strip()
-                    if not line or line.startswith('#'):
-                        continue
-                    patterns.append(line)
-            return patterns, current
-        parent = os.path.dirname(current)
-        if parent == current:
-            break
-        # Stop at git root (don't escape the repo)
-        if os.path.isdir(os.path.join(current, '.git')):
-            break
-        current = parent
-    return [], scan_root
-
-
-def _has_meaningful_code(filepath: str) -> bool:
-    """Return True if a file contains at least one non-blank, non-comment line."""
+def _has_meaningful_code(filepath: Path) -> bool:
+    """Return True iff the file has at least one non-blank, non-comment line."""
     try:
-        with open(filepath, 'r', errors='replace') as f:
+        with open(filepath, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
                 stripped = line.strip()
-                if stripped and not stripped.startswith('#'):
-                    return True
-    except (OSError, IOError):
-        return False
-    return False
-
-
-def _is_pddignored(filepath: str, pddignore_root: str, patterns: List[str]) -> bool:
-    """Check if a file matches any .pddignore pattern.
-
-    Matches against:
-    - Relative path from *pddignore_root* (for patterns like ``frontend/src/components/ui/*``)
-    - Basename (for patterns like ``*.stories.tsx``)
-    - Directory prefix (for patterns ending with ``/`` like ``ui/``)
-    """
-    try:
-        rel_path = os.path.relpath(filepath, pddignore_root).replace('\\', '/')
-    except ValueError:
-        return False
-    basename = os.path.basename(filepath)
-    for pat in patterns:
-        if pat.endswith('/'):
-            # Directory prefix pattern: match if any path component equals the dir name
-            dir_name = pat.rstrip('/')
-            parts = rel_path.split('/')
-            if dir_name in parts[:-1]:
-                return True
-        else:
-            if fnmatch.fnmatch(rel_path, pat):
-                return True
-            if fnmatch.fnmatch(basename, pat):
-                return True
-    return False
-
-custom_theme = Theme({
-    "info": "cyan",
-    "warning": "yellow",
-    "error": "bold red",
-    "success": "green",
-    "path": "dim blue",
-})
-console = Console(theme=custom_theme)
-
-def _extract_template_vars(concrete_path: str, template: str) -> Optional[Dict[str, str]]:
-    """Reverse-match a concrete path against a template to extract variable values.
-
-    Args:
-        concrete_path: Actual file path (e.g., "frontend/src/app/billing/page.tsx")
-        template: Template pattern (e.g., "frontend/src/{category}/{name}/{name}.tsx")
-
-    Returns:
-        Dictionary of extracted variables, or None if no match.
-    """
-    # Split template into literal and placeholder parts
-    parts = re.split(r'(\{[^}]+\})', template)
-    regex_parts = []
-    seen_vars: Set[str] = set()
-    for part in parts:
-        m = re.match(r'\{(\w+)\}', part)
-        if m:
-            var = m.group(1)
-            if var in seen_vars:
-                regex_parts.append(f'(?P={var})')
-            else:
-                regex_parts.append(f'(?P<{var}>[^/]+)')
-                seen_vars.add(var)
-        else:
-            regex_parts.append(re.escape(part))
-
-    pattern = '^' + ''.join(regex_parts) + '$'
-    match = re.match(pattern, concrete_path)
-    if match:
-        return match.groupdict()
-    return None
-
-
-def _resolve_prompt_from_pddrc(code_file_path: str, repo_root: str, language: str) -> Optional[str]:
-    """Try to resolve prompt path using .pddrc template configuration.
-
-    Loads .pddrc, finds the matching context for the code file, and if the
-    context has outputs.prompt.path and outputs.code.path templates, extracts
-    template variables from the code path and expands the prompt template.
-
-    Args:
-        code_file_path: Path to the code file.
-        repo_root: Repository root directory.
-        language: Language name for the code file.
-
-    Returns:
-        Absolute prompt path string, or None to fall back to default behavior.
-    """
-    from .construct_paths import _find_pddrc_file, _load_pddrc_config, detect_context_for_file, BUILTIN_EXT_MAP
-    from .template_expander import expand_template
-
-    # Prefer .pddrc at repo_root (the caller already resolved the nearest one),
-    # fall back to searching from the code file's parent directory.
-    pddrc_path = None
-    repo_root_pddrc = Path(repo_root) / ".pddrc"
-    if repo_root_pddrc.is_file():
-        pddrc_path = repo_root_pddrc
-    if not pddrc_path:
-        pddrc_path = _find_pddrc_file(Path(code_file_path).parent)
-    if not pddrc_path:
-        return None
-
-    try:
-        config = _load_pddrc_config(pddrc_path)
-    except Exception:
-        return None
-
-    pddrc_parent = pddrc_path.parent
-
-    # Find matching context — use pddrc_parent as the effective root
-    context_name, _ = detect_context_for_file(code_file_path, str(pddrc_parent))
-
-    # If paths-based matching only found 'default', try matching via
-    # outputs.code.path — needed when paths patterns are prompt-name
-    # globs (e.g., "*api_specs_route*") that don't match code file paths.
-    if not context_name or context_name == 'default':
-        code_abs = os.path.abspath(code_file_path)
-        try:
-            code_rel = os.path.relpath(code_abs, str(pddrc_parent)).replace('\\', '/')
-        except ValueError:
-            code_rel = None
-        if code_rel:
-            contexts = config.get('contexts', {})
-            for ctx_name, ctx_config in contexts.items():
-                if ctx_name == 'default':
+                if not stripped:
                     continue
-                ctx_code_path = ctx_config.get('defaults', {}).get('outputs', {}).get('code', {}).get('path')
-                if ctx_code_path and ctx_code_path == code_rel:
-                    context_name = ctx_name
-                    break
-
-    if not context_name:
-        return None
-
-    # Get outputs config from the context
-    contexts = config.get('contexts', {})
-    context_config = contexts.get(context_name, {})
-    defaults = context_config.get('defaults', {})
-    outputs = defaults.get('outputs', {})
-    prompt_template = outputs.get('prompt', {}).get('path')
-    code_template = outputs.get('code', {}).get('path')
-
-    if not prompt_template:
-        return None
-
-    # Get code file relative to pddrc_parent (normalize to forward slashes for template matching)
-    code_abs = os.path.abspath(code_file_path)
-    try:
-        code_rel = os.path.relpath(code_abs, str(pddrc_parent)).replace('\\', '/')
-    except ValueError:
-        return None
-
-    # Extract name from filename (without extension)
-    base_name = os.path.splitext(os.path.basename(code_file_path))[0]
-
-    # Try to extract {category} and other vars from code template
-    category = ''
-    if code_template:
-        extracted = _extract_template_vars(code_rel, code_template)
-        if extracted:
-            category = extracted.get('category', '')
-            base_name = extracted.get('name', base_name)
-
-    # Get file extension for language (without leading dot, matching template convention)
-    ext = BUILTIN_EXT_MAP.get(language.lower(), '').lstrip('.')
-
-    # Expand prompt template using shared template_expander
-    template_context = {
-        'name': base_name,
-        'category': category,
-        'dir_prefix': f'{category}/' if category else '',
-        'ext': ext,
-        'language': language,
-    }
-    expanded = expand_template(prompt_template, template_context)
-
-    return str(pddrc_parent / expanded)
-
-
-def _resolve_existing_prompt_path_case_insensitive(prompt_path: Path) -> Path:
-    """Return an existing prompt path using its on-disk filename casing."""
-    parent = prompt_path.parent
-    if not parent.exists():
-        return prompt_path
-
-    target_name = prompt_path.name.lower()
-    try:
-        for candidate in parent.iterdir():
-            if candidate.is_file() and candidate.name.lower() == target_name:
-                return candidate
+                if stripped.startswith(("#", "//", "/*", "*", "--", ";")):
+                    continue
+                return True
     except OSError:
-        return prompt_path
+        return False
+    return False
 
-    return prompt_path
 
-
-def resolve_prompt_code_pair(code_file_path: str, quiet: bool = False, output_dir: Optional[str] = None, create_missing: bool = True) -> Tuple[str, str]:
+def find_and_resolve_all_pairs(
+    repo_root: Path,
+    quiet: bool,
+    extensions: Optional[Tuple[str, ...]] = None,
+    output_dir: Optional[str] = None,
+) -> List[Tuple[Path, Path]]:
     """
-    Derives the corresponding prompt file path from a code file path.
-    Searches for and creates prompts only in the specified output directory or 'prompts' directory.
-    If the prompt file does not exist, it creates an empty one in the target directory.
-    Preserves the subdirectory structure of the code file relative to the repository root.
-
-    Args:
-        code_file_path: Path to the code file
-        quiet: Whether to suppress output messages
-        output_dir: Custom output directory (overrides default 'prompts' directory)
+    Walk the repo, apply multi-layer exclusion, and resolve each remaining
+    code file to a (prompt_path, code_path) pair.
     """
-    language = get_language(os.path.splitext(code_file_path)[1])
-    if not language:
-        language = "unknown"
+    repo_root = repo_root.resolve()
+    candidate_files: List[Path] = []
 
-    # Extract the filename without extension and directory
-    code_filename = os.path.basename(code_file_path)
-    base_name, _ = os.path.splitext(code_filename)
-
-    code_file_abs_path = os.path.abspath(code_file_path)
-    code_dir = os.path.dirname(code_file_abs_path)
-
-    # Find the repository root (where the code file is located)
-    # This is needed for relative path calculation to preserve structure
-    # First find the git root as fallback and search boundary
-    git_root = code_dir
-    try:
-        import git
-        repo = git.Repo(code_dir, search_parent_directories=True)
-        git_root = repo.working_tree_dir
-    except:
-        # If not a git repo, use the directory containing the code file
-        pass
-
-    # Find the nearest .pddrc starting from the code file — its parent
-    # directory becomes the effective repo_root for path calculations.
-    from .construct_paths import _find_nearest_pddrc_for_file
-    nearest_pddrc, effective_root = _find_nearest_pddrc_for_file(
-        Path(code_file_abs_path), stop_at=Path(git_root)
-    )
-    repo_root = str(effective_root) if effective_root else git_root
-
-    # Try template-based resolution from .pddrc first (when no explicit output_dir)
-    if not output_dir:
-        template_path = _resolve_prompt_from_pddrc(code_file_path, repo_root, language)
-        if template_path:
-            prompt_path = _resolve_existing_prompt_path_case_insensitive(Path(template_path))
-            if create_missing:
-                if not prompt_path.parent.exists():
-                    try:
-                        prompt_path.parent.mkdir(parents=True, exist_ok=True)
-                        if not quiet:
-                            console.print(f"[success]Created prompts directory:[/success] [path]{prompt_path.parent}[/path]")
-                    except OSError as e:
-                        console.print(f"[error]Failed to create prompts directory: {e}[/error]")
-                if not prompt_path.exists():
-                    try:
-                        prompt_path.touch()
-                        if not quiet:
-                            console.print(f"[success]Created missing prompt file:[/success] [path]{prompt_path}[/path]")
-                    except OSError as e:
-                        console.print(f"[error]Failed to create file {prompt_path}: {e}[/error]")
-            return str(prompt_path), code_file_path
-
-    # Determine the base prompts directory
-    context_config = {}
-    if output_dir:
-        # Use the custom output directory (absolute path)
-        base_prompts_dir = os.path.abspath(output_dir)
-    else:
-        # Use context-aware prompts_dir from .pddrc if available
-        context_name, context_config = detect_context_for_file(code_file_path, repo_root)
-        prompts_dir_config = context_config.get("prompts_dir", "prompts")
-        if os.path.isabs(prompts_dir_config):
-            base_prompts_dir = prompts_dir_config
-        else:
-            base_prompts_dir = os.path.join(repo_root, prompts_dir_config)
-
-    # Calculate relative path from repo_root to code_dir to preserve structure
-    try:
-        rel_dir = os.path.relpath(code_dir, repo_root)
-        if rel_dir == ".":
-            rel_dir = ""
-        else:
-            # If context has a code root (generate_output_path), strip that prefix
-            # E.g., for pdd/commands/file.py with generate_output_path="pdd",
-            # strip "pdd/" to get "commands/"
-            code_root = context_config.get("generate_output_path", "").rstrip(os.sep + "/")
-            if code_root and rel_dir.startswith(code_root + os.sep):
-                # Strip the code root prefix
-                rel_dir = rel_dir[len(code_root) + len(os.sep):]
-            elif code_root and rel_dir == code_root:
-                # File is directly in code root
-                rel_dir = ""
-    except ValueError:
-        # Can happen on Windows if paths are on different drives
-        rel_dir = ""
-
-    # Construct the final directory including the relative structure
-    final_prompts_dir = os.path.join(base_prompts_dir, rel_dir)
-
-    # Construct the prompt filename in the determined directory
-    prompt_filename = f"{base_name}_{language.lower()}.prompt"
-    prompt_path_str = os.path.join(final_prompts_dir, prompt_filename)
-    prompt_path = _resolve_existing_prompt_path_case_insensitive(Path(prompt_path_str))
-    prompt_path_str = str(prompt_path)
-
-    # Create directory and empty prompt file only when requested
-    if create_missing:
-        prompts_path = Path(final_prompts_dir)
-        if not prompts_path.exists():
-            try:
-                prompts_path.mkdir(parents=True, exist_ok=True)
-                if not quiet:
-                    console.print(f"[success]Created prompts directory:[/success] [path]{final_prompts_dir}[/path]")
-            except OSError as e:
-                console.print(f"[error]Failed to create prompts directory {final_prompts_dir}: {e}[/error]")
-
-        if not prompt_path.exists():
-            try:
-                prompt_path.touch()
-                if not quiet:
-                    console.print(f"[success]Created missing prompt file:[/success] [path]{prompt_path_str}[/path]")
-            except OSError as e:
-                console.print(f"[error]Failed to create file {prompt_path_str}: {e}[/error]")
-                # Even if creation fails, return the intended path
-
-    return prompt_path_str, code_file_path
-
-def find_and_resolve_all_pairs(repo_root: str, quiet: bool = False, extensions: Optional[str] = None, output_dir: Optional[str] = None) -> List[Tuple[str, str]]:
-    """
-    Scans the repo for code files, resolves their prompt pairs, and returns all pairs.
-    """
-    pairs = []
-
-    if not quiet:
-        console.print(f"[info]Scanning repository and resolving prompt/code pairs...[/info]")
-
-    allowed_extensions: Optional[set] = None
-    if extensions:
-        ext_list = [e.strip().lower() for e in extensions.split(',')]
-        allowed_extensions = {f'.{e}' if not e.startswith('.') else e for e in ext_list}
-        if not quiet:
-            console.print(f"[info]Filtering for extensions: {', '.join(allowed_extensions)}[/info]")
-
-    # Use git ls-files to respect .gitignore automatically.
-    # Falls back to os.walk with hardcoded ignores if git is unavailable.
-    all_files = []
+    # Prefer git ls-files to respect .gitignore.
+    used_git = False
     try:
         result = subprocess.run(
             ["git", "ls-files", "--cached", "--others", "--exclude-standard"],
-            capture_output=True, text=True, cwd=repo_root, check=True,
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            check=False,
         )
-        for rel_path in result.stdout.strip().splitlines():
-            if rel_path:
-                all_files.append(os.path.join(repo_root, rel_path))
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        # Fallback: os.walk with hardcoded directory ignores
-        ignored_dirs = {'.git', '.idea', '.vscode', '__pycache__', 'node_modules',
-                         '.venv', 'venv', 'dist', 'build',
-                         '.next', '.nuxt', '.output', '.cache', '.turbo',
-                         '.parcel-cache', 'coverage', '.pdd'}
-        for root, dirs, files in os.walk(repo_root, topdown=True):
-            dirs[:] = [d for d in dirs if d not in ignored_dirs]
-            for file in files:
-                all_files.append(os.path.join(root, file))
+        if result.returncode == 0:
+            used_git = True
+            for line in result.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                p = (repo_root / line).resolve()
+                if p.is_file():
+                    candidate_files.append(p)
+    except Exception:
+        used_git = False
+
+    if not used_git:
+        for root, dirs, files in os.walk(repo_root):
+            dirs[:] = [d for d in dirs if d not in _WALK_IGNORE_DIRS]
+            for f in files:
+                candidate_files.append(Path(root) / f)
 
     pddignore_patterns, pddignore_root = _load_pddignore(repo_root)
+    extensions_norm: Optional[Set[str]] = None
+    if extensions:
+        extensions_norm = {
+            ("." + e.lstrip(".")).lower() for e in extensions if e
+        }
 
-    code_files = [
-        f for f in all_files
-        if (
-            get_language(os.path.splitext(f)[1]) and  # Pass extension, not full path
-            not f.endswith('.prompt') and
-            not os.path.splitext(os.path.basename(f))[0].startswith('test_') and
-            not os.path.splitext(os.path.basename(f))[0].endswith('_example') and
-            os.path.splitext(f)[1].lower() not in _SKIP_EXTENSIONS and
-            os.path.basename(f) not in _SKIP_FILENAMES and
-            not _has_skip_suffix(f) and
-            not _is_pddignored(f, pddignore_root, pddignore_patterns) and
-            _has_meaningful_code(f)
-        )
-    ]
+    pairs: List[Tuple[Path, Path]] = []
+    seen: Set[Path] = set()
 
-    if allowed_extensions:
-        code_files = [
-            f for f in code_files
-            if os.path.splitext(f)[1].lower() in allowed_extensions
-        ]
-
-    for file_path in code_files:
-        prompt_path, code_path = resolve_prompt_code_pair(file_path, quiet, output_dir, create_missing=False)
+    for fp in candidate_files:
+        if fp in seen:
+            continue
+        seen.add(fp)
+        name = fp.name
+        ext = fp.suffix.lower()
+        # Hard skips first.
+        if ext == ".prompt":
+            continue
+        if ext in _SKIP_EXTENSIONS:
+            continue
+        if name in _SKIP_FILENAMES:
+            continue
+        if name.startswith("test_"):
+            continue
+        if fp.stem.endswith("_example"):
+            continue
+        if _has_skip_suffix(fp):
+            continue
+        if _is_pddignored(fp, pddignore_root, pddignore_patterns):
+            continue
+        if extensions_norm is not None and ext not in extensions_norm:
+            continue
+        if get_language(str(fp)) is None:
+            continue
+        if not _has_meaningful_code(fp):
+            continue
+        try:
+            prompt_path, code_path = resolve_prompt_code_pair(fp, quiet=True, output_dir=output_dir)
+        except Exception as exc:
+            if not quiet:
+                console.print(
+                    f"[warning]Skipping {fp}: failed to resolve prompt ({exc})[/warning]"
+                )
+            continue
         pairs.append((prompt_path, code_path))
-
     return pairs
 
-def get_git_changed_files(repo_root: str, base_branch: str = "main") -> Set[str]:
-    """Get the set of files changed relative to a base branch.
 
-    Combines three sources:
-    - Files changed between merge-base and HEAD (committed changes)
-    - Uncommitted changes (staged + unstaged vs HEAD)
-    - Untracked files
-
-    Args:
-        repo_root: Absolute path to the repository root.
-        base_branch: The base branch to compare against.
-
-    Returns:
-        Set of absolute file paths that have changed.
+# ---------------------------------------------------------------------------
+# Git-changed-files helpers.
+# ---------------------------------------------------------------------------
+def get_git_changed_files(repo_root: Path, base_branch: str = "main") -> Set[str]:
+    """
+    Combine merge-base diff, uncommitted changes, and untracked files into
+    a set of absolute path strings.
     """
     changed: Set[str] = set()
-
-    try:
-        # Find the merge base
-        merge_base = subprocess.run(
-            ["git", "merge-base", "HEAD", base_branch],
-            capture_output=True, text=True, cwd=repo_root, check=True,
-        ).stdout.strip()
-
-        # Committed changes since merge-base (Added, Copied, Modified, Renamed)
-        committed = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=ACMR", merge_base, "HEAD"],
-            capture_output=True, text=True, cwd=repo_root, check=True,
-        ).stdout.strip()
-        if committed:
-            for f in committed.splitlines():
-                changed.add(os.path.join(repo_root, f))
-    except subprocess.CalledProcessError:
-        # If merge-base fails (e.g., no common ancestor), skip committed changes
-        pass
-
-    try:
-        # Uncommitted changes (staged + unstaged)
-        uncommitted = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD"],
-            capture_output=True, text=True, cwd=repo_root, check=True,
-        ).stdout.strip()
-        if uncommitted:
-            for f in uncommitted.splitlines():
-                changed.add(os.path.join(repo_root, f))
-    except subprocess.CalledProcessError:
-        pass
-
-    try:
-        # Untracked files
-        untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard"],
-            capture_output=True, text=True, cwd=repo_root, check=True,
-        ).stdout.strip()
-        if untracked:
-            for f in untracked.splitlines():
-                changed.add(os.path.join(repo_root, f))
-    except subprocess.CalledProcessError:
-        pass
-
+    cwd = str(repo_root)
+    cmds: List[List[str]] = [
+        ["git", "diff", "--name-only", f"{base_branch}...HEAD"],
+        ["git", "diff", "--name-only", "HEAD"],
+        ["git", "diff", "--name-only", "--cached"],
+        ["git", "ls-files", "--others", "--exclude-standard"],
+    ]
+    for cmd in cmds:
+        try:
+            res = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, check=False)
+            if res.returncode != 0:
+                continue
+            for line in res.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                changed.add(str((repo_root / line).resolve()))
+        except Exception:
+            continue
     return changed
 
 
 def derive_basename_and_language(
-    code_file_path: str, repo_root: str
-) -> Tuple[Optional[str], Optional[str]]:
-    """Extract basename (relative path stem) and language from a code file path.
-
-    Uses the path relative to repo_root (without extension) as the basename
-    to avoid fingerprint collisions when multiple files share the same filename
-    (e.g., settings/page.tsx vs dashboard/page.tsx).
-
-    Args:
-        code_file_path: Absolute path to the code file.
-        repo_root: Absolute path to the repository root.
-
-    Returns:
-        (basename, language) or (None, None) for unknown extensions.
+    code_file_path: Path, repo_root: Path
+) -> Tuple[str, str]:
     """
-    ext = os.path.splitext(code_file_path)[1]
-    language = get_language(ext)
-    if not language:
-        return None, None
-
+    Use the relative path from repo_root (without extension) as the basename
+    so same-named files in different directories don't collide in `.pdd/meta`.
+    """
+    code_file_path = code_file_path.resolve()
+    repo_root = repo_root.resolve()
     try:
-        rel_path = os.path.relpath(code_file_path, repo_root)
+        rel = code_file_path.relative_to(repo_root)
     except ValueError:
-        rel_path = os.path.basename(code_file_path)
-    basename = os.path.splitext(rel_path)[0]
-    return basename, language.lower()
+        rel = Path(code_file_path.name)
+    rel_no_ext = rel.with_suffix("")
+    basename = "_".join(rel_no_ext.parts) if rel_no_ext.parts else code_file_path.stem
+    language = get_language(str(code_file_path)) or "python"
+    return basename, language
 
 
-def _check_include_deps_changed(fingerprint) -> Tuple[bool, str]:
-    """Check if any stored include dependencies have changed on disk."""
-    if not isinstance(fingerprint.include_deps, dict) or not fingerprint.include_deps:
-        return False, "no include deps in fingerprint"
-    for dep_path_str, stored_hash in fingerprint.include_deps.items():
-        dep_path = Path(dep_path_str)
-        if not dep_path.exists():
-            return True, f"include dependency deleted: {dep_path_str}"
-        current_hash = calculate_sha256(dep_path)
-        if current_hash is None:
-            # Treat unreadable dependencies as changed so they can be re-synced.
-            return True, f"include dependency unreadable: {dep_path_str}"
-        if current_hash != stored_hash:
-            return True, f"include dependency changed: {dep_path_str}"
-    return False, "include deps unchanged"
+def _check_include_deps_changed(fingerprint: Any) -> Tuple[bool, str]:
+    """
+    Compare each include dependency's stored hash against the file's
+    current SHA256 hash on disk.
+    """
+    deps = getattr(fingerprint, "include_deps", None)
+    if not deps:
+        return False, ""
+    if isinstance(deps, dict):
+        items = deps.items()
+    else:
+        try:
+            items = list(deps)
+        except Exception:
+            return False, ""
+    for item in items:
+        try:
+            if isinstance(item, tuple) and len(item) == 2:
+                path, stored_hash = item
+            elif isinstance(item, dict):
+                path, stored_hash = item.get("path"), item.get("hash")
+            else:
+                continue
+            if not path or not stored_hash:
+                continue
+            p = Path(path)
+            if not p.exists():
+                return True, f"include dep missing: {path}"
+            current = hashlib.sha256(p.read_bytes()).hexdigest()
+            if current != stored_hash:
+                return True, f"include dep changed: {path}"
+        except Exception:
+            continue
+    return False, ""
 
 
 def is_code_changed(
-    code_file_path: str,
-    repo_root: str,
+    code_file_path: Path,
+    repo_root: Path,
     git_changed_files: Set[str],
-    prompt_file_path: Optional[str] = None,
+    prompt_file_path: Optional[Path] = None,
 ) -> Tuple[bool, str]:
-    """Determine whether a code file has changed since last sync.
+    """
+    Decide whether a code file has effectively changed since its last
+    PDD operation.
 
     Strategy:
-    1. If a fingerprint exists, compare current SHA256 vs stored code_hash.
-    2. If code hash matches, check stored include dependency hashes.
-    3. If no fingerprint, fall back to git changed-files set.
-
-    When *prompt_file_path* is provided, uses ``infer_module_identity`` to
-    derive the fingerprint key (matching the write path in update_main).
-    Falls back to ``derive_basename_and_language`` otherwise.
-
-    Args:
-        code_file_path: Absolute path to the code file.
-        repo_root: Absolute path to the repository root.
-        git_changed_files: Set of absolute paths from get_git_changed_files().
-        prompt_file_path: Optional prompt path for accurate fingerprint lookup.
-
-    Returns:
-        (is_changed, reason) tuple.
+      1. Try to load a fingerprint via infer_module_identity (using prompt
+         path) or via derive_basename_and_language (using code path).
+      2. If a fingerprint exists, compare the code hash; if it matches,
+         also compare include-dependency hashes.
+      3. If no fingerprint exists, fall back to the git-changed set.
     """
-    basename, language = None, None
+    code_abs = str(code_file_path.resolve())
 
-    # Prefer prompt-path-based identity (matches the write path)
-    if prompt_file_path:
-        from .operation_log import infer_module_identity
-        basename, language = infer_module_identity(prompt_file_path)
+    fingerprint = None
+    basename: Optional[str] = None
+    language: Optional[str] = None
 
-    # Fallback to code-path-based identity
+    if prompt_file_path is not None:
+        try:
+            basename, language = infer_module_identity(str(prompt_file_path))
+        except Exception:
+            basename, language = None, None
+
     if basename is None or language is None:
         basename, language = derive_basename_and_language(code_file_path, repo_root)
 
-    if basename is None or language is None:
-        return False, "unknown extension"
-
-    fingerprint = read_fingerprint(basename, language)
-
-    if fingerprint is not None:
-        stored_hash = fingerprint.code_hash
-        if stored_hash is None:
-            return True, "fingerprint exists but has no code_hash"
-
-        current_hash = calculate_sha256(Path(code_file_path))
-        if current_hash is None:
-            return False, "could not compute current hash"
-
-        if current_hash != stored_hash:
-            return True, "code hash differs from fingerprint"
-
-        # Check include dependencies (shared files like preambles, examples)
-        include_changed, include_reason = _check_include_deps_changed(fingerprint)
-        if include_changed:
-            return True, include_reason
-
-        return False, "code hash matches fingerprint"
-
-    # No fingerprint — fall back to git
-    abs_path = os.path.abspath(code_file_path)
-    if abs_path in git_changed_files:
-        return True, "no fingerprint, file in git changed set"
-    return False, "no fingerprint, file not in git changed set"
-
-
-def update_file_pair(
-    prompt_file: str,
-    code_file: str,
-    ctx: click.Context,
-    repo: git.Repo,
-    simple: bool = False,
-    strength: Optional[float] = None,
-    temperature: Optional[float] = None,
-) -> Dict[str, Any]:
-    """
-    Wrapper to update a single file pair, choosing the correct method based on Git status and prompt content.
-    """
-    try:
-        verbose = ctx.obj.get("verbose", False)
-        quiet = ctx.obj.get("quiet", False)
-
-        # Agentic routing - try first before legacy paths
-        use_agentic = not simple and get_available_agents()
-
-        if use_agentic:
-            tests_dir = get_tests_dir_from_config()
-            success, message, agentic_cost, provider, changed_files = run_agentic_update(
-                prompt_file=prompt_file,
-                code_file=code_file,
-                test_files=None,
-                tests_dir=tests_dir,
-                verbose=verbose,
-                quiet=quiet,
-            )
-
-            if success:
-                with open(prompt_file, 'r') as f:
-                    modified_prompt = f.read()
-                return {
-                    "prompt_file": prompt_file,
-                    "status": "✅ Success (agentic)",
-                    "cost": agentic_cost,
-                    "model": provider,
-                    "error": "",
-                }
-            # Agentic failed - fall through to legacy
-
-        # Legacy path: Read the prompt first to decide the strategy.
+    fp_path = repo_root / ".pdd" / "meta" / f"{basename}_{language}.json"
+    if fp_path.exists():
         try:
-            with open(prompt_file, 'r') as f:
-                input_prompt = f.read()
-        except FileNotFoundError:
-            input_prompt = ""
+            data = json.loads(fp_path.read_text(encoding="utf-8"))
+            stored_code_hash = data.get("code_hash")
+            current_hash = hashlib.sha256(code_file_path.read_bytes()).hexdigest()
+            if stored_code_hash and current_hash != stored_code_hash:
+                return True, "code hash differs from fingerprint"
 
-        relative_code_path = os.path.relpath(code_file, repo.working_tree_dir)
-        is_untracked = relative_code_path in repo.untracked_files
+            class _FP:
+                pass
 
-        # GENERATION MODE: Trigger if the file is new OR if the prompt is empty.
-        if is_untracked or not input_prompt.strip():
-            if not quiet:
-                if is_untracked:
-                    console.print(f"[info]New untracked file detected, generating new prompt for:[/info] [path]{relative_code_path}[/path]")
-                else:
-                    console.print(f"[info]Empty prompt detected, generating new prompt for:[/info] [path]{relative_code_path}[/path]")
+            fp_obj = _FP()
+            fp_obj.include_deps = data.get("include_deps")
+            inc_changed, inc_reason = _check_include_deps_changed(fp_obj)
+            if inc_changed:
+                return True, inc_reason
+            return False, "fingerprint matches"
+        except Exception:
+            pass
 
-            with open(code_file, 'r') as f:
-                modified_code = f.read()
-
-            effective_config = _resolve_update_runtime_config(
-                ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                strength=strength,
-                temperature=temperature,
-            )
-            modified_prompt, total_cost, model_name = update_prompt(
-                input_prompt="no prompt exists yet, create a new one",
-                input_code="",  # No previous version for generation
-                modified_code=modified_code,
-                strength=effective_config["strength"],
-                temperature=effective_config["temperature"],
-                verbose=verbose,
-                time=ctx.obj.get('time', DEFAULT_TIME),
-            )
-        # UPDATE MODE: Only trigger if the file is tracked AND the prompt has content.
-        else:
-            effective_config = _resolve_update_runtime_config(
-                ctx,
-                prompt_file=prompt_file,
-                code_file=code_file,
-                strength=strength,
-                temperature=temperature,
-            )
-            modified_prompt, total_cost, model_name = git_update(
-                input_prompt=input_prompt,
-                modified_code_file=code_file,
-                strength=effective_config["strength"],
-                temperature=effective_config["temperature"],
-                verbose=verbose,
-                time=ctx.obj.get('time', DEFAULT_TIME),
-                simple=True,  # Force legacy since we already tried agentic,
-                quiet=quiet,
-                prompt_file=prompt_file,
-            )
-
-        if modified_prompt is not None:
-            # Overwrite the original prompt file
-            with open(prompt_file, "w") as f:
-                modified_prompt, invalid_includes = sanitize_prompt_output(
-                    modified_prompt,
-                    prompt_file,
-                )
-                if invalid_includes and not quiet:
-                    rprint(
-                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
-                        f"before saving {prompt_file}.[/yellow]"
-                    )
-                f.write(modified_prompt)
-            return {
-                "prompt_file": prompt_file,
-                "status": "✅ Success",
-                "cost": total_cost,
-                "model": model_name,
-                "error": "",
-            }
-        else:
-            return {
-                "prompt_file": prompt_file,
-                "status": "❌ Failed",
-                "cost": 0.0,
-                "model": "",
-                "error": "Update process returned no result.",
-            }
-    except click.Abort:
-        # User cancelled - re-raise to stop the sync loop
-        raise
-    except Exception as e:
-        return {
-            "prompt_file": prompt_file,
-            "status": "❌ Failed",
-            "cost": 0.0,
-            "model": "",
-            "error": str(e),
-        }
-
-def _read_text_byte_len(path: str) -> int:
-    """Best-effort size of file text for dry-run cost sizing (chars)."""
-    try:
-        return len(Path(path).read_text(encoding="utf-8", errors="ignore"))
-    except (OSError, IOError):
-        return 0
+    if code_abs in git_changed_files:
+        return True, "git reports change"
+    return False, "no change detected"
 
 
-def _repo_relative_md_dep(dep_str: str, repo_root_p: Path) -> Optional[str]:
-    """Return repo-relative path for a resolved include target, or None if outside repo / not doc."""
-    dep_p = Path(dep_str)
-    if not dep_p.is_absolute():
-        dep_p = (Path.cwd() / dep_p).resolve()
-    else:
-        dep_p = dep_p.resolve()
-    if dep_p.suffix.lower() not in (".md", ".mdx"):
-        return None
-    try:
-        rel = dep_p.relative_to(repo_root_p)
-    except ValueError:
-        return None
-    return str(rel).replace("\\", "/")
-
-
-def _md_doc_prompt_reference_counts(
-    repo_root: str, prompt_paths: List[str]
-) -> Dict[str, Set[str]]:
-    """Map repo-relative .md/.mdx → set of prompt paths that <include> it (scan-wide)."""
-    repo_root_p = Path(repo_root).resolve()
-    doc_to_prompts: Dict[str, Set[str]] = defaultdict(set)
-    for prompt_path_str in prompt_paths:
-        deps = extract_include_deps(Path(prompt_path_str))
-        for dep_str in deps:
-            rel = _repo_relative_md_dep(dep_str, repo_root_p)
-            if rel:
-                doc_to_prompts[rel].add(prompt_path_str)
-    return doc_to_prompts
-
-
-def _included_docs_for_drift_report(
-    repo_root: str,
-    all_prompt_paths: List[str],
-    drifted_prompt_paths: List[str],
-) -> List[Tuple[str, int]]:
-    """Docs referenced by at least one drifted prompt; count = prompts in full scan that include each doc."""
-    drifted_set = set(drifted_prompt_paths)
-    doc_to_prompts = _md_doc_prompt_reference_counts(repo_root, all_prompt_paths)
-    rows: List[Tuple[str, int]] = []
-    for doc_rel, prompters in doc_to_prompts.items():
-        if not prompters & drifted_set:
-            continue
-        rows.append((doc_rel, len(prompters)))
-    return sorted(rows, key=lambda x: (-x[1], x[0]))
-
-
-def _resolve_update_runtime_config(
-    ctx: click.Context,
-    *,
-    prompt_file: Optional[str] = None,
-    code_file: Optional[str] = None,
-    resolved_config: Optional[Dict[str, Any]] = None,
-    strength: Optional[float] = None,
-    temperature: Optional[float] = None,
-) -> Dict[str, Any]:
-    """Resolve effective update config for a single target.
-
-    Update flows can span multiple contexts in one command, especially in repo mode,
-    so config must be resolved per target instead of written once into ``ctx.obj``.
+# ---------------------------------------------------------------------------
+# Single-file metadata sync helper (issue #1005).
+# ---------------------------------------------------------------------------
+def _run_single_file_metadata_sync(
+    prompt_path: Path,
+    code_path: Path,
+    dry_run: bool = False,
+) -> bool:
     """
+    Wrap `pdd.metadata_sync.run_metadata_sync` for the single-file and
+    regeneration success paths.
 
-    if resolved_config is None:
-        quiet = ctx.obj.get("quiet", False)
-        context_override = ctx.obj.get("context")
-        candidate_paths: List[str] = []
-        if prompt_file:
-            candidate_paths.append(prompt_file)
-        if code_file and code_file not in candidate_paths:
-            candidate_paths.append(code_file)
+    Returns True on `MetadataSyncResult.ok` (including dry-runs/skipped
+    stages), and False on orchestrator exceptions or any stage whose
+    status is "failed". Failure lines are written to stderr per the
+    issue #1005 acceptance criterion so that "no silent stale-metadata
+    path remains" is directly testable by capturing stderr.
+    """
+    try:
+        from .metadata_sync import run_metadata_sync
+    except Exception as exc:
+        _err_console.print(
+            f"[error]metadata sync unavailable:[/error] {exc}"
+        )
+        return False
+    try:
+        result = run_metadata_sync(prompt_path, code_path, dry_run=dry_run)
+    except Exception as exc:
+        _err_console.print(
+            f"[error]metadata sync raised:[/error] {exc}"
+        )
+        return False
 
-        resolved_candidates: List[Dict[str, Any]] = []
-        for candidate in candidate_paths:
-            candidate_path = Path(candidate)
-            candidate_cwd = candidate_path.parent if candidate_path.parent else Path.cwd()
-            _, _, _, candidate_config, _ = resolve_target_context(
-                cli_options={},
-                context_override=context_override,
-                cwd=candidate_cwd,
-                prompt_file=str(candidate_path),
-                quiet=quiet,
+    failed_any = False
+    for stage_name, stage in (result.stages or {}).items():
+        status = getattr(stage, "status", None)
+        if status == "failed":
+            reason = getattr(stage, "reason", "") or ""
+            _err_console.print(
+                f"[error]metadata sync failed[/error] stage={stage_name} reason={reason}"
             )
-            resolved_candidates.append(candidate_config)
-            if candidate_config.get("_matched_context") not in ("default", "none"):
-                resolved_config = candidate_config
-                break
+            failed_any = True
 
-        if resolved_config is None:
-            if resolved_candidates:
-                resolved_config = resolved_candidates[0]
-            else:
-                _, _, _, resolved_config, _ = resolve_target_context(
-                    cli_options={},
-                    context_override=context_override,
-                    cwd=Path.cwd(),
-                    quiet=quiet,
-                )
-
-    return resolve_command_config(
-        ctx,
-        resolved_config,
-        param_overrides={"strength": strength, "temperature": temperature},
-    )
+    if failed_any or not getattr(result, "ok", False):
+        return False
+    if not dry_run:
+        console.print("[success]metadata: synced[/success]")
+    else:
+        console.print("[info]metadata: dry-run (no writes)[/info]")
+    return True
 
 
-def _estimate_dry_run_cost_range(
-    ctx: click.Context,
-    repo_obj: git.Repo,
+# ---------------------------------------------------------------------------
+# Per-pair update wrapper (repo mode).
+# ---------------------------------------------------------------------------
+def update_file_pair(
+    prompt_file: Path,
+    code_file: Path,
+    ctx: Any,
+    repo: bool,
     simple: bool,
-    changed_items: List[Tuple[str, str, str]],
-) -> Tuple[float, float]:
-    """Flat heuristic total $ range for dry-run (not billed).
-
-    Historically, each per-file update tends to cost around $0.50–$1.00. For dry-run,
-    report a simple flat estimate based on the number of drifted pairs.
+) -> Dict[str, Any]:
     """
-    n = len(changed_items)
-    return (n * 0.5, n * 1.0)
+    Update a single (prompt, code) pair.
+
+    Tries the agentic path first (when not `simple` and agents are
+    available); falls back to legacy git_update / update_prompt.
+    """
+    obj = ctx.obj or {}
+    verbose = obj.get("verbose", False)
+    quiet = obj.get("quiet", False)
+    strength = obj.get("strength", DEFAULT_STRENGTH)
+    temperature = obj.get("temperature", 0.0)
+    time_param = obj.get("time", DEFAULT_TIME)
+
+    result: Dict[str, Any] = {
+        "prompt_file": str(prompt_file),
+        "status": "pending",
+        "cost": 0.0,
+        "model": "",
+        "error": "",
+    }
+
+    # Determine if file is empty / untracked (regeneration sentinel).
+    try:
+        is_empty = (not prompt_file.exists()) or prompt_file.stat().st_size == 0
+    except OSError:
+        is_empty = True
+
+    # 1. Try agentic.
+    if not simple:
+        try:
+            from .agentic_update import run_agentic_update
+
+            success, message, cost, model, _changed = run_agentic_update(
+                prompt_file=str(prompt_file),
+                code_file=str(code_file),
+                quiet=quiet,
+            )
+            if success:
+                result.update(
+                    {"status": "updated (agentic)", "cost": float(cost or 0.0), "model": model or ""}
+                )
+                return result
+            if verbose and not quiet:
+                console.print(
+                    f"[warning]Agentic update unavailable for {prompt_file.name}: {message}[/warning]"
+                )
+        except ImportError:
+            pass
+        except Exception as exc:
+            if verbose and not quiet:
+                console.print(f"[warning]Agentic update error: {exc}[/warning]")
+
+    # 2. Legacy fallback.
+    try:
+        if is_empty:
+            # Treat as regeneration: run update_prompt with a generation sentinel.
+            try:
+                modified_code = code_file.read_text(encoding="utf-8")
+            except Exception as exc:
+                result.update({"status": "error", "error": f"cannot read code: {exc}"})
+                return result
+            modified_prompt, total_cost, model_name = update_prompt(
+                input_prompt="",
+                input_code="",
+                modified_code=modified_code,
+                strength=strength,
+                temperature=temperature,
+                verbose=verbose,
+                time=time_param,
+            )
+            if modified_prompt:
+                sanitized = _sanitize_for_write(modified_prompt, prompt_file)
+                prompt_file.write_text(sanitized, encoding="utf-8")
+                result.update(
+                    {"status": "regenerated", "cost": float(total_cost or 0.0), "model": model_name or ""}
+                )
+            else:
+                result.update({"status": "error", "error": "empty prompt returned"})
+            return result
+
+        try:
+            input_prompt = prompt_file.read_text(encoding="utf-8")
+        except Exception as exc:
+            result.update({"status": "error", "error": f"cannot read prompt: {exc}"})
+            return result
+
+        gu_result = git_update(
+            input_prompt=input_prompt,
+            modified_code_file=str(code_file),
+            strength=strength,
+            temperature=temperature,
+            verbose=verbose,
+            simple=True,  # we already tried agentic above
+            quiet=quiet,
+            prompt_file=str(prompt_file),
+            time=time_param,
+        )
+        if not gu_result:
+            result.update({"status": "error", "error": "git_update returned no result"})
+            return result
+        modified_prompt, total_cost, model_name = gu_result
+        if modified_prompt and modified_prompt.strip():
+            sanitized = _sanitize_for_write(modified_prompt, prompt_file)
+            prompt_file.write_text(sanitized, encoding="utf-8")
+            result.update(
+                {"status": "updated", "cost": float(total_cost or 0.0), "model": model_name or ""}
+            )
+        else:
+            result.update({"status": "error", "error": "empty prompt returned"})
+    except Exception as exc:
+        result.update({"status": "error", "error": str(exc)})
+    return result
 
 
-def _print_repository_drift_report(
-    repo_root: str,
-    n_changed: int,
-    n_pairs: int,
-    changed_items: List[Tuple[str, str, str]],
-    included_docs: List[Tuple[str, int]],
-    cost_low: float,
-    cost_high: float,
-) -> None:
-    """Print the repository drift summary for `pdd update --dry-run` (no LLM)."""
-    console.print()
-    console.print("[bold]Repository drift report:[/bold]")
-    console.print(f"  Changed files: [cyan]{n_changed}[/cyan] of [cyan]{n_pairs}[/cyan] pairs")
-    console.print(
-        f"  Estimated cost: [yellow]${cost_low:.2f}–${cost_high:.2f}[/yellow] "
-        "(flat $0.50–$1.00 per drifted pair; not billed in dry run)"
-    )
-    console.print()
-    console.print("  [bold]Drifted modules:[/bold]")
-    rows = sorted(changed_items, key=lambda x: x[1])
-    code_width = 0
-    for _p, code_path, _r in rows:
-        code_width = max(code_width, len(os.path.relpath(code_path, repo_root)))
-    code_width = min(max(code_width, 12), 52)
-    for i, (prompt_path, code_path, _reason) in enumerate(rows, start=1):
-        cr = os.path.relpath(code_path, repo_root)
-        pr = os.path.relpath(prompt_path, repo_root)
-        pad = max(code_width - len(cr), 0)
-        console.print(f"    {i}. {cr}{' ' * pad}  →  {pr}")
-    console.print()
-    console.print("  [bold]Included docs that may need updating:[/bold]")
-    if not included_docs:
-        console.print("    [dim](none detected among drifted prompts)[/dim]")
-    else:
-        for doc_rel, cnt in included_docs:
-            console.print(f"    - {doc_rel} (included by {cnt} prompt{'s' if cnt != 1 else ''})")
-    console.print()
-
-
+# ---------------------------------------------------------------------------
+# PRD discovery helper.
+# ---------------------------------------------------------------------------
 def _find_prd_file(project_root: Path) -> Optional[Path]:
-    """Find PRD file by convention: PRD.md, prd.md, *_prd.md, *_PRD.md."""
-    for pattern in ["PRD.md", "prd.md", "*_prd.md", "*_PRD.md"]:
+    """Find a PRD file by convention (PRD.md, prd.md, *_prd.md, *_PRD.md)."""
+    project_root = project_root.resolve()
+    for name in ("PRD.md", "prd.md"):
+        p = project_root / name
+        if p.exists():
+            return p
+    for pattern in ("*_prd.md", "*_PRD.md"):
         matches = list(project_root.glob(pattern))
         if matches:
             return matches[0]
     return None
 
 
-def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
-    """Run metadata sync for a single (prompt, code) pair.
+# ---------------------------------------------------------------------------
+# Repo mode entry.
+# ---------------------------------------------------------------------------
+def _meta_status_string(meta_result: Any) -> str:
+    """Render a one-cell metadata status for the summary table."""
+    if meta_result is None:
+        return "skipped"
+    stages = getattr(meta_result, "stages", {}) or {}
+    failed = [n for n, s in stages.items() if getattr(s, "status", None) == "failed"]
+    if failed:
+        return f"failed:{failed[0]}"
+    skipped_only = [n for n, s in stages.items() if getattr(s, "status", None) == "skipped"]
+    if skipped_only and len(skipped_only) == len(stages):
+        return "skipped"
+    if getattr(meta_result, "dry_run", False):
+        return "dry-run"
+    partial = [n for n, s in stages.items() if getattr(s, "status", None) not in ("ok", "dry_run")]
+    if partial and len(partial) < len(stages):
+        return f"partial:{partial[0]}"
+    return "synced"
 
-    Returns True when every stage reports `ok`/`dry_run`/`skipped`; False when
-    any stage `failed` or the orchestrator raised. Callers in single-file
-    update modes must propagate False as a non-success exit so preflight
-    auto-heal (which keys off the subprocess return code) does not treat a
-    half-finalized update as healed (#871 acceptance criterion).
-    """
+
+def _run_repo_mode(
+    ctx: Any,
+    directory: Optional[str],
+    extensions: Optional[Tuple[str, ...]],
+    base_branch: str,
+    simple: bool,
+    output_dir: Optional[str],
+    sync_metadata: bool,
+    dry_run: bool,
+) -> Optional[Tuple[str, float, str]]:
+    obj = ctx.obj or {}
+    quiet = obj.get("quiet", False)
+
+    # Determine repo root.
+    cwd = Path.cwd()
     try:
-        from .metadata_sync import run_metadata_sync
-        sync_result = run_metadata_sync(
-            prompt_path=prompt_path,
-            code_path=code_path,
-            dry_run=False,
+        res = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
         )
+        if res.returncode != 0 or not res.stdout.strip():
+            if not quiet:
+                console.print("[warning]Not in a git repository — repo mode requires git.[/warning]")
+            return None
+        repo_root = Path(res.stdout.strip()).resolve()
     except Exception as exc:
-        rprint(f"[error][metadata-sync] orchestrator: {exc}[/error]")
-        return False
-    if not sync_result.ok:
-        for stage_name, stage in sync_result.stages.items():
-            if stage.status == "failed":
-                rprint(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
-        return False
-    return True
+        if not quiet:
+            console.print(f"[error]Failed to detect git repo:[/error] {exc}")
+        return None
+
+    scan_root = Path(directory).resolve() if directory else repo_root
+
+    if not quiet:
+        console.print(f"[info]Scanning for code/prompt pairs under[/info] [path]{scan_root}[/path]")
+
+    pairs = find_and_resolve_all_pairs(
+        repo_root=scan_root,
+        quiet=quiet,
+        extensions=extensions,
+        output_dir=output_dir,
+    )
+    if not pairs:
+        if not quiet:
+            console.print("[warning]No scannable code files found.[/warning]")
+        return None
+
+    # Auto-create .pddrc if needed.
+    try:
+        from .pddrc_initializer import ensure_pddrc_for_scan
+
+        ensure_pddrc_for_scan(scan_root, pairs, quiet=quiet)
+    except Exception:
+        pass
+
+    git_changed = get_git_changed_files(repo_root, base_branch=base_branch)
+    changed_pairs: List[Tuple[Path, Path]] = []
+    for prompt_file, code_file in pairs:
+        try:
+            empty_prompt = prompt_file.exists() and prompt_file.stat().st_size == 0
+        except OSError:
+            empty_prompt = False
+        is_changed, _reason = is_code_changed(
+            code_file, repo_root, git_changed, prompt_file_path=prompt_file
+        )
+        if is_changed or empty_prompt:
+            changed_pairs.append((prompt_file, code_file))
+
+    if not changed_pairs:
+        if not quiet:
+            console.print("[success]Everything is in sync — no updates needed.[/success]")
+        return None
+
+    if not quiet:
+        console.print(
+            f"[info]Updating {len(changed_pairs)} pair(s)…[/info]"
+        )
+
+    results: List[Dict[str, Any]] = []
+    meta_results: Dict[str, Any] = {}  # prompt_file -> MetadataSyncResult or None
+    arch_updates_count = 0
+    total_cost = 0.0
+    models_used: Set[str] = set()
+
+    progress_columns = (
+        SpinnerColumn(),
+        TextColumn("[progress.description]{task.description}"),
+        BarColumn(),
+        TaskProgressColumn(),
+        TextColumn("•"),
+        TimeRemainingColumn(),
+        TextColumn("• ${task.fields[cost]:.4f}"),
+    )
+    with Progress(*progress_columns, console=console, disable=quiet) as progress:
+        task = progress.add_task(
+            "Updating pairs", total=len(changed_pairs), cost=0.0
+        )
+        for prompt_file, code_file in changed_pairs:
+            res = update_file_pair(prompt_file, code_file, ctx, repo=True, simple=simple)
+            results.append(res)
+            total_cost += float(res.get("cost") or 0.0)
+            if res.get("model"):
+                models_used.add(res["model"])
+
+            # Metadata finalization.
+            if res.get("status", "").startswith(("updated", "regenerated")):
+                if sync_metadata:
+                    try:
+                        from .metadata_sync import run_metadata_sync
+
+                        meta = run_metadata_sync(prompt_file, code_file, dry_run=dry_run)
+                        meta_results[str(prompt_file)] = meta
+                        if not getattr(meta, "ok", False):
+                            for stage_name, stage in (meta.stages or {}).items():
+                                if getattr(stage, "status", None) == "failed":
+                                    _err_console.print(
+                                        f"[error]metadata sync failed[/error] "
+                                        f"prompt={prompt_file} stage={stage_name} "
+                                        f"reason={getattr(stage, 'reason', '') or ''}"
+                                    )
+                        # Track arch updates from orchestrator.
+                        arch_stage = (meta.stages or {}).get("architecture")
+                        if arch_stage and getattr(arch_stage, "status", None) in ("ok", "dry_run"):
+                            detail = getattr(arch_stage, "detail", "") or ""
+                            if "updated" in detail.lower() or getattr(arch_stage, "status", None) == "ok":
+                                arch_updates_count += 1
+                    except Exception as exc:
+                        _err_console.print(
+                            f"[error]metadata sync exception for {prompt_file}:[/error] {exc}"
+                        )
+                        meta_results[str(prompt_file)] = None
+                else:
+                    # Legacy: save fingerprint and run architecture sync inline.
+                    meta_results[str(prompt_file)] = None
+                    if not dry_run:
+                        try:
+                            basename, language = infer_module_identity(str(prompt_file))
+                            save_fingerprint(
+                                basename=basename,
+                                language=language,
+                                operation="update",
+                                paths={"prompt": prompt_file, "code": code_file},
+                                cost=float(res.get("cost") or 0.0),
+                                model=res.get("model") or "",
+                            )
+                        except Exception as exc:
+                            if not quiet:
+                                console.print(
+                                    f"[warning]fingerprint save failed for {prompt_file}: {exc}[/warning]"
+                                )
+                        # Architecture sync per pair.
+                        try:
+                            from .architecture_sync import (
+                                find_architecture_for_project,
+                                update_architecture_from_prompt,
+                            )
+
+                            arch_path = find_architecture_for_project(repo_root)
+                            if arch_path and arch_path.exists():
+                                arch_res = update_architecture_from_prompt(
+                                    prompt_filename=prompt_file.name,
+                                    prompts_dir=prompt_file.parent,
+                                    architecture_path=arch_path,
+                                    dry_run=dry_run,
+                                )
+                                if arch_res and arch_res.get("updated"):
+                                    arch_updates_count += 1
+                        except Exception:
+                            pass
+            progress.update(task, advance=1, cost=total_cost)
+
+    # Render summary table.
+    table = Table(title="Update Summary")
+    table.add_column("prompt file", style="path")
+    table.add_column("status")
+    table.add_column("cost", justify="right")
+    table.add_column("model")
+    table.add_column("error")
+    if sync_metadata:
+        table.add_column("metadata")
+    for r in results:
+        cells = [
+            str(r.get("prompt_file", "")),
+            str(r.get("status", "")),
+            f"${float(r.get('cost') or 0.0):.4f}",
+            str(r.get("model", "")),
+            str(r.get("error", "")),
+        ]
+        if sync_metadata:
+            meta = meta_results.get(str(r.get("prompt_file", "")))
+            cells.append(_meta_status_string(meta))
+        table.add_row(*cells)
+    if not quiet:
+        console.print(table)
+
+    # PRD sync (both branches): keyed off arch_updates_count.
+    if arch_updates_count > 0:
+        prd_path = _find_prd_file(repo_root)
+        if prd_path:
+            try:
+                from .agentic_common import run_agentic_task
+
+                instruction = (
+                    f"Review the PRD at {prd_path} against the updated architecture and "
+                    "produce an updated PRD. Wrap the new PRD content in "
+                    "<updated-prd>...</updated-prd> tags."
+                )
+                llm_success, llm_output, llm_cost, _llm_model = run_agentic_task(
+                    instruction, repo_root, verbose=False, max_retries=1
+                )
+                total_cost += float(llm_cost or 0.0)
+                if llm_success and llm_output:
+                    m = re.search(
+                        r"<updated-prd>(.*?)</updated-prd>",
+                        llm_output,
+                        re.DOTALL,
+                    )
+                    if m and not dry_run:
+                        prd_path.write_text(m.group(1).strip() + "\n", encoding="utf-8")
+                        if not quiet:
+                            console.print(
+                                f"[success]PRD updated:[/success] [path]{prd_path}[/path]"
+                            )
+                elif not quiet:
+                    console.print("[warning]PRD agent call failed; PRD unchanged.[/warning]")
+            except Exception as exc:
+                if not quiet:
+                    console.print(f"[warning]PRD sync skipped:[/warning] {exc}")
+
+    # Non-zero exit on per-pair metadata failure (sync_metadata only).
+    if sync_metadata:
+        any_failed = any(
+            (m is None) or (not getattr(m, "ok", False))
+            for m in meta_results.values()
+        )
+        # Only treat as failure if at least one pair was updated and its
+        # metadata sync attempt did not succeed.
+        attempted_meta = [m for m in meta_results.values() if m is not None]
+        # If we have an explicit failure (None or not-ok) for any updated pair:
+        any_explicit_failure = any(
+            not getattr(m, "ok", False) for m in attempted_meta
+        )
+        if any_explicit_failure:
+            raise click.exceptions.Exit(1)
+        if any_failed and attempted_meta:
+            raise click.exceptions.Exit(1)
+
+    models_str = ",".join(sorted(models_used)) if models_used else "models"
+    return ("Repository update complete.", total_cost, models_str)
 
 
+# ---------------------------------------------------------------------------
+# Single-file & regeneration paths.
+# ---------------------------------------------------------------------------
+def _run_single_file_mode(
+    ctx: Any,
+    input_prompt_file: Optional[str],
+    modified_code_file: str,
+    input_code_file: Optional[str],
+    output: Optional[str],
+    use_git: bool,
+    simple: bool,
+    strength: Optional[float],
+    temperature: Optional[float],
+    dry_run: bool,
+) -> Optional[Tuple[str, float, str]]:
+    obj = ctx.obj or {}
+    verbose = obj.get("verbose", False)
+    quiet = obj.get("quiet", False)
+    time_param = obj.get("time", DEFAULT_TIME)
+    force = obj.get("force", False)
+    context_override = obj.get("context")
+    confirm_callback = obj.get("confirm_callback")
+
+    # Resolve strength/temperature.
+    resolved_strength = strength if strength is not None else obj.get("strength", DEFAULT_STRENGTH)
+    resolved_temperature = temperature if temperature is not None else obj.get("temperature", 0.0)
+    obj["strength"] = resolved_strength
+    obj["temperature"] = resolved_temperature
+
+    # Regeneration mode: only modified_code_file provided.
+    regeneration_mode = input_prompt_file is None
+
+    if regeneration_mode:
+        try:
+            prompt_path, code_path = resolve_prompt_code_pair(
+                Path(modified_code_file), quiet=quiet, output_dir=output
+            )
+        except Exception as exc:
+            if not quiet:
+                console.print(f"[error]Failed to resolve prompt for code:[/error] {exc}")
+            return None
+        input_prompt_file = str(prompt_path)
+    else:
+        prompt_path = Path(input_prompt_file)
+        code_path = Path(modified_code_file)
+
+    output_path = Path(output) if output else prompt_path
+
+    # Try agentic first when allowed.
+    if not simple:
+        try:
+            from .agentic_update import run_agentic_update
+
+            success, message, cost, model, _changed = run_agentic_update(
+                prompt_file=str(prompt_path),
+                code_file=str(code_path),
+                quiet=quiet,
+            )
+            if success:
+                # Agentic writes directly to file; read back the prompt.
+                try:
+                    new_prompt = prompt_path.read_text(encoding="utf-8")
+                except Exception as exc:
+                    if not quiet:
+                        console.print(f"[error]Agentic update succeeded but file unreadable:[/error] {exc}")
+                    return None
+                # If a separate output path was requested, copy it there.
+                if output and Path(output) != prompt_path:
+                    sanitized = _sanitize_for_write(new_prompt, output_path)
+                    Path(output).write_text(sanitized, encoding="utf-8")
+                # Metadata finalization (always-on).
+                ok = _run_single_file_metadata_sync(prompt_path, code_path, dry_run=dry_run)
+                if not ok:
+                    raise click.exceptions.Exit(1)
+                return (new_prompt, float(cost or 0.0), model or "")
+            if verbose and not quiet:
+                console.print(f"[info]Falling back to legacy update: {message}[/info]")
+        except click.exceptions.Exit:
+            raise
+        except ImportError:
+            pass
+        except Exception as exc:
+            if verbose and not quiet:
+                console.print(f"[warning]Agentic path error: {exc}[/warning]")
+
+    # Legacy path.
+    try:
+        if regeneration_mode:
+            try:
+                modified_code = code_path.read_text(encoding="utf-8")
+            except Exception as exc:
+                if not quiet:
+                    console.print(f"[error]Cannot read modified code:[/error] {exc}")
+                return None
+            modified_prompt, total_cost, model_name = update_prompt(
+                input_prompt="",
+                input_code="",
+                modified_code=modified_code,
+                strength=resolved_strength,
+                temperature=resolved_temperature,
+                verbose=verbose,
+                time=time_param,
+            )
+        elif use_git:
+            try:
+                input_prompt = prompt_path.read_text(encoding="utf-8")
+            except Exception as exc:
+                if not quiet:
+                    console.print(f"[error]Cannot read prompt:[/error] {exc}")
+                return None
+            gu = git_update(
+                input_prompt=input_prompt,
+                modified_code_file=str(code_path),
+                strength=resolved_strength,
+                temperature=resolved_temperature,
+                verbose=verbose,
+                simple=True,
+                quiet=quiet,
+                prompt_file=str(prompt_path),
+                time=time_param,
+            )
+            if not gu:
+                if not quiet:
+                    console.print("[error]git_update returned no result.[/error]")
+                return None
+            modified_prompt, total_cost, model_name = gu
+        else:
+            # True update with explicit input_code_file.
+            if not input_code_file:
+                raise ValueError("input_code_file or use_git is required for true update mode.")
+            try:
+                input_prompt = prompt_path.read_text(encoding="utf-8")
+                input_code = Path(input_code_file).read_text(encoding="utf-8")
+                modified_code = code_path.read_text(encoding="utf-8")
+            except Exception as exc:
+                if not quiet:
+                    console.print(f"[error]Cannot read inputs:[/error] {exc}")
+                return None
+            modified_prompt, total_cost, model_name = update_prompt(
+                input_prompt=input_prompt,
+                input_code=input_code,
+                modified_code=modified_code,
+                strength=resolved_strength,
+                temperature=resolved_temperature,
+                verbose=verbose,
+                time=time_param,
+            )
+    except click.Abort:
+        raise
+    except ValueError as exc:
+        if not quiet:
+            console.print(f"[error]{exc}[/error]")
+        return None
+    except Exception as exc:
+        if not quiet:
+            console.print(f"[error]Update failed:[/error] {exc}")
+        return None
+
+    # Validate prompt non-empty (true-update).
+    if modified_prompt is None or not modified_prompt.strip():
+        if not quiet:
+            console.print("[error]Update produced an empty prompt; aborting write.[/error]")
+        return None
+
+    # Sanitize and write.
+    sanitized = _sanitize_for_write(modified_prompt, output_path)
+    try:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if not dry_run:
+            output_path.write_text(sanitized, encoding="utf-8")
+        if not quiet:
+            console.print(f"[success]Wrote updated prompt:[/success] [path]{output_path}[/path]")
+    except Exception as exc:
+        if not quiet:
+            console.print(f"[error]Failed to write output:[/error] {exc}")
+        return None
+
+    # Always-on metadata finalization for single-file/regeneration mode (#1005).
+    ok = _run_single_file_metadata_sync(
+        prompt_path=output_path if output else prompt_path,
+        code_path=code_path,
+        dry_run=dry_run,
+    )
+    if not ok:
+        # Non-zero exit per #1005 acceptance criterion.
+        raise click.exceptions.Exit(1)
+
+    # Touch construct_paths for context propagation (best-effort).
+    if context_override or confirm_callback or force:
+        try:
+            _ = construct_paths  # noqa: F841 — referenced for side-effectful imports
+        except Exception:
+            pass
+
+    return (sanitized, float(total_cost or 0.0), model_name or "")
+
+
+# ---------------------------------------------------------------------------
+# Public entry point.
+# ---------------------------------------------------------------------------
 def update_main(
-    ctx: click.Context,
+    ctx: Any,
     input_prompt_file: Optional[str],
     modified_code_file: Optional[str],
     input_code_file: Optional[str],
     output: Optional[str],
-    use_git: bool = False,
-    repo: bool = False,
-    extensions: Optional[str] = None,
-    directory: Optional[str] = None,
-    strength: Optional[float] = None,
-    temperature: Optional[float] = None,
+    use_git: bool,
+    repo: bool,
+    extensions: Optional[Tuple[str, ...]],
+    directory: Optional[str],
+    strength: Optional[float],
+    temperature: Optional[float],
     simple: bool = False,
     base_branch: str = "main",
     budget: Optional[float] = None,
@@ -1049,701 +1345,71 @@ def update_main(
     sync_metadata: bool = False,
 ) -> Optional[Tuple[str, float, str]]:
     """
-    CLI wrapper for updating prompts based on modified code.
-    Can operate on a single file or an entire repository.
+    CLI wrapper for `pdd update`.
 
-    :param ctx: Click context object containing CLI options and parameters.
-    :param input_prompt_file: Path to the original prompt file.
-    :param modified_code_file: Path to the modified code file.
-    :param input_code_file: Optional path to the original code file. If None, Git history is used if --git is True.
-    :param output: Optional path to save the updated prompt.
-    :param use_git: Use Git history to retrieve the original code if True.
-    :param repo: If True, run in repository-wide mode.
-    :param extensions: Comma-separated string of file extensions to filter by in repo mode.
-    :param directory: Optional directory to scan in repo mode (defaults to repo root).
-    :param strength: Optional strength parameter (overrides ctx.obj if provided).
-    :param temperature: Optional temperature parameter (overrides ctx.obj if provided).
-    :param base_branch: Git branch to compare against for change detection in repo mode.
-    :param budget: Optional repository-wide cap; stop processing once cumulative update cost reaches this amount.
-    :param dry_run: If True in repo mode, list pending updates only (no LLM, no prompt writes, no architecture/PRD sync).
-    :param sync_metadata: If True, orchestrate prompt metadata finalization via run_metadata_sync
-        after the update writes the prompt. In repo mode, replaces the legacy per-pair fingerprint
-        and architecture sync with a per-pair run_metadata_sync call; PRD sync remains in this
-        wrapper and runs once after the batch when architecture entries changed.
-    :return: Tuple containing the updated prompt, total cost, and model name.
+    Modes:
+      - Repo mode (`repo=True`): scan repo, detect changed pairs, update
+        each, optionally run multi-stage metadata sync per pair, and run
+        PRD sync once at the end.
+      - Regeneration mode: only `modified_code_file` provided — derive the
+        prompt path and treat as regeneration.
+      - True update: `input_prompt_file` + `modified_code_file` plus either
+        `use_git` or `input_code_file`.
+
+    Returns (prompt, cost, model) on success, or None on early no-op /
+    error. Raises `click.exceptions.Exit(1)` when single-file or
+    repo-mode metadata finalization reports a stage failure (issue #1005,
+    #871) — the success tuple is reserved for fully-clean finalization.
     """
-    quiet = ctx.obj.get("quiet", False)
-    if repo:
-        try:
-            # Find the repo root by searching up from the current directory
-            repo_obj = git.Repo(os.getcwd(), search_parent_directories=True)
-            repo_root = repo_obj.working_tree_dir
-        except git.InvalidGitRepositoryError:
-            rprint("[bold red]Error:[/bold red] Repository-wide mode requires the current directory to be within a Git repository.")
-            # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
-            return None
+    obj = ctx.obj or {}
+    quiet = obj.get("quiet", False)
 
-        # Use specified directory if provided; if CWD has its own .pddrc
-        # (subdirectory project), scope scan to CWD instead of the git root.
-        if directory:
-            scan_dir = os.path.abspath(directory)
-        else:
-            cwd = os.getcwd()
-            cwd_pddrc = Path(cwd) / ".pddrc"
-            if cwd_pddrc.is_file() and os.path.abspath(cwd) != os.path.abspath(repo_root):
-                scan_dir = cwd
-            else:
-                scan_dir = repo_root
-        pairs = find_and_resolve_all_pairs(scan_dir, quiet, extensions, output)
+    # Mutually-exclusive validation.
+    if use_git and input_code_file:
+        raise ValueError("use_git and input_code_file are mutually exclusive.")
 
-        if pairs and not dry_run:
-            from .pddrc_initializer import ensure_pddrc_for_scan
-            code_files_for_pddrc = [code_path for _, code_path in pairs]
-            ensure_pddrc_for_scan(scan_dir, repo_root, code_files_for_pddrc, quiet=quiet)
-
-        if not pairs:
-            rprint("[info]No scannable code files found in the repository.[/info]")
-            return None
-
-        # Change-detection: filter to changed code files OR empty prompts
-        git_changed_files = get_git_changed_files(repo_root, base_branch)
-
-        changed_items = []
-        for prompt_path, code_path in pairs:
-            # Empty prompts always need generation, regardless of code changes
-            prompt_p = Path(prompt_path)
-            if prompt_p.exists() and prompt_p.stat().st_size == 0:
-                changed_items.append((prompt_path, code_path, "empty prompt file"))
-                continue
-            changed, reason = is_code_changed(code_path, repo_root, git_changed_files, prompt_file_path=prompt_path)
-            if changed:
-                changed_items.append((prompt_path, code_path, reason))
-
-        if not changed_items:
-            if not quiet:
-                rprint("[info]No changed code files detected. Everything is in sync.[/info]")
-            return None
-
-        if dry_run:
-            if not quiet:
-                drift_prompts = [p for p, _c, _r in changed_items]
-                all_prompt_paths = [p for p, _c in pairs]
-                included_docs = _included_docs_for_drift_report(
-                    repo_root, all_prompt_paths, drift_prompts
-                )
-                cost_low, cost_high = _estimate_dry_run_cost_range(
-                    ctx, repo_obj, simple, changed_items
-                )
-                _print_repository_drift_report(
-                    repo_root,
-                    len(changed_items),
-                    len(pairs),
-                    changed_items,
-                    included_docs,
-                    cost_low,
-                    cost_high,
-                )
-                rprint(
-                    "[dim]No LLM calls, no prompt writes, no architecture or PRD sync.[/dim]"
-                )
-            n = len(changed_items)
-            return (
-                f"Dry run: {n} prompt(s) would be updated (no changes made).",
-                0.0,
-                "N/A",
-            )
-
-        if not quiet:
-            rprint(
-                f"[info]Found {len(changed_items)} changed file(s) "
-                f"out of {len(pairs)} total pairs.[/info]"
-            )
-
-        results = []
-        total_repo_cost = 0.0
-        budget_reached = False
-        metadata_results: Dict[str, Any] = {}
-
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}", justify="right"),
-            BarColumn(bar_width=None),
-            TextColumn("[progress.percentage]{task.percentage:>3.1f}%"),
-            TextColumn("•"),
-            TimeRemainingColumn(),
-            TextColumn("•"),
-            TextColumn("Total Cost: $[bold green]{task.fields[total_cost]:.6f}[/bold green]"),
-            console=console,
-            transient=True,
-        )
-
-        with progress:
-            task = progress.add_task(
-                "Updating prompts...",
-                total=len(changed_items),
-                total_cost=0.0
-            )
-
-            for prompt_path, code_path, _reason in changed_items:
-                if budget is not None and total_repo_cost >= budget:
-                    budget_reached = True
-                    if not quiet:
-                        rprint(
-                            f"[info]Budget cap reached (${budget:.2f}); "
-                            f"stopping with {len(results)} file(s) processed.[/info]"
-                        )
-                    break
-                relative_path = os.path.relpath(code_path, repo_root)
-                progress.update(task, description=f"Processing [path]{relative_path}[/path]")
-
-                result = update_file_pair(
-                    prompt_path,
-                    code_path,
-                    ctx,
-                    repo_obj,
-                    simple=simple,
-                    strength=strength,
-                    temperature=temperature,
-                )
-                results.append(result)
-
-                total_repo_cost += result.get("cost", 0.0)
-
-                if not sync_metadata:
-                    # Save fingerprint so the file isn't detected as changed next run
-                    if "Success" in result.get("status", ""):
-                        from .operation_log import save_fingerprint, infer_module_identity
-                        basename, language = infer_module_identity(prompt_path)
-                        if basename and language:
-                            try:
-                                paths = {
-                                    "prompt": Path(prompt_path),
-                                    "code": Path(code_path),
-                                }
-                                save_fingerprint(
-                                    basename, language,
-                                    operation="update",
-                                    paths=paths,
-                                    cost=result.get("cost", 0.0),
-                                    model=result.get("model", "unknown"),
-                                )
-                            except Exception:
-                                pass  # Best-effort; don't fail the update
-                else:
-                    if "Success" in result.get("status", ""):
-                        try:
-                            from .metadata_sync import run_metadata_sync
-                            sync_res = run_metadata_sync(
-                                prompt_path=Path(prompt_path),
-                                code_path=Path(code_path),
-                                dry_run=False,
-                            )
-                            metadata_results[prompt_path] = sync_res
-                        except Exception as exc:
-                            from .metadata_sync import MetadataSyncResult, StageStatus
-                            metadata_results[prompt_path] = MetadataSyncResult(
-                                prompt_path=Path(prompt_path),
-                                code_path=Path(code_path),
-                                dry_run=False,
-                                stages={"prompt": StageStatus(status="failed", reason=str(exc))},
-                            )
-
-                progress.update(task, advance=1, total_cost=total_repo_cost)
-
-        # --- Post-update: Architecture sync (+ PRD sync if arch changed) ---
-        # The PRD-sync block always runs (independent of `sync_metadata`) so
-        # that opting into `--sync-metadata` does not silently drop PRD
-        # propagation. The orchestrator handles per-pair arch updates when
-        # `sync_metadata=True`, so we only run the legacy arch loop when
-        # `sync_metadata=False`; the PRD step keys off the resulting count
-        # of architecture entries that actually changed.
-        arch_entries_updated = 0
-        prd_status = "skipped"
-
-        from .architecture_registry import find_architecture_for_project
-        arch_files = find_architecture_for_project(Path(repo_root))
-        architecture_path = arch_files[0] if arch_files else Path(repo_root) / "architecture.json"
-        prompts_dir = Path(repo_root) / "prompts"
-
-        if not sync_metadata:
-            successful_prompts = [
-                res["prompt_file"] for res in results
-                if "Success" in res.get("status", "")
-            ]
-
-            if successful_prompts and architecture_path.exists():
-                from .architecture_sync import update_architecture_from_prompt
-                for prompt_file in successful_prompts:
-                    prompt_filename = os.path.basename(prompt_file)
-                    try:
-                        arch_result = update_architecture_from_prompt(
-                            prompt_filename,
-                            prompts_dir=prompts_dir,
-                            architecture_path=architecture_path,
-                        )
-                        if arch_result.get("success") and arch_result.get("updated"):
-                            arch_entries_updated += 1
-                    except Exception:
-                        # Architecture sync is best-effort; don't fail the update
-                        pass
-        else:
-            # The orchestrator already ran update_architecture_from_prompt per
-            # pair. Count entries whose architecture stage reported a real
-            # update so the downstream PRD-sync decision matches the legacy
-            # semantics (only run when arch actually changed).
-            for sync_res in metadata_results.values():
-                arch_stage = sync_res.stages.get("architecture")
-                if (
-                    arch_stage is not None
-                    and arch_stage.status == "ok"
-                    and arch_stage.detail
-                    and arch_stage.detail.startswith("updated fields:")
-                    and arch_stage.detail != "updated fields: []"
-                ):
-                    arch_entries_updated += 1
-
-        # --- Post-update: PRD sync (only if architecture changed) ---
-        if arch_entries_updated > 0:
-            prd_file = _find_prd_file(Path(repo_root))
-            if prd_file is None:
-                prd_status = "not found"
-            else:
-                try:
-                    from .agentic_common import run_agentic_task
-
-                    prd_content = prd_file.read_text(encoding="utf-8")
-                    arch_json = architecture_path.read_text(encoding="utf-8")
-
-                    instruction = (
-                        "You are reviewing whether a PRD (Product Requirements Document) needs updating "
-                        "after architecture changes.\n\n"
-                        f"Current PRD:\n{prd_content}\n\n"
-                        f"Updated architecture.json:\n{arch_json}\n\n"
-                        f"Architecture entries updated: {arch_entries_updated}\n\n"
-                        "If the PRD needs updating to reflect these architecture changes, output the "
-                        "complete updated PRD between <updated-prd> and </updated-prd> tags.\n"
-                        "If no update is needed, output: NO_UPDATE_NEEDED"
-                    )
-
-                    llm_success, llm_output, llm_cost, _llm_model = run_agentic_task(
-                        instruction=instruction,
-                        cwd=Path(repo_root),
-                        verbose=ctx.obj.get("verbose", False),
-                        quiet=True,
-                        label="prd-sync",
-                    )
-
-                    if llm_cost:
-                        total_repo_cost += llm_cost
-
-                    if not llm_success:
-                        prd_status = f"error: {llm_output}"
-                    elif llm_output and "<updated-prd>" in llm_output:
-                        match = re.search(
-                            r"<updated-prd>(.*?)</updated-prd>",
-                            llm_output,
-                            re.DOTALL,
-                        )
-                        if match:
-                            prd_file.write_text(match.group(1).strip() + "\n", encoding="utf-8")
-                            prd_status = "updated"
-                        else:
-                            prd_status = "unchanged"
-                    else:
-                        prd_status = "unchanged"
-                except Exception:
-                    prd_status = "error"
-        else:
-            prd_status = "skipped (no arch changes)"
-
-        from .metadata_sync import STAGE_ORDER
-
-        def _metadata_column_value(prompt_file_key: str) -> str:
-            res = metadata_results.get(prompt_file_key)
-            if res is None:
-                return "skipped"
-            stages = res.stages
-            failing = res.failing_stage
-            if failing:
-                return f"failed:{failing}"
-            if any(s.status == "dry_run" for s in stages.values()):
-                return "dry-run"
-            # ``partial:<stage>`` surfaces the first skipped stage (e.g. an
-            # unregistered module → architecture stage skipped). Result is
-            # still ``ok`` (skipped is a non-failure), but the column makes it
-            # obvious that not every metadata layer was actually written.
-            skipped = next(
-                (n for n in STAGE_ORDER if stages.get(n) and stages[n].status == "skipped"),
-                None,
-            )
-            if skipped:
-                return f"partial:{skipped}"
-            if res.ok:
-                return "synced"
-            return "skipped"
-
-        table = Table(show_header=True, header_style="bold magenta")
-        table.add_column("Prompt File", style="dim", width=50)
-        table.add_column("Status")
-        table.add_column("Cost", justify="right")
-        table.add_column("Model")
-        table.add_column("Error", style="error")
-        table.add_column("Metadata")
-
-        models_used = set()
-        for res in sorted(results, key=lambda x: x["prompt_file"]):
-            table.add_row(
-                os.path.relpath(res["prompt_file"], repo_root),
-                res["status"],
-                f"${res['cost']:.6f}",
-                res["model"],
-                res["error"],
-                _metadata_column_value(res["prompt_file"]),
-            )
-            if res["model"]:
-                models_used.add(res["model"])
-
-        console.print("\n[bold]Repository Update Summary[/bold]")
-        console.print(table)
-        if budget_reached:
-            console.print(f"[info]Budget cap reached: ${budget:.2f}[/info]")
-        if arch_entries_updated > 0 or prd_status != "skipped (no arch changes)":
-            console.print(f"\n[info]Architecture entries updated: {arch_entries_updated}[/info]")
-            console.print(f"[info]PRD status: {prd_status}[/info]")
-        console.print(f"\n[bold]Total Estimated Cost: ${total_repo_cost:.6f}[/bold]")
-
-        final_model_str = ", ".join(sorted(models_used)) if models_used else "N/A"
-
-        # When --sync-metadata was opted in, any per-pair MetadataSyncResult
-        # that is not .ok (i.e. a stage reported `failed`) must surface as a
-        # non-zero CLI exit. Without this, repo-mode silently returns the
-        # success tuple and Click exits 0 — masking partial-state heals and
-        # contradicting the single-file `click.exceptions.Exit(1)` contract.
-        # `skipped` is permitted (no arch entry, unregistered modules); only
-        # `failed` blocks. The summary table has already been printed above
-        # so the operator sees which pair(s) failed.
-        if sync_metadata and metadata_results:
-            failed_pairs = [
-                (p, r) for p, r in metadata_results.items()
-                if not getattr(r, "ok", False)
-            ]
-            if failed_pairs:
-                rprint(
-                    f"[error][metadata-sync] repo mode: "
-                    f"{len(failed_pairs)} pair(s) finalized with a failed stage; "
-                    f"exiting non-zero (#871)[/error]"
-                )
-                raise click.exceptions.Exit(1)
-
-        return "Repository update complete.", total_repo_cost, final_model_str
-
-    # --- Single file logic ---
     try:
-        # Case 1: Regeneration Mode.
-        # Triggered when ONLY the modified_code_file is provided.
-        # This creates a new prompt or overwrites an existing one from scratch.
-        is_regeneration_mode = (input_prompt_file is None and input_code_file is None)
-
-        if is_regeneration_mode:
-            if not quiet:
-                rprint("[bold yellow]Regeneration mode: Creating or overwriting prompt from code file.[/bold yellow]")
-
-            # Determine output path based on --output flag
-            if output:
-                # Check if output is a directory or file path
-                if os.path.isdir(output) or output.endswith('/'):
-                    # Output is a directory, pass as output_dir to resolve_prompt_code_pair
-                    prompt_path, _ = resolve_prompt_code_pair(modified_code_file, quiet, output)
-                else:
-                    # Output is a specific file path, use it directly
-                    prompt_path = os.path.abspath(output)
-                    # Ensure the directory exists
-                    os.makedirs(os.path.dirname(prompt_path), exist_ok=True)
-            else:
-                # No output specified, use default behavior
-                prompt_path, _ = resolve_prompt_code_pair(modified_code_file, quiet)
-
-            # Agentic routing for regeneration mode
-            use_agentic = not simple and get_available_agents()
-            verbose = ctx.obj.get("verbose", False)
-
-            if use_agentic:
-                # Ensure prompt file exists for agentic
-                Path(prompt_path).touch(exist_ok=True)
-
-                tests_dir = get_tests_dir_from_config()
-                success, message, agentic_cost, provider, changed_files = run_agentic_update(
-                    prompt_file=prompt_path,
-                    code_file=modified_code_file,
-                    test_files=None,
-                    tests_dir=tests_dir,
-                    verbose=verbose,
-                    quiet=quiet,
-                )
-
-                if success:
-                    with open(prompt_path, 'r') as f:
-                        generated_prompt = f.read()
-
-                    if not quiet:
-                        rprint("[bold green]Prompt generated successfully (agentic).[/bold green]")
-                        rprint(f"[bold]Provider:[/bold] {provider}")
-                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
-                        rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
-
-                    if sync_metadata:
-                        if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
-                            # Surface as a non-zero CLI exit, not a soft None
-                            # return. modify.py re-raises click.exceptions.Exit,
-                            # so this bubbles to Click's command boundary and
-                            # the preflight subprocess sees returncode != 0
-                            # (#871 acceptance criterion).
-                            raise click.exceptions.Exit(1)
-
-                    return generated_prompt, agentic_cost, provider
-
-                # Agentic failed - fall through to legacy
-                if not quiet:
-                    rprint(f"[warning]Agentic failed: {message}. Falling back to legacy.[/warning]")
-
-            # Legacy path
-            with open(modified_code_file, 'r') as f:
-                modified_code_content = f.read()
-
-            # Read the existing prompt when one is present so the LLM can
-            # preserve its structure. Only fall back to the first-time
-            # sentinel when the file truly doesn't exist or is empty —
-            # otherwise the legacy path regenerates from scratch and strips
-            # <pdd.*> tags, <include> preambles, and % markers (issue #1220).
-            existing_prompt_text = ""
-            try:
-                if prompt_path and Path(prompt_path).exists():
-                    existing_prompt_text = Path(prompt_path).read_text()
-            except (OSError, UnicodeDecodeError):
-                # OSError: I/O failure. UnicodeDecodeError: corrupt/binary
-                # prompt file (e.g., mojibake from a prior destructive heal).
-                # In both cases, degrade to the first-time sentinel rather
-                # than crashing the whole update pipeline.
-                existing_prompt_text = ""
-
-            input_prompt_arg = (
-                existing_prompt_text
-                if existing_prompt_text.strip()
-                else "no prompt exists yet, create a new one"
-            )
-            effective_config = _resolve_update_runtime_config(
-                ctx,
-                prompt_file=prompt_path,
-                code_file=modified_code_file,
-                strength=strength,
-                temperature=temperature,
+        if repo:
+            return _run_repo_mode(
+                ctx=ctx,
+                directory=directory,
+                extensions=extensions,
+                base_branch=base_branch,
+                simple=simple,
+                output_dir=output,
+                sync_metadata=sync_metadata,
+                dry_run=dry_run,
             )
 
-            modified_prompt, total_cost, model_name = update_prompt(
-                input_prompt=input_prompt_arg,
-                input_code="",
-                modified_code=modified_code_content,
-                strength=effective_config["strength"],
-                temperature=effective_config["temperature"],
-                verbose=verbose,
-                time=ctx.obj.get('time', DEFAULT_TIME)
-            )
+        if not modified_code_file:
+            raise ValueError("modified_code_file is required outside of repo mode.")
 
-            # Write the result to the derived/correct prompt path.
-            with open(prompt_path, "w") as f:
-                modified_prompt, invalid_includes = sanitize_prompt_output(
-                    modified_prompt,
-                    prompt_path,
-                )
-                if invalid_includes and not quiet:
-                    rprint(
-                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
-                        f"before saving {prompt_path}.[/yellow]"
-                    )
-                f.write(modified_prompt)
-
-            if not quiet:
-                rprint("[bold green]Prompt generated successfully.[/bold green]")
-                rprint(f"[bold]Model used:[/bold] {model_name}")
-                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-                rprint(f"[bold]Prompt saved to:[/bold] {prompt_path}")
-
-            if sync_metadata:
-                if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
-                    raise click.exceptions.Exit(1)
-
-            return modified_prompt, total_cost, model_name
-
-        # Case 2: True Update Mode.
-        # Triggered when the user provides the prompt file, indicating a desire to update it.
-        else:
-            actual_input_prompt_file = input_prompt_file
-            final_output_path = output or actual_input_prompt_file
-            verbose = ctx.obj.get("verbose", False)
-
-            # Agentic routing for true update mode (try before construct_paths)
-            use_agentic = not simple and get_available_agents()
-
-            if use_agentic:
-                tests_dir = get_tests_dir_from_config()
-
-                # If output differs from input, work on a copy to avoid modifying source
-                if final_output_path != actual_input_prompt_file:
-                    import shutil
-                    shutil.copy2(actual_input_prompt_file, final_output_path)
-                    agentic_prompt_file = final_output_path
-                else:
-                    agentic_prompt_file = actual_input_prompt_file
-
-                success, message, agentic_cost, provider, changed_files = run_agentic_update(
-                    prompt_file=agentic_prompt_file,
-                    code_file=modified_code_file,
-                    test_files=None,
-                    tests_dir=tests_dir,
-                    verbose=verbose,
-                    quiet=quiet,
-                )
-
-                if success:
-                    with open(agentic_prompt_file, 'r') as f:
-                        updated_prompt = f.read()
-
-                    if not quiet:
-                        rprint("[bold green]Prompt updated successfully (agentic).[/bold green]")
-                        rprint(f"[bold]Provider:[/bold] {provider}")
-                        rprint(f"[bold]Total cost:[/bold] ${agentic_cost:.6f}")
-                        rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
-
-                    if sync_metadata:
-                        if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
-                            raise click.exceptions.Exit(1)
-
-                    return updated_prompt, agentic_cost, provider
-
-                # Agentic failed - fall through to legacy
-                if not quiet:
-                    rprint(f"[warning]Agentic failed: {message}. Falling back to legacy.[/warning]")
-
-            # Legacy path: Prepare input_file_paths for construct_paths
-            input_file_paths = {
-                "input_prompt_file": actual_input_prompt_file,
-                "modified_code_file": modified_code_file
-            }
-            if input_code_file:
-                input_file_paths["input_code_file"] = input_code_file
-
-            command_options = {"output": final_output_path}
-
-            resolved_config, input_strings, output_file_paths, _ = construct_paths(
-                input_file_paths=input_file_paths,
-                force=ctx.obj.get("force", False),
-                quiet=quiet,
-                command="update",
-                command_options=command_options,
-                context_override=ctx.obj.get('context'),
-                confirm_callback=ctx.obj.get('confirm_callback')
-            )
-
-            input_prompt = input_strings["input_prompt_file"]
-            modified_code = input_strings["modified_code_file"]
-            input_code = input_strings.get("input_code_file")
-            time = ctx.obj.get('time', DEFAULT_TIME)
-            effective_config = _resolve_update_runtime_config(
-                ctx,
-                prompt_file=actual_input_prompt_file,
-                code_file=modified_code_file,
-                resolved_config=resolved_config,
-                strength=strength,
-                temperature=temperature,
-            )
-
-            if not modified_code.strip():
-                raise ValueError("Modified code file cannot be empty when updating or generating a prompt.")
-
-            if not input_prompt.strip():
-                input_prompt = "no prompt exists yet, create a new one"
-                if not use_git and input_code is None:
-                    input_code = ""
-                if not quiet:
-                    rprint("[bold yellow]Empty prompt file detected. Generating a new prompt from the modified code.[/bold yellow]")
-
-            if use_git:
-                if input_code_file:
-                    raise ValueError("Cannot use both --git and provide an input code file.")
-                modified_prompt, total_cost, model_name = git_update(
-                    input_prompt=input_prompt,
-                    modified_code_file=modified_code_file,
-                    strength=effective_config["strength"],
-                    temperature=effective_config["temperature"],
-                    verbose=verbose,
-                    time=time,
-                    simple=True if use_agentic else simple,  # Force legacy if agentic was tried
-                    quiet=quiet,
-                    prompt_file=actual_input_prompt_file,
-                )
-            else:
-                if input_code is None:
-                    # This will now only be triggered if --git is not used and no input_code_file is provided,
-                    # which is an error state for a true update.
-                    raise ValueError("For a true update, you must either provide an original code file or use the --git flag.")
-
-                modified_prompt, total_cost, model_name = update_prompt(
-                    input_prompt=input_prompt,
-                    input_code=input_code,
-                    modified_code=modified_code,
-                    strength=effective_config["strength"],
-                    temperature=effective_config["temperature"],
-                    verbose=verbose,
-                    time=time
-                )
-
-            # Defense-in-depth: validate prompt is not empty before writing
-            if not modified_prompt or not modified_prompt.strip():
-                raise ValueError(
-                    "Update produced an empty prompt. The LLM may have failed to generate a valid response."
-                )
-
-            with open(output_file_paths["output"], "w") as f:
-                modified_prompt, invalid_includes = sanitize_prompt_output(
-                    modified_prompt,
-                    output_file_paths["output"],
-                )
-                if invalid_includes and not quiet:
-                    rprint(
-                        "[yellow]Warning: Cleaned invalid <include> tag(s) "
-                        f"before saving {output_file_paths['output']}.[/yellow]"
-                    )
-                f.write(modified_prompt)
-
-            if not quiet:
-                rprint("[bold green]Prompt updated successfully.[/bold green]")
-                rprint(f"[bold]Model used:[/bold] {model_name}")
-                rprint(f"[bold]Total cost:[/bold] ${total_cost:.6f}")
-                rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
-
-            if sync_metadata:
-                if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
-                    raise click.exceptions.Exit(1)
-
-            return modified_prompt, total_cost, model_name
-
-    except (ValueError, git.InvalidGitRepositoryError) as e:
-        if not quiet:
-            rprint(f"[bold red]Input error:[/bold red] {str(e)}")
-        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
-        return None
+        return _run_single_file_mode(
+            ctx=ctx,
+            input_prompt_file=input_prompt_file,
+            modified_code_file=modified_code_file,
+            input_code_file=input_code_file,
+            output=output,
+            use_git=use_git,
+            simple=simple,
+            strength=strength,
+            temperature=temperature,
+            dry_run=dry_run,
+        )
     except click.Abort:
-        # User cancelled - re-raise to stop the sync loop
         raise
     except click.exceptions.Exit:
-        # Intentional non-zero exit (e.g. sync_metadata finalization failure).
-        # Must propagate so the CLI surfaces returncode != 0 and the preflight
-        # auto-heal subprocess does not mark a half-synced update as healed
-        # (#871). Letting the bare `except Exception` below swallow this would
-        # silently convert it to exit 0.
         raise
-    except Exception as e:
+    except ValueError as exc:
         if not quiet:
-            rprint(f"[bold red]Error:[/bold red] {str(e)}")
-        # Return error result instead of sys.exit(1) to allow orchestrator to handle gracefully
+            console.print(f"[error]{exc}[/error]")
+        return None
+    except Exception as exc:
+        # Try to detect git-repo errors by name to keep heavy imports out.
+        if exc.__class__.__name__ == "InvalidGitRepositoryError":
+            if not quiet:
+                console.print(f"[error]Invalid git repository:[/error] {exc}")
+            return None
+        if not quiet:
+            console.print(f"[error]update_main failed:[/error] {exc}")
         return None
