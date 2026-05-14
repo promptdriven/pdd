@@ -1,4 +1,4 @@
-<pdd-reason>Registers maintenance CLI commands: sync, sync-architecture, auto-deps, and setup with all options.</pdd-reason>
+<pdd-reason>Registers maintenance CLI commands: sync, sync-architecture, reconcile-metadata, auto-deps, and setup with all options.</pdd-reason>
 
 <pdd-interface>
 {
@@ -7,6 +7,7 @@
     "commands": [
       {"name": "sync", "description": "Synchronize a prompt with its code, tests, and examples"},
       {"name": "sync-architecture", "description": "Sync architecture.json from prompt metadata tags"},
+      {"name": "reconcile-metadata", "description": "Refresh PDD fingerprints for trusted current files without LLM calls"},
       {"name": "auto-deps", "description": "Analyze and insert dependencies into a prompt file"},
       {"name": "setup", "description": "Install shell completion and run setup utility"}
     ]
@@ -20,7 +21,7 @@
 % You are an expert Python engineer. Your goal is to write `pdd/commands/maintenance.py`.
 
 % Role & Scope
-  This module contains maintenance and setup commands: `sync`, `sync-architecture`, `auto-deps`, and `setup`.
+  This module contains maintenance and setup commands: `sync`, `sync-architecture`, `reconcile-metadata`, `auto-deps`, and `setup`.
 
 <include>context/python_preamble.prompt</include>
 
@@ -79,7 +80,14 @@
      - For each entry in `result.get("results", [])`: if `entry.get("updated")` print `f"UPDATED {entry['filename']}"`; elif `not entry.get("success")` print `f"ERROR {entry['filename']}: {entry.get('error')}"`.
      - If `result.get("errors")` is non-empty, print `"Sync errors:"` then `f"- {error}"` per entry.
      - Read `validation = result.get("validation", {})`. If `validation.get("errors")` is non-empty, print `"Validation errors:"` then `f"- {error['message']}"` per entry. If `validation.get("warnings")` is non-empty, print `"Validation warnings:"` then `f"- {warning['message']}"` per entry.
-  4. **auto-deps**:
+  4. **reconcile-metadata**:
+     - Interface: `pdd reconcile-metadata [TARGETS]... [--language LANGUAGE] [--dry-run]`.
+     - Purpose: Refresh `.pdd/meta/*_{language}.json` fingerprints for files the maintainer has already accepted as current truth, without LLM calls, code generation, prompt regeneration, verification, or tests.
+     - Targets may be basenames (`core/cloud`), prompt paths, or code paths. Resolve code paths through `architecture.json` filepath entries; resolve prompt paths with `infer_module_identity`; resolve bare basenames through matching `architecture.json` prompt filenames so non-Python modules infer their stored language automatically. When `--language` is provided for a bare basename, use it to select the matching architecture entry if multiple entries share the basename (for example an `_LLM.prompt` plus a Python module). Use `--language` as a fallback when no architecture entry exists.
+     - In `--dry-run`, compute current hashes with `get_pdd_file_paths`, `read_fingerprint`, and `calculate_current_hashes`, then print the fingerprint fields that would change. Do not write metadata.
+     - In write mode, call `save_fingerprint(..., operation="reconcile-metadata", cost=0.0, model="local")` for each resolved target. `sync_determine_operation` treats this command as a trusted completed state for verification and test gates.
+     - Require at least one explicit target. Do not provide a broad implicit repo-wide mode; maintainers should intentionally choose which stale modules to trust.
+  5. **auto-deps**:
      - Interface: Match the `auto-deps` command specification in `README.md`.
      - Logic: Call `auto_deps_main` with `@track_cost` decorator.
      - Argument typing: `prompt_file` uses `click.Path(exists=True, dir_okay=False)`; `directory_path` uses `click.Path(exists=False, file_okay=False)` (existence intentionally NOT enforced so the command can manually handle quoted paths or unexpanded globs).
@@ -89,7 +97,7 @@
        - `--include-docs` (bool flag, default False): Include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Pass as `include_docs` to `auto_deps_main`.
        - `--no-dedup` (bool flag, default False): Disable redundant inline content removal after inserting includes. Pass as `no_dedup` to `auto_deps_main`.
        - `--concurrency` (int, default 1): Number of parallel workers for file summarization LLM calls. Pass as `concurrency` to `auto_deps_main`.
-  5. **setup**:
+  6. **setup**:
      - Interface: Match the `setup` command specification in `README.md`.
      - Logic: Install shell completion, then run setup utility.
      - No `@track_cost` (no LLM calls).

@@ -44,6 +44,32 @@ def test_auto_deps_has_track_cost_decorator():
     assert hasattr(callback, '__wrapped__'), "auto_deps should have @track_cost decorator"
 
 
+def test_reconcile_target_language_filters_duplicate_architecture_basenames(monkeypatch, tmp_path):
+    """--language should select the Python entry when an LLM prompt shares the basename."""
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "architecture.json").write_text(
+        json.dumps([
+            {
+                "filename": "agentic_test_generate_LLM.prompt",
+                "filepath": "prompts/agentic_test_generate_LLM.prompt",
+            },
+            {
+                "filename": "agentic_test_generate_python.prompt",
+                "filepath": "pdd/agentic_test_generate.py",
+            },
+        ]),
+        encoding="utf-8",
+    )
+
+    basename, language = maintenance._resolve_reconcile_target(
+        "agentic_test_generate",
+        "python",
+    )
+
+    assert basename == "agentic_test_generate"
+    assert language == "python"
+
+
 # --- Return Type Tests ---
 
 @patch('pdd.core.cli.auto_update')

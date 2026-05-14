@@ -549,6 +549,10 @@ class SyncDecision:
     prerequisites: Optional[List[str]] = None  # List of operations that should be completed first, default None
 
 
+COMPLETED_VERIFY_COMMANDS = {'verify', 'test', 'fix', 'update', 'reconcile-metadata'}
+COMPLETED_TEST_COMMANDS = {'test', 'fix', 'update', 'reconcile-metadata'}
+
+
 class SyncLock:
     """Context manager for handling file-descriptor based locking."""
     
@@ -1791,6 +1795,19 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
     if not all(paths[f].exists() for f in required_files):
         return False
 
+    if skip_tests and skip_verify:
+        return True
+
+    # A maintainer-issued reconcile-metadata fingerprint means the current
+    # prompt/code/example/test state was explicitly accepted without rerunning
+    # verification or tests.
+    fingerprint = read_fingerprint(basename, language) if basename and language else None
+    if fingerprint:
+        if fingerprint.command.startswith('skip:'):
+            return False
+        if fingerprint.command == 'reconcile-metadata':
+            return True
+
     # Also check that run_report exists and code works (exit_code == 0)
     # Without this, newly generated code would incorrectly be marked as "complete"
     if basename and language:
@@ -1842,7 +1859,6 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                     return False
                 if not run_report.test_hash:
                     # Legacy run_report without test_hash - check fingerprint timestamp as fallback
-                    fingerprint = read_fingerprint(basename, language)
                     if fingerprint:
                         # If fingerprint is newer than run_report, run_report might be stale
                         from datetime import datetime
@@ -1858,12 +1874,11 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
         # Without this, workflow would be "complete" after crash even though verify hasn't run
         # Bug #23 fix: Also check for 'skip:' prefix which indicates operation was skipped, not executed
         if not skip_verify:
-            fingerprint = read_fingerprint(basename, language)
             if fingerprint:
                 # If command starts with 'skip:', the operation was skipped, not completed
                 if fingerprint.command.startswith('skip:'):
                     return False
-                if fingerprint.command not in ['verify', 'test', 'fix', 'update']:
+                if fingerprint.command not in COMPLETED_VERIFY_COMMANDS:
                     return False
 
         # CRITICAL FIX: Check tests have been run (unless skip_tests)
@@ -1876,7 +1891,7 @@ def _is_workflow_complete(paths: Dict[str, Path], skip_tests: bool = False, skip
                 # If command starts with 'skip:', the operation was skipped, not completed
                 if fp.command.startswith('skip:'):
                     return False
-                if fp.command not in ['test', 'fix', 'update']:
+                if fp.command not in COMPLETED_TEST_COMMANDS:
                     return False
 
     return True

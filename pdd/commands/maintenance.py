@@ -2,7 +2,7 @@
 Maintenance commands (sync, auto_deps, setup).
 """
 import click
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from pathlib import Path
 
 from ..architecture_sync import sync_prompts_to_architecture
@@ -15,6 +15,99 @@ from ..core.errors import handle_error
 from ..core.utils import _run_setup_utility
 
 DEFAULT_SYNC_BUDGET = 20.0
+
+
+def _load_architecture_modules() -> List[Dict[str, Any]]:
+    arch_path = Path.cwd() / "architecture.json"
+    if not arch_path.exists():
+        return []
+    try:
+        import json
+        raw = json.loads(arch_path.read_text(encoding="utf-8"))
+        if isinstance(raw, dict):
+            modules = raw.get("modules", [])
+        else:
+            modules = raw
+        return modules if isinstance(modules, list) else []
+    except (OSError, ValueError):
+        return []
+
+
+def _identity_from_architecture_path(path: Path) -> Tuple[Optional[str], Optional[str]]:
+    from ..operation_log import infer_module_identity
+
+    try:
+        rel = path.resolve().relative_to(Path.cwd().resolve()).as_posix()
+    except ValueError:
+        rel = path.as_posix()
+
+    for module in _load_architecture_modules():
+        if module.get("filepath") != rel:
+            continue
+        filename = module.get("filename")
+        if isinstance(filename, str) and filename.endswith(".prompt"):
+            return infer_module_identity(Path("prompts") / filename)
+    return None, None
+
+
+def _identity_from_architecture_basename(
+    target: str,
+    language: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
+    from ..operation_log import infer_module_identity
+
+    target_basename = target.strip().rstrip("/")
+    requested_language = language.lower() if language else None
+    for module in _load_architecture_modules():
+        filename = module.get("filename")
+        if not isinstance(filename, str) or not filename.endswith(".prompt"):
+            continue
+        basename, inferred_language = infer_module_identity(Path("prompts") / filename)
+        if basename != target_basename:
+            continue
+        if requested_language and inferred_language != requested_language:
+            continue
+        return basename, inferred_language
+    return None, None
+
+
+def _resolve_reconcile_target(
+    target: str,
+    language: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    from ..operation_log import infer_module_identity
+
+    path = Path(target)
+    if path.exists():
+        if path.suffix == ".prompt":
+            return infer_module_identity(path)
+        return _identity_from_architecture_path(path)
+
+    basename, inferred_language = _identity_from_architecture_basename(target, language)
+    if basename and inferred_language:
+        return basename, inferred_language
+
+    if language:
+        return target, language.lower()
+    return None, None
+
+
+def _metadata_diff_for_module(basename: str, language: str) -> Dict[str, Tuple[Any, Any]]:
+    from ..sync_determine_operation import calculate_current_hashes, get_pdd_file_paths, read_fingerprint
+
+    fingerprint = read_fingerprint(basename, language)
+    paths = get_pdd_file_paths(basename, language)
+    current = calculate_current_hashes(
+        paths,
+        stored_include_deps=fingerprint.include_deps if fingerprint else None,
+    )
+    changed: Dict[str, Tuple[Any, Any]] = {}
+    for key in ("prompt_hash", "code_hash", "example_hash", "test_hash", "test_files", "include_deps"):
+        old = getattr(fingerprint, key, None) if fingerprint else None
+        new = current.get(key)
+        if old != new:
+            changed[key] = (old, new)
+    return changed
 
 @click.command("sync")
 @click.argument("basename", required=False)
@@ -477,6 +570,97 @@ def sync_architecture(
         raise
     except Exception as exception:
         handle_error(exception, "sync-architecture", quiet)
+        return None
+
+
+@click.command("reconcile-metadata")
+@click.argument("targets", nargs=-1)
+@click.option(
+    "--language",
+    default=None,
+    help="Language for basename targets.",
+)
+@click.option(
+    "--dry-run",
+    is_flag=True,
+    default=False,
+    help="Show fingerprint fields that would change without writing metadata.",
+)
+@click.pass_context
+@track_cost
+def reconcile_metadata(
+    ctx: click.Context,
+    targets: Tuple[str, ...],
+    language: str,
+    dry_run: bool,
+) -> Optional[Tuple[Dict[str, Any], float, str]]:
+    """Refresh PDD fingerprints for trusted current files without LLM calls."""
+    ctx.ensure_object(dict)
+    quiet = ctx.obj.get("quiet", False)
+
+    try:
+        if not targets:
+            raise click.UsageError("Provide at least one basename, code path, or prompt path.")
+
+        from ..operation_log import save_fingerprint
+        from ..sync_determine_operation import get_pdd_file_paths
+
+        results = []
+        errors = []
+        for target in targets:
+            basename, resolved_language = _resolve_reconcile_target(target, language)
+            if not basename or not resolved_language:
+                errors.append(f"{target}: could not resolve module identity")
+                continue
+
+            if dry_run:
+                changes = _metadata_diff_for_module(basename, resolved_language)
+                results.append({
+                    "target": target,
+                    "basename": basename,
+                    "language": resolved_language,
+                    "changed_fields": sorted(changes),
+                })
+            else:
+                paths = get_pdd_file_paths(basename, resolved_language)
+                save_fingerprint(
+                    basename,
+                    resolved_language,
+                    operation="reconcile-metadata",
+                    paths=paths,
+                    cost=0.0,
+                    model="local",
+                )
+                results.append({
+                    "target": target,
+                    "basename": basename,
+                    "language": resolved_language,
+                    "updated": True,
+                })
+
+        if not quiet:
+            action = "Would reconcile" if dry_run else "Reconciled"
+            click.echo(f"{action} {len(results)} module(s).")
+            for result in results:
+                if dry_run:
+                    fields = ", ".join(result["changed_fields"]) or "none"
+                    click.echo(f"- {result['basename']} ({result['language']}): {fields}")
+                else:
+                    click.echo(f"- {result['basename']} ({result['language']})")
+            if errors:
+                click.echo("Errors:")
+                for error in errors:
+                    click.echo(f"- {error}")
+
+        if errors:
+            raise click.exceptions.Exit(1)
+        return {"results": results, "errors": errors}, 0.0, "local"
+    except click.Abort:
+        raise
+    except click.exceptions.Exit:
+        raise
+    except Exception as exception:
+        handle_error(exception, "reconcile-metadata", quiet)
         return None
 
 

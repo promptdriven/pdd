@@ -19,7 +19,9 @@ from pdd.agentic_sync import (
     _apply_architecture_corrections,
     _analyze_global_sync_modules,
     _architecture_module_basenames,
+    _architecture_sync_modules,
     _augment_architecture_from_pr_branch,
+    _build_scoped_global_dep_graph,
     _branch_diff_is_runtime_llm_only,
     _detect_modules_from_branch_diff,
     _filter_already_synced,
@@ -33,6 +35,7 @@ from pdd.agentic_sync import (
     _resolve_module_cwd,
     _run_dry_run_validation,
     _run_single_dry_run,
+    GlobalSyncModule,
     run_agentic_sync,
     run_global_sync,
 )
@@ -40,6 +43,24 @@ from pdd.agentic_sync_runner import (
     DepGraphFromArchitectureResult,
     build_dep_graph_from_architecture,
 )
+
+
+def _global_module(
+    basename: str,
+    root: Path,
+    *,
+    key: str | None = None,
+    arch_name: str = "architecture.json",
+    entry: Dict[str, Any] | None = None,
+) -> GlobalSyncModule:
+    arch_path = root / arch_name
+    return GlobalSyncModule(
+        key=key or basename,
+        basename=basename,
+        cwd=arch_path.parent,
+        architecture_path=arch_path,
+        entry=entry or {"filename": f"{basename}_python.prompt", "dependencies": []},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -373,7 +394,10 @@ class TestGlobalSyncHelpers:
         mock_determine.side_effect = [nothing, generate]
 
         analysis = _analyze_global_sync_modules(
-            ["clean_mod", "stale_mod"],
+            [
+                _global_module("clean_mod", tmp_path),
+                _global_module("stale_mod", tmp_path),
+            ],
             tmp_path,
             quiet=True,
         )
@@ -396,7 +420,7 @@ class TestGlobalSyncHelpers:
         mock_determine.return_value = decision
 
         analysis = _analyze_global_sync_modules(
-            ["complete_mod"],
+            [_global_module("complete_mod", tmp_path)],
             tmp_path,
             quiet=True,
         )
@@ -440,7 +464,11 @@ class TestGlobalSyncHelpers:
 
         mock_determine.side_effect = _fake_determine
 
-        _analyze_global_sync_modules(["src/mod"], tmp_path, quiet=True)
+        _analyze_global_sync_modules(
+            [_global_module("src/mod", nested_dir)],
+            tmp_path,
+            quiet=True,
+        )
 
         assert seen_cwds == [nested_dir]
 
@@ -459,7 +487,7 @@ class TestGlobalSyncHelpers:
         mock_determine.return_value = decision
 
         analysis = _analyze_global_sync_modules(
-            ["needs_fix"],
+            [_global_module("needs_fix", tmp_path)],
             tmp_path,
             quiet=True,
         )
@@ -468,11 +496,49 @@ class TestGlobalSyncHelpers:
         assert analysis.estimated_cost == 0.0
         assert any("outside Tier 1" in entry for entry in analysis.skipped_modules)
 
+    def test_scoped_global_dep_graph_separates_duplicate_basenames(self, tmp_path):
+        root_arch = tmp_path / "architecture.json"
+        nested_arch = tmp_path / "examples" / "demo" / "architecture.json"
+        nested_arch.parent.mkdir(parents=True)
+        root_report = _global_module(
+            "report",
+            tmp_path,
+            key="report",
+            entry={"filename": "report_python.prompt", "dependencies": []},
+        )
+        nested_models = _global_module(
+            "models",
+            nested_arch.parent,
+            key="examples/demo:models",
+            arch_name="architecture.json",
+            entry={"filename": "models_python.prompt", "dependencies": []},
+        )
+        nested_report = GlobalSyncModule(
+            key="examples/demo:report",
+            basename="report",
+            cwd=nested_arch.parent,
+            architecture_path=nested_arch,
+            entry={
+                "filename": "report_python.prompt",
+                "dependencies": ["models_python.prompt"],
+            },
+        )
+
+        graph, warnings = _build_scoped_global_dep_graph(
+            [root_report, nested_models, nested_report],
+            ["report", "examples/demo:models", "examples/demo:report"],
+            tmp_path,
+        )
+
+        assert graph["report"] == []
+        assert graph["examples/demo:report"] == ["examples/demo:models"]
+        assert warnings == []
+
 
 class TestRunGlobalSync:
     @patch("pdd.agentic_sync._find_project_root")
-    @patch("pdd.agentic_sync._load_architecture_json", return_value=(None, Path("/tmp/architecture.json")))
-    def test_fails_when_architecture_missing(self, mock_load, mock_root, tmp_path):
+    @patch("pdd.agentic_sync._architecture_sync_modules", return_value=([], [], Path("/tmp/architecture.json")))
+    def test_fails_when_architecture_missing(self, mock_arch_modules, mock_root, tmp_path):
         mock_root.return_value = tmp_path
 
         success, message, cost, model = run_global_sync(quiet=True)
@@ -483,32 +549,32 @@ class TestRunGlobalSync:
         assert model == "global-sync"
 
     @patch("pdd.agentic_sync._find_project_root")
-    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._architecture_sync_modules")
     @patch("pdd.agentic_sync._analyze_global_sync_modules")
-    @patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
+    @patch("pdd.agentic_sync._build_scoped_global_dep_graph")
     def test_dry_run_reports_dependency_order_without_running_runner(
-        self, mock_dep_graph, mock_analyze, mock_load, mock_root, tmp_path
+        self, mock_dep_graph, mock_analyze, mock_arch_modules, mock_root, tmp_path
     ):
         mock_root.return_value = tmp_path
-        mock_load.return_value = (
-            [
-                {"filename": "app_python.prompt"},
-                {"filename": "lib_python.prompt"},
-            ],
+        modules = [
+            _global_module("app", tmp_path),
+            _global_module("lib", tmp_path),
+        ]
+        mock_arch_modules.return_value = (
+            modules,
+            [module.entry for module in modules],
             tmp_path / "architecture.json",
         )
         mock_analyze.return_value = MagicMock(
             modules_to_sync=["app", "lib"],
             module_cwds={"app": tmp_path, "lib": tmp_path},
+            module_targets={"app": "app", "lib": "lib"},
             estimated_cost=2.0,
             module_operations={"app": ["python: generate - stale"], "lib": ["python: generate - stale"]},
             skipped_modules=[],
             all_modules=["app", "lib"],
         )
-        mock_dep_graph.return_value = DepGraphFromArchitectureResult(
-            graph={"app": ["lib"], "lib": []},
-            warnings=[],
-        )
+        mock_dep_graph.return_value = ({"app": ["lib"], "lib": []}, [])
 
         success, message, cost, model = run_global_sync(quiet=True, dry_run=True)
 
@@ -518,33 +584,33 @@ class TestRunGlobalSync:
         assert model == "global-sync"
 
     @patch("pdd.agentic_sync._find_project_root")
-    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._architecture_sync_modules")
     @patch("pdd.agentic_sync._analyze_global_sync_modules")
-    @patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
+    @patch("pdd.agentic_sync._build_scoped_global_dep_graph")
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     def test_global_sync_runs_async_runner_in_dependency_order(
-        self, mock_runner, mock_dep_graph, mock_analyze, mock_load, mock_root, tmp_path
+        self, mock_runner, mock_dep_graph, mock_analyze, mock_arch_modules, mock_root, tmp_path
     ):
         mock_root.return_value = tmp_path
-        mock_load.return_value = (
-            [
-                {"filename": "app_python.prompt"},
-                {"filename": "lib_python.prompt"},
-            ],
+        modules = [
+            _global_module("app", tmp_path),
+            _global_module("lib", tmp_path),
+        ]
+        mock_arch_modules.return_value = (
+            modules,
+            [module.entry for module in modules],
             tmp_path / "architecture.json",
         )
         mock_analyze.return_value = MagicMock(
             modules_to_sync=["app", "lib"],
             module_cwds={"app": tmp_path, "lib": tmp_path},
+            module_targets={"app": "app", "lib": "lib"},
             estimated_cost=2.0,
             module_operations={"app": ["python: generate - stale"], "lib": ["python: generate - stale"]},
             skipped_modules=[],
             all_modules=["app", "lib"],
         )
-        mock_dep_graph.return_value = DepGraphFromArchitectureResult(
-            graph={"app": ["lib"], "lib": []},
-            warnings=[],
-        )
+        mock_dep_graph.return_value = ({"app": ["lib"], "lib": []}, [])
         mock_runner.return_value.run.return_value = (True, "done", 1.5)
 
         success, message, cost, model = run_global_sync(
@@ -563,6 +629,7 @@ class TestRunGlobalSync:
         runner_kwargs = mock_runner.call_args.kwargs
         assert runner_kwargs["basenames"] == ["lib", "app"]
         assert runner_kwargs["github_info"] is None
+        assert runner_kwargs["module_targets"] == {"app": "app", "lib": "lib"}
         assert runner_kwargs["sync_options"]["total_budget"] == 3.0
         assert "budget" not in runner_kwargs["sync_options"]
         assert runner_kwargs["sync_options"]["skip_verify"] is True
@@ -571,27 +638,28 @@ class TestRunGlobalSync:
         assert runner_kwargs["sync_options"]["target_coverage"] == pytest.approx(95.0)
 
     @patch("pdd.agentic_sync._find_project_root")
-    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._architecture_sync_modules")
     @patch("pdd.agentic_sync._analyze_global_sync_modules")
+    @patch("pdd.agentic_sync._build_scoped_global_dep_graph")
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     def test_global_sync_uses_combined_architecture_for_nested_deps(
-        self, mock_runner, mock_analyze, mock_load, mock_root, tmp_path
+        self, mock_runner, mock_dep_graph, mock_analyze, mock_arch_modules, mock_root, tmp_path
     ):
         mock_root.return_value = tmp_path
-        mock_load.return_value = (
-            [
-                {"filename": "core_python.prompt", "dependencies": []},
-                {
-                    "filename": "nested/app_python.prompt",
-                    "dependencies": ["nested/lib_python.prompt"],
-                },
-                {"filename": "nested/lib_python.prompt", "dependencies": []},
-            ],
+        modules = [
+            _global_module("core", tmp_path),
+            _global_module("nested/app", tmp_path),
+            _global_module("nested/lib", tmp_path),
+        ]
+        mock_arch_modules.return_value = (
+            modules,
+            [module.entry for module in modules],
             tmp_path / "architecture.json",
         )
         mock_analyze.return_value = MagicMock(
             modules_to_sync=["nested/app", "nested/lib"],
             module_cwds={"nested/app": tmp_path / "nested", "nested/lib": tmp_path / "nested"},
+            module_targets={"nested/app": "nested/app", "nested/lib": "nested/lib"},
             estimated_cost=2.0,
             module_operations={
                 "nested/app": ["python: generate - stale"],
@@ -599,6 +667,10 @@ class TestRunGlobalSync:
             },
             skipped_modules=[],
             all_modules=["core", "nested/app", "nested/lib"],
+        )
+        mock_dep_graph.return_value = (
+            {"nested/app": ["nested/lib"], "nested/lib": []},
+            [],
         )
         mock_runner.return_value.run.return_value = (True, "done", 1.0)
 
@@ -610,20 +682,23 @@ class TestRunGlobalSync:
         assert runner_kwargs["dep_graph"]["nested/app"] == ["nested/lib"]
 
     @patch("pdd.agentic_sync._find_project_root")
-    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._architecture_sync_modules")
     @patch("pdd.agentic_sync._analyze_global_sync_modules")
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     def test_global_sync_rejects_estimated_cost_over_total_budget(
-        self, mock_runner, mock_analyze, mock_load, mock_root, tmp_path
+        self, mock_runner, mock_analyze, mock_arch_modules, mock_root, tmp_path
     ):
         mock_root.return_value = tmp_path
-        mock_load.return_value = (
-            [{"filename": "app_python.prompt"}],
+        modules = [_global_module("app", tmp_path)]
+        mock_arch_modules.return_value = (
+            modules,
+            [module.entry for module in modules],
             tmp_path / "architecture.json",
         )
         mock_analyze.return_value = MagicMock(
             modules_to_sync=["app"],
             module_cwds={"app": tmp_path},
+            module_targets={"app": "app"},
             estimated_cost=5.5,
             module_operations={"app": ["python: generate - stale"]},
             skipped_modules=[],
@@ -1209,6 +1284,28 @@ class TestResolveModuleCwd:
 
         assert _resolve_module_cwd("llm_model", tmp_path) == tmp_path
         assert _resolve_module_cwd("llm", tmp_path) == nested
+
+    def test_root_prompt_wins_over_nested_broad_glob(self, tmp_path):
+        """A root exact prompt should not be claimed by nested basename globs."""
+        (tmp_path / "prompts").mkdir()
+        (tmp_path / "prompts" / "cli_python.prompt").write_text("% root prompt")
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "default": {
+                "defaults": {"prompts_dir": "prompts"},
+            },
+        })
+
+        nested = tmp_path / "examples" / "prompts_linter"
+        (nested / "prompts").mkdir(parents=True)
+        (nested / "prompts" / "cli_python.prompt").write_text("% nested prompt")
+        self._write_pddrc(nested / ".pddrc", {
+            "cli": {
+                "paths": ["*cli*"],
+                "defaults": {"prompts_dir": "prompts"},
+            },
+        })
+
+        assert _resolve_module_cwd("cli", tmp_path) == tmp_path
 
     # --- Issue #1128: nested .pddrc shadowed by root .pddrc ---
 

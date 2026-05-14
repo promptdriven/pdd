@@ -14,7 +14,6 @@
 
 <pdd-dependency>path_resolution_python.prompt</pdd-dependency>
 <pdd-dependency>content_selector_python.prompt</pdd-dependency>
-<pdd-dependency>include_query_extractor_python.prompt</pdd-dependency>
 
 <include>./context/python_preamble.prompt</include>
 

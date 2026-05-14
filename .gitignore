@@ -11,7 +11,7 @@ examples/temp_split_dir/
 sync_order.sh
 
 staging_data_dump.json
-.pdd/core_dumps/*
+**/.pdd/core_dumps/*
 *_fixed.*
 
 .vscode/settings.json

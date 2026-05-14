@@ -360,6 +360,58 @@ def _infer_module_tags(filename: str) -> List[str]:
     return ['module']
 
 
+def _resolve_prompt_dependency_filename(dep: str, prompts_dir: Path) -> Optional[str]:
+    """Resolve a dependency tag to a prompt-relative filename, supporting nested prompts."""
+    dep_norm = _normalize_prompt_filename(dep)
+    exact = prompts_dir / dep_norm
+    if exact.exists():
+        return dep_norm
+
+    candidates = [
+        p.relative_to(prompts_dir).as_posix()
+        for p in prompts_dir.rglob(Path(dep_norm).name)
+    ]
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _normalize_dependency_references(
+    dependencies: List[str],
+    prompts_dir: Path,
+    existing_filenames: set,
+) -> List[str]:
+    """Normalize dependency names to architecture filenames when unambiguous."""
+    normalized: List[str] = []
+    for dep in dependencies:
+        if not isinstance(dep, str):
+            continue
+        dep_norm = _normalize_prompt_filename(dep)
+        if dep_norm in existing_filenames:
+            normalized.append(dep_norm)
+            continue
+        resolved = _resolve_prompt_dependency_filename(dep_norm, prompts_dir)
+        normalized.append(resolved if resolved in existing_filenames else dep_norm)
+    return normalized
+
+
+def _build_arch_entry_from_prompt(
+    filename: str,
+    tags: Dict[str, Any],
+    priority: int,
+    reason_prefix: str,
+) -> Dict[str, Any]:
+    reason = tags['reason'] or f'{reason_prefix}: {filename}'
+    return {
+        'reason': reason,
+        'description': reason,
+        'dependencies': tags['dependencies'],
+        'priority': priority,
+        'filename': filename,
+        'filepath': _infer_filepath(filename),
+        'tags': _infer_module_tags(filename),
+        'interface': tags['interface'] or {'type': 'module'},
+    }
+
+
 def register_untracked_prompts(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
@@ -397,7 +449,12 @@ def register_untracked_prompts(
         - errors: List[str] (error messages)
     """
     if not architecture_path.exists():
-        return {'registered': [], 'skipped': [], 'errors': ['Architecture file not found']}
+        return {
+            'registered': [],
+            'registered_entries': [],
+            'skipped': [],
+            'errors': ['Architecture file not found'],
+        }
 
     raw_arch = json.loads(architecture_path.read_text(encoding='utf-8'))
     arch_data = extract_modules(raw_arch)
@@ -405,6 +462,7 @@ def register_untracked_prompts(
     max_priority = max((m.get('priority', 0) for m in arch_data), default=0)
 
     registered = []
+    registered_entries = []
     skipped = []
     errors = []
 
@@ -430,24 +488,49 @@ def register_untracked_prompts(
             skipped.append(filename)
             continue
 
-        filepath = _infer_filepath(filename)
-        module_tags = _infer_module_tags(filename)
-        reason = tags['reason'] or f'Auto-registered module: {filename}'
-
         max_priority += 1
-        entry = {
-            'reason': reason,
-            'description': reason,
-            'dependencies': tags['dependencies'],
-            'priority': max_priority,
-            'filename': filename,
-            'filepath': filepath,
-            'tags': module_tags,
-            'interface': tags['interface'] or {'type': 'module'},
-        }
+        entry = _build_arch_entry_from_prompt(
+            filename,
+            tags,
+            max_priority,
+            'Auto-registered module',
+        )
         arch_data.append(entry)
         existing_filenames.add(filename)
         registered.append(filename)
+        registered_entries.append(entry)
+
+    for module in list(arch_data):
+        dependencies = module.get('dependencies', [])
+        if not isinstance(dependencies, list):
+            continue
+        for dep in dependencies:
+            if not isinstance(dep, str):
+                continue
+            resolved = _resolve_prompt_dependency_filename(dep, prompts_dir)
+            if not resolved or resolved in existing_filenames:
+                continue
+            if only_files is not None and resolved not in only_files:
+                skipped.append(resolved)
+                continue
+            prompt_file = prompts_dir / resolved
+            try:
+                content = prompt_file.read_text(encoding='utf-8')
+            except OSError as exc:
+                errors.append(f"{resolved}: {exc}")
+                continue
+            tags = parse_prompt_tags(content)
+            max_priority += 1
+            entry = _build_arch_entry_from_prompt(
+                resolved,
+                tags,
+                max_priority,
+                'Auto-registered dependency',
+            )
+            arch_data.append(entry)
+            existing_filenames.add(resolved)
+            registered.append(resolved)
+            registered_entries.append(entry)
 
     if registered and not dry_run:
         if isinstance(raw_arch, dict) and isinstance(raw_arch.get("modules"), list):
@@ -460,7 +543,12 @@ def register_untracked_prompts(
             encoding='utf-8'
         )
 
-    return {'registered': registered, 'skipped': skipped, 'errors': errors}
+    return {
+        'registered': registered,
+        'registered_entries': registered_entries,
+        'skipped': skipped,
+        'errors': errors,
+    }
 
 
 # --- Architecture Update ---
@@ -879,10 +967,20 @@ def update_architecture_from_prompt(
         )
         if should_update_deps:
             old_deps = module_entry.get('dependencies', [])
+            all_filenames = {
+                mod.get('filename')
+                for mod in arch_data
+                if isinstance(mod.get('filename'), str) and mod.get('filename')
+            }
+            new_deps = _normalize_dependency_references(
+                tags['dependencies'],
+                prompts_dir,
+                all_filenames,
+            )
             # Compare as sets to detect changes (order-independent)
-            if set(old_deps) != set(tags['dependencies']):
-                changes['dependencies'] = {'old': old_deps, 'new': tags['dependencies']}
-                module_entry['dependencies'] = tags['dependencies']
+            if set(old_deps) != set(new_deps):
+                changes['dependencies'] = {'old': old_deps, 'new': new_deps}
+                module_entry['dependencies'] = new_deps
                 updated = True
 
         # 6. Write back to architecture.json (if updated and not dry run)
@@ -964,11 +1062,33 @@ def sync_all_prompts_to_architecture(
         }
 
     arch_data = extract_modules(json.loads(architecture_path.read_text(encoding='utf-8')))
+    if dry_run:
+        existing_filenames = {m.get('filename') for m in arch_data}
+        for entry in reg_result.get('registered_entries', []):
+            filename = entry.get('filename')
+            if filename and filename not in existing_filenames:
+                arch_data.append(entry)
+                existing_filenames.add(filename)
+
+    all_filenames = {
+        m.get('filename')
+        for m in arch_data
+        if isinstance(m.get('filename'), str) and m.get('filename')
+    }
+    for module in arch_data:
+        dependencies = module.get('dependencies', [])
+        if isinstance(dependencies, list):
+            module['dependencies'] = _normalize_dependency_references(
+                dependencies,
+                prompts_dir,
+                all_filenames,
+            )
 
     results = []
     errors = []
     updated_count = 0
     skipped_count = 0
+    registered_filenames = set(reg_result.get('registered', []))
 
     for module in arch_data:
         filename = module.get('filename')
@@ -976,6 +1096,17 @@ def sync_all_prompts_to_architecture(
         # Skip entries without filename or non-prompt files
         if not filename or not filename.endswith('.prompt'):
             skipped_count += 1
+            continue
+
+        if dry_run and filename in registered_filenames:
+            updated_count += 1
+            results.append({
+                'filename': filename,
+                'success': True,
+                'updated': True,
+                'changes': {'registered': {'old': None, 'new': module}},
+                'error': None,
+            })
             continue
 
         # Update from prompt
@@ -1008,6 +1139,7 @@ def sync_all_prompts_to_architecture(
         'results': results,
         'errors': errors,
         'registered': reg_result['registered'],
+        'architecture_modules': arch_data,
     }
 
 
@@ -1229,7 +1361,10 @@ def sync_prompts_to_architecture(
                 "errors": errors,
             }
 
-        if resolved_architecture_path.exists():
+        if dry_run and sync_result.get("architecture_modules") is not None:
+            arch_data = sync_result["architecture_modules"]
+            validation = validate_architecture_modules(arch_data)
+        elif resolved_architecture_path.exists():
             arch_data = extract_modules(
                 json.loads(resolved_architecture_path.read_text(encoding="utf-8"))
             )
