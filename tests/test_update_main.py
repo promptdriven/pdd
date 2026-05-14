@@ -3044,6 +3044,73 @@ def test_default_single_file_update_writes_fresh_fingerprint(
     }
 
 
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_default_single_file_update_writes_real_fingerprint_to_disk(
+    mock_resolve_pair,
+    mock_ctx,
+    mock_update_prompt,
+    tmp_path,
+    monkeypatch,
+):
+    # Issue #1007 / PR #1009 Requirement 15 — integration regression.
+    # The mock-only test above asserts save_fingerprint is *called*; this one
+    # leaves save_fingerprint unmocked and asserts the user-visible
+    # .pdd/meta/<basename>_<language>.json file is actually written and that
+    # its prompt_hash / code_hash reflect the post-update files on disk.
+    import hashlib
+    import json
+
+    # Lay out a realistic prompts/ + code structure so infer_module_identity
+    # resolves to ("foo", "python") from the absolute prompt path.
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("old prompt content\n")
+    code_path = tmp_path / "foo.py"
+    code_path.write_text("def foo(): return 1\n")
+
+    # save_fingerprint resolves META_DIR relative to cwd.
+    monkeypatch.chdir(tmp_path)
+    mock_ctx.obj["quiet"] = True
+
+    new_prompt_text = "new updated prompt content\n"
+    mock_update_prompt.return_value = (new_prompt_text, 0.123456, "test-model")
+    mock_resolve_pair.return_value = (str(prompt_path), str(code_path))
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]):
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_path),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert result is not None
+
+    fingerprint_path = tmp_path / ".pdd" / "meta" / "foo_python.json"
+    assert fingerprint_path.exists(), (
+        f"Expected fingerprint at {fingerprint_path}; "
+        f".pdd contents: "
+        f"{sorted(p.relative_to(tmp_path) for p in (tmp_path / '.pdd').rglob('*')) if (tmp_path / '.pdd').exists() else 'no .pdd dir'}"
+    )
+
+    fingerprint_data = json.loads(fingerprint_path.read_text())
+    assert fingerprint_data["command"] == "update"
+
+    # code_hash is sha256 of the modified code file on disk.
+    expected_code_hash = hashlib.sha256(code_path.read_bytes()).hexdigest()
+    assert fingerprint_data["code_hash"] == expected_code_hash
+
+    # The legacy regeneration path writes the new prompt before finalizing the
+    # fingerprint; with no <include> tags, prompt_hash is plain sha256 of the
+    # freshly-written prompt file.
+    assert prompt_path.read_text() == new_prompt_text
+    expected_prompt_hash = hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+    assert fingerprint_data["prompt_hash"] == expected_prompt_hash
+
+
 def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
     mock_ctx,
     minimal_input_files,
