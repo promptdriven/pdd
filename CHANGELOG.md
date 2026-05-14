@@ -1,15 +1,34 @@
 ## v0.0.237 (2026-05-13)
 
+### CI
+
+- **release**: split releases into `make bump` on feature branches and `make release` tag pushes from `main`, add detached-HEAD/local/remote tag validation, and publish real PyPI artifacts from tag-push GitHub Actions OIDC while retaining manual TestPyPI publishing.
+- **cloud-batch**: restrict real-LLM pytest model selection to Google Vertex Gemini rows so CI does not select slow or unreliable Opus rows (#984).
+
 ### Fix
 
-- **tests**: re-import pdd.core.* after sys.modules pop to keep parent attrs in sync
-- handle PRD sync agent tuple output
-- **#964**: orchestrator owns visible step comments (start with pdd bug)
-- **checkup**: split codex finding prefix blocks
-- **checkup**: harden PR-head rebase recovery
-- **checkup**: avoid force-pushing advanced PR heads
-- **checkup**: harden review loop automation
-- **ci**: restrict pytest CI to Google Vertex gemini rows (no opus) (#984)
+- **bug #964**: move visible step comments into the bug orchestrator. Step prompts now emit `<step_report>` blocks, the orchestrator posts sanitized/truncated GitHub comments with trusted credentials, backfills missed comments on resume, posts fallback comments for failed steps, and persists Step 11 E2E skips without duplicate visible comments.
+- **agentic**: pass Codex/OpenAI provider prompts through stdin with `codex exec --json -`, so Codex receives the prompt body instead of the prompt file path.
+- **agentic-change**: preserve `.pddrc` context loading in minimal runtime/test environments when language extension lookup is unavailable.
+- **checkup**: avoid force-pushing over advanced PR heads; fetch the exact PR branch, rebase the fixer commit, retry a normal push, and abort before verification if fetch/rebase fails.
+- **checkup**: harden review-loop automation by committing/pushing completed fixer changes before stopping on post-fix budget caps, broadening reviewer sweeps, and parsing Codex `Finding:` / `Findings:` priority blocks cleanly.
+- **update**: handle PRD-sync agent tuple output, aggregate PRD-sync cost, and report agent failures without modifying the PRD.
+- **tests**: re-import `pdd.core.*` modules after `sys.modules` cleanup so parent-package attributes stay in sync with reloaded modules.
+
+### Docs
+
+- Add the specification-drift whitepaper with a publication-safe evidence bundle and link it from the README.
+- Update README bug-workflow documentation for the current 12-step flow, including API research, prompt classification, orchestrator-owned comments, and deterministic E2E skip behavior.
+
+### Build
+
+- Bump package metadata, README/PyPI version references, and shell completions from 0.0.236 to 0.0.237.
+- Remove the vestigial `pdd/setup.py` module and its generated prompt/example/metadata artifacts now that `pyproject.toml` is the packaging source of truth.
+
+### Test
+
+- Add regression coverage for orchestrator-owned bug step comments, secret redaction/truncation, resume/backfill idempotency, E2E skip state, checkup PR-head rebase recovery, Codex finding parsing, PRD-sync tuple handling, Codex stdin prompts, and import-cleanup behavior.
+- Ignore generated `*_fixed.py` artifacts during pytest collection.
 
 ## v0.0.236 (2026-05-12)
 
