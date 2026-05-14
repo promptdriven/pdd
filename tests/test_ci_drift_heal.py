@@ -2441,8 +2441,13 @@ class TestRunMetadataSyncSafe:
             stages={s: StageStatus(status="ok") for s in
                     ("prompt", "tags", "architecture", "run_report", "fingerprint")},
         )
-        with patch("pdd.metadata_sync.run_metadata_sync", return_value=good):
+        with patch("pdd.metadata_sync.run_metadata_sync", return_value=good), \
+             patch("pdd.operation_log.infer_module_identity",
+                   return_value=("foo", "python")), \
+             patch("pdd.operation_log.save_fingerprint") as mock_save:
             assert _run_metadata_sync_safe(str(prompt), None) is True
+        mock_save.assert_called_once()
+        assert mock_save.call_args.kwargs["paths"] is None
 
 
 class TestHealModuleInvokesMetadataSync:

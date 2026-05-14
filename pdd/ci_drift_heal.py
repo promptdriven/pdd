@@ -704,10 +704,22 @@ def _run_metadata_sync_safe(
     ok = bool(getattr(result, "ok", False))
     if ok:
         try:
-            basename = p.stem
+            from pdd.operation_log import infer_module_identity, save_fingerprint
+
+            basename, language = infer_module_identity(str(p))
+            save_fingerprint(
+                basename=basename,
+                language=language,
+                operation="metadata_sync",
+                paths=None,
+                cost=0.0,
+                model="metadata_sync",
+            )
         except Exception:
             basename = str(prompt_path)
-        meta_rel = f".pdd/meta/{basename}.json"
+            print(f"metadata finalization failed: fingerprint refresh failed for {basename}")
+            return False
+        meta_rel = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
         print(f"metadata finalized for {basename}: {meta_rel}")
         return True
 
