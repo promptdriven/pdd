@@ -2442,13 +2442,23 @@ class TestRunMetadataSyncSafe:
             stages={s: StageStatus(status="ok") for s in
                     ("prompt", "tags", "architecture", "run_report", "fingerprint")},
         )
+        fingerprint = MagicMock(
+            prompt_hash="prompt",
+            code_hash="code",
+            example_hash=None,
+            test_files=None,
+        )
+        paths = {"prompt": prompt, "code": tmp_path / "foo.py"}
         with patch("pdd.metadata_sync.run_metadata_sync", return_value=good), \
              patch("pdd.operation_log.infer_module_identity",
                    return_value=("foo", "python")), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths), \
+             patch("pdd.sync_determine_operation.read_fingerprint",
+                   return_value=fingerprint), \
              patch("pdd.operation_log.save_fingerprint") as mock_save:
             assert _run_metadata_sync_safe(str(prompt), None) is True
         mock_save.assert_called_once()
-        assert mock_save.call_args.kwargs["paths"] is None
+        assert mock_save.call_args.kwargs["paths"] == paths
 
 
 class TestHealModuleInvokesMetadataSync:

@@ -706,16 +706,33 @@ def _run_metadata_sync_safe(
     if ok:
         try:
             from pdd.operation_log import infer_module_identity, save_fingerprint
+            from pdd.sync_determine_operation import get_pdd_file_paths, read_fingerprint
 
             basename, language = infer_module_identity(str(p))
+            paths = get_pdd_file_paths(basename, language)
+            if not paths or not paths.get("prompt") or not paths.get("code"):
+                raise ValueError("authoritative prompt/code paths unavailable")
             save_fingerprint(
                 basename=basename,
                 language=language,
                 operation="metadata_sync",
-                paths=None,
+                paths=paths,
                 cost=0.0,
                 model="metadata_sync",
             )
+            fingerprint = read_fingerprint(basename, language)
+            if (
+                fingerprint is None
+                or not fingerprint.prompt_hash
+                or not fingerprint.code_hash
+            ):
+                raise ValueError("fingerprint missing prompt/code hashes")
+            example_path = paths.get("example")
+            if isinstance(example_path, Path) and example_path.exists() and not fingerprint.example_hash:
+                raise ValueError("fingerprint missing example hash")
+            test_files = paths.get("test_files")
+            if test_files and not fingerprint.test_files:
+                raise ValueError("fingerprint missing test file hashes")
         except Exception:
             basename = str(prompt_path)
             print(f"metadata finalization failed: fingerprint refresh failed for {basename}")
