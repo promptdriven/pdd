@@ -1,14 +1,12 @@
 {
-  "pdd_version": "0.0.233",
-  "timestamp": "2026-05-14T18:11:00.839474+00:00",
-  "command": "fix",
+  "pdd_version": "0.0.230",
+  "timestamp": "2026-05-14T19:02:35.601319+00:00",
+  "command": "metadata_sync",
   "prompt_hash": "b56569fefd7c2f9f1f4c99ce75a01e2746edfb23ccce8601df6cce45c66c8f24",
-  "code_hash": "38c0d974b8d6dfe70068cd5ed2e76814baa7b7f7416adb972d79f25bfadbe074",
-  "example_hash": "3ea2243a3343814fb42e520d504bc4cabbfd4796865948a8718b254d5440a784",
-  "test_hash": "469b8a3ef650f61098a8701656c1e5f16cbf3a7ab24f8d4234a99ba725341dad",
-  "test_files": {
-    "test_ci_drift_heal.py": "469b8a3ef650f61098a8701656c1e5f16cbf3a7ab24f8d4234a99ba725341dad"
-  },
+  "code_hash": "e845bdaa2dacf754ba70c6f6b83f7cdc30de2d32c8910d2d538765bfa57487f2",
+  "example_hash": null,
+  "test_hash": null,
+  "test_files": null,
   "include_deps": {
     "context/operation_log_example.py": "6cd7962ab255d6080aeb97897175250f987ce936cf7333e7601f10834405a940",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",

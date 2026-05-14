@@ -53,6 +53,11 @@ class DriftInfo:
     diff_base: Optional[str] = None
     original_operation: Optional[str] = None
     estimated_cost: float = 0.0
+    # Set True after `_run_metadata_sync_safe` reports a successful finalization
+    # for this module; used by `main()` to drive commit-time staging verification.
+    metadata_finalized: bool = False
+    metadata_finalization_failed: bool = False
+    metadata_finalization_error: str = ""
 
 
 @dataclass
@@ -893,7 +898,14 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
                 raise
             if snapshot is not None:
                 _restore_metadata_state_for(snapshot)
+            # Metadata finalization is a hard requirement (Issue #1006): a
+            # successful auto-heal commit must include the updated fingerprint,
+            # so this failure must surface distinctly from advisory subprocess
+            # failures and fail the run loudly in every mode.
+            drift.metadata_finalization_failed = True
+            drift.metadata_finalization_error = "metadata sync returned false"
             return False
+        drift.metadata_finalized = True
 
     # Optional follow-up: skip when module bypassed via env.
     if drift.basename in skip_set:
@@ -1012,8 +1024,14 @@ def commit_and_push(
     healed_modules: List[str],
     skip_ci: bool = False,
     checkpoint: bool = False,
+    finalized_modules: Optional[List[Tuple[str, str]]] = None,
 ) -> bool:
-    """Stage, commit, and push healed changes. Returns True on success."""
+    """Stage, commit, and push healed changes. Returns True on success.
+
+    `finalized_modules` is a list of (basename, language) for modules that
+    successfully finalized metadata. Their expected fingerprint paths must
+    appear in the staged set or the commit aborts (Issue #1006).
+    """
     if not healed_modules:
         return True
 
@@ -1039,6 +1057,39 @@ def commit_and_push(
     if diff.returncode == 0:
         # Nothing staged.
         return True
+
+    # Metadata staging verification: every module that reported a successful
+    # finalization must have its fingerprint file present in the staged set,
+    # otherwise the commit could ship without the updated fingerprint
+    # (Issue #1006). The fingerprint JSON includes a fresh timestamp on every
+    # write, so a real finalization always produces a staged change.
+    if finalized_modules:
+        try:
+            names = subprocess.run(
+                ["git", "diff", "--cached", "--name-only"],
+                capture_output=True,
+                text=True,
+            )
+        except Exception as exc:
+            console.print(f"[red]git diff --cached --name-only failed: {exc}[/red]")
+            return False
+        if names.returncode != 0:
+            console.print(
+                f"[red]git diff --cached --name-only failed: "
+                f"{getattr(names, 'stderr', '')}[/red]"
+            )
+            return False
+        stdout = getattr(names, "stdout", "") or ""
+        staged_paths = {line.strip() for line in stdout.splitlines() if line.strip()}
+        missing: List[str] = []
+        for basename, language in finalized_modules:
+            expected = f".pdd/meta/{_safe_basename(basename)}_{language}.json"
+            if expected not in staged_paths:
+                missing.append(expected)
+        if missing:
+            for path in missing:
+                console.print(f"[red]metadata staging verification failed: missing {path}[/red]")
+            return False
 
     module_str = ", ".join(healed_modules)
     headline = f"chore: auto-heal prompt/example drift for {module_str}"
@@ -1126,6 +1177,8 @@ def main(
     healed: List[str] = []
     failed: List[str] = []
     skipped: List[str] = []
+    finalized_modules: List[Tuple[str, str]] = []
+    meta_failed: List[str] = []
     revert_blocks_commit = False
     skip_set = _heal_skip_modules()
 
@@ -1160,8 +1213,20 @@ def main(
                 healed.append(drift.basename)
                 if drift.operation == "update" and drift.basename in skip_set:
                     skipped.append(drift.basename)
+                if getattr(drift, "metadata_finalized", False):
+                    finalized_modules.append((drift.basename, drift.language))
             else:
                 failed.append(drift.basename)
+                if getattr(drift, "metadata_finalization_failed", False):
+                    reason = getattr(
+                        drift,
+                        "metadata_finalization_error",
+                        "metadata sync returned false",
+                    ) or "metadata sync returned false"
+                    console.print(
+                        f"[red]metadata finalization failed for {drift.basename}: {reason}[/red]"
+                    )
+                    meta_failed.append(drift.basename)
 
             # Post-heal budget check: if cumulative cost exceeds cap, latch the
             # flag so subsequent modules are skipped without invoking heal.
@@ -1183,6 +1248,12 @@ def main(
     if revert_blocks_commit:
         return 1
 
+    # Metadata finalization is a hard requirement (Issue #1006): if it failed
+    # for any module, fail loudly in every mode (PR and push-to-main/preflight)
+    # without committing partial state from earlier modules.
+    if meta_failed:
+        return 1
+
     if is_pr_mode and has_failures:
         return 1
 
@@ -1191,7 +1262,12 @@ def main(
     pr_partial_success = is_pr_mode and has_healed and (has_failures or has_skipped)
     if has_healed and not pr_partial_success:
         checkpoint = is_pr_mode and not has_failures and not has_skipped
-        committed = commit_and_push(healed, skip_ci, checkpoint=checkpoint)
+        committed = commit_and_push(
+            healed,
+            skip_ci,
+            checkpoint=checkpoint,
+            finalized_modules=finalized_modules,
+        )
         if not committed:
             return 1
 
