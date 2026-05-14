@@ -3561,6 +3561,11 @@ For detailed command examples for each workflow, see the respective command docu
 - `pull_request_target` (opened / synchronize / reopened / ready_for_review): heals only modules changed by the PR and pushes a `chore: auto-heal …` commit back to the PR branch.
 - `issue_comment` with a `/heal` command on a PR by an authorized collaborator: same as above, on demand.
 
+Generated internal PRs authored by `prompt-driven-github[bot]` are trusted as
+the autonomous pdd-issue App identity for the `pull_request_target` heal path.
+Other PR authors and all `/heal` comment requesters must pass the `pdd_cloud`
+collaborator check before Cloud Build is dispatched.
+
 There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
 
 **Loop prevention**: Auto-heal commits start with `chore: auto-heal …`; the Cloud Build step short-circuits when the triggering commit subject matches that prefix, so the heal cannot retrigger itself.
