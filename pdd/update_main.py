@@ -1030,6 +1030,65 @@ def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
     return True
 
 
+def _finalize_single_file_fingerprint(
+    prompt_path: Path,
+    code_path: Path,
+    sync_metadata: bool,
+    dry_run: bool,
+    quiet: bool,
+    cost: float,
+    model: str,
+) -> None:
+    """Default fingerprint finalization for single-file/regeneration update modes.
+
+    Writes a current `(prompt, code)` fingerprint via the existing
+    `pdd.operation_log` helpers so a successful `pdd update <code>` is not
+    re-detected as changed on the next run (issue #1007 / PR #1009
+    Requirement 15). Skips with an `[info]` log line — unless `quiet` — for
+    the three intentional skip cases (sync_metadata orchestrator owns the
+    stage, dry-run mode, or `infer_module_identity` cannot derive
+    basename/language). All failures are best-effort: a `save_fingerprint`
+    exception surfaces as a `[warning]` line but never breaks the caller's
+    success tuple.
+    """
+    if sync_metadata:
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                "orchestrator owns fingerprint stage[/info]"
+            )
+        return
+    if dry_run:
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: dry-run mode[/info]"
+            )
+        return
+
+    from .operation_log import save_fingerprint, infer_module_identity
+    basename, language = infer_module_identity(prompt_path)
+    if not (basename and language):
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                f"unable to infer module identity for {prompt_path}[/info]"
+            )
+        return
+
+    try:
+        save_fingerprint(
+            basename,
+            language,
+            operation="update",
+            paths={"prompt": Path(prompt_path), "code": Path(code_path)},
+            cost=cost,
+            model=model,
+        )
+    except Exception as exc:
+        if not quiet:
+            rprint(f"[warning][metadata] Fingerprint save failed: {exc}[/warning]")
+
+
 def update_main(
     ctx: click.Context,
     input_prompt_file: Optional[str],
@@ -1500,6 +1559,16 @@ def update_main(
                             # (#871 acceptance criterion).
                             raise click.exceptions.Exit(1)
 
+                    _finalize_single_file_fingerprint(
+                        Path(prompt_path),
+                        Path(modified_code_file),
+                        sync_metadata=sync_metadata,
+                        dry_run=dry_run,
+                        quiet=quiet,
+                        cost=agentic_cost,
+                        model=provider,
+                    )
+
                     return generated_prompt, agentic_cost, provider
 
                 # Agentic failed - fall through to legacy
@@ -1572,6 +1641,16 @@ def update_main(
                 if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
                     raise click.exceptions.Exit(1)
 
+            _finalize_single_file_fingerprint(
+                Path(prompt_path),
+                Path(modified_code_file),
+                sync_metadata=sync_metadata,
+                dry_run=dry_run,
+                quiet=quiet,
+                cost=total_cost,
+                model=model_name,
+            )
+
             return modified_prompt, total_cost, model_name
 
         # Case 2: True Update Mode.
@@ -1617,6 +1696,16 @@ def update_main(
                     if sync_metadata:
                         if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
                             raise click.exceptions.Exit(1)
+
+                    _finalize_single_file_fingerprint(
+                        Path(agentic_prompt_file),
+                        Path(modified_code_file),
+                        sync_metadata=sync_metadata,
+                        dry_run=dry_run,
+                        quiet=quiet,
+                        cost=agentic_cost,
+                        model=provider,
+                    )
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1724,6 +1813,16 @@ def update_main(
             if sync_metadata:
                 if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
                     raise click.exceptions.Exit(1)
+
+            _finalize_single_file_fingerprint(
+                Path(output_file_paths["output"]),
+                Path(modified_code_file),
+                sync_metadata=sync_metadata,
+                dry_run=dry_run,
+                quiet=quiet,
+                cost=total_cost,
+                model=model_name,
+            )
 
             return modified_prompt, total_cost, model_name
 

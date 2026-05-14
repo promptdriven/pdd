@@ -2996,6 +2996,132 @@ def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_regeneration(
     assert mock_sync.call_count == 0
 
 
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_default_single_file_update_writes_fresh_fingerprint(
+    mock_resolve_pair,
+    mock_ctx,
+    mock_update_prompt,
+    tmp_path,
+):
+    # Issue #1007 / PR #1009 Requirement 15: a successful default single-file
+    # `pdd update <code>` must finalize a current fingerprint for the
+    # affected (prompt, code) pair so the next preflight run does not
+    # re-detect the file as changed. Patch save_fingerprint on the
+    # operation_log module (where _finalize_single_file_fingerprint imports
+    # it from) and assert one call with the resolved identity and paths.
+    code_file = tmp_path / "modified_code.py"
+    code_file.write_text("def foo(): return 1\n")
+    derived_prompt = tmp_path / "modified_code_python.prompt"
+    mock_resolve_pair.return_value = (str(derived_prompt), str(code_file))
+    mock_ctx.obj["quiet"] = True
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("modified_code", "python")) as mock_infer, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert result is not None
+    # Orchestrator is the sync_metadata=True path; default must NOT use it.
+    assert mock_sync.call_count == 0
+    # infer_module_identity drives the basename/language used for the write.
+    mock_infer.assert_called_once_with(Path(str(derived_prompt)))
+    # Exactly one fresh fingerprint write for the affected (prompt, code).
+    assert mock_save_fp.call_count == 1
+    kwargs = mock_save_fp.call_args.kwargs
+    assert mock_save_fp.call_args.args == ("modified_code", "python")
+    assert kwargs["operation"] == "update"
+    assert kwargs["paths"] == {
+        "prompt": Path(str(derived_prompt)),
+        "code": Path(str(code_file)),
+    }
+
+
+def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # When infer_module_identity returns (None, None) the finalizer must
+    # skip save_fingerprint (and emit an info log when not quiet), preserving
+    # the successful return tuple.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=(None, None)), \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+        )
+
+    assert result is not None
+    mock_save_fp.assert_not_called()
+
+
+def test_default_single_file_update_swallows_fingerprint_save_failure(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # A save_fingerprint exception must not break the success return — the
+    # update tuple is the contract; fingerprint write is best-effort.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")), \
+         patch("pdd.operation_log.save_fingerprint", side_effect=OSError("disk full")):
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+        )
+
+    assert result == ("updated prompt text", 0.123456, "test-model")
+
+
+def test_sync_metadata_true_skips_default_fingerprint_finalization(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # When the orchestrator runs (sync_metadata=True), the default fingerprint
+    # write must be skipped so we do not double-write the same fingerprint.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="custom_output.prompt",
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    mock_sync.assert_called_once()
+    mock_save_fp.assert_not_called()
+
+
 def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     mock_ctx,
     minimal_input_files,
