@@ -10,12 +10,6 @@ from dotenv import load_dotenv
 from pdd.llm_invoke import InsufficientCreditsError
 
 
-def pytest_ignore_collect(collection_path: Path, config: pytest.Config) -> bool:
-    """Ignore generated fixed-code artifacts that match pytest's test pattern."""
-    del config
-    return collection_path.name.endswith("_fixed.py")
-
-
 # Load environment variables from .env early in collection
 load_dotenv()
 
@@ -395,6 +389,8 @@ def pytest_runtest_makereport(item: pytest.Item, call):
 collect_ignore_glob = [
     "csv/*",
     "fixtures/*",
+    "*_fixed.py",
+    "**/*_fixed.py",
 ]
 
 
