@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .agentic_common import (
+    PDD_INTERNAL_PATH_ALLOWLIST,
     _is_valid_companion_pattern,
     _matches_companion_pattern_anchored,
 )
@@ -528,6 +529,26 @@ class DurableSyncRunner(AsyncSyncRunner):
             # unchanged.
             if normalized in self.allowed_write_paths:
                 continue
+            # Issue #1013 iter-42 M-1 (durable PDD_INTERNAL parity): PDD's
+            # own infrastructure writes (audit logs, runner state, etc.)
+            # are NEVER part of a contract — they're internal artifacts
+            # the tool produces as side effects of running. Mirror the
+            # async per-module guard (iter-36 B-1/B-2 at
+            # ``agentic_sync_runner.py`` line ~2376/~2408) so the durable
+            # checkpoint-staging validation honors the same allowlist;
+            # otherwise contracted durable runs hard-fail on PDD's own
+            # audit logs / state file. The internal allowlist patterns
+            # are REPO-ROOT-anchored (the writes happen at the top of
+            # the project regardless of module_cwd), so this check runs
+            # BEFORE the module_cwd prefix stripping below and matches
+            # against ``normalized`` (the raw repo-relative form).
+            internal_matched = False
+            for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                if _matches_companion_pattern_anchored(normalized, pattern):
+                    internal_matched = True
+                    break
+            if internal_matched:
+                continue
             # F3 (Issue #1013): companion glob matching uses anchored,
             # segment-aware semantics so ``.pdd/meta/*.json`` does NOT
             # match nested paths like ``.pdd/meta/nested/foo.json`` or
@@ -593,6 +614,26 @@ class DurableSyncRunner(AsyncSyncRunner):
         for path in paths:
             normalized = path.replace(os.sep, "/")
             lower = normalized.lower()
+            # Issue #1013 iter-42 M-1 (durable PDD_INTERNAL parity): PDD's
+            # own infrastructure writes (e.g. ``.pdd/agentic-logs/*``,
+            # ``.pdd/agentic_sync_state.json``) match neither a contract's
+            # allowed_write_set nor the user-facing companion allowlist;
+            # they're tool internals. The unsafe-path rules below would
+            # otherwise classify ``.pdd/agentic-logs/foo.jsonl`` as
+            # unsafe via the ``_pdd_path_index`` branch (because it sits
+            # under ``.pdd/`` but is NOT a recognized meta artifact). The
+            # async per-module guard already exempts these patterns;
+            # mirror it here so a contracted durable run does not
+            # hard-fail at checkpoint on its own audit logs / state file.
+            # Patterns are REPO-ROOT-anchored — match the raw normalized
+            # path without stripping any module prefix.
+            internal_matched = False
+            for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                if _matches_companion_pattern_anchored(normalized, pattern):
+                    internal_matched = True
+                    break
+            if internal_matched:
+                continue
             pdd_index = _pdd_path_index(normalized)
             if pdd_index is not None:
                 matching_meta_prefix = next(

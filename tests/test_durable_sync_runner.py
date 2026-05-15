@@ -298,6 +298,13 @@ def test_metadata_allowlist_rejects_nested_pdd_state_and_wrong_meta_scope(tmp_pa
 
 
 def test_unsafe_staged_paths_rejects_sensitive_artifacts(tmp_path: Path):
+    """Iter-42 M-1: PDD's own infrastructure writes (``.pdd/agentic-logs/*``,
+    ``.pdd/agentic_sync_state.json``) match the internal allowlist and must
+    be treated as safe at checkpoint validation time — mirrors the async
+    per-module guard. Paths that sit under ``.pdd/`` but are NOT in the
+    internal allowlist (e.g. ``.pdd/worktrees/...``, ``.pdd/cache/...``)
+    remain unsafe.
+    """
     repo = _init_repo_with_remote(tmp_path)
     runner = _runner(repo)
 
@@ -312,17 +319,125 @@ def test_unsafe_staged_paths_rejects_sensitive_artifacts(tmp_path: Path):
         "config/token.txt",
         "config/secrets/api.txt",
         ".pdd/worktrees/sync-issue-1328-foo",
-        ".pdd/agentic_sync_state.json",
         ".pdd/cache/unrelated.json",
     ]
     safe_paths = [
         "src/app.py",
         ".pdd/meta/foo_python.json",
+        # Internal allowlist: tool infrastructure, never user-contracted.
+        ".pdd/agentic_sync_state.json",
+        ".pdd/agentic-logs/session_test.jsonl",
     ]
 
     result = runner._unsafe_staged_paths("foo", [*unsafe_paths, *safe_paths])
 
     assert result == sorted(unsafe_paths)
+
+
+def test_durable_does_not_flag_pdd_audit_logs_at_checkpoint(tmp_path: Path):
+    """Iter-42 M-1: PDD's own audit logs under ``.pdd/agentic-logs/`` are
+    tool-infrastructure side effects of running, never user-contracted.
+    The durable checkpoint-staging validation must mirror the async
+    per-module guard (iter-36 B-1/B-2) and skip ``PDD_INTERNAL_PATH_ALLOWLIST``
+    matches; otherwise contracted durable runs hard-fail at checkpoint on
+    PDD's own audit logs.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    result = runner._out_of_scope_staged_paths(
+        ["pdd/foo.py", ".pdd/agentic-logs/session_test.jsonl"],
+        "foo",
+        repo,
+    )
+    assert ".pdd/agentic-logs/session_test.jsonl" not in result, (
+        "PDD audit logs must NOT be flagged as out-of-contract by the "
+        "durable checkpoint validation (iter-42 M-1)"
+    )
+    assert result == []
+
+
+def test_durable_does_not_flag_pdd_state_file_at_checkpoint(tmp_path: Path):
+    """Iter-42 M-1: ``.pdd/agentic_sync_state.json`` is the runner state
+    file — internal PDD infrastructure, NOT a contract artifact. The
+    durable checkpoint validation must auto-allow it via the internal
+    allowlist (mirrors async per-module guard).
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    result = runner._out_of_scope_staged_paths(
+        ["pdd/foo.py", ".pdd/agentic_sync_state.json"],
+        "foo",
+        repo,
+    )
+    assert ".pdd/agentic_sync_state.json" not in result, (
+        "PDD runner state file must NOT be flagged as out-of-contract "
+        "by the durable checkpoint validation (iter-42 M-1)"
+    )
+    assert result == []
+
+
+def test_durable_still_flags_unrelated_pdd_artifacts(tmp_path: Path):
+    """Iter-42 M-1 (negative): the internal allowlist must NOT widen into
+    a generic ``.pdd/**`` bypass. A path like ``.pdd/random/junk.txt``
+    that does NOT match any ``PDD_INTERNAL_PATH_ALLOWLIST`` pattern must
+    still be flagged as out-of-contract.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    result = runner._out_of_scope_staged_paths(
+        ["pdd/foo.py", ".pdd/random/junk.txt"],
+        "foo",
+        repo,
+    )
+    assert result == [".pdd/random/junk.txt"], (
+        "unrelated .pdd artifacts must still be flagged as out-of-"
+        "contract — the internal allowlist is fixed, not a generic "
+        ".pdd/** bypass (iter-42 M-1 negative)"
+    )
+
+
+def test_durable_unsafe_skips_pdd_internal_allowlist(tmp_path: Path):
+    """Iter-42 M-1 (unsafe parity): the per-path unsafe-classification
+    rules in ``_unsafe_staged_paths`` would otherwise reject
+    ``.pdd/agentic-logs/foo.jsonl`` via the ``_pdd_path_index`` branch
+    (under ``.pdd/`` but NOT a recognized meta artifact). Internal
+    allowlist patterns must take precedence so PDD's own infrastructure
+    writes are not classified as unsafe at checkpoint time.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo)
+
+    result = runner._unsafe_staged_paths(
+        "foo",
+        [
+            ".pdd/agentic-logs/session_test.jsonl",
+            ".pdd/agentic_sync_state.json",
+            ".pdd/bug-state/foo.json",
+            # Negative control: not in internal allowlist, must still
+            # land in unsafe via _pdd_path_index branch.
+            ".pdd/random/junk.txt",
+        ],
+    )
+    assert result == [".pdd/random/junk.txt"], (
+        "internal allowlist matches must be skipped before unsafe-"
+        "classification rules run; only paths NOT in the allowlist "
+        "should surface as unsafe (iter-42 M-1)"
+    )
 
 
 def test_allowed_write_set_rejects_out_of_scope_checkpoint_paths(tmp_path: Path):
