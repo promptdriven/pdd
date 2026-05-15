@@ -112,8 +112,13 @@ class DurableSyncRunner(AsyncSyncRunner):
         # against the scope-guard-time ``repo_root``, which is the per-module
         # worktree root), bypassing the split contract. Clear the baseline
         # so each fresh module worktree starts clean.
-        self._baseline_changed_paths = set()
-        self._baseline_ignored_paths = set()
+        #
+        # Iter-24 M-1: baseline snapshots are now ``Dict[str, Optional[str]]``
+        # (path → SHA-1) for content-aware preservation; clear to empty dicts
+        # so iteration in ``_enforce_scope_guard`` and
+        # ``_remaining_out_of_scope_paths`` remains a no-op.
+        self._baseline_changed_paths = {}
+        self._baseline_ignored_paths = {}
         if self.total_budget is not None:
             self.max_workers = 1
         elif durable_max_parallel is not None:

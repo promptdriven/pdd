@@ -776,8 +776,9 @@ def test_durable_baseline_paths_use_git_root_not_caller_cwd(
 
     assert runner.project_root == durable_root.resolve()
     # Iter-22 M-1 invariant: durable baseline is always empty.
+    # Iter-24 M-1: empty dict (was empty set before the type swap).
     assert "out.py" not in runner._baseline_changed_paths
-    assert runner._baseline_changed_paths == set()
+    assert runner._baseline_changed_paths == {}
 
 
 def test_durable_baseline_is_empty_even_when_git_root_has_dirty_files(
@@ -819,9 +820,44 @@ def test_durable_baseline_is_empty_even_when_git_root_has_dirty_files(
     # Iter-22 M-1: durable baseline is empty regardless of the git_root's
     # state. The dirty paths from the main checkout must NOT bleed into the
     # per-module worktree's allow set.
+    # Iter-24 M-1: empty dict (was empty set before the type swap).
     assert runner.project_root == durable_root.resolve()
-    assert runner._baseline_changed_paths == set()
-    assert runner._baseline_ignored_paths == set()
+    assert runner._baseline_changed_paths == {}
+    assert runner._baseline_ignored_paths == {}
+
+
+def test_durable_baseline_remains_empty_dict_after_init(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Issue #1013 iter-24 M-1: baseline snapshots changed from ``Set[str]``
+    to ``Dict[str, Optional[str]]`` (path → SHA-1) for content-aware
+    preservation. The durable runner's iter-22 "clear baseline" invariant
+    still holds — but the cleared value is now an empty dict, not an empty
+    set. Iterating a dict with no entries yields nothing, so all the
+    ``.items()`` loops in ``_enforce_scope_guard`` and
+    ``_remaining_out_of_scope_paths`` remain safe no-ops in durable mode.
+    """
+    durable_root = _init_repo_with_remote(tmp_path)
+    # Dirty paths in the git_root that would have populated the baseline
+    # under the inherited AsyncSyncRunner init path.
+    (durable_root / "dirty.py").write_text("user wip")
+    (durable_root / "build.log").write_text("ignored junk")
+
+    monkeypatch.chdir(durable_root)
+    runner = _runner(
+        durable_root,
+        runner_cls=EmptyDurableRunner,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    assert runner._baseline_changed_paths == {}
+    assert runner._baseline_ignored_paths == {}
+    # Iter-24 invariant: the cleared baseline is a Mapping (so .items() is
+    # safe). Iteration yields no entries — confirms downstream loops are
+    # no-ops.
+    assert list(runner._baseline_changed_paths.items()) == []
+    assert list(runner._baseline_ignored_paths.items()) == []
 
 
 def test_durable_scope_guard_does_not_whitelist_main_checkout_dirty_files(

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv as _csv
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -221,6 +222,35 @@ def _git_ignored_paths(project_root: Path) -> set[str]:
         if rel:
             paths.add(rel)
     return paths
+
+
+def _hash_file(project_root: Path, rel_posix: str) -> Optional[str]:
+    """Return the SHA-1 of *rel_posix* under *project_root*, or None.
+
+    Issue #1013 iter-24 (M-1) baseline-clobber fix: the scope guard preserves
+    pre-existing dirty/untracked paths (iter-6 B1) so the sync run does not
+    delete unrelated user WIP. The original implementation matched paths by
+    NAME only, which let a buggy LLM SILENTLY OVERWRITE an out-of-scope
+    baseline file with different content — the post-revert re-scan saw the
+    name in the baseline and skipped the contract check.
+
+    This hash is captured per baseline path at runner init and re-computed
+    at scope-guard time; only an unchanged SHA (same bytes on disk) is
+    treated as pre-existing user WIP and auto-allowed. A divergent SHA
+    falls through to the contract check, surfacing the clobber.
+
+    SHA-1 is sufficient — this is clobber detection, not adversarial
+    collision resistance. Returns ``None`` when the file cannot be read
+    (missing, permission denied, etc.); callers MUST treat ``None`` as
+    "no fingerprint available" and decide policy explicitly.
+    """
+    try:
+        path = (project_root / rel_posix).resolve()
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except (OSError, FileNotFoundError):
+        return None
+    return hashlib.sha1(data).hexdigest()
 
 
 # ---------------------------------------------------------------------------
@@ -988,11 +1018,25 @@ class AsyncSyncRunner:
         # set BEFORE any module sync runs. Pre-existing untracked files
         # (e.g. user's ``scratch.txt``) are not the sync run's responsibility
         # and MUST be preserved by the scope guard.
-        self._baseline_changed_paths: Set[str] = (
-            _git_changed_paths(self.project_root)
-            if self.scope_guard_enabled and self.allowed_write_paths is not None
-            else set()
-        )
+        #
+        # Iter-24 M-1 (baseline-clobber bug): the snapshot is now a DICT
+        # mapping repo-relative POSIX path → init-time SHA-1 instead of a
+        # bare set. ``_enforce_scope_guard`` re-hashes each baseline path at
+        # check time; ONLY paths whose content is byte-identical to the init
+        # snapshot are auto-allowed. Name-based preservation let a buggy LLM
+        # silently OVERWRITE pre-existing dirty files outside the contract
+        # (the iter-23 codex repro). Empty dict — never bare set — when the
+        # gate (``scope_guard_enabled AND allowed_write_paths is not None``)
+        # is off, so the dict.items() loops in the enforcement path are
+        # safe no-ops.
+        if self.scope_guard_enabled and self.allowed_write_paths is not None:
+            _baseline_paths = _git_changed_paths(self.project_root)
+            self._baseline_changed_paths: Dict[str, Optional[str]] = {
+                rel: _hash_file(self.project_root, rel)
+                for rel in _baseline_paths
+            }
+        else:
+            self._baseline_changed_paths = {}
 
         # Iter-20 M-1 (gitignored fail-open): also snapshot pre-existing
         # gitignored files (e.g. user-side ``build/cache.bin`` under a
@@ -1006,11 +1050,19 @@ class AsyncSyncRunner:
         # (same gate as ``_baseline_changed_paths``) so non-contract runs do
         # not pay the ``git ls-files`` cost on repos with large ignored
         # trees (``node_modules/``, ``build/``, etc.).
-        self._baseline_ignored_paths: Set[str] = (
-            _git_ignored_paths(self.project_root)
-            if self.scope_guard_enabled and self.allowed_write_paths is not None
-            else set()
-        )
+        #
+        # Iter-24 M-1: same dict-with-SHA shape as ``_baseline_changed_paths``
+        # — pre-existing ignored files are skipped from the gitignored
+        # re-scan ONLY when their content is unchanged. A clobbered ignored
+        # baseline path surfaces via the re-scan.
+        if self.scope_guard_enabled and self.allowed_write_paths is not None:
+            _baseline_ignored = _git_ignored_paths(self.project_root)
+            self._baseline_ignored_paths: Dict[str, Optional[str]] = {
+                rel: _hash_file(self.project_root, rel)
+                for rel in _baseline_ignored
+            }
+        else:
+            self._baseline_ignored_paths = {}
 
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
@@ -2047,15 +2099,33 @@ class AsyncSyncRunner:
         if ignored_result.returncode != 0:
             return ["<git-status-failed>"]
 
-        baseline_ignored = getattr(self, "_baseline_ignored_paths", set())
+        # Iter-24 M-1: ``_baseline_ignored_paths`` is now a Dict[path, SHA].
+        # ``getattr`` fallback keeps the runtime robust against subclasses
+        # that bypass __init__ (none in-tree today, but the iter-20 fallback
+        # used ``set()`` for the same reason); we still expect a mapping.
+        baseline_ignored = getattr(self, "_baseline_ignored_paths", {})
         for line in ignored_result.stdout.splitlines():
             rel = _normalize_repo_path(line.strip().strip('"'))
             if not rel:
                 continue
-            # Pre-existing ignored files (snapshot at runner init) are NOT
-            # the sync run's responsibility.
+            # Iter-6 B1 / iter-24 M-1: pre-existing ignored files snapshotted
+            # at runner init are NOT the sync run's responsibility — but ONLY
+            # if their content is byte-identical to the init snapshot. A
+            # clobbered ignored baseline path must surface as out-of-scope.
             if rel in baseline_ignored:
-                continue
+                baseline_hash = baseline_ignored[rel]
+                current_hash = _hash_file(repo_root, rel)
+                # ``current_hash is None`` means the file disappeared from
+                # disk between the init snapshot and now — but the ignored
+                # scan still listed it, which is contradictory. Fall through
+                # to surface it; the diagnostic is the safer direction.
+                if (current_hash is not None
+                        and (baseline_hash is None
+                             or current_hash == baseline_hash)):
+                    # Unchanged baseline (or unreadable at init → preserve
+                    # by name, same conservative carve-out as the changed
+                    # baseline branch in ``_enforce_scope_guard``).
+                    continue
             absolute = (repo_root / rel).resolve()
             # Companion-allowlisted files (e.g. ``.pdd/meta/*.json`` when
             # the user has ``.pdd/`` in ``.gitignore``) are in
@@ -2153,8 +2223,36 @@ class AsyncSyncRunner:
             # captured at runner __init__ are NEVER out-of-scope. Without
             # this pass, a user's ``scratch.txt`` or unrelated WIP under
             # the repo root would be removed by the revert helper.
-            for rel_posix in self._baseline_changed_paths:
-                allowed_files.add((repo_root / rel_posix).resolve())
+            #
+            # Iter-24 M-1 (baseline-clobber bug): preservation is now
+            # CONTENT-AWARE. Re-hash each baseline path against the
+            # init-time SHA. Only byte-identical content is auto-allowed;
+            # divergent SHAs fall through to the contract check so a
+            # sync-side clobber is surfaced. Note: the init hash uses
+            # ``self.project_root`` and the enforcement hash uses
+            # ``repo_root`` — in the non-durable async case those resolve
+            # to the same path; the durable runner clears the baseline
+            # entirely (iter-22) so this loop is a no-op there.
+            for rel_posix, baseline_hash in self._baseline_changed_paths.items():
+                current_hash = _hash_file(repo_root, rel_posix)
+                if current_hash is None:
+                    # File was deleted (or unreadable) at check time —
+                    # don't auto-allow a ghost. The revert helpers handle
+                    # restore semantics; we just refuse to whitelist.
+                    continue
+                if baseline_hash is None:
+                    # Couldn't hash at init (the file was unreadable
+                    # then). Be conservative and preserve by name, the
+                    # legacy iter-6 B1 behaviour — avoids false-positives
+                    # on permission-flaky paths that pre-date the run.
+                    allowed_files.add((repo_root / rel_posix).resolve())
+                    continue
+                if current_hash == baseline_hash:
+                    # Unchanged user WIP — preserve.
+                    allowed_files.add((repo_root / rel_posix).resolve())
+                # else: sync (or some other writer) clobbered the file.
+                # Do NOT add to allowed_files — let the contract check
+                # flag it as out-of-scope.
 
             tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
             untracked_reverted = revert_out_of_scope_changes_with_dirs(

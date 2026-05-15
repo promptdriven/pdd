@@ -2881,6 +2881,219 @@ class TestEnforceScopeGuard:
         )
         assert diagnostic is None or "scratch.txt" not in diagnostic
 
+    # ---------------------------------------------------------------------
+    # Iter-24 M-1: hash-aware baseline preservation
+    # ---------------------------------------------------------------------
+
+    def test_baseline_preservation_clobber_is_detected(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-24 M-1 (baseline-clobber bug, codex iter-23 repro): a
+        pre-existing dirty file outside the contract MUST be flagged when
+        sync overwrites it with different content. Name-based preservation
+        (iter-6 B1) silently auto-allowed any same-named write."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing dirty file outside the contract — codex repro.
+        outside = tmp_path / "outside.py"
+        outside.write_text("user wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "outside.py" in runner._baseline_changed_paths
+        baseline_hash = runner._baseline_changed_paths["outside.py"]
+        assert baseline_hash is not None, (
+            "iter-24: baseline SHA must be captured for readable files"
+        )
+
+        # Simulate sync (buggy LLM) clobbering the file with different
+        # content.
+        outside.write_text("sync clobbered")
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-24: clobbered baseline file must hard-fail the module"
+        )
+        assert "outside.py" in diagnostic, (
+            "iter-24: clobbered path must appear in the diagnostic"
+        )
+
+    def test_baseline_preservation_unchanged_file_still_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-24 M-1 (iter-6 B1 regression): an unchanged pre-existing
+        dirty file MUST still be auto-allowed (preserved). The iter-24 fix
+        adds content-awareness but does not break the iter-6 B1 carve-out
+        for unchanged user WIP."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        outside = tmp_path / "outside.py"
+        outside.write_text("user wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # Sync did NOT touch outside.py — content unchanged.
+        assert outside.read_text() == "user wip"
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is None, (
+            f"iter-24: unchanged baseline file must be preserved, got: "
+            f"{diagnostic!r}"
+        )
+
+    def test_baseline_preservation_deleted_file_drops_from_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-24 M-1: when a baseline path is deleted between init and
+        scope-guard time, the iter-24 logic skips it (``current_hash is
+        None``). The deleted path MUST NOT appear in ``allowed_files`` —
+        use a TRACKED-AND-MODIFIED baseline path so ``git status`` shows
+        the deletion (advisor #3 fix). Capture the revert helpers' allowed
+        set to assert directly."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        # Commit ``outside.py`` so it's tracked; then dirty it. ``git
+        # status`` will list the subsequent deletion as ``D ``.
+        (tmp_path / "outside.py").write_text("tracked content")
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "outside.py", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+        outside = tmp_path / "outside.py"
+        outside.write_text("dirty content")  # now tracked + modified
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "outside.py" in runner._baseline_changed_paths
+
+        # Simulate the file being deleted between baseline snapshot and
+        # scope-guard run.
+        outside.unlink()
+
+        captured_allowed: Dict[str, set] = {}
+
+        def fake_revert(_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        runner._enforce_scope_guard("mod", tmp_path)
+
+        # The KEY assertion: the deleted baseline path was NOT auto-allowed.
+        deleted_abs = (tmp_path / "outside.py").resolve()
+        assert deleted_abs not in captured_allowed["files"], (
+            "iter-24: deleted baseline path must not be in allowed_files; "
+            f"got: {captured_allowed['files']}"
+        )
+
     def test_wildcard_only_companion_pattern_does_not_auto_allow(
         self, tmp_path, monkeypatch
     ):
@@ -3290,7 +3503,8 @@ class TestEnforceScopeGuard:
             companion_allowlist=[".pdd/meta/*.json"],
         )
         runner.project_root = tmp_path.resolve()
-        assert runner._baseline_ignored_paths == set(), (
+        # Iter-24 M-1: baseline snapshots are now Dict[str, Optional[str]].
+        assert runner._baseline_ignored_paths == {}, (
             "no ignored files exist yet — baseline must be empty"
         )
 
