@@ -171,14 +171,23 @@ class TestParseLlmResponse:
 
 
 class TestExtractAllowedWritePaths:
-    def test_extracts_split_contract_allowed_paths(self):
-        issue = """
-## Split Contract
-Allowed write set:
+    """
+    Issue #1013 (F1, F3, F16): the deprecated ``_extract_allowed_write_paths``
+    wrapper now delegates to :func:`pdd.agentic_common.parse_issue_contract`,
+    which only recognizes two structured contract formats: HTML-comment
+    blocks and heading+fenced-block. The legacy loose-markdown parsing tested
+    here previously is intentionally NOT supported by the new contract API —
+    deeper coverage lives in ``tests/test_agentic_common.py``.
+    """
 
-  * `pdd/update_main.py`
-  * `pdd/prompts/update_main_python.prompt`
-  * `tests/test_update_main.py`
+    def test_extracts_split_contract_allowed_paths_from_fenced_block(self):
+        issue = """
+## Allowed Write Set
+```text
+pdd/update_main.py
+pdd/prompts/update_main_python.prompt
+tests/test_update_main.py
+```
 
 But sync wrote other files.
 """
@@ -188,12 +197,30 @@ But sync wrote other files.
             "tests/test_update_main.py",
         ]
 
+    def test_extracts_split_contract_allowed_paths_from_html_comment(self):
+        issue = """
+Some discussion.
+
+<!-- PDD_ISSUE_CONTRACT
+{"allowed_paths": ["pdd/update_main.py", "tests/test_update_main.py"]}
+-->
+
+More discussion.
+"""
+        assert _extract_allowed_write_paths(issue) == [
+            "pdd/update_main.py",
+            "tests/test_update_main.py",
+        ]
+
     def test_returns_empty_without_contract_marker(self):
         assert _extract_allowed_write_paths("Touch `pdd/foo.py` if needed.") == []
 
-    def test_ignores_historical_allowed_only_examples(self):
+    def test_ignores_loose_markdown_bullets_without_structured_block(self):
+        # The legacy markdown-bullet format is no longer supported; the new
+        # contract API requires either an HTML-comment or a fenced block.
         issue = """
-In PR #1010 for issue #1005, the issue contract allowed only:
+## Split Contract
+Allowed write set:
 
   * `pdd/update_main.py`
   * `tests/test_update_main.py`
