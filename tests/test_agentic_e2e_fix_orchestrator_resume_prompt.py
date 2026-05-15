@@ -226,6 +226,52 @@ class TestResumeRoutingOnStep9Success:
             "Resume section must retain the last_completed_step >= 9 inspection"
         )
 
+    def test_resume_section_requires_step9_retry_key_precedence(self, resume_section):
+        """Issue #1001 round 10: the prompt (the source of truth) must specify
+        that resume reads ``step_outputs["9_retry"]`` in preference to
+        ``step_outputs["9"]`` when resolving the cached Step 9 token.
+
+        Without this directive in the SoT prompt, a future ``pdd sync`` could
+        regenerate the orchestrator and re-introduce the round-9 bug (reading
+        only ``step_outputs["9"]`` and missing a retry-emitted
+        ``ALL_TESTS_PASS``). The runtime now uses
+        ``_resolve_cached_step9_output`` to enforce this precedence; this test
+        keeps the prompt in lockstep with the runtime.
+        """
+        # The retry key MUST be referenced by literal string so the directive
+        # is unambiguous at the prompt level.
+        assert '"9_retry"' in resume_section or "'9_retry'" in resume_section, (
+            "Resume & State section must reference the '9_retry' step_outputs key "
+            "so a future pdd sync cannot regenerate the old bug of reading only "
+            "step_outputs['9'] on resume"
+        )
+        # The primary key must also appear so the precedence directive names
+        # both sides of the choice.
+        assert '"9"' in resume_section or "'9'" in resume_section, (
+            "Resume & State section must reference the primary '9' step_outputs key"
+        )
+        # Precedence is described as "9_retry" FIRST, then a "falling back"
+        # phrase that names the primary key — order proves the directive
+        # teaches "retry first, primary as fallback" rather than the reverse.
+        retry_idx = resume_section.find("9_retry")
+        fallback_idx = resume_section.find("falling back")
+        assert retry_idx != -1, "Resume section must contain the literal '9_retry'"
+        assert fallback_idx != -1, (
+            "Resume section must use 'falling back' wording to describe the "
+            "fallback to step_outputs['9']"
+        )
+        assert retry_idx < fallback_idx, (
+            "Retry-key precedence must be described before any 'falling back' "
+            "wording (i.e. '9_retry' first, then 'falling back to step_outputs[\"9\"]')"
+        )
+        # The runtime helper MUST also be named in the prompt so the prompt
+        # and the .py implementation stay synchronized through pdd sync.
+        assert "_resolve_cached_step9_output" in resume_section, (
+            "Resume & State section must name the _resolve_cached_step9_output "
+            "helper so the precedence is encapsulated and the prompt/runtime "
+            "stay symmetric"
+        )
+
 
 class TestMaxCyclesExhaustionOnResume:
     """Criterion C-extended: resume with no remaining cycles surfaces MAX_CYCLES_REACHED.
