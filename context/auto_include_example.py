@@ -258,7 +258,7 @@ def main():
     # ------------------------------------------------------------------
     # 8. Two-stage retrieval: embed pre-filter when candidates > 50
     # ------------------------------------------------------------------
-    print("\n--- 8. Two-stage retrieval (embed pre-filter) ---")
+print("\n--- 8. Two-stage retrieval (embed pre-filter) ---")
 
     # Build CSV with > 50 rows to trigger embedding pre-filter
     csv_rows = ["full_path,file_summary,key_exports,dependencies,content_hash"]
