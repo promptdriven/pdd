@@ -148,6 +148,7 @@ complete -c pdd -n "__fish_seen_subcommand_from checkup" -l reviewers -x -d "Com
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l reviewer -x -d "Primary reviewer role"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l fixer -x -d "Fixer role"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l reviewer-fallback -x -d "Fallback reviewer when primary fails"
+complete -c pdd -n "__fish_seen_subcommand_from checkup" -l fixer-fallback -x -d "Fallback fixer when primary fixer fails (e.g. credential-limit)"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l max-review-rounds -x -d "Max review rounds"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l max-review-cost -x -d "Max review cost (USD)"
 complete -c pdd -n "__fish_seen_subcommand_from checkup" -l max-review-minutes -x -d "Max review wall-clock minutes"

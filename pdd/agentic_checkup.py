@@ -321,6 +321,7 @@ def run_agentic_checkup(
     reviewer: Optional[str] = None,
     fixer: Optional[str] = None,
     reviewer_fallback: Optional[str] = None,
+    fixer_fallback: Optional[str] = None,
     max_review_rounds: int = 5,
     max_review_cost: float = 50.0,
     max_review_minutes: float = 90.0,
@@ -349,6 +350,10 @@ def run_agentic_checkup(
             reviewer first pass and do not invoke the fixer or push changes.
         reviewer_fallback: Optional secondary reviewer role to try once when
             the primary reviewer cannot complete.
+        fixer_fallback: Optional secondary fixer role to try once when the
+            primary fixer cannot address the reviewer's findings (e.g. a
+            subscription-tier credential is exhausted). Must differ from
+            both the primary fixer and the active reviewer.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -452,6 +457,7 @@ def run_agentic_checkup(
             reviewer=reviewer,
             fixer=fixer,
             reviewer_fallback=reviewer_fallback,
+            fixer_fallback=fixer_fallback,
             review_only=review_only,
             max_rounds=max_review_rounds,
             max_cost=max_review_cost,
