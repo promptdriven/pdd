@@ -2273,20 +2273,34 @@ def _revert_out_of_scope_changes(
         # renames as ``R  old -> new``. Treating the whole payload as one
         # path caused ``git checkout HEAD --`` to be called with a literal
         # ``"old -> new"`` arg, which silently failed and left the rename
-        # in place. Split renames so BOTH source and destination are
-        # membership-checked independently.
+        # in place. Split renames so both source and destination surface.
         if " -> " in payload:
             old_raw, new_raw = payload.split(" -> ", 1)
             entry_paths = [old_raw.strip().strip('"'), new_raw.strip().strip('"')]
+            is_rename = True
         else:
             entry_paths = [payload.strip('"')]
-        for rel_path in entry_paths:
-            if not rel_path:
-                continue
-            full_path = (cwd / rel_path).resolve()
-            if full_path not in allowed_paths:
-                to_restore.append(rel_path)
-                reverted.append(full_path)
+            is_rename = False
+        entry_paths = [p for p in entry_paths if p]
+        if not entry_paths:
+            continue
+        # Iter-7 B4 (partial-rename revert): a rename is an atomic git
+        # operation. If EITHER side of the rename is out of scope, the
+        # rename as a whole has to be undone — restoring only one side
+        # leaves the working tree in a half-renamed state (``D old`` or
+        # ``A new`` depending on which side was in scope).
+        full_paths = [(cwd / rel).resolve() for rel in entry_paths]
+        out_of_scope = any(fp not in allowed_paths for fp in full_paths)
+        if is_rename:
+            if out_of_scope:
+                for rel, fp in zip(entry_paths, full_paths):
+                    to_restore.append(rel)
+                    reverted.append(fp)
+        else:
+            for rel, fp in zip(entry_paths, full_paths):
+                if fp not in allowed_paths:
+                    to_restore.append(rel)
+                    reverted.append(fp)
     if to_restore:
         # Iter-6 B2: use ``git restore --staged --worktree --source=HEAD``
         # so staged renames are correctly undone (``git checkout HEAD --``

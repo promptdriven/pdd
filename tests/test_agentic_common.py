@@ -4723,6 +4723,106 @@ class TestRevertOutOfScopeChanges:
         assert not (proj / "new.py").exists()
         assert len(reverted) >= 1
 
+    def test_partial_rename_restores_both_sides_when_source_allowed(self, tmp_path):
+        """Iter-7 B4 (partial-rename bug): a rename is atomic. If the
+        contract allows the SOURCE (``old``) but NOT the destination
+        (``new``), restoring only ``new`` leaves ``D old`` staged. Fix:
+        when either side of a rename is out of scope, revert BOTH so the
+        rename is fully undone.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        # Contract allows source but not destination.
+        allowed = {(proj / "pdd" / "old.py").resolve()}
+        _revert_out_of_scope_changes(proj, allowed)
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"git status should be clean — rename must be fully undone; "
+            f"got: {status!r}"
+        )
+        assert (proj / "pdd" / "old.py").exists()
+        assert not (proj / "pdd" / "new.py").exists()
+
+    def test_partial_rename_restores_both_sides_when_destination_allowed(
+        self, tmp_path
+    ):
+        """Iter-7 B4 (partial-rename bug): inverse of the above. If the
+        contract allows the DESTINATION but NOT the source, restoring only
+        ``old`` leaves ``A new`` staged. The whole rename must be reverted.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        # Contract allows destination but not source.
+        allowed = {(proj / "pdd" / "new.py").resolve()}
+        _revert_out_of_scope_changes(proj, allowed)
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"git status should be clean — rename must be fully undone; "
+            f"got: {status!r}"
+        )
+        assert (proj / "pdd" / "old.py").exists()
+        assert not (proj / "pdd" / "new.py").exists()
+
+    def test_rename_left_in_place_when_both_sides_allowed(self, tmp_path):
+        """Iter-7 B4 negative case: when BOTH sides of the rename are in
+        scope, the rename must NOT be reverted — only out-of-scope changes
+        get touched.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        allowed = {
+            (proj / "pdd" / "old.py").resolve(),
+            (proj / "pdd" / "new.py").resolve(),
+        }
+        _revert_out_of_scope_changes(proj, allowed)
+
+        # Rename should remain staged.
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert "R" in status and "old.py" in status and "new.py" in status, (
+            f"In-scope rename must remain staged; got: {status!r}"
+        )
+
     def test_reverts_deleted_files(self, tmp_path):
         """Deleted files outside allowed set must be restored."""
         from pdd.agentic_common import _revert_out_of_scope_changes
