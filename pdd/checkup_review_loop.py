@@ -3008,7 +3008,10 @@ def _budget_exhausted(
     state: ReviewLoopState,
     deadline: float,
 ) -> bool:
-    return state.total_cost >= config.max_cost or time.monotonic() >= deadline
+    # ``--max-review-cost`` is deprecated/report-only — cost is telemetry and
+    # never stops the loop. Only wall-clock duration is a hard budget here.
+    del config, state
+    return time.monotonic() >= deadline
 
 
 def _mark_budget_exhausted(
@@ -3016,9 +3019,8 @@ def _mark_budget_exhausted(
     state: ReviewLoopState,
     deadline: float,
 ) -> None:
-    if state.total_cost >= config.max_cost:
-        state.max_cost_reached = True
-        state.stop_reason = f"Max review cost reached: ${config.max_cost:.2f}."
+    # Cost-cap stop was removed; ``state.max_cost_reached`` stays ``False`` for
+    # ordinary runs even when ``state.total_cost`` exceeds ``config.max_cost``.
     if time.monotonic() >= deadline:
         state.max_duration_reached = True
         state.stop_reason = f"Max review duration reached: {config.max_minutes:g} minutes."
@@ -3596,7 +3598,9 @@ def _has_hard_not_clean_state(state: ReviewLoopState) -> bool:
 
 
 def _has_limit_state(state: ReviewLoopState) -> bool:
-    return state.max_rounds_reached or state.max_cost_reached or state.max_duration_reached
+    # ``state.max_cost_reached`` stays in the state object for backwards-compat
+    # telemetry/reporting, but it is no longer a real safety-limit stop signal.
+    return state.max_rounds_reached or state.max_duration_reached
 
 
 def _render_final_report(

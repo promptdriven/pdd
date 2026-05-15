@@ -238,9 +238,16 @@ class TestCheckupReviewLoopRuntime:
         assert not any("review-claude" in label for _, label in calls)
         assert not any("fresh-final" in label for _, label in calls)
 
-    def test_cost_cap_after_review_stops_before_fixer_or_push(
+    def test_cost_overage_after_review_still_runs_fixer_and_verifier(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
+        """Issue #1030: ``--max-review-cost`` is deprecated/report-only.
+
+        Reported cost crossing the configured deprecated value before the
+        fixer MUST NOT stop the loop. The fixer and verifier must still run,
+        the loop must proceed to clean (or max rounds), and the rendered
+        report must show ``max-cost-reached: false``.
+        """
         from pdd.checkup_review_loop import run_checkup_review_loop
         import pdd.checkup_review_loop as mod
 
@@ -256,58 +263,186 @@ class TestCheckupReviewLoopRuntime:
         }
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
-            calls.append(kwargs["label"])
+            label = kwargs["label"]
+            calls.append(label)
+            if label == "checkup-review-loop-review-codex-round1":
+                # First reviewer pass already exceeds the deprecated cap.
+                return True, _json("findings", [finding]), 1.0, role
+            if "fix-" in label:
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        pushes: List[str] = []
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
+        )
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Cost telemetry still accumulates past the deprecated value.
+        assert round(cost, 2) == 1.3
+        # Loop continued through review -> fix -> verify even though total
+        # cost crossed ``max_cost`` before the fixer ran.
+        assert calls == [
+            "checkup-review-loop-review-codex-round1",
+            "checkup-review-loop-fix-claude-for-codex-round1",
+            "checkup-review-loop-verify-codex-round1",
+        ]
+        assert pushes == ["pushed"]
+        assert "max-cost-reached: false" in report
+        assert "max-cost-reached: true" not in report
+        assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
+        # Finding addressed; no longer remains in the report's findings table.
+        assert "The PR does not test the new workflow." not in report
+
+    def test_cost_overage_after_fixer_still_runs_verifier(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1030: cost overage after the fixer must not skip the verifier.
+
+        Reported cost crossing the deprecated value after the fixer push MUST
+        still let the verifier run; the loop continues to clean or max rounds
+        and ``max-cost-reached`` stays ``false`` in the report.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[str] = []
+        finding = {
+            "severity": "critical",
+            "area": "api",
+            "location": "pdd/api.py:5",
+            "evidence": "missing guard",
+            "finding": "The API accepts invalid input.",
+            "required_fix": "Validate the input before use.",
+        }
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "fix-" in label:
+                # Fixer pushes total cost past the deprecated cap.
+                return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
+            if label == "checkup-review-loop-verify-codex-round1":
+                return True, _json("clean"), 0.1, role
+            return True, _json("findings", [finding]), 0.1, role
+
+        pushes: List[str] = []
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
+        )
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert round(cost, 2) == 1.2
+        assert calls == [
+            "checkup-review-loop-review-codex-round1",
+            "checkup-review-loop-fix-claude-for-codex-round1",
+            "checkup-review-loop-verify-codex-round1",
+        ]
+        assert pushes == ["pushed"]
+        assert "max-cost-reached: false" in report
+        assert "max-cost-reached: true" not in report
+        assert "reviewer-status: codex=clean claude=fixer fresh-final=clean" in report
+        # Verifier confirmed the fix; finding is no longer remaining.
+        assert "The API accepts invalid input." not in report
+        assert "verification=verified" in report
+
+    def test_unparseable_review_past_cost_value_still_runs_parse_repair(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1030: cost is report-only, so parse-repair is no longer
+        gated by ``--max-review-cost``. Unparseable reviewer output past the
+        deprecated value must still trigger the parse-repair pass.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "parse-repair" in label:
+                return True, _json("clean"), 0.05, role
+            return True, "Needs changes, but not JSON.", 0.6, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pytest.fail("nothing to push for a clean parse-repair"),
+        )
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Parse-repair was attempted past the deprecated cap.
+        assert any("parse-repair" in label for label in calls)
+        assert "max-cost-reached: false" in report
+        assert "max-cost-reached: true" not in report
+
+    def test_cost_overage_continues_through_multiple_rounds_to_max_rounds(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1030: even when telemetry cost is far past the deprecated
+        value, the loop must continue through codex review -> claude fix ->
+        codex verify until merge-ready or ``max_review_rounds`` is reached.
+        Hitting ``max_review_rounds`` is the real stop signal, not cost.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[str] = []
+        finding = {
+            "severity": "critical",
+            "area": "api",
+            "location": "pdd/api.py:5",
+            "evidence": "missing guard",
+            "finding": "The API accepts invalid input.",
+            "required_fix": "Validate the input before use.",
+        }
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "fix-" in label:
+                return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
+            # Reviewer/verifier always reports the same finding so the loop
+            # runs until ``max_review_rounds`` is hit (not until cost stops it).
             return True, _json("findings", [finding]), 1.0, role
 
-        monkeypatch.setattr(mod, "_run_role_task", fake_task)
-        monkeypatch.setattr(
-            mod,
-            "_commit_and_push_if_changed",
-            lambda *a, **k: pytest.fail("must not push after review cost cap"),
-        )
-
-        success, report, cost, _model = run_checkup_review_loop(
-            context=_ctx(tmp_path),
-            config=_config(max_cost=0.5),
-            cwd=tmp_path,
-            quiet=True,
-            use_github_state=False,
-        )
-
-        assert success is True
-        assert cost == 1.0
-        assert calls == ["checkup-review-loop-review-codex-round1"]
-        assert "max-cost-reached: true" in report
-        assert "issue_aligned: unknown" in report
-        assert "Review loop stopped on a configured safety limit" not in report
-        assert "The PR does not test the new workflow." in report
-
-    def test_cost_cap_after_fixer_pushes_then_stops_before_verifier(
-        self, monkeypatch: Any, tmp_path: Path
-    ) -> None:
-        from pdd.checkup_review_loop import run_checkup_review_loop
-        import pdd.checkup_review_loop as mod
-
-        self._patch_io(monkeypatch, tmp_path)
-        calls: List[str] = []
-        finding = {
-            "severity": "critical",
-            "area": "api",
-            "location": "pdd/api.py:5",
-            "evidence": "missing guard",
-            "finding": "The API accepts invalid input.",
-            "required_fix": "Validate the input before use.",
-        }
-
-        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
-            label = kwargs["label"]
-            calls.append(label)
-            if "fix-" in label:
-                return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
-            return True, _json("findings", [finding]), 0.1, role
-
         pushes: List[str] = []
-
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
         monkeypatch.setattr(
             mod,
@@ -315,111 +450,25 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
         )
 
-        success, report, cost, _model = run_checkup_review_loop(
+        success, report, _cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
-            config=_config(max_cost=0.5),
+            config=_config(max_cost=0.5, max_rounds=2),
             cwd=tmp_path,
             quiet=True,
             use_github_state=False,
         )
 
         assert success is True
-        assert round(cost, 2) == 1.1
-        assert calls == [
-            "checkup-review-loop-review-codex-round1",
-            "checkup-review-loop-fix-claude-for-codex-round1",
-        ]
-        assert pushes == ["pushed"]
-        assert "max-cost-reached: true" in report
-        assert "issue_aligned: unknown" in report
-        assert "The API accepts invalid input." in report
-        assert "verification=unverified" in report
-
-    def test_unparseable_review_at_cost_cap_skips_parse_repair(
-        self, monkeypatch: Any, tmp_path: Path
-    ) -> None:
-        from pdd.checkup_review_loop import run_checkup_review_loop
-        import pdd.checkup_review_loop as mod
-
-        self._patch_io(monkeypatch, tmp_path)
-        calls: List[str] = []
-
-        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
-            calls.append(kwargs["label"])
-            return True, "Needs changes, but not JSON.", 0.5, role
-
-        monkeypatch.setattr(mod, "_run_role_task", fake_task)
-        monkeypatch.setattr(
-            mod,
-            "_commit_and_push_if_changed",
-            lambda *a, **k: pytest.fail("must not push after review cost cap"),
-        )
-
-        success, report, cost, _model = run_checkup_review_loop(
-            context=_ctx(tmp_path),
-            config=_config(max_cost=0.5),
-            cwd=tmp_path,
-            quiet=True,
-            use_github_state=False,
-        )
-
-        assert success is True
-        assert cost == 0.5
-        assert calls == ["checkup-review-loop-review-codex-round1"]
-        assert "max-cost-reached: true" in report
-
-    def test_cost_cap_after_fixer_stops_before_commit_and_push(
-        self, monkeypatch: Any, tmp_path: Path
-    ) -> None:
-        from pdd.checkup_review_loop import run_checkup_review_loop
-        import pdd.checkup_review_loop as mod
-
-        self._patch_io(monkeypatch, tmp_path)
-        calls: List[str] = []
-        finding = {
-            "severity": "critical",
-            "area": "api",
-            "location": "pdd/api.py:5",
-            "evidence": "missing guard",
-            "finding": "The API accepts invalid input.",
-            "required_fix": "Validate the input before use.",
-        }
-
-        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
-            label = kwargs["label"]
-            calls.append(label)
-            if "fix-" in label:
-                return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
-            return True, _json("findings", [finding]), 0.1, role
-
-        pushes: List[str] = []
-
-        monkeypatch.setattr(mod, "_run_role_task", fake_task)
-        monkeypatch.setattr(
-            mod,
-            "_commit_and_push_if_changed",
-            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
-        )
-
-        success, report, cost, _model = run_checkup_review_loop(
-            context=_ctx(tmp_path),
-            config=_config(max_cost=0.5),
-            cwd=tmp_path,
-            quiet=True,
-            use_github_state=False,
-        )
-
-        assert success is True
-        assert round(cost, 2) == 1.1
-        assert calls == [
-            "checkup-review-loop-review-codex-round1",
-            "checkup-review-loop-fix-claude-for-codex-round1",
-        ]
-        assert pushes == ["pushed"]
-        assert "max-cost-reached: true" in report
-        assert "issue_aligned: unknown" in report
-        assert "The API accepts invalid input." in report
-        assert "verification=unverified" in report
+        # Both rounds ran fixer + verifier despite cost being far past the
+        # deprecated cap. Stop reason is max rounds, not cost.
+        fix_calls = [c for c in calls if "fix-" in c]
+        verify_calls = [c for c in calls if "verify-" in c]
+        assert len(fix_calls) == 2
+        assert len(verify_calls) == 2
+        assert pushes == ["pushed", "pushed"]
+        assert "max-cost-reached: false" in report
+        assert "max-cost-reached: true" not in report
+        assert "max-rounds-reached: true" in report
 
     def test_codex_findings_are_given_to_claude_then_verified_by_codex(
         self, monkeypatch: Any, tmp_path: Path
