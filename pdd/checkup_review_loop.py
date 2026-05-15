@@ -982,6 +982,15 @@ def run_checkup_review_loop(
                 deadline=deadline,
             )
             if fallback_fix is None or not fallback_fix.success:
+                # Record the failed fallback attempt in the audit trail
+                # before breaking. ``fallback_fix is None`` means the
+                # fallback never ran (budget/guard skip), so there is
+                # nothing to append; a non-None failure means the
+                # fallback executed and its result — summary, changed
+                # files, model — must remain visible in the final
+                # report and ``final-state.json``.
+                if fallback_fix is not None:
+                    state.fixes.append(fallback_fix)
                 # Preserve the existing stop_reason if the fallback path
                 # already wrote one (e.g. budget exhausted before fallback
                 # could run) — the operator-facing detail wins.

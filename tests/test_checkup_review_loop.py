@@ -1847,6 +1847,71 @@ class TestCheckupReviewLoopRuntime:
             f"reset at {first_reset_idx}, clean at {first_clean_idx}"
         )
 
+    def test_fixer_fallback_failure_is_recorded_in_state_fixes(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When the configured ``fixer_fallback`` runs but also fails,
+        its ``FixResult`` must still be appended to ``state.fixes`` so
+        the audit trail and ``final-state.json`` show the attempt. A
+        ``None`` fallback (never ran) is the only case that should NOT
+        leave a row."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return (
+                    False,
+                    'Exit code 1: {"api_error_status":429,"result":"You\'ve hit your limit · resets May 18, 11pm (UTC)"}',
+                    0.0,
+                    role,
+                )
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return False, "gemini fixer also failed", 0.05, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "fallback fixer gemini also failed" in report
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+        assert len(state.fixes) >= 2, (
+            f"failed fallback must still be appended to state.fixes; "
+            f"got len={len(state.fixes)}: {[f.fixer for f in state.fixes]!r}"
+        )
+        primary_entry, fallback_entry = state.fixes[0], state.fixes[1]
+        assert primary_entry.fixer == "claude" and primary_entry.success is False
+        assert fallback_entry.fixer == "gemini" and fallback_entry.success is False, (
+            f"failed fallback FixResult expected (gemini, success=False); got "
+            f"({fallback_entry.fixer}, success={fallback_entry.success})"
+        )
+
     def test_fixer_fallback_not_configured_breaks_loop(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
