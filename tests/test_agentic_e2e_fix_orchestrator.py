@@ -7693,3 +7693,267 @@ class TestCommitAndPushFiltersGhWrapper:
             f"The filter at agentic_e2e_fix_orchestrator.py:1325 must drop "
             f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
         )
+
+
+# Issue #1034: NOT_A_BUG_SUPPRESSED_ON_RESUME regression tests
+#
+# When a cached Step 3 NOT_A_BUG token is loaded on resume (from either
+# step_outputs or bug_step_outputs), the orchestrator must re-run the same
+# direct-edit + dev_unit_states + cycle-waste-breaker guard logic that the
+# inline Step 3 path applies. If any guard would have suppressed the token,
+# the cached entry must be demoted to FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME
+# so that validate_cached_state rewinds last_completed_step and Step 3 reruns.
+# ============================================================================
+
+
+class TestNotABugSuppressedOnResume:
+    """Tests for issue #1034: cached Step 3 NOT_A_BUG must be re-evaluated on resume."""
+
+    def test_helper_passes_through_when_not_a_bug_absent(self, tmp_path):
+        """Non-NOT_A_BUG cached output should be returned unchanged."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: CODE_BUG in module.py"
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={},
+            initial_file_hashes={},
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result == out
+
+    def test_helper_passes_through_when_already_failed(self, tmp_path):
+        """Already-FAILED outputs should be returned unchanged."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "FAILED: VERIFICATION_FAILED"
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={"u1": {"fixed": True}},
+            initial_file_hashes={},
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result == out
+
+    def test_helper_passes_through_when_no_guards_trigger(self, tmp_path):
+        """NOT_A_BUG with no fixed units and no direct edits stays trusted."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={"u1": {"fixed": False}},
+                initial_file_hashes={},
+                cwd=tmp_path,
+                quiet=True,
+            )
+        assert result == out
+
+    def test_helper_demotes_when_dev_unit_fixed(self, tmp_path):
+        """FIXED unit in dev_unit_states must demote cached NOT_A_BUG."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={"u1": {"fixed": True}},
+            initial_file_hashes={},
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:")
+        assert "dev_unit_states" in result
+
+    def test_helper_demotes_when_direct_edits_present(self, tmp_path):
+        """Direct edits relative to restored initial_file_hashes must demote."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes={"src/module.py": "abc"},
+                cwd=tmp_path,
+                quiet=True,
+            )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:")
+        assert "direct_edits" in result
+
+    def test_helper_fails_open_when_initial_hashes_missing(self, tmp_path):
+        """Missing initial_file_hashes must skip direct-edit check (fail open)."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        # No dev_unit_states fixes, no snapshot → cannot suppress → pass through.
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={},
+            initial_file_hashes=None,
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result == out
+
+    def test_resume_demotes_cached_step3_not_a_bug_via_dev_units(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """End-to-end: resume with cached NOT_A_BUG + FIXED dev unit reruns Step 3.
+
+        Without the resume guard, the orchestrator would skip Step 3 entirely
+        (because last_completed_step >= 3 and cached output is NOT_A_BUG),
+        wasting the cycle. The guard must demote the cached entry so
+        validate_cached_state rewinds and Step 3 actually executes.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        # Simulate a resumed state mid-cycle 1 with cached NOT_A_BUG and a
+        # FIXED dev unit (cycle-waste-breaker condition on resume).
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"unit_a": {"fixed": True}},
+            "skipped_steps": {},
+            "initial_file_hashes": {},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                # On rerun, Step 3 must execute — and we let it issue CODE_BUG
+                # so the workflow continues normally.
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 must have been re-executed despite cached NOT_A_BUG token.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume when cached NOT_A_BUG is demoted by "
+            f"the dev_unit_states guard. Called labels: {called_labels}"
+        )
+
+    def test_bug_step_outputs_not_a_bug_resuppressed_by_dev_units(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, tmp_path
+    ):
+        """bug_step_outputs[\"3\"] = NOT_A_BUG must be re-evaluated symmetrically.
+
+        Loads a sibling bug_state_<issue>.json with a cached NOT_A_BUG step 3.
+        Combined with a FIXED dev unit in workflow state (mid-resume), the
+        cached bug-state token must NOT short-circuit Step 3 — the orchestrator
+        must run Step 3 fresh.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        # Write a sibling bug_state file under .pdd/state for the orchestrator to
+        # discover via the bug-state candidates loop.
+        cwd = e2e_fix_default_args["cwd"]
+        bug_state_dir = cwd / ".pdd" / "state"
+        bug_state_dir.mkdir(parents=True, exist_ok=True)
+        bug_state_file = bug_state_dir / f"bug_state_{e2e_fix_default_args['issue_number']}.json"
+        bug_state_file.write_text(json.dumps({
+            "step_outputs": {
+                "2": "Bug step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+            }
+        }))
+
+        # Resume into cycle 1, but at a step before 3 so the bug_step_outputs
+        # reuse branch is the entry vector (not the prior-resume guard).
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 0,
+            "step_outputs": {},
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"unit_a": {"fixed": True}},
+            "skipped_steps": {},
+            "initial_file_hashes": {},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun when bug_step_outputs[3] = NOT_A_BUG is "
+            "demoted by the dev_unit_states guard symmetrically with the "
+            f"step_outputs path. Called labels: {called_labels}"
+        )
+
+    def test_prompt_documents_not_a_bug_suppressed_on_resume(self):
+        """Orchestrator source prompt must document the demotion token.
+
+        Issue #1034 requires the prompt to specify
+        ``FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME`` so regeneration preserves
+        the resume-time guard.
+        """
+        prompt_path = (
+            Path(__file__).parent.parent
+            / "prompts"
+            / "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+        if not prompt_path.exists():
+            pytest.skip("Prompt file not available in public repo")
+        template = prompt_path.read_text()
+        assert "NOT_A_BUG_SUPPRESSED_ON_RESUME" in template, (
+            "Prompt must document the FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME "
+            "demotion token used by the resume-time guard."
+        )

@@ -1096,6 +1096,83 @@ def _detect_meaningful_changes(cwd: Path, initial_file_hashes: Dict[str, Optiona
     return [p for p in _detect_changed_files(cwd, initial_file_hashes) if not _is_noise_path(p)]
 
 
+def _reevaluate_step3_not_a_bug_on_resume(
+    cached_output: str,
+    *,
+    dev_unit_states: Dict[str, Any],
+    initial_file_hashes: Optional[Dict[str, Optional[str]]],
+    cwd: Path,
+    quiet: bool = False,
+    source: str = "step_outputs",
+) -> str:
+    """Re-evaluate a cached Step 3 ``NOT_A_BUG`` token on workflow resume.
+
+    Implements the resume-time guard described in
+    ``pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt`` (Issue #1034):
+    when the cached entry classifies as ``NOT_A_BUG``, re-run the same
+    direct-edit + ``dev_unit_states`` + cycle-waste-breaker checks that the
+    inline Step 3 path applies. If any guard would have suppressed the token,
+    demote the cached output to
+    ``FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>`` so the existing
+    ``FAILED:`` rewind in :func:`validate_cached_state` reruns Step 3.
+
+    The raw cached token MUST NOT be trusted on resume. Both
+    ``step_outputs["3"]`` and ``bug_step_outputs["3"]`` callers route through
+    this helper for symmetry.
+
+    Args:
+        cached_output: The cached Step 3 output text.
+        dev_unit_states: Restored ``dev_unit_states`` from workflow state.
+        initial_file_hashes: Restored workflow-start file hash snapshot. If
+            ``None``, the direct-edit check is skipped (fail open).
+        cwd: Repo working directory used for direct-edit detection.
+        quiet: Suppress console messages when True.
+        source: Diagnostic label (``"step_outputs"`` or ``"bug_step_outputs"``).
+
+    Returns:
+        The original ``cached_output`` if the token should still be trusted,
+        otherwise a ``"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>"`` token.
+    """
+    if not cached_output or str(cached_output).startswith("FAILED:"):
+        return cached_output
+    if _classify_step_output(cached_output, step_num=3) != "NOT_A_BUG":
+        return cached_output
+
+    # Guard 1: dev_unit_states with any FIXED unit suppresses NOT_A_BUG.
+    # Per the prompt's cycle-waste-breaker rule on resume (no cycle_start_hashes
+    # available), has_fixed_units True is treated as terminal-for-cycle and
+    # suppresses the cached token.
+    has_fixed_units = any(
+        isinstance(s, dict) and s.get("fixed") for s in (dev_unit_states or {}).values()
+    )
+    if has_fixed_units:
+        if not quiet:
+            console.print(
+                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} suppressed "
+                f"because dev_unit_states has FIXED units. Demoting to "
+                f"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:dev_unit_states.[/yellow]"
+            )
+        return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:dev_unit_states"
+
+    # Guard 2: direct-edit detection using restored initial_file_hashes.
+    # If the snapshot is missing, fail open (do not suppress) per the prompt.
+    if initial_file_hashes is not None:
+        try:
+            direct_edits = _detect_meaningful_changes(cwd, initial_file_hashes)
+        except Exception:
+            direct_edits = []
+        if direct_edits:
+            if not quiet:
+                console.print(
+                    f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} suppressed "
+                    f"because direct edits exist on disk relative to initial_file_hashes. "
+                    f"Demoting to FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits.[/yellow]"
+                )
+            return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits"
+
+    return cached_output
+
+
 def _has_unpushed_commits(cwd: Path) -> bool:
     """Check if there are commits ahead of the remote tracking branch."""
     result = subprocess.run(
@@ -1649,6 +1726,24 @@ def run_agentic_e2e_fix_orchestrator(
             if isinstance(saved_sha, str) and saved_sha:
                 resumed_initial_sha = saved_sha
 
+            # Issue #1034: Re-evaluate cached Step 3 NOT_A_BUG before trusting
+            # last_completed_step. If guards (direct edits or FIXED dev_unit_states)
+            # would have suppressed NOT_A_BUG, demote the cached entry to
+            # "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>" so the existing
+            # validate_cached_state FAILED-rewind reruns Step 3.
+            cached_step3 = step_outputs.get("3")
+            if cached_step3:
+                demoted = _reevaluate_step3_not_a_bug_on_resume(
+                    cached_step3,
+                    dev_unit_states=dev_unit_states,
+                    initial_file_hashes=resumed_initial_file_hashes,
+                    cwd=cwd,
+                    quiet=quiet,
+                    source="step_outputs",
+                )
+                if demoted is not cached_step3 and demoted != cached_step3:
+                    step_outputs["3"] = demoted
+
             # Issue #467: Validate cached state — correct last_completed_step
             # if any cached step outputs have "FAILED:" prefix.
             last_completed_step = validate_cached_state(
@@ -1924,11 +2019,37 @@ def run_agentic_e2e_fix_orchestrator(
 
                     continue
 
-                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830)
+                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830).
+                # Issue #1034: Re-evaluate any cached Step 3 NOT_A_BUG token from
+                # bug_step_outputs symmetrically with the resume-time step_outputs
+                # guard, before short-circuiting Step 3.
                 if str(step_num) in bug_step_outputs and current_cycle == 1:
-                    console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
-                    last_completed_step = step_num
-                    continue
+                    if step_num == 3:
+                        cached_bug3 = bug_step_outputs.get("3", "")
+                        demoted_bug3 = _reevaluate_step3_not_a_bug_on_resume(
+                            cached_bug3,
+                            dev_unit_states=dev_unit_states,
+                            initial_file_hashes=initial_file_hashes,
+                            cwd=cwd,
+                            quiet=quiet,
+                            source="bug_step_outputs",
+                        )
+                        if demoted_bug3 != cached_bug3:
+                            # Drop the suppressed entry from both caches and fall
+                            # through to run Step 3 fresh.
+                            bug_step_outputs.pop("3", None)
+                            # If we pre-populated step_outputs["3"] from this stale
+                            # bug-state entry, clear it so the step actually runs.
+                            if step_outputs.get("3") == cached_bug3:
+                                step_outputs.pop("3", None)
+                        else:
+                            console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
+                            last_completed_step = step_num
+                            continue
+                    else:
+                        console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
+                        last_completed_step = step_num
+                        continue
 
                 step_name = STEP_NAMES[step_num]
                 description = STEP_DESCRIPTIONS[step_num]
