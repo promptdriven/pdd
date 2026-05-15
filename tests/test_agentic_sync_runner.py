@@ -1203,6 +1203,34 @@ class TestSyncOneModule:
         assert signature == ("ratio=0.82", "pre_lines=100")
         assert "Reduce churn below threshold 0.40" in directive
 
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_hard_failure_reads_structured_line_counts(self, _mock_env):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for test_update_main_Python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_update_main.py\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 95\n"
+        )
+
+        block = runner._build_test_churn_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "=== test churn threshold exceeded ===" in block
+        assert "churn ratio: 0.82" in block
+        assert "threshold: 0.40" in block
+        assert "pre lines: 100" in block
+        assert "post lines: 95" in block
+
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(
             basenames=["foo"],

@@ -1940,13 +1940,18 @@ class AsyncSyncRunner:
 
         def _extract_field(label: str, default: str = "<unknown>") -> str:
             normalized = label.lower().replace(" ", "_")
-            line_match = re.search(
-                rf"^{re.escape(normalized)}:\s*(.+)$",
-                combined,
-                re.MULTILINE,
-            )
-            if line_match:
-                return line_match.group(1).strip() or default
+            aliases = {
+                "pre_lines": ("pre_lines", "pre_line_count"),
+                "post_lines": ("post_lines", "post_line_count"),
+            }.get(normalized, (normalized,))
+            for alias in aliases:
+                line_match = re.search(
+                    rf"^{re.escape(alias)}:\s*(.+)$",
+                    combined,
+                    re.MULTILINE,
+                )
+                if line_match:
+                    return line_match.group(1).strip() or default
             pattern = re.compile(
                 rf"{re.escape(label)}:\s*(.*?){field_boundary}",
                 re.DOTALL,
@@ -1994,13 +1999,18 @@ class AsyncSyncRunner:
 
         def _extract_field(label: str, default: str = "<unknown>") -> str:
             normalized = label.lower().replace(" ", "_")
-            line_match = re.search(
-                rf"^{re.escape(normalized)}:\s*(.+)$",
-                combined,
-                re.MULTILINE,
-            )
-            if line_match:
-                return line_match.group(1).strip() or default
+            aliases = {
+                "pre_lines": ("pre_lines", "pre_line_count"),
+                "post_lines": ("post_lines", "post_line_count"),
+            }.get(normalized, (normalized,))
+            for alias in aliases:
+                line_match = re.search(
+                    rf"^{re.escape(alias)}:\s*(.+)$",
+                    combined,
+                    re.MULTILINE,
+                )
+                if line_match:
+                    return line_match.group(1).strip() or default
             pattern = re.compile(
                 rf"{re.escape(label)}:\s*(.*?){field_boundary}",
                 re.DOTALL,
