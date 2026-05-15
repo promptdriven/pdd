@@ -235,6 +235,7 @@ yarn.lock
 .pdd/*
 !.pdd/
 !.pdd/meta/
+.pdd/meta/*.json
 !.pdd/meta/agentic_bug_orchestrator_python.json
 !.pdd/meta/agentic_bug_python.json
 !.pdd/meta/agentic_checkup_python.json
