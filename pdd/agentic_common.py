@@ -2342,10 +2342,13 @@ _HTML_COMMENT_CONTRACT_RE = re.compile(
     re.DOTALL,
 )
 
-# Matches a fenced code block (```text``` or ```json```) optionally preceded by
-# whitespace/newlines. Captures the inner body.
+# Matches a fenced code block (```text``` or ```json```, or bare ```) that
+# IMMEDIATELY follows the heading. Only whitespace/newlines may precede the
+# fence (anchored via ``\A`` once we slice the text after the heading); the
+# info string is restricted to empty/``text``/``json`` per spec. Captures the
+# inner body.
 _FENCED_BLOCK_RE = re.compile(
-    r"```(?:[a-zA-Z0-9_-]+)?\s*\n(?P<body>.*?)```",
+    r"\A\s*```(?:text|json)?[ \t]*\n(?P<body>.*?)```",
     re.DOTALL,
 )
 
@@ -2356,8 +2359,10 @@ def _is_valid_contract_path(raw: object) -> bool:
     no traversal segments and no Windows separators.
 
     Validation runs inside the parser so a malformed entry never reaches the
-    runner. Per the docstring on :func:`parse_issue_contract`, invalid entries
-    are dropped silently; if all entries drop, the parser returns None.
+    runner. Per Issue #1013 spec, syntactically invalid entries are dropped
+    silently; the *contract* itself remains valid even if the resulting
+    ``allowed_paths`` ends up empty (empty contract → reject-all enforcement,
+    see :func:`parse_issue_contract`).
     """
     if not isinstance(raw, str):
         return False
@@ -2392,10 +2397,10 @@ def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
     raw_allowed = parsed.get("allowed_paths")
     if not isinstance(raw_allowed, list):
         return None
-    # Drop invalid entries silently; if all entries drop, treat as no contract.
+    # Drop syntactically invalid entries silently. Per Issue #1013, a
+    # syntactically valid contract with an empty ``allowed_paths`` is a
+    # legal degenerate contract meaning "reject every change" — keep it.
     allowed = tuple(p.strip() for p in raw_allowed if _is_valid_contract_path(p))
-    if not allowed:
-        return None
     raw_companion = parsed.get("companion_allowlist", [])
     if not isinstance(raw_companion, list):
         raw_companion = []
@@ -2410,12 +2415,19 @@ def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
 
 
 def _parse_fenced_block_contract(text: str) -> Optional[IssueContract]:
-    """Return a contract parsed from a heading + fenced code block, else None."""
+    """Return a contract parsed from a heading + immediately-following fenced
+    code block, else None. The fence MUST be ```` ``` ```` /
+    ```` ```text ```` / ```` ```json ```` and MUST appear immediately after
+    the heading (only whitespace permitted between). When the fence body
+    contains no valid paths, the contract is still returned as an empty
+    (reject-all) contract per Issue #1013."""
     header_match = _FENCED_BLOCK_HEADER_RE.search(text)
     if not header_match:
         return None
     after_header = text[header_match.end():]
-    block_match = _FENCED_BLOCK_RE.search(after_header)
+    # ``\A``-anchored regex: the fence must IMMEDIATELY follow the heading
+    # (only whitespace/newlines between heading end and the opening fence).
+    block_match = _FENCED_BLOCK_RE.match(after_header)
     if not block_match:
         return None
     body = block_match.group("body")
@@ -2433,8 +2445,7 @@ def _parse_fenced_block_contract(text: str) -> Optional[IssueContract]:
         if line not in seen:
             paths.append(line)
             seen.add(line)
-    if not paths:
-        return None
+    # Empty fenced block is a legal degenerate contract (reject all).
     return IssueContract(
         allowed_paths=tuple(paths),
         companion_allowlist=(),
@@ -2494,12 +2505,16 @@ def parse_issue_contract(
     (issues are edited authoritatively; comments are append-only and may carry
     stale snapshots from earlier workflow steps).
 
-    Path entries are validated as repo-relative POSIX paths: invalid entries
-    (absolute, containing ``..``, empty, or using Windows separators ``\\``)
-    are dropped silently. If ``allowed_paths`` becomes empty after dropping,
-    the parser returns ``None`` (treated as "no contract → permissive
-    fallback"). Resolution to absolute filesystem paths is the caller's job
-    once it knows the repo root.
+    Path entries are validated as repo-relative POSIX paths: syntactically
+    invalid entries (absolute, containing ``..``, empty, or using Windows
+    separators ``\\``) are dropped silently. A syntactically valid contract
+    whose ``allowed_paths`` ends up empty (either declared as ``[]`` or
+    reduced to ``[]`` after dropping invalid entries) is still returned as
+    an :class:`IssueContract` with ``allowed_paths=()``; the caller treats
+    that as a degenerate "reject every change" contract. The parser returns
+    ``None`` only when there is no parseable marker at all or when the
+    marker payload is syntactically malformed. Resolution to absolute
+    filesystem paths is the caller's job once it knows the repo root.
 
     The parser MUST NOT raise on any input: malformed JSON, missing fields,
     unexpected types, or absent markers all return ``None``.
