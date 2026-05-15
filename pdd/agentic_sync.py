@@ -2521,6 +2521,44 @@ def run_agentic_sync(
     contract_source: Optional[str] = (
         issue_contract.source if issue_contract is not None else None
     )
+
+    # Iter-32 B-1: orchestrator scope guard at the dispatch boundary.
+    # iter-30 wrapped every early-return site with
+    # :func:`_orch_scope_check_return`, but the SUCCESSFUL DISPATCH path —
+    # where the orchestrator constructs ``AsyncSyncRunner`` or
+    # ``DurableSyncRunner`` and calls ``.run()`` — was intentionally left
+    # unwrapped (the runner has its own per-module guard). The gap: any
+    # pre-dispatch write from LLM module identification, dry-run validation,
+    # ``_apply_architecture_corrections``, etc. that does NOT trigger an
+    # early return reaches the runner, where the very first thing
+    # :class:`AsyncSyncRunner.__init__` does is snapshot the working tree
+    # as ``_baseline_changed_paths``. That baseline AUTO-ALLOWS those
+    # writes for the entire sync session (per-module guard preserves
+    # baseline paths). Run the orchestrator guard one last time here so
+    # out-of-contract pre-dispatch writes are reverted and dispatch fails
+    # with a clear diagnostic BEFORE the runner snapshots them.
+    #
+    # Single check before the ``if durable: ... else: ...`` branch covers
+    # both async and durable construction sites — the only intervening
+    # logic is the runner-class selection, which has no write side
+    # effects.
+    scope_diagnostic = _enforce_orchestrator_scope(
+        project_root,
+        issue_contract,
+        scope_guard,
+        _orch_baseline_changed,
+        _orch_baseline_ignored,
+        quiet=quiet,
+    )
+    if scope_diagnostic is not None:
+        combined = (
+            f"Orchestrator scope guard hard-fail before dispatch: "
+            f"out-of-contract artifacts detected.\n{scope_diagnostic}"
+        )
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, combined)
+        return False, combined, llm_cost, provider
+
     if durable:
         runner = DurableSyncRunner(
             basenames=modules_to_sync,
