@@ -1024,10 +1024,17 @@ class TestRunGlobalSync:
             estimated_cost=0.0,
             module_operations={},
             skipped_modules=[
-                "mod_a: python requires fix; outside Tier 1 prompt-staleness scope",
-                "mod_b: python requires fix; outside Tier 1 prompt-staleness scope",
+                "mod_a: python requires example; outside Tier 1 prompt-staleness scope",
+                "mod_b: python requires example; outside Tier 1 prompt-staleness scope",
+                "mod_c: python requires test; outside Tier 1 prompt-staleness scope",
+                "mod_d: python requires verify; outside Tier 1 prompt-staleness scope",
+                "mod_e: python requires update; outside Tier 1 prompt-staleness scope",
+                "mod_f: python requires fix; outside Tier 1 prompt-staleness scope",
+                "mod_g: python requires crash; outside Tier 1 prompt-staleness scope",
+                "mod_h: no syncable prompt file found",
+                "mod_i: python requires something_weird; outside Tier 1 prompt-staleness scope",
             ],
-            all_modules=["mod_a", "mod_b"],
+            all_modules=["mod_a", "mod_b", "mod_c", "mod_d", "mod_e", "mod_f", "mod_g", "mod_h", "mod_i"],
         )
         mock_dep_graph.return_value = ({}, [])
 
@@ -1035,9 +1042,16 @@ class TestRunGlobalSync:
 
         assert success is True
         output = recorder.export_text(clear=False)
-        assert "2 module(s) outside Tier 1" in output
+        # Bucket roll-up must use canonical order and skip zero-count buckets.
+        expected_summary = (
+            "Out of Tier 1 scope: 2 example, 1 test, 1 verify, 1 update, "
+            "1 fix, 1 crash, 1 no-prompt fixture, 1 other"
+        )
+        assert expected_summary in output
+        # Default (non-verbose) must not emit per-module yellow warnings.
         assert "Warning: mod_a" not in output
         assert "Warning: mod_b" not in output
+        assert "Warning: mod_h" not in output
 
     @patch("pdd.agentic_sync._find_project_root")
     @patch("pdd.agentic_sync._architecture_sync_modules")

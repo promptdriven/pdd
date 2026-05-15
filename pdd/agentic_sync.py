@@ -844,6 +844,66 @@ def _build_scoped_global_dep_graph(
     return graph, warnings
 
 
+_SKIPPED_BUCKET_ORDER: Tuple[str, ...] = (
+    "example",
+    "test",
+    "verify",
+    "update",
+    "fix",
+    "crash",
+    "no-prompt fixture",
+    "other",
+)
+_SKIPPED_OPERATION_BUCKETS: Tuple[str, ...] = (
+    "example",
+    "test",
+    "verify",
+    "update",
+    "fix",
+    "crash",
+)
+
+
+def _bucket_skipped_reasons(skipped_modules: List[str]) -> Dict[str, int]:
+    """Bucket skipped-module entries by reason for the dry-run roll-up.
+
+    Entries flagged "no syncable prompt file found" go into `no-prompt fixture`;
+    entries shaped "{key}: {language} requires {operation}; outside Tier 1 ..."
+    bucket by `operation` when it matches a known Tier-1-out-of-scope op,
+    otherwise into `other`.
+    """
+    buckets: Dict[str, int] = {name: 0 for name in _SKIPPED_BUCKET_ORDER}
+    for entry in skipped_modules:
+        lower = entry.lower()
+        if "no syncable prompt file found" in lower:
+            buckets["no-prompt fixture"] += 1
+            continue
+        matched = False
+        for op in _SKIPPED_OPERATION_BUCKETS:
+            if f"requires {op}" in lower:
+                buckets[op] += 1
+                matched = True
+                break
+        if not matched:
+            buckets["other"] += 1
+    return buckets
+
+
+def _format_skipped_bucket_summary(skipped_modules: List[str]) -> Optional[str]:
+    """Return a stable single-line roll-up of skipped buckets, or None if empty."""
+    if not skipped_modules:
+        return None
+    buckets = _bucket_skipped_reasons(skipped_modules)
+    parts = [
+        f"{count} {name}"
+        for name in _SKIPPED_BUCKET_ORDER
+        if (count := buckets.get(name, 0)) > 0
+    ]
+    if not parts:
+        return None
+    return "Out of Tier 1 scope: " + ", ".join(parts)
+
+
 def _print_global_sync_plan(
     analysis: GlobalSyncAnalysis,
     ordered_modules: List[str],
@@ -877,14 +937,12 @@ def _print_global_sync_plan(
         console.print(f"[yellow]Warning: {warning}[/yellow]")
 
     if analysis.skipped_modules:
+        summary = _format_skipped_bucket_summary(analysis.skipped_modules)
+        if summary is not None:
+            console.print(f"  [dim]{summary}[/dim]")
         if verbose:
             for skipped in analysis.skipped_modules:
                 console.print(f"[yellow]Warning: {skipped}[/yellow]")
-        else:
-            console.print(
-                f"  [dim]{len(analysis.skipped_modules)} module(s) outside Tier 1 "
-                f"prompt-staleness scope (run with --verbose for details).[/dim]"
-            )
 
 
 def run_global_sync(
