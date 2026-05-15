@@ -1026,10 +1026,9 @@ def sync_main(
                                     last_signature = new_signature
                                     last_kind = new_kind
                                     last_exc = exc
-                                    if (
-                                        _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS
-                                        or isinstance(exc, TestChurnError)
-                                    ):
+                                    if _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                        break
+                                    if isinstance(exc, TestChurnError) and _attempt >= 1:
                                         break
                                     if (
                                         remaining_budget is not None

@@ -2264,10 +2264,9 @@ def sync_orchestration(
                                             last_conform_signature = new_signature
                                             last_conform_kind = new_kind
                                             last_conform_exc = _conform_exc
-                                            if (
-                                                _conform_attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS
-                                                or isinstance(_conform_exc, TestChurnError)
-                                            ):
+                                            if _conform_attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                                break
+                                            if isinstance(_conform_exc, TestChurnError) and _conform_attempt >= 1:
                                                 break
                                             if conformance_failed_cost >= max(budget - current_cost_ref[0], 0.0):
                                                 break

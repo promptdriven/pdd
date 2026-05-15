@@ -1829,7 +1829,9 @@ class AsyncSyncRunner:
             last_failure_kind = failure_kind
             repair_directive = new_directive
 
-            if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS or failure_kind == "test_churn":
+            if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                break
+            if failure_kind == "test_churn" and attempt >= 1:
                 break
             remaining_budget = self._remaining_total_budget(total_cost)
             if remaining_budget is not None and remaining_budget <= 0.0:

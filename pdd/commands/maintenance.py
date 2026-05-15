@@ -258,6 +258,9 @@ def _run_agentic_sync_dispatch(
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
+    strength: Optional[float] = None,
+    temperature: Optional[float] = None,
+    context_override: Optional[str] = None,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to agentic sync runner for GitHub issue URLs."""
     ctx.ensure_object(dict)
@@ -284,6 +287,9 @@ def _run_agentic_sync_dispatch(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            strength=strength,
+            temperature=temperature,
+            context_override=context_override,
         )
 
         if not quiet:

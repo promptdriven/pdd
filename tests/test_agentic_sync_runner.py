@@ -1295,6 +1295,45 @@ class TestSyncOneModule:
         assert "- Foo.run" in second_env["PDD_REPAIR_DIRECTIVE"]
 
     @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_test_churn_failure_retries_once_with_repair_directive(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        churn_error = (
+            "Test churn threshold exceeded for foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"
+            "pre_line_count: 100\n"
+            "post_line_count: 95\n"
+        )
+        mock_popen.side_effect = [
+            _make_mock_popen(stderr_text=churn_error, exit_code=1),
+            _make_mock_popen(stdout_text="Overall status: Success\n", exit_code=0),
+        ]
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+
+        success, cost, error = runner._sync_one_module("foo")
+
+        assert success
+        assert cost == pytest.approx(0.0)
+        assert error == ""
+        assert mock_popen.call_count == 2
+        first_env = mock_popen.call_args_list[0].kwargs["env"]
+        second_env = mock_popen.call_args_list[1].kwargs["env"]
+        assert "PDD_REPAIR_DIRECTIVE" not in first_env
+        assert "Test churn repair required" in second_env["PDD_REPAIR_DIRECTIVE"]
+        assert "Reduce churn below threshold 0.40; current churn is 0.82" in second_env["PDD_REPAIR_DIRECTIVE"]
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", side_effect=[0.6, 0.1])
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
