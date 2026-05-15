@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import csv as _csv
 import datetime
-import fnmatch
 import json
 import os
 import re
@@ -22,7 +21,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 from rich.console import Console
@@ -1860,12 +1859,22 @@ class AsyncSyncRunner:
     def _matches_companion_allowlist(
         self, rel_posix_path: str, allowlist: Iterable[str]
     ) -> bool:
-        """Return True if *rel_posix_path* matches any companion glob."""
+        """Return True if *rel_posix_path* matches any companion glob.
+
+        Uses ``pathlib.PurePosixPath.match`` (not ``fnmatch.fnmatch``) so that
+        ``.pdd/meta/*.json`` does NOT inadvertently match nested paths like
+        ``.pdd/meta/nested/foo.json``. Matches Issue #1013 spec.
+        """
+        candidate = PurePosixPath(rel_posix_path)
         for pattern in allowlist:
             if not pattern:
                 continue
-            if fnmatch.fnmatch(rel_posix_path, pattern):
-                return True
+            try:
+                if candidate.match(pattern):
+                    return True
+            except ValueError:
+                # Invalid glob pattern — treat as non-match rather than raise.
+                continue
         return False
 
     def _enforce_scope_guard(

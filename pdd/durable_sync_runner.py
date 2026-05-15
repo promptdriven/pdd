@@ -8,7 +8,6 @@ durable branch before marking the module complete.
 # pylint: disable=too-few-public-methods
 from __future__ import annotations
 
-import fnmatch
 import os
 import re
 import shutil
@@ -18,10 +17,9 @@ import threading
 import time
 import uuid
 from hashlib import sha1
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
 
-from .agentic_common import DEFAULT_SYNC_COMPANION_ALLOWLIST
 from .agentic_sync_runner import AsyncSyncRunner, MAX_WORKERS
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
@@ -405,9 +403,7 @@ class DurableSyncRunner(AsyncSyncRunner):
         # Permissive mode: scope_guard disabled or no contract parsed.
         if not self.scope_guard_enabled or self.allowed_write_paths is None:
             return []
-        allowlist = (
-            tuple(self.companion_allowlist) or DEFAULT_SYNC_COMPANION_ALLOWLIST
-        )
+        allowlist = tuple(self.companion_allowlist)
         offending: Set[str] = set()
         for raw in paths:
             normalized = raw.replace(os.sep, "/").strip()
@@ -415,9 +411,21 @@ class DurableSyncRunner(AsyncSyncRunner):
                 normalized = normalized[2:]
             if normalized in self.allowed_write_paths:
                 continue
-            if any(
-                fnmatch.fnmatch(normalized, pattern) for pattern in allowlist
-            ):
+            # F3 (Issue #1013): companion glob matching uses pathlib-style
+            # semantics so ``.pdd/meta/*.json`` does NOT match nested paths
+            # like ``.pdd/meta/nested/foo.json``.
+            candidate = PurePosixPath(normalized)
+            matched = False
+            for pattern in allowlist:
+                if not pattern:
+                    continue
+                try:
+                    if candidate.match(pattern):
+                        matched = True
+                        break
+                except ValueError:
+                    continue
+            if matched:
                 continue
             offending.add(normalized)
         return sorted(offending)
