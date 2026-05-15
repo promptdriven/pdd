@@ -21,7 +21,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 from rich.console import Console
@@ -29,6 +29,7 @@ from rich.console import Console
 from .agentic_common import (
     DEFAULT_SYNC_COMPANION_ALLOWLIST,
     _is_valid_companion_pattern,
+    _matches_companion_pattern_anchored,
     _revert_out_of_scope_changes,
 )
 from .agentic_common_worktree import revert_out_of_scope_changes_with_dirs
@@ -1886,25 +1887,25 @@ class AsyncSyncRunner:
     ) -> bool:
         """Return True if *rel_posix_path* matches any companion glob.
 
-        Uses ``pathlib.PurePosixPath.match`` (not ``fnmatch.fnmatch``) so that
-        ``.pdd/meta/*.json`` does NOT inadvertently match nested paths like
-        ``.pdd/meta/nested/foo.json``. Matches Issue #1013 spec.
+        Issue #1013 iter-14 M-1: uses
+        :func:`_matches_companion_pattern_anchored` (segment-aware,
+        anchored at the START of the path) rather than
+        :meth:`pathlib.PurePosixPath.match`. The pathlib matcher is
+        suffix-based when the pattern is relative, so
+        ``.pdd/meta/*.json`` falsely matches ``subdir/.pdd/meta/foo.json``
+        — letting a contract violator bypass the guard by writing
+        fingerprint-shaped files nested under any directory.
         """
-        candidate = PurePosixPath(rel_posix_path)
         for pattern in allowlist:
             if not pattern:
                 continue
             # Issue #1013 iter-10 M-1 (defense-in-depth): even if a
-            # wildcard-only pattern slipped past the parser, refuse to
-            # treat it as auto-allowing repo-wide writes.
+            # wildcard-only / doublestar pattern slipped past the parser,
+            # refuse to treat it as auto-allowing repo-wide writes.
             if not _is_valid_companion_pattern(pattern):
                 continue
-            try:
-                if candidate.match(pattern):
-                    return True
-            except ValueError:
-                # Invalid glob pattern — treat as non-match rather than raise.
-                continue
+            if _matches_companion_pattern_anchored(rel_posix_path, pattern):
+                return True
         return False
 
     def _remaining_out_of_scope_paths(
@@ -2004,13 +2005,25 @@ class AsyncSyncRunner:
             # F1 (Issue #1013 iter-3): only files UNDER ``module_cwd`` count
             # as companion artifacts — never auto-allow a sibling module's
             # ``.pdd/meta/*.json`` just because it lives in the same repo.
+            #
+            # Iter-14 M-1: companion patterns are matched MODULE-RELATIVE,
+            # not repo-relative. The pattern ``.pdd/meta/*.json`` describes
+            # fingerprint metadata at the top of each module's working
+            # directory; in a multi-module repo where ``module_cwd`` is a
+            # subdirectory (e.g. ``mod_a/``), the file lives at
+            # ``mod_a/.pdd/meta/x.json`` relative to the repo root but at
+            # ``.pdd/meta/x.json`` relative to the module — and the latter
+            # is what the segment-aware anchored matcher must see. (The old
+            # ``PurePosixPath.match`` suffix-matching obscured this by
+            # accidentally auto-allowing the repo-relative form, which also
+            # auto-allowed any ``subdir/.pdd/meta/foo.json`` — the bug.)
             allowlist = tuple(self.companion_allowlist)
             cwd_path = Path(module_cwd).resolve()
             for path in cwd_path.rglob("*"):
                 if not path.is_file():
                     continue
                 try:
-                    rel_posix = path.resolve().relative_to(repo_root).as_posix()
+                    rel_posix = path.resolve().relative_to(cwd_path).as_posix()
                 except ValueError:
                     continue
                 if self._matches_companion_allowlist(rel_posix, allowlist):
@@ -2021,14 +2034,19 @@ class AsyncSyncRunner:
             # when a module is renamed/removed); those deletions appear in
             # ``git status`` as tracked ``D ``. Without this pass the revert
             # helper would resurrect the deleted companion and hard-fail.
+            #
+            # Iter-14 M-1: ``_git_changed_paths`` returns repo-relative paths;
+            # scope to ``cwd_path`` FIRST, then match the module-relative form
+            # against the companion pattern (same semantics as the rglob loop
+            # above).
             for rel_posix in _git_changed_paths(repo_root):
-                if not self._matches_companion_allowlist(rel_posix, allowlist):
-                    continue
                 absolute = (repo_root / rel_posix).resolve()
                 try:
-                    absolute.relative_to(cwd_path)
+                    module_rel_posix = absolute.relative_to(cwd_path).as_posix()
                 except ValueError:
                     # Outside the module's cwd — scoped out by F1 iter-3.
+                    continue
+                if not self._matches_companion_allowlist(module_rel_posix, allowlist):
                     continue
                 allowed_files.add(absolute)
 

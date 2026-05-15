@@ -7371,22 +7371,26 @@ class TestParseIssueContract:
 
     def test_companion_allowlist_keeps_anchored_patterns(self):
         """Iter-10 M-1: patterns with at least one literal-character segment
-        anchor remain valid."""
+        anchor remain valid. Iter-14 M-1/M-2: ``**``-bearing patterns are
+        ALSO dropped now (segment-aware matcher requires equal segment
+        counts, so a doublestar segment would be ambiguous)."""
         from pdd.agentic_common import parse_issue_contract, IssueContract
 
         body = (
             "<!-- PDD_ISSUE_CONTRACT\n"
             '{"allowed_paths": ["pdd/foo.py"],'
             ' "companion_allowlist": [".pdd/meta/*.json", "architecture.json",'
-            ' "**/foo.json"]}\n'
+            ' "tests/test_*.py", "**/foo.json"]}\n'
             "-->"
         )
         c = parse_issue_contract(body)
         assert isinstance(c, IssueContract)
+        # ``**/foo.json`` is dropped by the iter-14 doublestar rule;
+        # the three remaining anchored patterns are kept.
         assert c.companion_allowlist == (
             ".pdd/meta/*.json",
             "architecture.json",
-            "**/foo.json",
+            "tests/test_*.py",
         )
 
     def test_companion_allowlist_rejects_traversal_and_absolute(self):
@@ -7416,3 +7420,64 @@ class TestParseIssueContract:
         assert DEFAULT_SYNC_COMPANION_ALLOWLIST
         for pattern in DEFAULT_SYNC_COMPANION_ALLOWLIST:
             assert _is_valid_companion_pattern(pattern), pattern
+
+    def test_anchored_matcher_rejects_nested_default_pattern(self):
+        """Iter-14 M-1/M-2: the anchored, segment-aware matcher MUST treat
+        ``.pdd/meta/*.json`` as a TOP-LEVEL pattern — paths nested under
+        any other directory (``subdir/.pdd/meta/foo.json``) MUST NOT auto-
+        allow, because ``PurePosixPath.match`` is suffix-based and would
+        let a contract violator bypass the guard by writing fingerprint-
+        shaped files under any prefix.
+        """
+        from pdd.agentic_common import _matches_companion_pattern_anchored
+
+        # Intended: top-level match auto-allows.
+        assert _matches_companion_pattern_anchored(
+            ".pdd/meta/foo.json", ".pdd/meta/*.json"
+        ) is True
+        # Bug repro: nested-prefix path must NOT match.
+        assert _matches_companion_pattern_anchored(
+            "subdir/.pdd/meta/foo.json", ".pdd/meta/*.json"
+        ) is False
+        # Deeper-prefix path must NOT match.
+        assert _matches_companion_pattern_anchored(
+            "a/b/c/.pdd/meta/foo.json", ".pdd/meta/*.json"
+        ) is False
+        # Path nested UNDER the meta dir (different segment count) must
+        # NOT match — preserves the iter-3 F3 strict-pathlib semantics.
+        assert _matches_companion_pattern_anchored(
+            ".pdd/meta/sub/foo.json", ".pdd/meta/*.json"
+        ) is False
+
+    def test_anchored_matcher_handles_segment_wildcards(self):
+        """Iter-14 M-1/M-2: ``*`` matches a single segment only. The
+        matcher MUST NOT collapse multiple segments into one wildcard.
+        """
+        from pdd.agentic_common import _matches_companion_pattern_anchored
+
+        assert _matches_companion_pattern_anchored(
+            "tests/foo.txt", "tests/*.txt"
+        ) is True
+        # Segment count mismatch — ``*`` does not span ``sub/foo.txt``.
+        assert _matches_companion_pattern_anchored(
+            "tests/sub/foo.txt", "tests/*.txt"
+        ) is False
+
+    def test_is_valid_companion_pattern_rejects_doublestar(self):
+        """Iter-14 M-1/M-2: ``**`` segments are rejected at parse time so
+        the segment-aware matcher never sees them. The validator MUST
+        reject both pure ``**`` and any pattern with a ``**`` segment.
+        """
+        from pdd.agentic_common import _is_valid_companion_pattern
+
+        # Pure wildcard-only patterns (already iter-10 territory).
+        assert _is_valid_companion_pattern("**") is False
+        # Iter-14: ``**`` SEGMENTS rejected even when paired with literals.
+        assert _is_valid_companion_pattern("**/foo.json") is False
+        assert _is_valid_companion_pattern("foo/**") is False
+        assert _is_valid_companion_pattern("foo/**/bar.json") is False
+        # Regression: the shipped default and other anchored patterns
+        # without ``**`` segments remain valid.
+        assert _is_valid_companion_pattern(".pdd/meta/*.json") is True
+        assert _is_valid_companion_pattern("architecture.json") is True
+        assert _is_valid_companion_pattern("tests/test_*.py") is True

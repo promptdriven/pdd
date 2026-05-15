@@ -17,10 +17,13 @@ import threading
 import time
 import uuid
 from hashlib import sha1
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
-from .agentic_common import _is_valid_companion_pattern
+from .agentic_common import (
+    _is_valid_companion_pattern,
+    _matches_companion_pattern_anchored,
+)
 from .agentic_sync_runner import AsyncSyncRunner, MAX_WORKERS
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
@@ -427,26 +430,26 @@ class DurableSyncRunner(AsyncSyncRunner):
                 normalized = normalized[2:]
             if normalized in self.allowed_write_paths:
                 continue
-            # F3 (Issue #1013): companion glob matching uses pathlib-style
-            # semantics so ``.pdd/meta/*.json`` does NOT match nested paths
-            # like ``.pdd/meta/nested/foo.json``.
-            candidate = PurePosixPath(normalized)
+            # F3 (Issue #1013): companion glob matching uses anchored,
+            # segment-aware semantics so ``.pdd/meta/*.json`` does NOT
+            # match nested paths like ``.pdd/meta/nested/foo.json`` or
+            # ``subdir/.pdd/meta/foo.json``. Iter-14 M-2: replaced
+            # ``PurePosixPath.match`` (suffix-based, falsely matched
+            # ``subdir/.pdd/meta/foo.json``) with the centralized
+            # anchored matcher in ``agentic_common``.
             matched = False
             for pattern in allowlist:
                 if not pattern:
                     continue
                 # Issue #1013 iter-10 M-1 (defense-in-depth): a
-                # wildcard-only / absolute / traversal pattern that
-                # slipped past the parser must NOT auto-allow repo-wide
-                # writes.
+                # wildcard-only / doublestar / absolute / traversal
+                # pattern that slipped past the parser must NOT
+                # auto-allow repo-wide writes.
                 if not _is_valid_companion_pattern(pattern):
                     continue
-                try:
-                    if candidate.match(pattern):
-                        matched = True
-                        break
-                except ValueError:
-                    continue
+                if _matches_companion_pattern_anchored(normalized, pattern):
+                    matched = True
+                    break
             if matched:
                 continue
             offending.add(normalized)

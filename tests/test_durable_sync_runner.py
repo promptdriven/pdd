@@ -387,6 +387,35 @@ def test_wildcard_only_companion_pattern_is_ignored_by_durable_runner(
     ) == ["unrelated/file.py"]
 
 
+def test_durable_nested_meta_path_is_not_in_companion_allowlist(
+    tmp_path: Path,
+):
+    """Iter-14 M-2: durable checkpoint scope checking previously used
+    ``PurePosixPath.match`` (suffix-based), which falsely matched
+    ``subdir/.pdd/meta/foo.json`` against the default top-level
+    ``.pdd/meta/*.json`` companion pattern. The anchored matcher MUST
+    refuse to auto-allow nested fingerprint-shaped paths, so staged
+    nested ``.pdd/meta/*.json`` files surface as out-of-scope and the
+    checkpoint is rejected.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    # The nested path is shaped like a fingerprint-meta artifact but
+    # sits under ``subdir/`` — the iter-14 M-2 bug shape.
+    result = runner._out_of_scope_staged_paths(
+        ["subdir/.pdd/meta/bar.json"]
+    )
+    assert result == ["subdir/.pdd/meta/bar.json"], (
+        "nested .pdd/meta path must NOT be auto-allowed by the "
+        "default top-level companion pattern (iter-14 M-2)"
+    )
+
+
 def test_staged_rename_source_side_is_scope_checked(tmp_path: Path):
     """Iter-6 B3 (rename detection bug): ``git diff --cached --name-only``
     for a staged ``git mv old new`` emits ONLY ``new``. A contract that

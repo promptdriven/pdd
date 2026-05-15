@@ -2845,6 +2845,68 @@ class TestEnforceScopeGuard:
         # is non-None — confirming the scope guard did flag it.
         assert diagnostic is not None
 
+    def test_nested_meta_path_is_not_auto_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-14 M-1: the default companion pattern ``.pdd/meta/*.json``
+        was previously matched with ``PurePosixPath.match`` (suffix-based),
+        which falsely matched any path ending in ``.pdd/meta/<file>.json``
+        — including ``subdir/.pdd/meta/bar.json``. The anchored matcher
+        MUST treat the default pattern as TOP-LEVEL, so a nested path is
+        out of scope even though it carries the right basename and dir
+        suffix.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        repo = tmp_path
+        # Create an out-of-scope file at a NESTED .pdd/meta path — the
+        # exact bug shape: a fingerprint-shaped file under a subdir.
+        nested = repo / "subdir" / ".pdd" / "meta"
+        nested.mkdir(parents=True)
+        offending = nested / "bar.json"
+        offending.write_text("{}", encoding="utf-8")
+
+        captured_allowed = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return [offending]
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: repo.resolve()
+        )
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: [],
+        )
+
+        # Direct matcher assertion: anchored, segment-aware match must
+        # REJECT a nested .pdd/meta/*.json path against the top-level
+        # pattern (the iter-14 M-1 bug shape).
+        assert runner._matches_companion_allowlist(
+            "subdir/.pdd/meta/bar.json", (".pdd/meta/*.json",)
+        ) is False
+
+        diagnostic = runner._enforce_scope_guard("mod", repo)
+        # Nested file must NOT be auto-allowed even though it is shaped
+        # like the default companion pattern.
+        assert offending.resolve() not in captured_allowed.get("files", set()), (
+            "nested .pdd/meta path must NOT be auto-allowed by the "
+            "default top-level companion pattern (iter-14 M-1)"
+        )
+        assert diagnostic is not None
+
     def test_deleted_companion_in_git_status_is_preserved(
         self, tmp_path, monkeypatch
     ):

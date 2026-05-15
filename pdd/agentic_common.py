@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import functools
 import os
 import signal
@@ -2449,7 +2450,7 @@ def _is_valid_contract_path(raw: object) -> bool:
 def _is_valid_companion_pattern(raw: object) -> bool:
     """
     Return True iff *raw* is a repo-relative companion glob pattern with at
-    least one literal-character anchor.
+    least one literal-character anchor and no ``**`` doublestar segment.
 
     Issue #1013 iter-10 M-1: ``companion_allowlist`` accepts arbitrary glob
     patterns, so a contract that declares ``*``, ``**``, or ``**/*`` would
@@ -2457,6 +2458,14 @@ def _is_valid_companion_pattern(raw: object) -> bool:
     bypass the split-contract write set. Reject patterns whose every
     segment is wildcard-only (no character outside ``*?``), as well as
     absolute, Windows-separator, traversal, and empty patterns.
+
+    Issue #1013 iter-14 M-1/M-2: also reject patterns whose any segment is
+    exactly ``**``. The segment-aware matcher (``fnmatch.fnmatchcase`` per
+    segment) treats ``**`` as just another wildcard segment, which would
+    let a contract like ``**/foo.json`` auto-allow ``foo.json`` at any
+    depth — exactly the suffix-match foot-gun ``PurePosixPath.match``
+    exhibited. Contracts that genuinely need a depth-wildcard companion
+    artifact should enumerate the directories explicitly.
     """
     if not isinstance(raw, str):
         return False
@@ -2470,6 +2479,11 @@ def _is_valid_companion_pattern(raw: object) -> bool:
     parts = candidate.split("/")
     if any(part == ".." for part in parts):
         return False
+    # Iter-14: reject doublestar segments. ``**`` only has well-defined
+    # semantics for recursive matching, which the anchored segment-aware
+    # matcher does NOT implement (it requires equal segment counts).
+    if any(part == "**" for part in parts):
+        return False
     # At least one segment MUST contain a literal character (anything
     # outside ``*?``); otherwise the pattern is wildcard-only and would
     # match arbitrary repo paths, defeating the scope guard.
@@ -2479,6 +2493,34 @@ def _is_valid_companion_pattern(raw: object) -> bool:
         if any(ch not in "*?" for ch in segment):
             return True
     return False
+
+
+def _matches_companion_pattern_anchored(rel_posix: str, pattern: str) -> bool:
+    """
+    Issue #1013 iter-14 M-1/M-2: anchored, segment-aware glob match for
+    companion allowlist patterns.
+
+    Unlike :meth:`pathlib.PurePosixPath.match` (which matches from the
+    right and lets ``.pdd/meta/*.json`` falsely match
+    ``subdir/.pdd/meta/foo.json``), this matcher requires path and
+    pattern to align segment-by-segment from the START of the path with
+    equal segment count. Each segment is matched via
+    :func:`fnmatch.fnmatchcase` for ``*`` / ``?`` semantics.
+
+    Returns False on invalid patterns (already filtered by
+    :func:`_is_valid_companion_pattern`); callers should validate first
+    so an invalid pattern can never auto-allow a path.
+    """
+    if not pattern or not rel_posix:
+        return False
+    path_parts = rel_posix.replace("\\", "/").strip("/").split("/")
+    pattern_parts = pattern.replace("\\", "/").strip("/").split("/")
+    if len(path_parts) != len(pattern_parts):
+        return False
+    return all(
+        fnmatch.fnmatchcase(pp, patp)
+        for pp, patp in zip(path_parts, pattern_parts)
+    )
 
 
 def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
