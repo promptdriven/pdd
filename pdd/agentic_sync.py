@@ -733,8 +733,10 @@ def run_global_sync(
     one_session: bool = False,
     local: bool = False,
     timeout_adder: float = 0.0,
+    scope_guard: bool = True,
 ) -> Tuple[bool, str, float, str]:
     """Run project-wide Tier 1 global sync from architecture.json."""
+    del scope_guard
     project_root = _find_project_root(Path.cwd())
     architecture, arch_path = _load_architecture_json(project_root)
     if architecture is None:
@@ -1353,6 +1355,53 @@ def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, 
     return modules_to_sync, deps_valid, deps_corrections
 
 
+def _extract_allowed_write_paths(issue_text: str) -> List[str]:
+    """Extract a split-contract allowed write set from issue text."""
+    if not issue_text:
+        return []
+
+    allowed: List[str] = []
+    seen: set[str] = set()
+    capture = False
+    path_re = re.compile(r"`([^`]+)`")
+
+    for raw_line in issue_text.splitlines():
+        line = raw_line.strip()
+        lower = line.lower()
+        marker_line = re.sub(r"^(?:#+\s*|[-*]\s*)", "", lower).strip()
+        if (
+            marker_line.startswith(("allowed write set", "allowed write-set"))
+            or marker_line.startswith(("allowed files", "allowed paths"))
+            or marker_line.startswith("allowed only")
+            or (
+                marker_line.startswith(("split contract", "issue contract"))
+                and "allowed" in marker_line
+            )
+        ):
+            capture = True
+        elif capture and line.startswith("#"):
+            break
+
+        if not capture:
+            continue
+
+        matches = path_re.findall(line)
+        if not matches:
+            if allowed and not line:
+                break
+            continue
+
+        for match in matches:
+            path = match.strip().replace("\\", "/").lstrip("./")
+            if not path or " " in path or path.startswith("#"):
+                continue
+            if path not in seen:
+                allowed.append(path)
+                seen.add(path)
+
+    return allowed
+
+
 def _apply_architecture_corrections(
     arch_path: Path,
     architecture: List[Dict[str, Any]],
@@ -1426,6 +1475,7 @@ def run_agentic_sync(
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
+    scope_guard: bool = True,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -1497,6 +1547,7 @@ def run_agentic_sync(
 
     # 5. Build issue content
     issue_content = f"Title: {title}\n\nDescription:\n{body}\n"
+    raw_contract_text = body
     if comments_data and isinstance(comments_data, list):
         issue_content += "\nComments:\n"
         for comment in comments_data:
@@ -1504,6 +1555,11 @@ def run_agentic_sync(
                 c_user = comment.get("user", {}).get("login", "unknown")
                 c_body = comment.get("body", "")
                 issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
+                raw_contract_text += f"\n{c_body}\n"
+
+    allowed_write_paths = (
+        _extract_allowed_write_paths(raw_contract_text) if scope_guard else []
+    )
 
     issue_content = _escape_format_braces(issue_content)
 
@@ -1775,6 +1831,8 @@ def run_agentic_sync(
             issue_url=issue_url,
             module_cwds=module_cwds,
             initial_cost=llm_cost,
+            allowed_write_set=allowed_write_paths,
+            scope_guard_enabled=scope_guard,
         )
     else:
         runner = AsyncSyncRunner(
@@ -1787,6 +1845,8 @@ def run_agentic_sync(
             issue_url=issue_url,
             module_cwds=module_cwds,
             initial_cost=llm_cost,
+            allowed_write_set=allowed_write_paths,
+            scope_guard_enabled=scope_guard,
         )
 
     runner_success, runner_msg, total_cost = runner.run()

@@ -47,6 +47,10 @@ class DurableSyncRunner(AsyncSyncRunner):
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Path]] = None,
         initial_cost: float = 0.0,
+        allowed_write_paths: Optional[List[str]] = None,
+        allowed_write_set: Optional[List[str]] = None,
+        companion_allowlist: Optional[List[str]] = None,
+        scope_guard_enabled: bool = True,
     ) -> None:
         self.issue_number = issue_number
         self.git_root = project_root.resolve()
@@ -72,6 +76,10 @@ class DurableSyncRunner(AsyncSyncRunner):
             issue_url=issue_url,
             module_cwds={},
             initial_cost=initial_cost,
+            allowed_write_paths=allowed_write_paths,
+            allowed_write_set=allowed_write_set,
+            companion_allowlist=companion_allowlist,
+            scope_guard_enabled=scope_guard_enabled,
         )
         self.project_root = self.git_root
         if self.total_budget is not None:
@@ -361,6 +369,14 @@ class DurableSyncRunner(AsyncSyncRunner):
             return False, f"Failed to inspect staged changes: {_combined_output(names)}", False
 
         changed_paths = [line.strip() for line in names.stdout.splitlines() if line.strip()]
+        out_of_scope = self._out_of_scope_staged_paths(changed_paths)
+        if out_of_scope:
+            return (
+                False,
+                "Durable sync refuses to checkpoint path(s) outside the issue "
+                "split-contract allowed write set: " + ", ".join(out_of_scope),
+                False,
+            )
         unsafe = self._unsafe_staged_paths(basename, changed_paths)
         if unsafe:
             return (
@@ -372,6 +388,17 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         empty = not changed_paths
         return True, "", empty
+
+    def _out_of_scope_staged_paths(self, paths: List[str]) -> List[str]:
+        if not self.allowed_write_paths:
+            return []
+        return sorted(
+            {
+                path.replace(os.sep, "/").lstrip("./")
+                for path in paths
+                if path.replace(os.sep, "/").lstrip("./") not in self.allowed_write_paths
+            }
+        )
 
     def _force_add_module_metadata(self, basename: str, module_worktree: Path) -> None:
         safe = basename.replace("/", "_")

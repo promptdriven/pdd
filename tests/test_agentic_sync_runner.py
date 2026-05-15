@@ -2518,6 +2518,54 @@ class TestModuleCwds:
         assert popen_kwargs["cwd"] == str(runner.project_root)
 
 
+class TestAllowedWriteSet:
+    def test_successful_module_fails_when_new_path_outside_allowed_set(self, monkeypatch):
+        import pdd.agentic_sync_runner as mod
+
+        snapshots = iter([
+            {"README.md"},
+            {"README.md", "pdd/allowed.py", "architecture.json"},
+        ])
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: next(snapshots))
+
+        runner = AsyncSyncRunner(
+            basenames=["allowed"],
+            dep_graph={"allowed": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_paths=["pdd/allowed.py"],
+        )
+        monkeypatch.setattr(
+            runner,
+            "_run_attempt",
+            lambda *_args, **_kwargs: (True, 0.0, "", "ok", ""),
+        )
+
+        success, cost, error = runner._sync_one_module("allowed")
+
+        assert success is False
+        assert cost == 0.0
+        assert "allowed write set violation" in error
+        assert "architecture.json" in error
+        assert "README.md" not in error
+
+    def test_allowed_write_set_forces_sequential_execution(self, monkeypatch):
+        import pdd.agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: set())
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_paths=["pdd/a.py"],
+        )
+
+        assert runner.max_workers == 1
+
+
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking
 # ---------------------------------------------------------------------------

@@ -133,6 +133,42 @@ class DepGraphFromArchitectureResult(NamedTuple):
     warnings: List[str]
 
 
+def _normalize_repo_path(path: str) -> str:
+    """Normalize a repository-relative path for contract comparisons."""
+    return str(path or "").replace("\\", "/").strip().lstrip("./")
+
+
+def _git_changed_paths(project_root: Path) -> set[str]:
+    """Return changed paths from git status, including untracked files."""
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if result.returncode != 0:
+        return set()
+
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        payload = line[3:].strip()
+        if not payload:
+            continue
+        if " -> " in payload:
+            old_path, new_path = payload.split(" -> ", 1)
+            paths.add(_normalize_repo_path(old_path.strip('"')))
+            paths.add(_normalize_repo_path(new_path.strip('"')))
+        else:
+            paths.add(_normalize_repo_path(payload.strip('"')))
+    return {p for p in paths if p}
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -819,6 +855,10 @@ class AsyncSyncRunner:
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Any]] = None,
         initial_cost: float = 0.0,
+        allowed_write_paths: Optional[List[str]] = None,
+        allowed_write_set: Optional[List[str]] = None,
+        companion_allowlist: Optional[List[str]] = None,
+        scope_guard_enabled: bool = True,
     ):
         self.basenames: List[str] = list(basenames)
         self.dep_graph: Dict[str, List[str]] = {
@@ -832,9 +872,25 @@ class AsyncSyncRunner:
         self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.initial_cost = float(initial_cost or 0.0)
+        del companion_allowlist  # accepted for prompt/CLI compatibility
+        active_allowed_paths = (
+            allowed_write_paths
+            if allowed_write_paths is not None
+            else allowed_write_set
+        )
+        if not scope_guard_enabled:
+            active_allowed_paths = None
+        self.allowed_write_paths: set[str] = {
+            _normalize_repo_path(path) for path in (active_allowed_paths or []) if path
+        }
+        self._baseline_changed_paths: set[str] = (
+            _git_changed_paths(self.project_root) if self.allowed_write_paths else set()
+        )
 
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
+        if self.allowed_write_paths:
+            self.max_workers = 1
 
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in self.basenames
@@ -1662,6 +1718,13 @@ class AsyncSyncRunner:
             last_stderr = stderr
 
             if success:
+                violations = self._allowed_write_set_violations()
+                if violations:
+                    return (
+                        False,
+                        total_cost,
+                        self._format_allowed_write_set_error(violations),
+                    )
                 return True, total_cost, ""
 
             conformance = _parse_conformance_failure(stdout, stderr)
@@ -1691,6 +1754,27 @@ class AsyncSyncRunner:
             basename, last_error, last_stdout, last_stderr
         )
         return False, total_cost, hard_block
+
+    def _allowed_write_set_violations(self) -> List[str]:
+        """Return newly changed paths outside the issue's allowed write set."""
+        if not self.allowed_write_paths:
+            return []
+        current = _git_changed_paths(self.project_root)
+        newly_changed = current - self._baseline_changed_paths
+        violations = [
+            path for path in newly_changed if path not in self.allowed_write_paths
+        ]
+        return sorted(violations)
+
+    def _format_allowed_write_set_error(self, violations: List[str]) -> str:
+        allowed = ", ".join(sorted(self.allowed_write_paths)) or "<none>"
+        blocked = ", ".join(violations)
+        return (
+            "Issue split-contract allowed write set violation. "
+            f"Out-of-scope changed path(s): {blocked}. "
+            f"Allowed path(s): {allowed}. "
+            "Revert or explicitly justify companion artifacts before rerunning pdd sync."
+        )
 
     def _build_conformance_hard_failure(
         self,

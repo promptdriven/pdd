@@ -29,6 +29,7 @@ from pdd.agentic_sync import (
     _is_runtime_llm_template,
     _llm_fix_dry_run_failure,
     _load_architecture_json,
+    _extract_allowed_write_paths,
     _parse_llm_response,
     _resolve_module_cwd,
     _run_dry_run_validation,
@@ -167,6 +168,37 @@ class TestParseLlmResponse:
         response2 = 'MODULES_TO_SYNC: ["a"]\nDEPS_VALID: FALSE\n'
         _, valid2, _ = _parse_llm_response(response2)
         assert valid2 is False
+
+
+class TestExtractAllowedWritePaths:
+    def test_extracts_split_contract_allowed_paths(self):
+        issue = """
+## Split Contract
+Allowed write set:
+
+  * `pdd/update_main.py`
+  * `pdd/prompts/update_main_python.prompt`
+  * `tests/test_update_main.py`
+
+But sync wrote other files.
+"""
+        assert _extract_allowed_write_paths(issue) == [
+            "pdd/update_main.py",
+            "pdd/prompts/update_main_python.prompt",
+            "tests/test_update_main.py",
+        ]
+
+    def test_returns_empty_without_contract_marker(self):
+        assert _extract_allowed_write_paths("Touch `pdd/foo.py` if needed.") == []
+
+    def test_ignores_historical_allowed_only_examples(self):
+        issue = """
+In PR #1010 for issue #1005, the issue contract allowed only:
+
+  * `pdd/update_main.py`
+  * `tests/test_update_main.py`
+"""
+        assert _extract_allowed_write_paths(issue) == []
 
 
 # ---------------------------------------------------------------------------
