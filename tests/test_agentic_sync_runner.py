@@ -2779,6 +2779,72 @@ class TestEnforceScopeGuard:
         )
         assert diagnostic is None or "scratch.txt" not in diagnostic
 
+    def test_wildcard_only_companion_pattern_does_not_auto_allow(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-10 M-1: a wildcard-only pattern (``**/*``) that bypassed the
+        parser (e.g. constructed directly, injected through a non-issue
+        code path) MUST NOT cause ``_matches_companion_allowlist`` to
+        auto-allow repo-wide writes. The defense-in-depth filter inside
+        the runner rejects wildcard-only patterns the same way the parser
+        does."""
+        from pdd import agentic_sync_runner as mod
+
+        repo = tmp_path
+        # Create an out-of-scope file under the module's cwd.
+        unrelated = repo / "unrelated"
+        unrelated.mkdir()
+        offending = unrelated / "file.py"
+        offending.write_text("out of scope")
+
+        captured_allowed = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            # Pretend we reverted the out-of-scope file so the diagnostic
+            # path returns a non-None message; the assertion below is on
+            # the auto-allow decision, not on the revert mechanics.
+            return [offending]
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            # Inject the dangerous wildcard-only pattern directly,
+            # bypassing the parser.
+            companion_allowlist=["**/*"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: repo.resolve()
+        )
+        # iter-9 M-1 re-scan needs git; stub it out — this test only
+        # cares about the auto-allow decision feeding ``fake_revert``.
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: [],
+        )
+
+        # The defense-in-depth filter must reject ``**/*`` directly.
+        assert runner._matches_companion_allowlist(
+            "unrelated/file.py", ("**/*",)
+        ) is False
+
+        diagnostic = runner._enforce_scope_guard("mod", repo)
+        # The offending file must NOT be in the auto-allowed set despite
+        # the wildcard-only pattern living in self.companion_allowlist.
+        assert offending.resolve() not in captured_allowed.get("files", set()), (
+            "wildcard-only companion pattern must NOT auto-allow "
+            "repo-wide writes (iter-10 M-1)"
+        )
+        # Because fake_revert returned the offending file, the diagnostic
+        # is non-None — confirming the scope guard did flag it.
+        assert diagnostic is not None
+
     def test_deleted_companion_in_git_status_is_preserved(
         self, tmp_path, monkeypatch
     ):

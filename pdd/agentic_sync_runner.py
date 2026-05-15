@@ -28,6 +28,7 @@ from rich.console import Console
 
 from .agentic_common import (
     DEFAULT_SYNC_COMPANION_ALLOWLIST,
+    _is_valid_companion_pattern,
     _revert_out_of_scope_changes,
 )
 from .agentic_common_worktree import revert_out_of_scope_changes_with_dirs
@@ -1892,6 +1893,11 @@ class AsyncSyncRunner:
         candidate = PurePosixPath(rel_posix_path)
         for pattern in allowlist:
             if not pattern:
+                continue
+            # Issue #1013 iter-10 M-1 (defense-in-depth): even if a
+            # wildcard-only pattern slipped past the parser, refuse to
+            # treat it as auto-allowing repo-wide writes.
+            if not _is_valid_companion_pattern(pattern):
                 continue
             try:
                 if candidate.match(pattern):

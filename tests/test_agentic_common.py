@@ -7273,3 +7273,68 @@ class TestParseIssueContract:
         c = parse_issue_contract(body)
         assert isinstance(c, IssueContract)
         assert c.allowed_paths == ()
+
+    def test_companion_allowlist_rejects_wildcard_only_patterns(self):
+        """Iter-10 M-1: wildcard-only patterns (``*``, ``**``, ``**/*``, ``?``)
+        would let a contract auto-allow repo-wide changes; the parser MUST
+        drop them silently."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py"],'
+            ' "companion_allowlist": ["*", "**", "**/*", "?"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.companion_allowlist == ()
+        assert c.allowed_paths == ("pdd/foo.py",)
+
+    def test_companion_allowlist_keeps_anchored_patterns(self):
+        """Iter-10 M-1: patterns with at least one literal-character segment
+        anchor remain valid."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py"],'
+            ' "companion_allowlist": [".pdd/meta/*.json", "architecture.json",'
+            ' "**/foo.json"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.companion_allowlist == (
+            ".pdd/meta/*.json",
+            "architecture.json",
+            "**/foo.json",
+        )
+
+    def test_companion_allowlist_rejects_traversal_and_absolute(self):
+        """Iter-10 M-1: absolute paths, parent-traversal, and Windows
+        separators in companion patterns must be dropped silently."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py"],'
+            ' "companion_allowlist": ["../foo", "/etc/passwd", "tests\\\\bar"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.companion_allowlist == ()
+
+    def test_default_companion_allowlist_passes_validation(self):
+        """Iter-10 M-1: the shipped default allowlist MUST itself pass the
+        validator — otherwise the runner's defense-in-depth filter would
+        strip every entry and the scope guard would have no companions."""
+        from pdd.agentic_common import (
+            DEFAULT_SYNC_COMPANION_ALLOWLIST,
+            _is_valid_companion_pattern,
+        )
+
+        assert DEFAULT_SYNC_COMPANION_ALLOWLIST
+        for pattern in DEFAULT_SYNC_COMPANION_ALLOWLIST:
+            assert _is_valid_companion_pattern(pattern), pattern

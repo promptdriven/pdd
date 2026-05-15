@@ -20,6 +20,7 @@ from hashlib import sha1
 from pathlib import Path, PurePosixPath
 from typing import Dict, List, Optional, Set, Tuple
 
+from .agentic_common import _is_valid_companion_pattern
 from .agentic_sync_runner import AsyncSyncRunner, MAX_WORKERS
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
@@ -433,6 +434,12 @@ class DurableSyncRunner(AsyncSyncRunner):
             matched = False
             for pattern in allowlist:
                 if not pattern:
+                    continue
+                # Issue #1013 iter-10 M-1 (defense-in-depth): a
+                # wildcard-only / absolute / traversal pattern that
+                # slipped past the parser must NOT auto-allow repo-wide
+                # writes.
+                if not _is_valid_companion_pattern(pattern):
                     continue
                 try:
                     if candidate.match(pattern):

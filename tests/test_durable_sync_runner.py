@@ -367,6 +367,26 @@ def test_allowed_write_set_empty_rejects_everything_for_durable_runner(tmp_path:
     assert result == ["src/app.py"]
 
 
+def test_wildcard_only_companion_pattern_is_ignored_by_durable_runner(
+    tmp_path: Path,
+):
+    """Iter-10 M-1: even if a wildcard-only pattern (``**/*``) bypasses the
+    parser and lands in ``self.companion_allowlist``, the durable runner's
+    defense-in-depth filter MUST refuse to treat it as auto-allowing
+    repo-wide writes."""
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=["**/*"],
+    )
+
+    # ``**/*`` is wildcard-only, so it must NOT auto-allow ``unrelated/file.py``.
+    assert runner._out_of_scope_staged_paths(
+        ["unrelated/file.py"]
+    ) == ["unrelated/file.py"]
+
+
 def test_staged_rename_source_side_is_scope_checked(tmp_path: Path):
     """Iter-6 B3 (rename detection bug): ``git diff --cached --name-only``
     for a staged ``git mv old new`` emits ONLY ``new``. A contract that

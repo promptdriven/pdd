@@ -2443,6 +2443,41 @@ def _is_valid_contract_path(raw: object) -> bool:
     return True
 
 
+def _is_valid_companion_pattern(raw: object) -> bool:
+    """
+    Return True iff *raw* is a repo-relative companion glob pattern with at
+    least one literal-character anchor.
+
+    Issue #1013 iter-10 M-1: ``companion_allowlist`` accepts arbitrary glob
+    patterns, so a contract that declares ``*``, ``**``, or ``**/*`` would
+    let ``_matches_companion_allowlist`` auto-allow repo-wide changes and
+    bypass the split-contract write set. Reject patterns whose every
+    segment is wildcard-only (no character outside ``*?``), as well as
+    absolute, Windows-separator, traversal, and empty patterns.
+    """
+    if not isinstance(raw, str):
+        return False
+    candidate = raw.strip()
+    if not candidate:
+        return False
+    if "\\" in candidate:
+        return False
+    if candidate.startswith("/"):
+        return False
+    parts = candidate.split("/")
+    if any(part == ".." for part in parts):
+        return False
+    # At least one segment MUST contain a literal character (anything
+    # outside ``*?``); otherwise the pattern is wildcard-only and would
+    # match arbitrary repo paths, defeating the scope guard.
+    for segment in parts:
+        if not segment:
+            continue
+        if any(ch not in "*?" for ch in segment):
+            return True
+    return False
+
+
 def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
     """Return a contract parsed from a ``<!-- PDD_ISSUE_CONTRACT ... -->`` block, else None."""
     match = _HTML_COMMENT_CONTRACT_RE.search(text)
@@ -2467,8 +2502,11 @@ def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
     raw_companion = parsed.get("companion_allowlist", [])
     if not isinstance(raw_companion, list):
         raw_companion = []
+    # Issue #1013 iter-10 M-1: drop wildcard-only / absolute / traversal /
+    # Windows-separator patterns silently so a contract cannot declare
+    # ``*``/``**``/``**/*`` and bypass the split-contract write set.
     companion = tuple(
-        p.strip() for p in raw_companion if isinstance(p, str) and p.strip()
+        p.strip() for p in raw_companion if _is_valid_companion_pattern(p)
     )
     return IssueContract(
         allowed_paths=allowed,
