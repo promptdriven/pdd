@@ -1965,6 +1965,11 @@ class AsyncSyncRunner:
                 f"Allowed write set:\n{allowed_lines}\n"
                 f"Companion allowlist:\n{companion_lines}"
             )
+            # F8 (Issue #1013): print the diagnostic to stderr immediately
+            # after reverting. ``maintenance.py`` separately echoes the
+            # assembled module-failure error at the end of the run — two
+            # distinct events, so keep both.
+            print(diagnostic, file=sys.stderr)
             return diagnostic
 
     def _build_conformance_hard_failure(
