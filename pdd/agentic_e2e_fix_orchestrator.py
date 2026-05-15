@@ -1096,6 +1096,18 @@ def _detect_meaningful_changes(cwd: Path, initial_file_hashes: Dict[str, Optiona
     return [p for p in _detect_changed_files(cwd, initial_file_hashes) if not _is_noise_path(p)]
 
 
+# Sentinel returned by ``_reevaluate_step3_not_a_bug_on_resume`` to signal that
+# the resume-time cycle-waste-breaker condition holds (cached NOT_A_BUG,
+# direct edits, no fixed units, current_cycle > 1). The caller treats this as a
+# terminal-success short-circuit equivalent to the inline Step 3 cycle-waste
+# breaker (Issue #1034) — it MUST NOT be written into ``step_outputs``.
+NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME = "NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME"
+NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE = (
+    "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining "
+    "state as not a bug."
+)
+
+
 def _reevaluate_step3_not_a_bug_on_resume(
     cached_output: str,
     *,
@@ -1104,6 +1116,7 @@ def _reevaluate_step3_not_a_bug_on_resume(
     cwd: Path,
     quiet: bool = False,
     source: str = "step_outputs",
+    current_cycle: Optional[int] = None,
 ) -> str:
     """Re-evaluate a cached Step 3 ``NOT_A_BUG`` token on workflow resume.
 
@@ -1120,6 +1133,14 @@ def _reevaluate_step3_not_a_bug_on_resume(
     ``step_outputs["3"]`` and ``bug_step_outputs["3"]`` callers route through
     this helper for symmetry.
 
+    Cycle-waste-breaker terminal-success path: when ``current_cycle > 1`` and
+    direct edits exist with no FIXED dev units, mirror the inline Step 3
+    cycle-waste-breaker (lines 2127-2134 of the inner loop) by returning the
+    :data:`NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME` sentinel instead of demoting.
+    The caller is expected to translate that sentinel into a terminal-success
+    workflow exit so the orchestrator does NOT spend another Step 3 LLM call
+    when the prior-cycle direct-edit fix is already terminal.
+
     Args:
         cached_output: The cached Step 3 output text.
         dev_unit_states: Restored ``dev_unit_states`` from workflow state.
@@ -1128,10 +1149,18 @@ def _reevaluate_step3_not_a_bug_on_resume(
         cwd: Repo working directory used for direct-edit detection.
         quiet: Suppress console messages when True.
         source: Diagnostic label (``"step_outputs"`` or ``"bug_step_outputs"``).
+        current_cycle: Restored cycle counter from workflow state. When
+            ``current_cycle > 1`` and the direct-edit guard would otherwise
+            fire with no FIXED units, return the terminal-success sentinel
+            instead of the FAILED demotion token. When ``None``, the
+            cycle-waste-breaker terminal-success path is disabled (backwards
+            compatible with helper-only test callers).
 
     Returns:
         The original ``cached_output`` if the token should still be trusted,
-        otherwise a ``"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>"`` token.
+        a ``"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>"`` token if a
+        guard demotes it, or :data:`NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME` when
+        the cycle-waste-breaker terminal-success path applies.
     """
     if not cached_output or str(cached_output).startswith("FAILED:"):
         return cached_output
@@ -1162,6 +1191,24 @@ def _reevaluate_step3_not_a_bug_on_resume(
         except Exception:
             direct_edits = []
         if direct_edits:
+            # Cycle-waste-breaker terminal success on resume (Issue #1034):
+            # mirror the inline Step 3 path at lines 2127-2134 — when
+            # current_cycle > 1, direct edits exist, and no FIXED dev units
+            # exist, the prior-cycle direct-edit fix is treated as terminal
+            # and the workflow exits successfully instead of rerunning Step 3.
+            # cycle_start_hashes is not persisted across resumes, so we assume
+            # no current-cycle progress (the resumed cycle has not started any
+            # work yet — Steps 1-N were completed in the prior session).
+            if current_cycle is not None and current_cycle > 1:
+                if not quiet:
+                    console.print(
+                        f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} "
+                        f"matches cycle-waste-breaker (current_cycle={current_cycle}, "
+                        f"direct edits present, no FIXED dev units). Treating prior "
+                        f"direct-edit fix as terminal success instead of rerunning "
+                        f"Step 3.[/yellow]"
+                    )
+                return NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME
             if not quiet:
                 console.print(
                     f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} suppressed "
@@ -1698,6 +1745,9 @@ def run_agentic_e2e_fix_orchestrator(
     # Issue #1001: deferred action computed during resume that must be applied
     # after `success`/`final_message` are initialized below. Default: no-op.
     _resume_deferred_action: Optional[str] = None
+    # Set by the resume-time Step 3 re-evaluation if the cycle-waste-breaker
+    # terminal-success condition holds (Issue #1034). Skips the inner workflow.
+    resume_terminal_success = False
 
     # Resume Logic
     if resume:
@@ -1731,6 +1781,11 @@ def run_agentic_e2e_fix_orchestrator(
             # would have suppressed NOT_A_BUG, demote the cached entry to
             # "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>" so the existing
             # validate_cached_state FAILED-rewind reruns Step 3.
+            # If the cycle-waste-breaker condition holds on resume (cached
+            # NOT_A_BUG + direct edits + no FIXED units + current_cycle > 1),
+            # the helper returns NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME to signal
+            # the inline cycle-waste-breaker terminal-success path (mirrors
+            # lines 2127-2134 of the inner loop) instead of a demotion.
             cached_step3 = step_outputs.get("3")
             if cached_step3:
                 demoted = _reevaluate_step3_not_a_bug_on_resume(
@@ -1740,8 +1795,16 @@ def run_agentic_e2e_fix_orchestrator(
                     cwd=cwd,
                     quiet=quiet,
                     source="step_outputs",
+                    current_cycle=current_cycle,
                 )
-                if demoted is not cached_step3 and demoted != cached_step3:
+                if demoted == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME:
+                    # Honor the inline cycle-waste-breaker terminal-success
+                    # path on resume. The cached cycle counter and step
+                    # outputs are left untouched (we are about to exit) so the
+                    # post-success commit/cleanup/CI branch sees the same
+                    # state it would after an inline break.
+                    resume_terminal_success = True
+                elif demoted is not cached_step3 and demoted != cached_step3:
                     step_outputs["3"] = demoted
 
             # Issue #467: Validate cached state — correct last_completed_step
@@ -1950,12 +2013,27 @@ def run_agentic_e2e_fix_orchestrator(
     elif _resume_deferred_action == "MAX_CYCLES_REACHED":
         final_message = "Max cycles reached."
 
+    # Resume-time cycle-waste-breaker terminal success (Issue #1034): if the
+    # resume guard detected the inline cycle-waste-breaker condition for the
+    # cached Step 3 NOT_A_BUG, skip the inner workflow and fall straight into
+    # the success branch (commit, Step 11 cleanup, CI) just like the inline
+    # path at lines 2127-2134.
+    if resume_terminal_success:
+        success = True
+        final_message = NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE
+        if not quiet:
+            console.print(
+                f"[yellow]NOT_A_BUG with prior direct edits and no new progress "
+                f"this cycle (resumed cycle {current_cycle}) — treating prior fix "
+                f"as terminal.[/yellow]"
+            )
+
     try:
         # Outer Loop
         if current_cycle == 0:
             current_cycle = 1
 
-        while current_cycle <= max_cycles:
+        while current_cycle <= max_cycles and not resume_terminal_success:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
 
             # Snapshot file hashes at cycle start for convergence detection (5b)

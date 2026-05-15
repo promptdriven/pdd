@@ -7953,6 +7953,149 @@ class TestNotABugSuppressedOnResume:
             f"NOT_A_BUG short-circuit. final_message={final_message!r}"
         )
 
+    def test_helper_returns_terminal_success_sentinel_on_cycle_waste_breaker(
+        self, tmp_path
+    ):
+        """Cached NOT_A_BUG + direct edits + no FIXED units + current_cycle > 1
+        must return the terminal-success sentinel (cycle-waste-breaker path)."""
+        from pdd.agentic_e2e_fix_orchestrator import (
+            NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME,
+            _reevaluate_step3_not_a_bug_on_resume,
+        )
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes={"src/module.py": "originalhash"},
+                cwd=tmp_path,
+                quiet=True,
+                current_cycle=2,
+            )
+        assert result == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME
+
+    def test_helper_demotes_direct_edits_on_cycle1_even_with_current_cycle(
+        self, tmp_path
+    ):
+        """current_cycle == 1 must still demote (cycle-waste breaker requires >1)."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes={"src/module.py": "originalhash"},
+                cwd=tmp_path,
+                quiet=True,
+                current_cycle=1,
+            )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:")
+        assert "direct_edits" in result
+
+    def test_resume_cycle_waste_breaker_terminal_success_via_direct_edits(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """End-to-end: cycle 2+ resume with cached NOT_A_BUG + direct edits +
+        no FIXED units must exit with the inline cycle-waste-breaker terminal
+        success message — without rerunning Step 3.
+
+        Acceptance test for issue #1034 (cycle-waste-breaker acceptance
+        criterion): the inline Step 3 path at lines 2127-2134 exits with
+        ``success = True`` and ``final_message = "Direct-edit fix applied in a
+        prior cycle; Step 3 classifies remaining state as not a bug."`` when
+        ``has_direct_edits and not has_fixed_units and not has_cycle_progress
+        and current_cycle > 1``. The resume guard MUST mirror that path
+        instead of demoting and rerunning Step 3.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        # Avoid Step 11 + CI side effects; the assertion is about workflow exit.
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        resumed_state = {
+            "current_cycle": 2,  # cycle-waste-breaker requires current_cycle > 1
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},  # no FIXED units
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "Committed prior-cycle direct edits."),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    # Step 3 must NOT rerun on the cycle-waste-breaker path —
+                    # if it does, force a CODE_BUG that would continue the
+                    # workflow, making the assertion below catch the bug.
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 must NOT have been re-executed — the cycle-waste-breaker
+        # terminal-success path short-circuits the inner workflow entirely.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert not step3_calls, (
+            "Step 3 must NOT rerun when the resume cycle-waste-breaker "
+            f"terminal-success path applies. Called labels: {called_labels}"
+        )
+
+        # Workflow exits as success with the inline cycle-waste-breaker
+        # terminal-success message (not "Issue determined to be not a bug.").
+        # Return tuple: (success, final_message, total_cost, model_used, changed_files).
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        success, final_message = result[0], result[1]
+        assert success is True, (
+            "Resume cycle-waste-breaker must produce terminal success "
+            f"(got success={success!r}, final_message={final_message!r})"
+        )
+        assert final_message == (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        ), (
+            "Resume cycle-waste-breaker final_message must mirror the inline "
+            f"Step 3 path. Got: {final_message!r}"
+        )
+
     def test_bug_step_outputs_not_a_bug_resuppressed_by_dev_units(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args, tmp_path
     ):
