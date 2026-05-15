@@ -6,7 +6,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False)", "returns": "Tuple[bool, str, float, str, List[str]]"},
+      {"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)", "returns": "Tuple[bool, str, float, str, List[str]]"},
       {"name": "push_with_retry", "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True, force_with_lease_on_non_fast_forward: bool = True) -> Tuple[bool, str]", "returns": "Tuple[bool, str]", "sideEffects": ["Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true", "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"]}
     ]
   }
