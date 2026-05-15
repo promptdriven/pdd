@@ -420,17 +420,16 @@ class TestArchitectureMetadataSanityCheck:
         )
 
     def test_prompt_interface_mirrors_architecture_json(self, orchestrator_prompt_raw):
-        """Every function declared in the prompt's ``<pdd-interface>`` MUST
-        round-trip-match the corresponding entry in ``architecture.json`` on
-        ``name``, ``signature``, ``returns``, and ``sideEffects`` (when
-        architecture.json declares them).
+        """The prompt's ``<pdd-interface>`` and ``architecture.json`` MUST
+        declare the **exact same set** of function names, and every function
+        MUST round-trip-match on ``name``, ``signature``, ``returns``, and
+        ``sideEffects`` (when architecture.json declares them).
 
-        This is the strong sync check codex flagged in round 2: if either side
-        drifts -- a new ``sideEffects`` entry is added to architecture.json,
+        This is the strong sync check codex flagged in round 2/3: if either
+        side drifts -- a function is added or removed on one side without the
+        other, a new ``sideEffects`` entry is added to architecture.json,
         a signature is updated, or the prompt's interface is edited without
-        the architecture entry being updated -- this test fails. The prompt
-        may declare a subset of architecture's functions, but every prompt
-        function must exactly mirror its architecture counterpart.
+        the architecture entry being updated -- this test fails.
         """
         # Parse the <pdd-interface> JSON block out of the raw template.
         m = re.search(
@@ -452,14 +451,25 @@ class TestArchitectureMetadataSanityCheck:
         )
         arch_by_name = {f["name"]: f for f in arch_functions}
 
+        # Exact set equality: the prompt and architecture.json must declare
+        # the same function names. This catches drops on either side --
+        # e.g. the prompt removing an architecture-declared function, or
+        # architecture.json adding a function the prompt never mentions.
+        prompt_function_names = {f["name"] for f in prompt_functions}
+        arch_function_names = set(arch_by_name.keys())
+        only_in_prompt = prompt_function_names - arch_function_names
+        only_in_arch = arch_function_names - prompt_function_names
+        assert prompt_function_names == arch_function_names, (
+            "Function-name set drift between prompt's <pdd-interface> and "
+            "architecture.json:\n"
+            f"  only in prompt:       {sorted(only_in_prompt)!r}\n"
+            f"  only in architecture: {sorted(only_in_arch)!r}\n"
+            "Both sides MUST declare exactly the same function names."
+        )
+
         # Every function declared in the prompt must mirror its architecture entry.
         for prompt_fn in prompt_functions:
             name = prompt_fn["name"]
-            assert name in arch_by_name, (
-                f"Prompt declares function {name!r} but architecture.json has no "
-                f"matching entry. Either remove it from the prompt or add it to "
-                f"architecture.json."
-            )
             arch_fn = arch_by_name[name]
 
             # name / signature / returns must match exactly.
