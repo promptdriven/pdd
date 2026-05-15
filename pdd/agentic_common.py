@@ -2268,30 +2268,73 @@ def _revert_out_of_scope_changes(
     for line in result.stdout.splitlines():
         if len(line) < 4:
             continue
-        rel_path = line[3:].strip()
-        full_path = (cwd / rel_path).resolve()
-        if full_path not in allowed_paths:
-            to_restore.append(rel_path)
-            reverted.append(full_path)
+        payload = line[3:].strip()
+        # Iter-6 B2 (rename revert bug): ``git status --porcelain`` reports
+        # renames as ``R  old -> new``. Treating the whole payload as one
+        # path caused ``git checkout HEAD --`` to be called with a literal
+        # ``"old -> new"`` arg, which silently failed and left the rename
+        # in place. Split renames so BOTH source and destination are
+        # membership-checked independently.
+        if " -> " in payload:
+            old_raw, new_raw = payload.split(" -> ", 1)
+            entry_paths = [old_raw.strip().strip('"'), new_raw.strip().strip('"')]
+        else:
+            entry_paths = [payload.strip('"')]
+        for rel_path in entry_paths:
+            if not rel_path:
+                continue
+            full_path = (cwd / rel_path).resolve()
+            if full_path not in allowed_paths:
+                to_restore.append(rel_path)
+                reverted.append(full_path)
     if to_restore:
+        # Iter-6 B2: use ``git restore --staged --worktree --source=HEAD``
+        # so staged renames are correctly undone (``git checkout HEAD --``
+        # cannot remove a rename destination unknown to HEAD). Falls back
+        # to the legacy command for git < 2.23.
+        checkout_failed = False
         try:
-            subprocess.run(
-                ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + to_restore,
+            restore_result = subprocess.run(
+                ["git", "-C", str(cwd), "restore",
+                 "--staged", "--worktree", "--source=HEAD", "--"] + to_restore,
                 capture_output=True, timeout=30,
             )
+            if restore_result.returncode != 0:
+                stderr = (restore_result.stderr or b"").decode(errors="replace")
+                if "'restore' is not a git command" in stderr:
+                    legacy = subprocess.run(
+                        ["git", "-C", str(cwd), "checkout", "HEAD", "--"]
+                        + to_restore,
+                        capture_output=True, timeout=30,
+                    )
+                    if legacy.returncode != 0:
+                        checkout_failed = True
+                        _scope_guard_logger.warning(
+                            "Scope guard: legacy git checkout returned %d "
+                            "for %d file(s): %s",
+                            legacy.returncode, len(to_restore),
+                            (legacy.stderr or b"").decode(errors="replace").strip(),
+                        )
+                else:
+                    checkout_failed = True
+                    _scope_guard_logger.warning(
+                        "Scope guard: git restore returned %d for %d file(s): %s",
+                        restore_result.returncode, len(to_restore), stderr.strip(),
+                    )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
             _scope_guard_logger.warning(
-                "Scope guard: git checkout failed for %d file(s): %s",
+                "Scope guard: git restore failed for %d file(s): %s",
                 len(to_restore), exc,
             )
+            checkout_failed = True
+        if checkout_failed:
             reverted.clear()
-        else:
-            if reverted:
-                _scope_guard_logger.info(
-                    "Scope guard reverted %d out-of-scope file(s): %s",
-                    len(reverted),
-                    ", ".join(str(p.name) for p in reverted[:10]),
-                )
+        elif reverted:
+            _scope_guard_logger.info(
+                "Scope guard reverted %d out-of-scope file(s): %s",
+                len(reverted),
+                ", ".join(str(p.name) for p in reverted[:10]),
+            )
     return reverted
 
 

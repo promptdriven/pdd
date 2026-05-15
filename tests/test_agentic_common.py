@@ -4689,6 +4689,40 @@ def _init_test_git_repo(path):
 class TestRevertOutOfScopeChanges:
     """Tests for _revert_out_of_scope_changes scope guard utility."""
 
+    def test_reverts_out_of_scope_staged_rename(self, tmp_path):
+        """Iter-6 B2 (rename revert bug): ``git status --porcelain`` reports
+        renames as ``R  old -> new``. The helper used to treat the whole
+        payload as one path, so the subsequent ``git checkout HEAD --``
+        was passed a literal ``"old -> new"`` and silently failed.
+
+        After the fix both source and destination are restored and
+        ``git status`` is clean.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "old.py").write_text("contents\n")
+        (proj / "in_scope.py").write_text("in_scope\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv", "old.py", "new.py"],
+                        check=True, capture_output=True)
+
+        allowed = {(proj / "in_scope.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"git status should be clean after rename revert; got: {status!r}"
+        )
+        assert (proj / "old.py").exists()
+        assert not (proj / "new.py").exists()
+        assert len(reverted) >= 1
+
     def test_reverts_deleted_files(self, tmp_path):
         """Deleted files outside allowed set must be restored."""
         from pdd.agentic_common import _revert_out_of_scope_changes
