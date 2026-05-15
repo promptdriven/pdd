@@ -2,34 +2,34 @@
 
 ### Feat
 
-- enforce metadata finalization in CI auto-heal/preflight drift-heal (#1006)
+- **ci auto-heal**: require successful metadata finalization before CI/preflight drift heals are treated as complete, routing healed updates through the shared metadata-sync orchestrator and blocking checkpoint commits when prompt tags, architecture, run reports, or fingerprints fail to finalize (#1006).
+
+### CI
+
+- **auto-heal**: allow trusted internal PRs authored by `prompt-driven-github[bot]` to dispatch the privileged Cloud Build heal path without failing collaborator authorization, while keeping fork PRs and `/heal` comments gated.
+- **cloud-batch**: include `.github/` in source uploads so Batch runs can exercise workflow tests.
 
 ### Fix
 
-- pdd sync bug fixes
-- address codex review-loop findings
-- address codex review-loop findings round 6
-- address codex review-loop findings
-- address codex review-loop findings round 5
-- address codex review-loop findings round 4
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- **update_main**: finalize fingerprint in default single-file mode
-- align update_main prompt contract
-- restore metadata sync state
-- **metadata_sync**: preserve user-facing command on fingerprint finalize
-- hard fail preflight metadata errors
-- harden metadata finalization validation
-- fail finalized empty-index commits
-- skip commits on advisory partial failures
-- restore ci drift heal summaries
-- preserve full metadata fingerprint state
-- hard fail unresolved post-update prompts
-- restore promptless module drift detection
-- enforce metadata finalization in auto-heal
-- **ci**: avoid red auto-heal job for generated PRs
+- **update**: finalize fingerprints after successful default single-file/regeneration updates, clear stale run reports, and skip fingerprint/orchestrator writes when `--output` redirects away from the canonical prompt (#1007).
+- **metadata_sync**: preserve the previous user-facing workflow command (`verify`/`test`/`fix`/`update`) when refreshing fingerprints so synced workflows remain recognized as complete.
+- **ci_drift_heal**: hard-fail metadata finalization errors, snapshot and restore per-module metadata on failed heals, verify finalized fingerprints are staged before commit, and avoid committing PR/push partial-failure state.
+- **ci_drift_heal**: restore compact drift/final summaries, preserve non-example operations, detect requested code-only modules without prompts, and fail closed when a post-update prompt path cannot be resolved.
+- **sync**: fix no-argument global sync for nested architectures by preserving scoped module keys, resolving same-architecture dependencies first, warning on unresolved or ambiguous cross-architecture edges, and running child syncs from the correct cwd with the plain basename target.
+- **sync**: treat `--skip-tests --skip-verify` workflows as complete once required files exist, and ignore `--dry-run` invocations in the duplicate expensive-run guard.
+
+### Build
+
+- Bump package metadata, README/PyPI version references, and shell completions from 0.0.237 to 0.0.238.
+- Tighten `.pdd/meta` ignore rules while retaining the required run reports for long-running metadata/auto-heal modules.
+
+### Chore
+
+- Refresh Cloud Batch test-duration data and synchronize prompt, example, architecture, and `.pdd/meta` artifacts for the updated modules.
+
+### Test
+
+- Add regression coverage for generated-PR auto-heal authorization, metadata finalization/staging failures, default update fingerprinting, redirected-output skips, scoped global sync dependency handling, duplicate dry-run guard behavior, and skipped workflow completion.
 
 ## v0.0.237 (2026-05-13)
 
