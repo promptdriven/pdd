@@ -13,6 +13,7 @@ from rich.console import Console
 from rich import print as rprint
 
 from .agentic_common import run_agentic_task
+from .code_generator_main import TestChurnError, _verify_test_churn
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 
@@ -208,6 +209,15 @@ def run_one_session_sync(
             f"Code file not found: {code_path}\n"
             f"Run `pdd generate {basename}` first."
         )
+    prompt_path = pdd_files["prompt"]
+    prompt_content = prompt_path.read_text(encoding="utf-8") if prompt_path.exists() else ""
+    test_path = pdd_files.get("test")
+    existing_test_content: Optional[str] = None
+    if test_path and test_path.exists():
+        try:
+            existing_test_content = test_path.read_text(encoding="utf-8")
+        except OSError:
+            existing_test_content = None
 
     # Build the mega-prompt
     prompt = build_one_session_prompt(
@@ -333,6 +343,21 @@ def run_one_session_sync(
     # Determine which operations were completed
     operations: List[str] = []
     if success:
+        if test_path and existing_test_content and test_path.exists():
+            try:
+                generated_test_content = test_path.read_text(encoding="utf-8")
+                _verify_test_churn(
+                    existing_code=existing_test_content,
+                    generated_code=generated_test_content,
+                    prompt_name=f"{basename}_test_{language}.prompt",
+                    output_path=str(test_path),
+                    prompt_content=prompt_content,
+                )
+            except TestChurnError as churn_err:
+                test_path.write_text(existing_test_content, encoding="utf-8")
+                churn_err.total_cost = float(cost or 0.0)
+                churn_err.model_name = provider or "unknown"
+                raise
         operations = ["example", "crash_fix", "verify", "test"]
 
     errors: List[str] = []

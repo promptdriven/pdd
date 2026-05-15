@@ -2244,7 +2244,19 @@ def sync_orchestration(
                                                 conformance_failed_model = exc_model
                                             if isinstance(_conform_exc, PublicSurfaceRegressionError):
                                                 new_kind = "public_surface"
-                                                new_signature = tuple(sorted(set(_conform_exc.removed_symbols)))
+                                                new_signature = tuple(
+                                                    sorted(
+                                                        set(_conform_exc.removed_symbols)
+                                                        | {
+                                                            f"sig:{symbol}"
+                                                            for symbol in getattr(
+                                                                _conform_exc,
+                                                                "changed_signatures",
+                                                                [],
+                                                            )
+                                                        }
+                                                    )
+                                                )
                                             elif isinstance(_conform_exc, TestChurnError):
                                                 new_kind = "test_churn"
                                                 new_signature = (

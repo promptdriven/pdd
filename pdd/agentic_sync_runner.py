@@ -515,30 +515,43 @@ def _parse_public_surface_failure(
             combined,
             re.MULTILINE,
         )
-    if not match:
-        return None
+    removed_text = match.group(1) if match else ""
     removed = tuple(
         sorted(
             {
                 token.strip().strip("`'\"").rstrip(".")
-                for token in match.group(1).split(",")
-                if token.strip()
+                for token in removed_text.split(",")
+                if token.strip() and token.strip() != "<none>"
             }
         )
     )
-    if not removed:
-        return None
-    lines = [
-        "Public surface regression repair required.",
-        "Restore these public symbols from the existing module:",
-    ]
-    for sym in removed:
-        lines.append(f"- {sym}")
-    lines.append(
-        "Preserve backward-compatible public helpers unless the prompt "
-        "explicitly contains BREAKING-CHANGE:."
+    changed_match = re.search(r"^signature_changed:\s*(.+)$", combined, re.MULTILINE)
+    changed_text = changed_match.group(1) if changed_match else ""
+    changed = tuple(
+        sorted(
+            {
+                token.strip().strip("`'\"").rstrip(".")
+                for token in changed_text.split(",")
+                if token.strip() and token.strip() != "<none>"
+            }
+        )
     )
-    return "\n".join(lines), removed
+    if not removed and not changed:
+        return None
+    lines = ["Public surface regression repair required."]
+    if removed:
+        lines.append("Restore these public symbols from the existing module:")
+        for sym in removed:
+            lines.append(f"- {sym}")
+    if changed:
+        lines.append("Restore compatible signatures for these public symbols:")
+        for sym in changed:
+            lines.append(f"- {sym}")
+    lines.append(
+        "Preserve backward-compatible public helpers unless the prompt lists "
+        "the intended removals with BREAKING-CHANGE: remove <symbol>."
+    )
+    return "\n".join(lines), tuple(sorted(set(removed) | {f"sig:{sym}" for sym in changed}))
 
 
 def _parse_test_churn_failure(
@@ -585,6 +598,7 @@ def build_public_surface_hard_failure_from_error(
 ) -> str:
     """Format a structured public-surface hard-failure block."""
     removed = list(getattr(exc, "removed_symbols", []) or [])
+    changed = list(getattr(exc, "changed_signatures", []) or [])
     block_lines = [
         str(exc),
         "",
@@ -592,6 +606,7 @@ def build_public_surface_hard_failure_from_error(
         f"prompt: {getattr(exc, 'prompt_name', '') or '<unknown>'}",
         f"output: {getattr(exc, 'output_path', '') or '<unknown>'}",
         "removed: " + (", ".join(removed) if removed else "<none>"),
+        "signature_changed: " + (", ".join(changed) if changed else "<none>"),
         f"pre surface size: {getattr(exc, 'pre_surface_size', '<unknown>')}",
         f"post surface size: {getattr(exc, 'post_surface_size', '<unknown>')}",
         "",

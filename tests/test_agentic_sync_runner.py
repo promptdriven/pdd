@@ -1191,6 +1191,21 @@ class TestSyncOneModule:
         assert "- calculate_sha256" in directive
         assert "BREAKING-CHANGE:" in directive
 
+    def test_parse_public_surface_failure_reads_signature_changes(self):
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: calculate\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+        )
+
+        directive, signature = _parse_public_surface_failure("", stderr)
+
+        assert signature == ("sig:calculate",)
+        assert "Restore compatible signatures" in directive
+
     def test_parse_test_churn_failure(self):
         stderr = (
             "Test churn threshold exceeded for test_update_main_Python.prompt: "

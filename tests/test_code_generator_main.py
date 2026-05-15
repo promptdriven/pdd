@@ -5242,6 +5242,59 @@ class TestSyncCompatibilityGates:
             "BREAKING-CHANGE: remove old_helper.",
         )
 
+    def test_public_surface_regression_requires_scoped_breaking_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "def old_helper():\n    pass\n"
+                "def keep_helper():\n    pass\n",
+                "def new_helper():\n    pass\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "BREAKING-CHANGE: remove old_helper.",
+            )
+
+        assert excinfo.value.removed_symbols == ["keep_helper"]
+
+    def test_public_surface_regression_catches_signature_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "def calculate(value, *, strict=False) -> str:\n    return str(value)\n",
+                "def calculate(value) -> str:\n    return str(value)\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert excinfo.value.removed_symbols == []
+        assert excinfo.value.changed_signatures == ["calculate"]
+        assert "signature_changed: calculate" in str(excinfo.value)
+
+    def test_public_surface_gate_has_dedicated_skip_flag(self, monkeypatch):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        monkeypatch.setenv("PDD_SKIP_PUBLIC_SURFACE_GATE", "1")
+
+        _verify_public_surface_regression(
+            "def old_helper():\n    pass\n",
+            "def new_helper():\n    pass\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
     def test_public_surface_regression_exempts_first_time_generation(self):
         from pdd.code_generator_main import _verify_public_surface_regression
 
@@ -5288,6 +5341,59 @@ class TestSyncCompatibilityGates:
 
         assert excinfo.value.churn_ratio > excinfo.value.threshold
         assert "Test churn threshold exceeded for update_main_test_Python.prompt:" in str(excinfo.value)
+
+    def test_test_churn_allows_pure_additive_growth(self, monkeypatch):
+        from pdd.code_generator_main import _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a():\n    assert True\n"
+        after = before + "\ndef test_b():\n    assert True\n"
+
+        _verify_test_churn(
+            before,
+            after,
+            "module_test_Python.prompt",
+            "tests/test_module.py",
+            "",
+        )
+
+    def test_test_churn_requires_explicit_test_rewrite_marker(self, monkeypatch):
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n"
+        after = "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "module_test_Python.prompt",
+                "tests/test_module.py",
+                "BREAKING-CHANGE: remove old_helper.",
+            )
+
+        _verify_test_churn(
+            before,
+            after,
+            "module_test_Python.prompt",
+            "tests/test_module.py",
+            "BREAKING-CHANGE: rewrite tests for new contract.",
+        )
+
+    def test_test_churn_gate_has_dedicated_skip_flag(self, monkeypatch):
+        from pdd.code_generator_main import _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.setenv("PDD_SKIP_TEST_CHURN_GATE", "1")
+
+        _verify_test_churn(
+            "def test_a(): pass\ndef test_b(): pass\ndef test_c(): pass\n",
+            "def test_new_a(): pass\ndef test_new_b(): pass\ndef test_new_c(): pass\n",
+            "module_test_Python.prompt",
+            "tests/test_module.py",
+            "",
+        )
 
     def test_test_churn_threshold_is_clamped_to_one(self, monkeypatch):
         from pdd.code_generator_main import _get_test_churn_threshold

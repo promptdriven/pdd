@@ -632,6 +632,44 @@ class TestRunOneSessionSync:
         assert len(result["errors"]) == 1
         assert "failed" in result["errors"][0].lower()
 
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_success_rejects_broad_test_rewrite_and_restores_file(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        mock_task.return_value = (True, "done", 1.0, "claude-code")
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def rewrite_tests(*args, **kwargs):
+            pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite_tests
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        assert pdd_files["test"].read_text(encoding="utf-8") == original_tests
+
 
 # ---------------------------------------------------------------------------
 # CLI integration — --one-session flag

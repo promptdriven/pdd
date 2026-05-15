@@ -1002,7 +1002,15 @@ def sync_main(
                                     if isinstance(exc, PublicSurfaceRegressionError):
                                         new_kind = "public_surface"
                                         new_signature = tuple(
-                                            sorted(set(exc.removed_symbols))
+                                            sorted(
+                                                set(exc.removed_symbols)
+                                                | {
+                                                    f"sig:{symbol}"
+                                                    for symbol in getattr(
+                                                        exc, "changed_signatures", []
+                                                    )
+                                                }
+                                            )
                                         )
                                     elif isinstance(exc, TestChurnError):
                                         new_kind = "test_churn"

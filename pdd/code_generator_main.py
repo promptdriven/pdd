@@ -123,6 +123,7 @@ class PublicSurfaceRegressionError(click.UsageError):
         removed_symbols: List[str],
         pre_surface_size: int,
         post_surface_size: int,
+        changed_signatures: Optional[List[str]] = None,
         total_cost: float = 0.0,
         model_name: str = "unknown",
         repair_directive: Optional[str] = None,
@@ -130,6 +131,7 @@ class PublicSurfaceRegressionError(click.UsageError):
         self.prompt_name = prompt_name
         self.output_path = output_path or ""
         self.removed_symbols = list(removed_symbols)
+        self.changed_signatures = list(changed_signatures or [])
         self.pre_surface_size = int(pre_surface_size)
         self.post_surface_size = int(post_surface_size)
         self.total_cost = float(total_cost or 0.0)
@@ -138,7 +140,8 @@ class PublicSurfaceRegressionError(click.UsageError):
         output_display = self.output_path or "<unknown>"
         super().__init__(
             f"Public surface regression for {prompt_name}:\n"
-            f"removed: {', '.join(self.removed_symbols)}\n"
+            f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}\n"
+            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}\n"
             f"output: {output_display}\n"
             f"pre_surface_size: {self.pre_surface_size}\n"
             f"post_surface_size: {self.post_surface_size}"
@@ -148,15 +151,18 @@ class PublicSurfaceRegressionError(click.UsageError):
     def repair_directive(self) -> str:
         if self._repair_directive_override:
             return self._repair_directive_override
-        lines = [
-            "Public surface regression repair required.",
-            "Restore these public symbols from the existing module:",
-        ]
-        for sym in self.removed_symbols:
-            lines.append(f"- {sym}")
+        lines = ["Public surface regression repair required."]
+        if self.removed_symbols:
+            lines.append("Restore these public symbols from the existing module:")
+            for sym in self.removed_symbols:
+                lines.append(f"- {sym}")
+        if self.changed_signatures:
+            lines.append("Restore compatible signatures for these public symbols:")
+            for sym in self.changed_signatures:
+                lines.append(f"- {sym}")
         lines.append(
-            "Preserve backward-compatible public helpers unless the prompt "
-            "explicitly contains BREAKING-CHANGE:."
+            "Preserve backward-compatible public helpers unless the prompt lists "
+            "the intended removals with BREAKING-CHANGE: remove <symbol>."
         )
         return "\n".join(lines)
 
@@ -233,6 +239,68 @@ def _prompt_has_breaking_change_marker(prompt_content: Optional[str]) -> bool:
     return bool(prompt_content and "BREAKING-CHANGE:" in prompt_content)
 
 
+def _prompt_breaking_change_removed_symbols(prompt_content: Optional[str]) -> Set[str]:
+    """Return public symbols explicitly listed for removal in BREAKING-CHANGE lines."""
+    if not prompt_content:
+        return set()
+    allowed: Set[str] = set()
+    symbol_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?")
+    ignored = {
+        "BREAKING",
+        "CHANGE",
+        "remove",
+        "removes",
+        "removed",
+        "removal",
+        "delete",
+        "deletes",
+        "drop",
+        "drops",
+        "rename",
+        "renames",
+        "renamed",
+        "symbol",
+        "symbols",
+        "function",
+        "functions",
+        "class",
+        "classes",
+        "method",
+        "methods",
+    }
+    for line in prompt_content.splitlines():
+        if "BREAKING-CHANGE:" not in line:
+            continue
+        directive = line.split("BREAKING-CHANGE:", 1)[1]
+        if not re.search(
+            r"\b(remove|removes|removed|delete|deletes|drop|drops|rename|renames|renamed)\b",
+            directive,
+            re.IGNORECASE,
+        ):
+            continue
+        for match in symbol_re.findall(directive):
+            if match in ignored or match.lower() in ignored:
+                continue
+            allowed.add(match.strip("`'\"."))
+    return allowed
+
+
+def _prompt_allows_test_churn(prompt_content: Optional[str]) -> bool:
+    """Return True only for explicit test rewrite/churn breaking-change directives."""
+    if not prompt_content:
+        return False
+    for line in prompt_content.splitlines():
+        if "BREAKING-CHANGE:" not in line:
+            continue
+        directive = line.split("BREAKING-CHANGE:", 1)[1].lower()
+        if re.search(r"\b(test|tests)\b", directive) and re.search(
+            r"\b(rewrite|replace|regenerate|churn|overwrite|remove|drop)\b",
+            directive,
+        ):
+            return True
+    return False
+
+
 def _is_python_generation(language: Optional[str], output_path: Optional[str]) -> bool:
     detected = (language or "").lower()
     return detected in {"python", "py"} or bool(
@@ -288,6 +356,72 @@ def _diff_public_surface(pre: Set[str], post: Set[str]) -> List[str]:
     return sorted(set(pre) - set(post))
 
 
+def _format_python_signature(node: ast.AST, *, skip_first: bool = False) -> str:
+    """Return a stable public-call signature string for a function-like AST node."""
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return ""
+    args = node.args
+    parts: List[str] = []
+
+    def add_arg(arg: ast.arg, default: Optional[ast.AST] = None) -> None:
+        text = arg.arg
+        if arg.annotation is not None:
+            text += f": {ast.unparse(arg.annotation)}"
+        if default is not None:
+            text += f"={ast.unparse(default)}"
+        parts.append(text)
+
+    positional = list(args.posonlyargs) + list(args.args)
+    if skip_first and positional:
+        positional = positional[1:]
+    defaults: List[Optional[ast.AST]] = [None] * (
+        len(positional) - len(args.defaults)
+    ) + list(args.defaults)
+    for arg, default in zip(positional, defaults):
+        add_arg(arg, default)
+    if args.vararg:
+        text = "*" + args.vararg.arg
+        if args.vararg.annotation is not None:
+            text += f": {ast.unparse(args.vararg.annotation)}"
+        parts.append(text)
+    elif args.kwonlyargs:
+        parts.append("*")
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        add_arg(arg, default)
+    if args.kwarg:
+        text = "**" + args.kwarg.arg
+        if args.kwarg.annotation is not None:
+            text += f": {ast.unparse(args.kwarg.annotation)}"
+        parts.append(text)
+    returns = ""
+    if node.returns is not None:
+        returns = f" -> {ast.unparse(node.returns)}"
+    return f"({', '.join(parts)}){returns}"
+
+
+def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
+    """Collect signatures for public top-level functions, classes, and class methods."""
+    if (language or "").lower() not in {"python", "py"}:
+        return {}
+    try:
+        tree = ast.parse(code_text or "")
+    except SyntaxError:
+        return {}
+
+    signatures: Dict[str, str] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and not node.name.startswith("_"):
+            signatures[node.name] = _format_python_signature(node)
+        elif isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
+            for child in node.body:
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    if child.name == "__init__":
+                        signatures[node.name] = _format_python_signature(child, skip_first=True)
+                    elif not child.name.startswith("_"):
+                        signatures[f"{node.name}.{child.name}"] = _format_python_signature(child, skip_first=True)
+    return signatures
+
+
 def _collect_python_public_surface(source: str) -> List[str]:
     """Backward-compatible wrapper for older tests and local imports."""
     return sorted(_snapshot_public_surface(source, "python"))
@@ -310,7 +444,7 @@ def _verify_public_surface_regression(
     if (
         not existing_code
         or not existing_code.strip()
-        or _prompt_has_breaking_change_marker(prompt_content)
+        or _env_flag_enabled("PDD_SKIP_PUBLIC_SURFACE_GATE")
         or _is_test_output_path(output_path)
         or not _is_python_generation(language, output_path)
     ):
@@ -320,12 +454,25 @@ def _verify_public_surface_regression(
     after = _snapshot_public_surface(generated_code, language or "python")
     if not before:
         return
-    removed = _diff_public_surface(before, after)
-    if removed:
+    allowed_removed = _prompt_breaking_change_removed_symbols(prompt_content)
+    removed = [
+        symbol
+        for symbol in _diff_public_surface(before, after)
+        if symbol not in allowed_removed
+    ]
+    before_signatures = _snapshot_public_signatures(existing_code, language or "python")
+    after_signatures = _snapshot_public_signatures(generated_code, language or "python")
+    changed_signatures = sorted(
+        symbol
+        for symbol, signature in before_signatures.items()
+        if symbol in after_signatures and after_signatures[symbol] != signature
+    )
+    if removed or changed_signatures:
         raise PublicSurfaceRegressionError(
             prompt_name=prompt_name,
             output_path=output_path or "",
             removed_symbols=removed,
+            changed_signatures=changed_signatures,
             pre_surface_size=len(before),
             post_surface_size=len(after),
         )
@@ -357,6 +504,8 @@ def _compute_test_churn_ratio(pre_text: str, post_text: str) -> float:
             added += 1
         elif line.startswith("-"):
             removed += 1
+    if removed == 0:
+        return 0.0
     return min(max(added, removed) / max(len(before_lines), 1), 1.0)
 
 
@@ -376,8 +525,9 @@ def _verify_test_churn(
     if (
         not existing_code
         or not existing_code.strip()
+        or _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
         or not _is_test_output_path(output_path)
-        or _prompt_has_breaking_change_marker(prompt_content)
+        or _prompt_allows_test_churn(prompt_content)
     ):
         return
 
