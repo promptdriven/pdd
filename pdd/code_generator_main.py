@@ -349,6 +349,8 @@ def _get_test_churn_threshold() -> float:
         return 0.40
     if value < 0:
         return 0.0
+    if value > 1:
+        return 1.0
     return value
 
 

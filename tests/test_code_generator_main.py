@@ -5159,6 +5159,13 @@ class TestSyncCompatibilityGates:
         assert excinfo.value.churn_ratio > excinfo.value.threshold
         assert "Test churn threshold exceeded for update_main_test_Python.prompt:" in str(excinfo.value)
 
+    def test_test_churn_threshold_is_clamped_to_one(self, monkeypatch):
+        from pdd.code_generator_main import _get_test_churn_threshold
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "2")
+
+        assert _get_test_churn_threshold() == pytest.approx(1.0)
+
 
 # ---------------------------------------------------------------------------
 # Tests for <pdd-interface> signature conformance (Issue #928)

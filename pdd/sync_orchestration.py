@@ -55,7 +55,8 @@ from .sync_determine_operation import (
     _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
-from .code_generator_main import code_generator_main
+from .code_generator_main import code_generator_main, TestChurnError
+from .agentic_sync_runner import build_test_churn_hard_failure_from_error
 from .context_generator_main import context_generator_main
 from .crash_main import crash_main
 from .fix_verification_main import fix_verification_main
@@ -2211,13 +2212,11 @@ def sync_orchestration(
                                 from .code_generator_main import (
                                     ArchitectureConformanceError,
                                     PublicSurfaceRegressionError,
-                                    TestChurnError,
                                 )
                                 from .agentic_sync_runner import (
                                     MAX_CONFORMANCE_ATTEMPTS,
                                     build_conformance_hard_failure_from_error,
                                     build_public_surface_hard_failure_from_error,
-                                    build_test_churn_hard_failure_from_error,
                                 )
                                 _prev_repair = os.environ.get("PDD_REPAIR_DIRECTIVE")
                                 try:
@@ -2728,6 +2727,11 @@ def sync_orchestration(
                         except Exception as e:
                             if operation_rollback is not None:
                                 operation_rollback.restore()
+                            if isinstance(e, TestChurnError):
+                                hard_block = build_test_churn_hard_failure_from_error(
+                                    e, basename
+                                )
+                                print(hard_block, file=sys.stderr)
                             error_msg = str(e) if str(e) else type(e).__name__
                             errors.append(f"Exception during '{operation}': {error_msg}")
                             exc_cost = float(getattr(e, "total_cost", 0.0) or 0.0)

@@ -260,6 +260,45 @@ def test_generate_conformance_hard_failure_cost_is_counted(orchestration_fixture
     ]
     assert generate_entries[-1]["actual_cost"] == pytest.approx(0.50)
 
+
+def test_test_churn_failure_emits_structured_block(orchestration_fixture, capsys):
+    """Test operation TestChurnError should surface the documented diagnostic."""
+    from pdd.code_generator_main import TestChurnError
+
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='test', reason='Tests need regeneration'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    test_path = orchestration_fixture['get_pdd_file_paths'].return_value['test']
+    prompt_path = orchestration_fixture['get_pdd_file_paths'].return_value['prompt']
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Create a calculator.")
+    code_path.write_text("def add(a, b):\n    return a + b\n")
+    test_path.write_text("def test_old():\n    assert True\n")
+
+    orchestration_fixture['cmd_test_main'].side_effect = TestChurnError(
+        prompt_name="calculator_python.prompt",
+        output_path=str(test_path),
+        churn_ratio=1.0,
+        threshold=0.4,
+        pre_line_count=2,
+        post_line_count=2,
+        total_cost=0.12,
+        model_name="failed-model",
+    )
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+    captured = capsys.readouterr()
+
+    assert result['success'] is False
+    assert orchestration_fixture['cmd_test_main'].called, result
+    assert "=== test churn threshold exceeded ===" in captured.err
+    assert "Reproduce locally: pdd sync calculator" in captured.err
+
+
 def test_sync_stops_on_operation_failure(orchestration_fixture):
     """
     Ensures the workflow halts immediately if any step fails.
