@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
@@ -1746,6 +1747,104 @@ class TestCheckupReviewLoopRuntime:
         assert fallback_entry.fixer == "gemini" and fallback_entry.success is True, (
             f"fallback FixResult expected (gemini, success=True); got "
             f"({fallback_entry.fixer}, success={fallback_entry.success})"
+        )
+
+    def test_fixer_fallback_resets_worktree_before_fallback_runs(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When the primary fixer dead-stops (e.g. on credential
+        exhaustion) it may have left partial edits in the worktree.
+        Before invoking the fallback fixer the loop MUST run
+        ``git reset --hard HEAD`` + ``git clean -fd`` on the worktree so
+        the fallback runs from the same baseline as the primary did and
+        the failed primary's untrusted edits cannot leak into the
+        eventual ``_commit_and_push_if_changed`` call (codex iter-04 P1).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "primary credential-limit dead-stop", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        # Record all subprocess.run calls so we can assert the
+        # reset+clean pair fires between primary failure and fallback
+        # invocation. Keep the real subprocess.run behavior — the loop
+        # invokes other ``git`` commands that must still succeed.
+        real_run = subprocess.run
+        subprocess_calls: List[List[str]] = []
+
+        def recording_run(cmd: Any, *args: Any, **kwargs: Any):
+            if isinstance(cmd, list):
+                subprocess_calls.append(list(cmd))
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(mod.subprocess, "run", recording_run)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Locate the indices of the primary failure, the reset/clean
+        # pair, and the fallback invocation. The reset+clean must sit
+        # strictly between the two role tasks.
+        role_labels = [label for _, label in calls]
+        primary_idx = role_labels.index(
+            "checkup-review-loop-fix-claude-for-codex-round1"
+        )
+        fallback_idx = role_labels.index(
+            "checkup-review-loop-fix-gemini-for-codex-round1"
+        )
+        assert primary_idx < fallback_idx, (
+            f"primary fixer must precede fallback; calls={role_labels!r}"
+        )
+
+        # Find a reset+clean pair anywhere in the recorded subprocess
+        # calls. They are inserted before the fallback fires; with the
+        # bug present, neither command would be issued.
+        reset_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 5 and c[0] == "git" and c[1] == "-C"
+            and c[3:5] == ["reset", "--hard"]
+        ]
+        clean_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 4 and c[0] == "git" and c[1] == "-C"
+            and c[3] == "clean"
+        ]
+        assert reset_calls, (
+            f"expected 'git reset --hard HEAD' before fallback; "
+            f"recorded subprocess calls={subprocess_calls!r}"
+        )
+        assert clean_calls, (
+            f"expected 'git clean -fd' before fallback; "
+            f"recorded subprocess calls={subprocess_calls!r}"
+        )
+
+        # The reset+clean pair must appear in order, and the first
+        # reset must precede the first clean.
+        first_reset_idx = subprocess_calls.index(reset_calls[0])
+        first_clean_idx = subprocess_calls.index(clean_calls[0])
+        assert first_reset_idx < first_clean_idx, (
+            f"reset must come before clean; "
+            f"reset at {first_reset_idx}, clean at {first_clean_idx}"
         )
 
     def test_fixer_fallback_not_configured_breaks_loop(

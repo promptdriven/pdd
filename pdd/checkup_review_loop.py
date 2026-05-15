@@ -908,6 +908,25 @@ def run_checkup_review_loop(
         _record_fix_attempts(state, fix_findings, fix)
 
         if not fix.success:
+            # Reset the worktree before invoking the fallback fixer. The
+            # primary may have written partial edits before dead-stopping
+            # (e.g. on credential exhaustion); without this reset those
+            # untrusted edits would be picked up by ``_commit_and_push_if_changed``
+            # alongside the fallback's edits, leaking failed primary work
+            # into the PR (codex iter-04 P1).
+            _capture = None if verbose else subprocess.DEVNULL
+            subprocess.run(
+                ["git", "-C", str(worktree), "reset", "--hard", "HEAD"],
+                check=False,
+                stdout=_capture,
+                stderr=_capture,
+            )
+            subprocess.run(
+                ["git", "-C", str(worktree), "clean", "-fd"],
+                check=False,
+                stdout=_capture,
+                stderr=_capture,
+            )
             fallback_fix = _maybe_run_fallback_fixer(
                 primary_fixer=fixer,
                 primary_fix=fix,
