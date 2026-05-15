@@ -136,6 +136,36 @@ class DurableSyncRunner(AsyncSyncRunner):
         """Durable mode leaves local runner state untouched."""
 
     def run(self) -> Tuple[bool, str, float]:
+        # Iter-40 M-2 (durable init ordering): iter-38 added a
+        # fail-closed abort to :meth:`AsyncSyncRunner.run` when the
+        # init-time baseline scan returned ``None``, but the durable
+        # subclass calls :meth:`_prepare_durable_branch` BEFORE
+        # delegating to ``super().run()`` — so a baseline-acquisition
+        # failure on the main checkout would leave durable side effects
+        # (worktree creation, branch checkout, remote pushes) in place
+        # before the fail-closed check ran. Hoist the check above
+        # ``_prepare_durable_branch`` so no durable infrastructure is
+        # touched when the baseline scan failed.
+        #
+        # The flag reflects the MAIN CHECKOUT's git scan (see iter-22:
+        # the durable runner intentionally inherits the main-checkout
+        # baseline via ``super().__init__(project_root=self.git_root)``
+        # and only clears the *paths* afterward — the flag is
+        # preserved). That is precisely the scan we want to abort on:
+        # the main checkout is where the orchestrator scope guard
+        # operates.
+        if getattr(self, "_baseline_acquisition_failed", False):
+            return (
+                False,
+                (
+                    "Scope guard fail-closed: could not snapshot working-tree "
+                    "baseline at runner init (git scan failed). Aborting "
+                    "before any write-capable work to prevent false-positive "
+                    "reverts of pre-existing user files."
+                ),
+                self.initial_cost,
+            )
+
         ok, message = self._prepare_durable_branch()
         if not ok:
             return False, message, self.initial_cost

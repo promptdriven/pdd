@@ -36,6 +36,7 @@ from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
     _basename_from_architecture_filename,
+    _classify_baseline_path,
     _find_pdd_executable,
     _git_changed_paths,
     _git_ignored_paths,
@@ -1864,17 +1865,31 @@ def _enforce_orchestrator_scope(
     # status surfaces this as ``D `` and the re-scan picks it up, but
     # UNTRACKED baselines leave no trail; without this collection the
     # orchestrator silently passes a sync-side deletion of user WIP.
+    #
+    # Iter-40 M-1 (unreadable vs missing): use
+    # :func:`_classify_baseline_path` to distinguish "file deleted" from
+    # "file exists but unreadable" (permission flip, locked file). The
+    # latter case must NOT be flagged as deleted — preserve by name to
+    # avoid the false-deletion diagnostic and prevent downstream revert
+    # helpers from attempting to remove a still-present path.
     baseline_deleted: set[str] = set()
     for rel_posix, baseline_hash in baseline_changed.items():
-        current_hash = _hash_file(repo_root, rel_posix)
-        if current_hash is None:
+        status = _classify_baseline_path(repo_root, rel_posix)
+        if status.missing:
             # File was deleted after baseline — surface it via the
             # ``remaining`` set below regardless of whether it was tracked
             # or untracked (we can't distinguish from the snapshot, and
             # even the tracked-deletion case warrants a hard-fail).
             baseline_deleted.add(rel_posix)
             continue
-        if baseline_hash is None or current_hash == baseline_hash:
+        if status.sha is None:
+            # Iter-40 M-1: present but unreadable. Preserve by name —
+            # same conservative carve-out as the unreadable-at-snapshot
+            # branch below — so a permission-flaky baseline is not
+            # misreported as deleted.
+            allowed_files.add((repo_root / rel_posix).resolve())
+            continue
+        if baseline_hash is None or status.sha == baseline_hash:
             # Unreadable at snapshot (preserve by name) or unchanged content
             # → preserve.
             allowed_files.add((repo_root / rel_posix).resolve())
@@ -1886,10 +1901,15 @@ def _enforce_orchestrator_scope(
     # baseline directly to catch the deletion. Present-but-changed
     # ignored baselines are already surfaced by
     # :func:`_orchestrator_remaining_out_of_scope_paths`'s ignored loop.
+    #
+    # Iter-40 M-1: same unreadable-vs-missing discrimination.
     for rel_posix, baseline_hash in baseline_ignored.items():
-        current_hash = _hash_file(repo_root, rel_posix)
-        if current_hash is None:
+        status = _classify_baseline_path(repo_root, rel_posix)
+        if status.missing:
             baseline_deleted.add(rel_posix)
+        elif status.sha is None:
+            # Present but unreadable — preserve by name.
+            allowed_files.add((repo_root / rel_posix).resolve())
 
     tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
     untracked_reverted = revert_out_of_scope_changes_with_dirs(

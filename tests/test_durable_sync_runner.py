@@ -926,3 +926,71 @@ def test_durable_scope_guard_does_not_whitelist_main_checkout_dirty_files(
     # fix the baseline is empty, so ``out.py`` is correctly out of scope.
     assert diagnostic is not None
     assert "out.py" in diagnostic
+
+
+def test_durable_runner_aborts_before_worktree_setup_when_baseline_failed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Iter-40 M-2 (durable init ordering): when the inherited
+    ``AsyncSyncRunner.__init__`` records ``_baseline_acquisition_failed=True``
+    (the iter-38 fail-closed signal), the durable runner's
+    :meth:`~DurableSyncRunner.run` MUST abort BEFORE
+    :meth:`_prepare_durable_branch` runs. The iter-38 fix was added in
+    ``AsyncSyncRunner.run()``, but ``DurableSyncRunner.run()`` calls
+    ``_prepare_durable_branch()`` first — without this iter-40 hoist a
+    transient git scan failure would leave durable side effects
+    (worktree creation, branch checkout, remote pushes) in place before
+    the inherited fail-closed check ran."""
+    from pdd import agentic_sync_runner as mod
+
+    durable_root = _init_repo_with_remote(tmp_path)
+
+    # Patch the baseline scan to fail. ``DurableSyncRunner.__init__``
+    # forwards to ``AsyncSyncRunner.__init__`` which reads the scan and
+    # records ``_baseline_acquisition_failed`` on ``None``.
+    monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: None)
+    monkeypatch.setattr(mod, "_git_ignored_paths", lambda _root: set())
+
+    monkeypatch.chdir(durable_root)
+
+    runner = _runner(
+        durable_root,
+        runner_cls=EmptyDurableRunner,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    # The inherited init must have flagged the baseline acquisition as
+    # failed. (Iter-22 clears the baseline *paths* to {} but does NOT
+    # clear this flag — exactly so the iter-40 hoist can see it.)
+    assert runner._baseline_acquisition_failed is True, (
+        "iter-40: inherited fail-closed flag must reach the durable runner"
+    )
+
+    prepare_calls: list[bool] = []
+
+    def fake_prepare() -> tuple[bool, str]:
+        prepare_calls.append(True)
+        return True, ""
+
+    monkeypatch.setattr(runner, "_prepare_durable_branch", fake_prepare)
+
+    success, message, cost = runner.run()
+
+    assert success is False, (
+        "iter-40: durable runner must fail-closed when baseline scan failed"
+    )
+    assert prepare_calls == [], (
+        "iter-40: _prepare_durable_branch MUST NOT run when baseline "
+        "acquisition failed — otherwise worktree creation and branch "
+        f"checkout happen before the abort. Calls: {prepare_calls}"
+    )
+    assert "fail-closed" in message, (
+        f"iter-40: abort message must mention fail-closed; got: {message!r}"
+    )
+    assert "baseline" in message, (
+        f"iter-40: abort message must mention baseline; got: {message!r}"
+    )
+    # The abort path returns ``self.initial_cost`` (0.0 for the default
+    # runner) — mirrors the inherited AsyncSyncRunner.run abort.
+    assert cost == 0.0

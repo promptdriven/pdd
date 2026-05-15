@@ -3414,6 +3414,189 @@ class TestEnforceScopeGuard:
             f"got: {diagnostic!r}"
         )
 
+    # ---------------------------------------------------------------------
+    # Iter-40 M-1: unreadable vs missing baseline discrimination
+    # ---------------------------------------------------------------------
+
+    def test_baseline_unreadable_file_is_not_misclassified_as_deleted(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-40 M-1: an unreadable (but still on disk) baseline file
+        MUST NOT be flagged as deleted. The iter-34 deletion-detection
+        branch previously collapsed "file gone" and "file unreadable"
+        (permission flip, locked file) to the same ``current_hash is None``
+        signal and treated both as deletions. That falsely claimed the
+        file was removed AND asked downstream revert helpers to remove
+        a still-present path. The :func:`_classify_baseline_path` helper
+        distinguishes the two; the unreadable case falls through to the
+        legacy preserve-by-name carve-out."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing UNTRACKED WIP — the same shape as iter-34's test.
+        userwip = tmp_path / "userwip.py"
+        userwip.write_text("wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "userwip.py" in runner._baseline_changed_paths, (
+            "iter-40: untracked WIP must be captured in baseline"
+        )
+        assert runner._baseline_changed_paths["userwip.py"] is not None, (
+            "iter-40: baseline SHA must be captured for readable WIP"
+        )
+
+        # Iter-40: simulate permission flip / locked file by injecting a
+        # ``PermissionError`` for the baseline path while leaving the file
+        # itself on disk. Patching the module's ``open`` attribute is
+        # more reliable than ``os.chmod(path, 0)`` — macOS root,
+        # filesystem ACLs, and Spotlight can all defeat the latter. The
+        # module's function bodies use the unqualified name ``open``,
+        # which Python's LEGB lookup resolves via the module namespace
+        # before falling back to the builtin, so a ``setattr(mod, "open",
+        # ...)`` does intercept the call.
+        import builtins
+        wip_resolved = userwip.resolve()
+        builtin_open = builtins.open
+
+        def _open_with_block(path, *args, **kwargs):
+            try:
+                resolved = Path(path).resolve()
+            except (OSError, TypeError):
+                return builtin_open(path, *args, **kwargs)
+            if resolved == wip_resolved:
+                raise PermissionError("simulated permission flip")
+            return builtin_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(mod, "open", _open_with_block, raising=False)
+
+        captured_allowed: Dict[str, set] = {}
+
+        def fake_revert(_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        # The file is still on disk, so it cannot have been "deleted":
+        # the diagnostic must NOT flag it as out-of-scope.
+        assert userwip.exists(), (
+            "iter-40 precondition: the unreadable file must still exist"
+        )
+        assert diagnostic is None or "userwip.py" not in diagnostic, (
+            "iter-40: unreadable baseline file must be preserved by name "
+            "(not flagged as deleted). "
+            f"diagnostic={diagnostic!r}"
+        )
+        # The path must end up in the allowed set so downstream revert
+        # helpers do not try to remove it.
+        assert wip_resolved in captured_allowed["files"], (
+            "iter-40: unreadable baseline path must be auto-allowed "
+            "(preserve by name) so revert helpers do not remove it; "
+            f"got allowed_files={captured_allowed['files']}"
+        )
+
+    def test_baseline_missing_file_still_flagged_as_deleted(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-40 M-1 regression for iter-34: actual deletion of a
+        pre-existing untracked baseline file MUST still hard-fail the
+        module. The iter-40 discrimination helper preserves the iter-34
+        behaviour for the genuinely-missing case."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        userwip = tmp_path / "userwip.py"
+        userwip.write_text("wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # GENUINE deletion — iter-34 path must still fire.
+        userwip.unlink()
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-40: genuinely-deleted untracked baseline must still "
+            "hard-fail the module — iter-34 regression"
+        )
+        assert "userwip.py" in diagnostic, (
+            f"iter-40: deleted baseline path must still appear in diagnostic, "
+            f"got: {diagnostic!r}"
+        )
+
     def test_wildcard_only_companion_pattern_does_not_auto_allow(
         self, tmp_path, monkeypatch
     ):

@@ -271,6 +271,13 @@ def _hash_file(project_root: Path, rel_posix: str) -> Optional[str]:
     collision resistance. Returns ``None`` when the file cannot be read
     (missing, permission denied, etc.); callers MUST treat ``None`` as
     "no fingerprint available" and decide policy explicitly.
+
+    Iter-40 M-1: callers that need to DISCRIMINATE between missing and
+    unreadable (the iter-34 deletion-detection paths in the scope guards)
+    must use :func:`_classify_baseline_path` instead — this helper collapses
+    both cases to ``None`` and is kept for the snapshot-time + re-scan
+    sites where the fall-through "preserve by name" / "surface as
+    out-of-scope" semantics are already correct.
     """
     try:
         path = (project_root / rel_posix).resolve()
@@ -279,6 +286,79 @@ def _hash_file(project_root: Path, rel_posix: str) -> Optional[str]:
     except (OSError, FileNotFoundError):
         return None
     return hashlib.sha1(data).hexdigest()
+
+
+class _BaselinePathStatus(NamedTuple):
+    """Result of re-classifying a baseline file at scope-guard time.
+
+    Iter-40 M-1: the iter-34 deletion-detection branches in the per-module
+    and orchestrator scope guards previously collapsed "file missing" and
+    "file unreadable" to the same ``current_hash is None`` signal, then
+    treated both as deletions. A pre-existing baseline file that became
+    UNREADABLE mid-sync (permission flip, locked file) was falsely flagged
+    as deleted — and downstream revert helpers were asked to remove a
+    path that still exists on disk.
+
+    Fields:
+        sha: SHA-1 hex digest when the file was successfully hashed, else
+            ``None``.
+        missing: True when the file no longer exists on disk (the iter-34
+            deletion case), False otherwise. When False AND ``sha is None``
+            the file exists but could not be read (permission, OSError).
+    """
+
+    sha: Optional[str]
+    missing: bool
+
+
+def _classify_baseline_path(
+    project_root: Path, rel_posix: str
+) -> _BaselinePathStatus:
+    """Discriminated re-hash for baseline preservation at enforcement time.
+
+    Iter-40 M-1 fix for the deletion blind spot (iter-34) which previously
+    treated unreadable files as deleted. Returns:
+
+    - ``_BaselinePathStatus(hex_sha, False)`` — file exists and was hashed
+    - ``_BaselinePathStatus(None, True)``    — file is gone (iter-34 deletion)
+    - ``_BaselinePathStatus(None, False)``   — file exists but unreadable
+      (permission flip / OSError) → callers SHOULD preserve by name to
+      avoid the false-deletion diagnostic + the downstream revert-helper
+      attempt to remove a still-present path.
+
+    This helper is intentionally NOT a replacement for :func:`_hash_file`.
+    The snapshot-time callsite (:func:`_hash_baseline_paths`) and the
+    re-scan loops in :meth:`AsyncSyncRunner._remaining_out_of_scope_paths`
+    + :func:`_orchestrator_remaining_out_of_scope_paths` already do the
+    right thing on a collapsed ``None`` — they either record ``None`` as
+    "no fingerprint available" (snapshot) or fall through to surfacing
+    the path as out-of-scope (re-scan, where git already listed the file).
+    Only the iter-34 baseline-iteration sites in
+    :meth:`AsyncSyncRunner._enforce_scope_guard` and
+    :func:`pdd.agentic_sync._enforce_orchestrator_scope` need the
+    discriminated answer.
+    """
+    try:
+        path = (project_root / rel_posix).resolve()
+    except OSError:
+        # Path resolution itself failed — treat as unreadable, preserve.
+        return _BaselinePathStatus(None, False)
+    # ``exists()`` is the primary "missing" probe. ``open()`` below still
+    # has a defensive ``FileNotFoundError`` catch in case the file is
+    # raced out from under us between the two syscalls.
+    if not path.exists():
+        return _BaselinePathStatus(None, True)
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except FileNotFoundError:
+        # Raced removal between exists() and open() — treat as missing.
+        return _BaselinePathStatus(None, True)
+    except OSError:
+        # PermissionError / locked file / generic IO — file is present
+        # but cannot be read. Distinct from missing.
+        return _BaselinePathStatus(None, False)
+    return _BaselinePathStatus(hashlib.sha1(data).hexdigest(), False)
 
 
 def _hash_baseline_paths(
@@ -2366,10 +2446,23 @@ class AsyncSyncRunner:
             # module would succeed with the WIP silently lost. Collect
             # the deletions here and union them into the diagnostic's
             # ``remaining`` set below.
+            #
+            # Iter-40 M-1 (unreadable vs missing): the previous code
+            # collapsed "file missing" and "file unreadable" (permission
+            # flip, locked file) into the same ``current_hash is None``
+            # signal, then treated both as deletions. A pre-existing
+            # baseline file that became UNREADABLE mid-sync would be
+            # falsely flagged as deleted, the diagnostic would lie about
+            # the file being removed, and downstream revert helpers
+            # would attempt to remove a still-present path. The
+            # :func:`_classify_baseline_path` helper distinguishes the
+            # two; unreadable falls through to the legacy iter-6 B1
+            # preserve-by-name carve-out (same as the unreadable-at-init
+            # branch), while genuinely-missing flows the iter-34 path.
             baseline_deleted: Set[str] = set()
             for rel_posix, baseline_hash in self._baseline_changed_paths.items():
-                current_hash = _hash_file(repo_root, rel_posix)
-                if current_hash is None:
+                status = _classify_baseline_path(repo_root, rel_posix)
+                if status.missing:
                     # Iter-34 M-3: baseline file is GONE. Surface it as
                     # unrecovered regardless of whether it was tracked
                     # or untracked at init — we can't distinguish the
@@ -2379,6 +2472,15 @@ class AsyncSyncRunner:
                     # removed by sync).
                     baseline_deleted.add(rel_posix)
                     continue
+                if status.sha is None:
+                    # Iter-40 M-1: file exists but unreadable now
+                    # (permission flip, locked file, transient OSError).
+                    # Preserve by name — same conservative carve-out as
+                    # the unreadable-at-init branch below — so a
+                    # permission-flaky baseline path is not misreported
+                    # as deleted.
+                    allowed_files.add((repo_root / rel_posix).resolve())
+                    continue
                 if baseline_hash is None:
                     # Couldn't hash at init (the file was unreadable
                     # then). Be conservative and preserve by name, the
@@ -2386,7 +2488,7 @@ class AsyncSyncRunner:
                     # on permission-flaky paths that pre-date the run.
                     allowed_files.add((repo_root / rel_posix).resolve())
                     continue
-                if current_hash == baseline_hash:
+                if status.sha == baseline_hash:
                     # Unchanged user WIP — preserve.
                     allowed_files.add((repo_root / rel_posix).resolve())
                 # else: sync (or some other writer) clobbered the file.
@@ -2399,10 +2501,18 @@ class AsyncSyncRunner:
             # gitignored baseline file (e.g. user-side ``cache.bin``
             # erased by sync) leaves no trail in either scan. Iterate
             # the ignored baseline directly to catch the deletion.
+            #
+            # Iter-40 M-1: same unreadable-vs-missing discrimination —
+            # an unreadable ignored baseline must NOT be flagged as
+            # deleted. Preserve by name so the diagnostic does not
+            # falsely claim the file was removed.
             for rel_posix, baseline_hash in self._baseline_ignored_paths.items():
-                current_hash = _hash_file(repo_root, rel_posix)
-                if current_hash is None:
+                status = _classify_baseline_path(repo_root, rel_posix)
+                if status.missing:
                     baseline_deleted.add(rel_posix)
+                elif status.sha is None:
+                    # File exists but unreadable — preserve by name.
+                    allowed_files.add((repo_root / rel_posix).resolve())
                 # Present-but-changed ignored baselines are already
                 # surfaced by ``_remaining_out_of_scope_paths``'s
                 # ignored loop (the hash comparison there falls through
