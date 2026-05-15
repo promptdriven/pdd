@@ -103,6 +103,11 @@ class ReviewLoopConfig:
     # example mirrors the live dataclass at
     # ``pdd/checkup_review_loop.py``. Off by default.
     fallback_reviewer_on_failure: bool = False
+    # Optional secondary fixer invoked at most once across the loop when
+    # the primary fixer fails (e.g., subscription-tier credential exhausted).
+    # Must differ from the primary fixer and the active reviewer. Kept at
+    # the end of the field list so positional callers stay stable.
+    fixer_fallback: Optional[str] = None
 
 
 @dataclass
@@ -146,6 +151,10 @@ class ReviewLoopState:
     dispute_notes_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_feedback_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_status_details: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Set lazily once ``fixer_fallback`` runs and succeeds; from that point on
+    # every subsequent round drives the fix step with this role instead of the
+    # exhausted primary. Parallel to ``active_reviewer``.
+    active_fixer: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
