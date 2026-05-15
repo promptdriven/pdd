@@ -2334,6 +2334,16 @@ def code_generator_main(
                                 output_path
                                 and temp_input_path == str(pathlib.Path(output_path).resolve())
                             )
+                            if (
+                                proc
+                                and proc.returncode == 0
+                                and llm_enabled
+                                and generated_code_content is not None
+                                and not is_resolved_output
+                            ):
+                                generated_code_content = pathlib.Path(temp_input_path).read_text(
+                                    encoding="utf-8"
+                                )
                             if not is_resolved_output:
                                 os.unlink(temp_input_path)
                         except Exception:

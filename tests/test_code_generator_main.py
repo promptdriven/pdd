@@ -1929,6 +1929,54 @@ Generate a simple module.
     assert pathlib.Path(postprocess_cmd[2]).resolve() != output_file_path.resolve()
 
 
+def test_postprocess_reads_back_modified_temp_input_when_llm_enabled(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "postprocess_prompt_python.prompt"
+    output_file_path = temp_dir_setup["output_dir"] / "pp_output.py"
+    postprocessed_code = "def hello():\n  print('postprocessed')"
+
+    front_matter_prompt = """---
+language: python
+post_process_python: "./dummy_post_process.py"
+post_process_args: ["{INPUT_FILE}"]
+---
+Generate a simple module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+
+    def rewrite_input_file(*args, **kwargs):
+        input_path = pathlib.Path(args[0][2])
+        input_path.write_text(postprocessed_code, encoding="utf-8")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+    mock_subprocess_run_fixture.side_effect = rewrite_input_file
+
+    code, incremental, cost, model = code_generator_main(
+        mock_ctx,
+        str(prompt_file_path),
+        str(output_file_path),
+        None,
+        False,
+        env_vars={"llm": "true"},
+    )
+
+    assert code == postprocessed_code
+    assert output_file_path.read_text(encoding="utf-8") == postprocessed_code
+
+
 def test_postprocess_gate_failure_restores_existing_output(
     mock_ctx,
     temp_dir_setup,
