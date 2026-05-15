@@ -751,17 +751,17 @@ def test_total_budget_keeps_durable_runner_single_worker(tmp_path: Path):
 def test_durable_baseline_paths_use_git_root_not_caller_cwd(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Issue #1013 iter-18 M-1: ``DurableSyncRunner`` MUST take its baseline-
-    changed-paths snapshot from the durable repo root, NOT from the caller's
-    current working directory. Reviewer reproduced a regression where a
-    dirty file in the main checkout (``out.py``) was auto-allowed by the
-    scope guard inside the durable worktree because the baseline was taken
-    from ``Path.cwd()`` before ``DurableSyncRunner.__init__`` reassigned
-    ``project_root`` to ``self.git_root``.
+    """Issue #1013 iter-18 M-1 + iter-22 M-1: ``DurableSyncRunner`` MUST NOT
+    inherit baseline-changed-paths from the caller's cwd. Iter-18 first
+    pinned the snapshot to the durable ``git_root`` (so caller-cwd dirty
+    files would not leak); iter-22 then made the durable baseline EMPTY by
+    construction (per-module worktrees are freshly-created and have no
+    pre-existing user WIP), so this assertion is now vacuously true but is
+    kept as an explicit guard against regressions.
     """
     caller_cwd = tmp_path / "caller_cwd"
     caller_cwd.mkdir()
-    # Dirty file under the caller's cwd; should NOT leak into baseline.
+    # Dirty file under the caller's cwd; must NOT leak into baseline.
     (caller_cwd / "out.py").write_text("dirty file in caller's cwd")
 
     durable_root = _init_repo_with_remote(tmp_path)
@@ -775,27 +775,40 @@ def test_durable_baseline_paths_use_git_root_not_caller_cwd(
     )
 
     assert runner.project_root == durable_root.resolve()
-    # Baseline snapshot was taken against durable_root, where ``out.py``
-    # does not exist as a dirty file. The caller's dirty ``out.py`` MUST
-    # NOT appear in the baseline.
+    # Iter-22 M-1 invariant: durable baseline is always empty.
     assert "out.py" not in runner._baseline_changed_paths
+    assert runner._baseline_changed_paths == set()
 
 
-def test_durable_baseline_includes_dirty_files_in_durable_root(
+def test_durable_baseline_is_empty_even_when_git_root_has_dirty_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
-    """Iter-18 M-1 (positive case): a dirty file ACTUALLY under the durable
-    repo root MUST appear in ``_baseline_changed_paths`` so the scope guard
-    preserves pre-existing user work-in-progress under the durable worktree.
+    """Issue #1013 iter-22 M-1 (durable baseline-leakage bug): in production
+    ``git_root`` IS the user's main checkout where dirty WIP lives, but the
+    per-module sync runs in a SEPARATE ``.pdd/worktrees/sync-issue-N-mod/``
+    worktree. If the durable runner inherits the main-checkout baseline,
+    ``_enforce_scope_guard`` resolves each baseline ``rel_posix`` against the
+    per-module worktree root and silently auto-allows any same-named file
+    written there by sync, bypassing the split contract.
+
+    Iter-18 fixed the iter-17 regression where the snapshot was taken from
+    ``Path.cwd()`` BEFORE the durable runner reassigned ``project_root``;
+    iter-22 closes the residual leak by making the durable baseline empty
+    by construction. Per-module worktrees are freshly created via
+    ``git worktree add`` and have no pre-existing user WIP — so the
+    iter-6 B1 "preserve pre-existing untracked files" carve-out (which
+    exists for the in-place async case) has no analog here.
     """
-    caller_cwd = tmp_path / "caller_cwd"
-    caller_cwd.mkdir()
     durable_root = _init_repo_with_remote(tmp_path)
 
-    # Dirty (untracked) file inside the durable repo root.
+    # Dirty (untracked) file inside the durable repo root. In production this
+    # stands in for the user's WIP in their main checkout.
     (durable_root / "dirty.py").write_text("user work-in-progress")
+    # Also stage a tracked modification so both flavours of "dirty" are
+    # represented in what ``git status`` would otherwise report.
+    (durable_root / "README.md").write_text("locally modified\n")
 
-    monkeypatch.chdir(caller_cwd)
+    monkeypatch.chdir(durable_root)
     runner = _runner(
         durable_root,
         runner_cls=EmptyDurableRunner,
@@ -803,5 +816,77 @@ def test_durable_baseline_includes_dirty_files_in_durable_root(
         companion_allowlist=[".pdd/meta/*.json"],
     )
 
+    # Iter-22 M-1: durable baseline is empty regardless of the git_root's
+    # state. The dirty paths from the main checkout must NOT bleed into the
+    # per-module worktree's allow set.
     assert runner.project_root == durable_root.resolve()
-    assert "dirty.py" in runner._baseline_changed_paths
+    assert runner._baseline_changed_paths == set()
+    assert runner._baseline_ignored_paths == set()
+
+
+def test_durable_scope_guard_does_not_whitelist_main_checkout_dirty_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Iter-22 M-1 reviewer repro: a dirty ``out.py`` in the main checkout
+    must NOT silently whitelist an ``out.py`` written by sync in a separate
+    per-module worktree. Before iter-22, the durable runner snapshotted the
+    main checkout's ``out.py`` into ``_baseline_changed_paths``; the scope
+    guard then resolved that path against the per-module worktree root and
+    added it to ``allowed_files``, so the contract-violating worktree
+    ``out.py`` slid through.
+    """
+    from pdd import agentic_sync_runner as mod
+
+    # Main checkout (becomes the durable runner's ``git_root``) with a dirty
+    # ``out.py`` standing in for the user's WIP.
+    main_checkout = _init_repo_with_remote(tmp_path)
+    (main_checkout / "out.py").write_text("user WIP in main checkout")
+
+    # Separate worktree directory, where sync actually runs. Initialize it
+    # as its own git repo so ``_resolve_repo_root`` and ``git status``
+    # operate locally there.
+    worktree_path = tmp_path / "sync-worktree"
+    worktree_path.mkdir()
+    _git(worktree_path, "init", "-b", "main", ".")
+    _git(worktree_path, "config", "user.name", "Test User")
+    _git(worktree_path, "config", "user.email", "test@example.invalid")
+    (worktree_path / ".gitignore").write_text(".pdd/\n", encoding="utf-8")
+    _git(worktree_path, "add", ".gitignore")
+    _git(worktree_path, "commit", "-m", "initial")
+
+    # Sync wrote ``out.py`` inside the worktree — this is the contract
+    # violation that must be detected.
+    (worktree_path / "out.py").write_text("written by sync, NOT in contract")
+
+    monkeypatch.chdir(main_checkout)
+    runner = _runner(
+        main_checkout,
+        runner_cls=EmptyDurableRunner,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    # Mock the revert helpers to return [] so the diagnostic depends purely
+    # on the re-scan + baseline interaction, not the helpers' behaviour.
+    monkeypatch.setattr(
+        mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+    )
+    monkeypatch.setattr(
+        mod,
+        "revert_out_of_scope_changes_with_dirs",
+        lambda _root, allowed_dirs, allowed_files: [],
+    )
+
+    # Pretend ``module_cwd`` resolves to the separate worktree.
+    monkeypatch.setattr(
+        runner, "_resolve_repo_root", lambda _cwd: worktree_path.resolve()
+    )
+
+    diagnostic = runner._enforce_scope_guard("mod", worktree_path)
+
+    # Without the iter-22 fix the diagnostic would be ``None`` because
+    # ``out.py`` from the (leaked) baseline resolves to
+    # ``<worktree_path>/out.py`` and lands in ``allowed_files``. With the
+    # fix the baseline is empty, so ``out.py`` is correctly out of scope.
+    assert diagnostic is not None
+    assert "out.py" in diagnostic

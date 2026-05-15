@@ -94,6 +94,26 @@ class DurableSyncRunner(AsyncSyncRunner):
             contract_source=contract_source,
             project_root=self.git_root,
         )
+
+        # Issue #1013 iter-22 M-1 (durable baseline-leakage bug): per-module
+        # durable worktrees are freshly created via ``git worktree add`` and
+        # have no pre-existing user WIP by construction. Whatever surfaces in
+        # a worktree at scope-guard time was put there BY this sync run, so
+        # the iter-6 B1 "preserve user's pre-existing untracked files"
+        # carve-out — which exists for the in-place async case where sync
+        # runs inside the user's main checkout — has no analog in durable
+        # mode. iter-18 pinned the baseline snapshot to ``self.git_root``
+        # (the main checkout), but in production ``git_root`` IS the user's
+        # main checkout where dirty WIP lives; the actual per-module sync
+        # then runs inside ``.pdd/worktrees/sync-issue-<N>-<basename>/``, a
+        # DIFFERENT directory. Inheriting the main checkout's baseline LEAKS
+        # the caller's dirty paths into the worktree's allow set (see
+        # ``_enforce_scope_guard``: each baseline ``rel_posix`` is resolved
+        # against the scope-guard-time ``repo_root``, which is the per-module
+        # worktree root), bypassing the split contract. Clear the baseline
+        # so each fresh module worktree starts clean.
+        self._baseline_changed_paths = set()
+        self._baseline_ignored_paths = set()
         if self.total_budget is not None:
             self.max_workers = 1
         elif durable_max_parallel is not None:
