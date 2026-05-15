@@ -12,6 +12,8 @@
 </pdd-interface>
 
 <pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>sync_order_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 
@@ -41,13 +43,20 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
     - Detect changed files (created, modified, or deleted).
     - Re-discover test files after the run to catch any newly created tests.
 9. **Success Criterion**: The operation is considered successful if the `prompt_file` itself was modified, regardless of the agent's internal success report.
-10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common` where `allowed = {prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}`. Import it alongside the other agentic_common imports. This prevents the agent from accidentally deleting or modifying unrelated files.
+10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed, allowed_directories=allowed_dirs)` from `agentic_common`. Build the allowlist to mirror the permissions documented in `agentic_update_LLM.prompt` (the prompt file, included docs, code file, tests, and intentional new shared includes under `context/`):
+    - `allowed = {prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}`.
+    - Reuse `extract_includes_from_file` from `pdd.sync_order` (the authoritative `<include>` parser shared with preprocessing/fingerprinting per Issue #1025's "Reuse the same include parsing semantics" criterion) to resolve every `<include>` target referenced by `prompt_path` relative to `PROJECT_ROOT`. Add each resolved existing path to `allowed`. Includes that fail to parse or do not resolve to an existing file MUST be skipped without aborting the guard (graceful fallback).
+    - `allowed_dirs = {(PROJECT_ROOT / "context").resolve()}` so the agent may intentionally create new shared include files under `context/`.
+    Import `_revert_out_of_scope_changes` alongside the other agentic_common imports and `extract_includes_from_file` from `pdd.sync_order`. This preserves permitted included-doc edits and intentional new shared context include files while still reverting unrelated mutations.
 
 % Dependencies
 <pdd.agentic_common>
     <include select="def:example_run_agentic_task">context/agentic_common_example.py</include>
     <include select="def:get_available_agents,def:_revert_out_of_scope_changes">pdd/agentic_common.py</include>
 </pdd.agentic_common>
+<pdd.sync_order>
+    <include select="def:extract_includes_from_file">pdd/sync_order.py</include>
+</pdd.sync_order>
 <pdd.load_prompt_template>
     <include>context/load_prompt_template_example.py</include>
 </pdd.load_prompt_template>
