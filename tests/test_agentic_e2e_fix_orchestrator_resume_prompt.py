@@ -497,3 +497,143 @@ class TestArchitectureMetadataSanityCheck:
                     f"architecture.json:\n  prompt:       {prompt_fn['sideEffects']!r}\n"
                     f"  architecture: {arch_fn['sideEffects']!r}"
                 )
+
+
+def _parse_signature_param_names(sig_str: str) -> list:
+    """Parse parameter NAMES out of a function signature string.
+
+    Handles ``"(a, b, *, c=1, d: T = False)"`` -- keeps declaration order,
+    drops the bare ``*`` marker, and strips type annotations / defaults.
+
+    Compares only NAMES, not defaults: a default like ``Optional[float] = None``
+    in the prompt vs. ``= None`` in ``inspect.signature`` would falsely diverge
+    even though both describe the same parameter. The reviewer-flagged drift
+    (#1001 round 8) is about MISSING parameter names, not formatting.
+
+    Parser is intentionally simple: it tracks bracket depth so commas inside
+    ``Dict[str, int]`` or ``Optional[float]`` don't split the parameter list.
+    Future drift: a default value that itself contains parens (e.g. ``Path()``)
+    would break this parser. Not present in the current signature; reassess
+    if/when that changes.
+    """
+    inner = sig_str[sig_str.index("(") + 1 : sig_str.rindex(")")]
+    declared_params: list = []
+    depth = 0
+    buf = ""
+    for ch in inner + ",":
+        if ch in "([{":
+            depth += 1
+            buf += ch
+        elif ch in ")]}":
+            depth -= 1
+            buf += ch
+        elif ch == "," and depth == 0:
+            tok = buf.strip()
+            buf = ""
+            if not tok or tok == "*":
+                continue
+            # tok looks like "name", "name: type", "name=val", "name: type = val".
+            name = re.split(r"[:\s=]", tok, maxsplit=1)[0].strip()
+            if name:
+                declared_params.append(name)
+        else:
+            buf += ch
+    return declared_params
+
+
+class TestRunOrchestratorSignatureSyncedWithCode:
+    """Round 8 reviewer gap: ``run_agentic_e2e_fix_orchestrator`` had two kwargs
+    (``skip_cleanup``, ``reasoning_time``) added to the .py module without the
+    prompt's ``<pdd-interface>`` or ``architecture.json`` metadata being updated.
+
+    These tests pin BOTH metadata sources independently to
+    ``inspect.signature(run_agentic_e2e_fix_orchestrator)`` so the same drift
+    cannot recur silently: if a future edit adds a kwarg to the function
+    without updating BOTH the prompt and architecture.json, one of these tests
+    fails before the change can land.
+
+    Defaults are intentionally not compared (e.g. ``Optional[float] = None``
+    formats differently than ``None``); only parameter NAMES and ORDER, which
+    is the signal the reviewer flagged.
+    """
+
+    def test_prompt_interface_signature_pins_actual_function_params(
+        self, orchestrator_prompt_raw
+    ):
+        """The ``<pdd-interface>`` signature for ``run_agentic_e2e_fix_orchestrator``
+        must name the same parameters, in the same order, as ``inspect.signature``.
+
+        Catches the drift the external reviewer flagged: ``skip_cleanup`` and
+        ``reasoning_time`` were added to the .py code without prompt metadata
+        updates (#1001 round 8).
+        """
+        import inspect
+        from pdd.agentic_e2e_fix_orchestrator import (
+            run_agentic_e2e_fix_orchestrator,
+        )
+
+        actual_params = list(
+            inspect.signature(run_agentic_e2e_fix_orchestrator).parameters.keys()
+        )
+
+        m = re.search(
+            r'<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>',
+            orchestrator_prompt_raw,
+            re.DOTALL,
+        )
+        assert m, "<pdd-interface> block not found in prompt"
+        prompt_iface = json.loads(m.group(1))
+        sig_str = next(
+            f
+            for f in prompt_iface["module"]["functions"]
+            if f["name"] == "run_agentic_e2e_fix_orchestrator"
+        )["signature"]
+
+        declared_params = _parse_signature_param_names(sig_str)
+
+        assert declared_params == actual_params, (
+            "<pdd-interface> signature param order/names drifted from "
+            "inspect.signature(run_agentic_e2e_fix_orchestrator):\n"
+            f"  declared in prompt: {declared_params}\n"
+            f"  actual in code:     {actual_params}\n"
+            f"  symmetric diff:     "
+            f"{sorted(set(declared_params) ^ set(actual_params))}"
+        )
+
+    def test_architecture_signature_pins_actual_function_params(self):
+        """``architecture.json`` ``run_agentic_e2e_fix_orchestrator`` signature
+        must name the same parameters, in the same order, as
+        ``inspect.signature``.
+
+        Independent of the prompt-side test above: catches the case where the
+        prompt is updated but architecture.json is missed (or vice versa).
+        """
+        import inspect
+        from pdd.agentic_e2e_fix_orchestrator import (
+            run_agentic_e2e_fix_orchestrator,
+        )
+
+        actual_params = list(
+            inspect.signature(run_agentic_e2e_fix_orchestrator).parameters.keys()
+        )
+
+        entry = _get_orchestrator_architecture_entry()
+        arch_functions = (
+            entry.get("interface", {}).get("module", {}).get("functions", [])
+        )
+        sig_str = next(
+            f
+            for f in arch_functions
+            if f["name"] == "run_agentic_e2e_fix_orchestrator"
+        )["signature"]
+
+        declared_params = _parse_signature_param_names(sig_str)
+
+        assert declared_params == actual_params, (
+            "architecture.json signature param order/names drifted from "
+            "inspect.signature(run_agentic_e2e_fix_orchestrator):\n"
+            f"  declared in architecture.json: {declared_params}\n"
+            f"  actual in code:                {actual_params}\n"
+            f"  symmetric diff:                "
+            f"{sorted(set(declared_params) ^ set(actual_params))}"
+        )
