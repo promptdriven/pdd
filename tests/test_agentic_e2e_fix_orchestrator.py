@@ -6940,6 +6940,221 @@ class TestPostStep9ResumeRoutesToCleanupNotStep1:
             f"got success={success}, final_message={final_message!r}."
         )
 
+    def test_resume_with_stale_all_tests_pass_token_reverifies_and_demotes_on_failure(
+        self, mock_deps, tmp_path
+    ):
+        """Issue #1001 round 11 (save-before-verify race): when cached state
+        says ALL_TESTS_PASS but the actual tests fail on resume, the
+        orchestrator MUST re-run ``_verify_tests_independently`` and demote
+        the resume action — it MUST NOT skip verification and commit as
+        success.
+
+        Reproduces the reviewer's mocked resume scenario:
+          * cached ``step_outputs["9"] = "ALL_TESTS_PASS"``
+          * ``_verify_tests_independently`` mocked to return ``(False, "stale pass")``
+          * assert ``_verify_tests_independently`` WAS called
+          * assert orchestrator did NOT return success=True
+
+        The inner-loop save at line ~2049 writes the LLM's raw pass token
+        BEFORE the independent verification at line ~2154 runs (Step 9's
+        ``_apply_step9_resolved_token``). A process pause in that window
+        leaves disk state with ``ALL_TESTS_PASS`` even though the
+        verification would have failed. Without the re-verify gate, resume
+        skips Steps 1-9 and commits as success.
+
+        Discriminator: temporarily remove the SUCCESS_FALL_THROUGH
+        re-verify block from the orchestrator. This test must fail
+        because ``_verify_tests_independently`` won't be called and
+        ``success`` will be True.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — but state was saved before verify ran",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            # If any new cycle proceeds, terminate it at Step 9 with
+            # MAX_CYCLES_REACHED so the test doesn't burn the budget.
+            if "step9" in label:
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        # Patch _extract_test_files to return a non-empty list so the
+        # re-verify path actually runs (with empty changed_files and a
+        # blank tmp_path, the real helper would return []).
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_stale.py"],
+        ) as extract_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, "stale pass: pytest exit code 1"),
+        ) as verify_mock:
+            success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume with stale ALL_TESTS_PASS",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        # Discriminator 1: _verify_tests_independently MUST have been called
+        # on resume. Without the re-verify gate this assertion fails.
+        assert verify_mock.called, (
+            "Issue #1001 round 11: Resume with cached ALL_TESTS_PASS MUST "
+            "re-run _verify_tests_independently to close the save-before-"
+            "verify race. _verify_tests_independently was not called — the "
+            "orchestrator trusted the stale cached pass token and would "
+            "have proceeded to commit/cleanup/CI as if the run succeeded."
+        )
+        # Sanity: _extract_test_files runs first to feed the verifier.
+        assert extract_mock.called, (
+            "Issue #1001 round 11: _extract_test_files must run on resume "
+            "so the re-verify path has test files to check."
+        )
+
+        # Discriminator 2: orchestrator MUST NOT return success=True with a
+        # stale pass token. Either it demoted to ADVANCE_CYCLE (and then
+        # hit MAX_CYCLES_REACHED in the new cycle, returning False) or it
+        # demoted directly to MAX_CYCLES_REACHED.
+        assert success is not True, (
+            f"Issue #1001 round 11: stale ALL_TESTS_PASS on resume must "
+            f"NOT lead to success=True. Got success={success}, "
+            f"final_message={final_message!r}. The bug the reviewer "
+            f"reproduced: resume skips Steps 1-9, does not rerun "
+            f"verification, and proceeds to commit/cleanup/CI as success."
+        )
+
+    def test_resume_with_all_tests_pass_reverifies_and_proceeds_when_verify_passes(
+        self, mock_deps, tmp_path
+    ):
+        """Positive case for the round-11 re-verify gate: when the cached
+        Step 9 success token IS confirmed by an independent re-verification
+        on resume, the orchestrator proceeds to the post-success path
+        (commit / cleanup / CI) WITHOUT re-running Steps 1-9.
+
+        Proves the re-verify gate does not break the happy path: if the
+        runtime independently confirms the cached pass, the cycle is still
+        treated as terminal and the inner loop is skipped entirely.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — and verify still agrees",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_ok.py"],
+        ) as extract_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "pytest exit code 0"),
+        ) as verify_mock:
+            success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume with confirmed ALL_TESTS_PASS",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        # Re-verification did run.
+        assert extract_mock.called and verify_mock.called, (
+            "Issue #1001 round 11: re-verify gate must execute on resume "
+            "even when the cached token is confirmed."
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+        # Steps 1-9 must NOT be re-run when verification confirms the
+        # cached token.
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Issue #1001 round 11: with a re-verified cached "
+            f"ALL_TESTS_PASS, Steps 1-9 MUST be skipped. Executed steps: "
+            f"{sorted(executed_steps)} (labels: {executed_labels})."
+        )
+
+        # And the orchestrator returns success.
+        assert success is True, (
+            f"Issue #1001 round 11: a re-verified cached ALL_TESTS_PASS "
+            f"MUST drive success=True. Got success={success}, "
+            f"final_message={final_message!r}."
+        )
+        assert mock_deps["commit"].called, (
+            "Issue #1001 round 11: post-success path must invoke "
+            "_commit_and_push when resume re-verification confirms the "
+            "cached Step 9 success token."
+        )
+
 
 # ============================================================================
 # Issue #1001 round 8: _commit_and_push must filter .gh-wrapper/* in BOTH

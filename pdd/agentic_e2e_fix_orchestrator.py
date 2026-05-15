@@ -1741,6 +1741,52 @@ def run_agentic_e2e_fix_orchestrator(
     import_error_retries = 0  # Global budget: max 1 retry across all cycles
     verification_failure_context = ""  # Injected into Step 1 prompt on retry
 
+    # Issue #1001 round 11: save-before-verify race.
+    # The inner-loop state save at line ~2049 persists step_outputs["9"] with
+    # the LLM's raw output BEFORE the independent verification at line ~2061 /
+    # _apply_step9_resolved_token at line ~2154 runs. A process pause in that
+    # window can leave disk state with ALL_TESTS_PASS even though verification
+    # would have failed. Re-run _verify_tests_independently on resume to close
+    # the race BEFORE treating the cycle as terminal. On failure, demote the
+    # resume action to ADVANCE_CYCLE (or MAX_CYCLES_REACHED if budget
+    # exhausted) and overwrite step_outputs["9"] with a
+    # FAILED: VERIFICATION_FAILED_ON_RESUME: prefix so the cached state
+    # reflects reality.
+    if _resume_deferred_action == "SUCCESS_FALL_THROUGH":
+        test_files = _extract_test_files(
+            issue_content, changed_files, cwd, initial_file_hashes
+        )
+        if test_files:
+            verified, verify_output = _verify_tests_independently(test_files, cwd)
+            # Mirror the cap-downgrade in _apply_step9_resolved_token for
+            # symmetry with the initial Step 9 verification path.
+            if _fallback_scan_was_capped and verified:
+                verified = False
+                verify_output += (
+                    f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                    "hundreds of test files were verified; cannot confirm full "
+                    "suite pass."
+                )
+            if not verified:
+                console.print(
+                    "[yellow]Resume re-verification: cached Step 9 success no "
+                    "longer verified by independent pytest run; advancing "
+                    "cycle.[/yellow]"
+                )
+                step_outputs["9"] = (
+                    f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
+                )
+                if current_cycle < max_cycles:
+                    current_cycle += 1
+                    last_completed_step = 0
+                    step_outputs = {}  # ADVANCE_CYCLE: clear for new cycle
+                    _resume_deferred_action = None
+                else:
+                    _resume_deferred_action = "MAX_CYCLES_REACHED"
+        # else: no test files — match the initial-flow fallback (no
+        # independent verification possible). Trust the cached token, fall
+        # through to the existing SUCCESS_FALL_THROUGH handling below.
+
     # Issue #1001: Apply deferred resume action now that `success` and
     # `final_message` exist. Mirrors how the in-cycle Step 9 handler
     # surfaces these tokens via _apply_step9_resolved_token.

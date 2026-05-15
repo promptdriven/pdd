@@ -273,6 +273,43 @@ class TestResumeRoutingOnStep9Success:
         )
 
 
+class TestResumeReverifiesOnStep9SuccessTokenRace:
+    """Issue #1001 round 11: the prompt (the source of truth) must specify
+    that resume re-runs ``_verify_tests_independently`` before treating a
+    cached Step 9 success token as terminal, to close the save-before-verify
+    race the external reviewer reproduced.
+
+    Without this directive in the SoT prompt, a future ``pdd sync`` could
+    regenerate the orchestrator and re-introduce the round-11 bug (skipping
+    re-verification on resume and committing as success on a stale cached
+    ALL_TESTS_PASS token).
+    """
+
+    def test_resume_section_requires_reverify_on_step9_success(self, resume_section):
+        """The Resume & State section MUST instruct re-running
+        ``_verify_tests_independently`` on resume when a cached Step 9
+        success token is present."""
+        assert "_verify_tests_independently" in resume_section, (
+            "Resume & State section must name _verify_tests_independently "
+            "so the resume path is required to re-run independent "
+            "verification before treating the cycle as terminal (Issue "
+            "#1001 round 11 save-before-verify race)."
+        )
+
+    def test_resume_section_names_verification_failed_on_resume_marker(
+        self, resume_section
+    ):
+        """The Resume & State section MUST name the
+        ``VERIFICATION_FAILED_ON_RESUME`` marker used to overwrite
+        ``step_outputs["9"]`` when re-verification fails on resume."""
+        assert "VERIFICATION_FAILED_ON_RESUME" in resume_section, (
+            "Resume & State section must name the "
+            "VERIFICATION_FAILED_ON_RESUME marker so a future pdd sync "
+            "cannot drop the failure-state overwrite that signals a "
+            "stale cached Step 9 success token (Issue #1001 round 11)."
+        )
+
+
 class TestMaxCyclesExhaustionOnResume:
     """Criterion C-extended: resume with no remaining cycles surfaces MAX_CYCLES_REACHED.
 
