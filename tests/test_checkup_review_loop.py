@@ -1982,6 +1982,134 @@ class TestCheckupReviewLoopRuntime:
         )
         assert "could not address" in report
 
+    def test_fixer_fallback_normalizes_canonical_role(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``--fixer-fallback Gemini`` (mixed case) or ``--fixer-fallback
+        OpenAI`` (provider alias) MUST be canonicalised before reaching
+        ``_run_fix`` and ``state.active_fixer``. Downstream code does a
+        case-sensitive ``ROLE_TO_PROVIDER.get(role, role)`` lookup — if a
+        raw ``"Gemini"`` leaks through, the provider table misses, an
+        invalid provider is spawned, and the fallback fails opaquely
+        instead of running. The execution path must see the lowercase
+        canonical role even when the operator typed an alias or odd
+        casing.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "fixer failed", 0.0, role
+            # Fallback path. The label MUST be the lowercase canonical
+            # role (``gemini``) — not ``Gemini`` — for the run to
+            # succeed at all. If the raw alias leaks through, this
+            # branch never matches and the assertion below fires.
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            # Mixed case + provider-name input — both must canonicalise
+            # to ``gemini`` before execution.
+            config=_config(fixer_fallback="Gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        fix_labels = [label for _, label in calls if "-fix-" in label]
+        assert "checkup-review-loop-fix-gemini-for-codex-round1" in fix_labels, (
+            f"fallback did not run with canonical 'gemini' role; "
+            f"fix labels seen: {fix_labels!r}"
+        )
+        # No raw "Gemini" label may appear — that would mean the raw
+        # alias reached ``_run_fix`` and we'd be back to the bug.
+        assert not any("fix-Gemini" in label for _, label in calls), (
+            f"raw 'Gemini' leaked into fix invocation; calls={calls!r}"
+        )
+
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+
+        # Active-fixer promotion must store the canonical role so later
+        # rounds dispatch to a provider the lookup table knows.
+        assert state.active_fixer == "gemini", (
+            f"state.active_fixer expected 'gemini' (canonical); "
+            f"got {state.active_fixer!r}"
+        )
+
+        # And the audited FixResult should record the canonical role too.
+        fallback_entries = [f for f in state.fixes if f.fixer == "gemini"]
+        assert fallback_entries, (
+            f"no FixResult recorded with canonical 'gemini' fixer; "
+            f"got fixers={[f.fixer for f in state.fixes]!r}"
+        )
+
+    def test_fixer_fallback_unknown_role_skips_safely(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """An unrecognized ``fixer_fallback`` (typo, removed provider,
+        etc.) MUST be skipped rather than passed through to ``_run_fix``.
+        ``ROLE_TO_PROVIDER`` would otherwise return the raw string as
+        the provider name, which crashes opaquely. The loop should fall
+        through to its normal "could not address" termination instead.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="not-a-real-role"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Loop terminates on the primary failure; the bogus fallback is
+        # never invoked.
+        assert success is True
+        assert "could not address" in report
+        assert not any(
+            "fix-not-a-real-role" in label for _, label in calls
+        ), f"unknown fallback role should not be executed; calls={calls!r}"
+
     def test_fixer_fallback_same_as_reviewer_skips(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

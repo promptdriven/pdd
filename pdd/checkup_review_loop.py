@@ -1647,12 +1647,31 @@ def _maybe_run_fallback_fixer(
     # returns an empty list for unknown/empty roles; guard with a literal
     # fallback so callers passing a non-canonical string still get a
     # meaningful equality check rather than IndexError.
-    normalized_fallback = _normalize_reviewers([fallback_role]) or [fallback_role]
+    normalized_fallback = _normalize_reviewers([fallback_role])
     normalized_primary = _normalize_reviewers([primary_fixer]) or [primary_fixer]
     normalized_reviewer = _normalize_reviewers([reviewer]) or [reviewer]
+    # An empty result from ``_normalize_reviewers`` means the role string
+    # isn't a known alias or canonical name. ``_run_fix`` would feed that
+    # raw string into ``ROLE_TO_PROVIDER.get(role, role)`` which then
+    # tries to spawn an invalid provider and fails opaquely; safer to
+    # skip the fallback entirely and tell the operator why so they can
+    # fix their config rather than silently retrying with garbage.
+    if not normalized_fallback:
+        if not quiet:
+            console.print(
+                f"[yellow]Skipping fallback fixer: {fallback_role!r} is not a "
+                f"recognized role (expected one of "
+                f"{sorted(ROLE_TO_PROVIDER)}).[/yellow]"
+            )
+        return None
+    # Use the canonical lowercase role downstream so ``_run_fix`` and the
+    # ``ROLE_TO_PROVIDER`` lookup it performs see a key the table knows
+    # about. The operator-facing messages also reference the canonical
+    # form to keep what we *say* aligned with what we *do*.
+    canonical_fallback = normalized_fallback[0]
     if (
-        normalized_fallback[0] == normalized_primary[0]
-        or normalized_fallback[0] == normalized_reviewer[0]
+        canonical_fallback == normalized_primary[0]
+        or canonical_fallback == normalized_reviewer[0]
     ):
         return None
 
@@ -1665,7 +1684,7 @@ def _maybe_run_fallback_fixer(
         _mark_budget_exhausted(config, state, deadline)
         state.stop_reason = (
             f"Fixer {primary_fixer} could not address {reviewer}'s findings; "
-            f"budget exhausted before fallback fixer {fallback_role} could run."
+            f"budget exhausted before fallback fixer {canonical_fallback} could run."
         )
         return None
 
@@ -1673,10 +1692,10 @@ def _maybe_run_fallback_fixer(
         console.print(
             f"[yellow]Primary fixer {primary_fixer} could not address "
             f"{reviewer}'s findings; running fallback fixer "
-            f"{fallback_role}.[/yellow]"
+            f"{canonical_fallback}.[/yellow]"
         )
     fallback_fix = _run_fix(
-        fixer=fallback_role,
+        fixer=canonical_fallback,
         reviewer=reviewer,
         findings=findings,
         context=context,
@@ -1695,7 +1714,7 @@ def _maybe_run_fallback_fixer(
     # promotion mirrors ``state.active_reviewer`` semantics: once a
     # fallback succeeds it takes over the role for the rest of the loop.
     if fallback_fix.success:
-        state.active_fixer = fallback_role
+        state.active_fixer = canonical_fallback
     return fallback_fix
 
 
