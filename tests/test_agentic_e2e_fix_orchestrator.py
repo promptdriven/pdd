@@ -6495,6 +6495,64 @@ class TestPostStep9ResumeAction:
 
 
 # ============================================================================
+# Issue #1001 round 9: prefer Step 9 retry output when resolving cached
+# resume token. Step 9 may run twice in one cycle — the initial pass + a
+# retry when the initial pass emits no token. The retry output is stored
+# under step_outputs["9_retry"], the initial output under "9". The resume
+# routing must read the retry output when present so a retry that succeeded
+# with ALL_TESTS_PASS but was interrupted before the post-Step-9 pause is
+# not misread as a tokenless "9" and silently advanced into a fresh cycle.
+# ============================================================================
+
+
+class TestResolveCachedStep9Output:
+    """Unit tests for ``_resolve_cached_step9_output`` (Issue #1001 round 9).
+
+    Step 9 may run twice in one cycle: the initial pass plus a retry when
+    the initial pass emits no recognizable loop-control token. The retry
+    output lives under ``step_outputs["9_retry"]``; the initial output
+    under ``"9"``. The helper must prefer the retry output when present
+    and non-empty — otherwise a retry-success that was interrupted before
+    the next pause would be misread as a tokenless ``"9"`` on resume.
+    """
+
+    @pytest.fixture
+    def helper(self):
+        from pdd.agentic_e2e_fix_orchestrator import _resolve_cached_step9_output
+        return _resolve_cached_step9_output
+
+    def test_returns_retry_when_present(self, helper):
+        """When ``"9_retry"`` holds a real token, prefer it over a tokenless
+        ``"9"``. This is the load-bearing case: a Step 9 retry that emitted
+        ``ALL_TESTS_PASS`` must drive the resume routing, not the initial
+        tokenless output that triggered the retry.
+        """
+        step_outputs = {"9": "no token", "9_retry": "ALL_TESTS_PASS"}
+        assert helper(step_outputs) == "ALL_TESTS_PASS"
+
+    def test_returns_primary_when_no_retry(self, helper):
+        """When no retry ran, fall back to ``"9"``. This is the normal
+        single-pass case: Step 9 emitted a token on the first try.
+        """
+        step_outputs = {"9": "CONTINUE_CYCLE"}
+        assert helper(step_outputs) == "CONTINUE_CYCLE"
+
+    def test_returns_primary_when_retry_empty_string(self, helper):
+        """An empty-string retry value must not shadow a real primary output.
+        Defensive: only a truthy retry value should preempt the primary.
+        """
+        step_outputs = {"9": "CONTINUE_CYCLE", "9_retry": ""}
+        assert helper(step_outputs) == "CONTINUE_CYCLE"
+
+    def test_returns_empty_string_when_neither_present(self, helper):
+        """An empty dict must yield ``""``, which the downstream resolver
+        treats as "no token resolved" and routes to ``ADVANCE_CYCLE`` /
+        ``MAX_CYCLES_REACHED`` per the budget check.
+        """
+        assert helper({}) == ""
+
+
+# ============================================================================
 # Issue #1001: post-Step-9 resume routing — orchestrator-level integration
 # ============================================================================
 
@@ -6677,6 +6735,110 @@ class TestPostStep9ResumeRoutesToCleanupNotStep1:
             "Issue #1001: post-success path must invoke _commit_and_push "
             "to record any deferred edits when resuming from a Step 9 "
             "success token."
+        )
+
+    def test_resume_with_step9_retry_all_tests_pass_skips_steps_1_through_9(
+        self, mock_deps, tmp_path
+    ):
+        """A resumed state with ``last_completed_step=9``, a tokenless cached
+        ``"9"``, and ``"9_retry" = ALL_TESTS_PASS`` MUST NOT re-run Steps 1-9
+        (Issue #1001 round 9).
+
+        Scenario this reproduces: the initial Step 9 pass emitted a tokenless
+        output, the retry ran and emitted ``ALL_TESTS_PASS`` (stored under
+        ``"9_retry"``), but the workflow was interrupted before the next
+        pause. On resume, the routing must read the retry output, recognize
+        the success token, and fall through to the post-success path —
+        rather than reading the tokenless ``"9"`` and silently advancing
+        into a fresh cycle.
+
+        Discriminator: with the original resume site reading only
+        ``step_outputs.get("9", "")``, the tokenless primary value causes
+        ``_post_step9_resume_action`` to return ``ADVANCE_CYCLE`` (budget
+        remaining), and Steps 1-9 are re-invoked under the new cycle. With
+        the fix (``_resolve_cached_step9_output`` preferring ``"9_retry"``),
+        the retry success token routes to ``SUCCESS_FALL_THROUGH`` and the
+        inner loop is skipped entirely.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                # Tokenless initial Step 9 output — would route to
+                # ADVANCE_CYCLE under the old resume site.
+                "9": "some intermediate text",
+                # Retry success — must drive the routing under the fix.
+                "9_retry": "ALL_TESTS_PASS — retry verification succeeded",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1001",
+            issue_content="E2E failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1001,
+            issue_author="user",
+            issue_title="Resume from Step 9 retry success",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=3,
+            resume=True,
+            use_github_state=False,
+            skip_cleanup=True,
+            skip_ci=True,
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+
+        # Discriminator: NONE of Steps 1-9 may have been invoked. Under the
+        # old code (reading only step_outputs["9"]), the tokenless primary
+        # would route to ADVANCE_CYCLE and Steps 1-9 would be re-invoked.
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Issue #1001 round 9: Resume with cached ALL_TESTS_PASS at "
+            f"step_outputs['9_retry'] (and tokenless primary '9') must NOT "
+            f"re-invoke Steps 1-9, but these step numbers were executed: "
+            f"{sorted(executed_steps)} (labels: {executed_labels}). Under "
+            f"the old resume site reading only step_outputs.get('9', ''), "
+            f"the tokenless primary would route to ADVANCE_CYCLE and Steps "
+            f"1-9 would be re-invoked."
+        )
+
+        # The post-success path is reached: orchestrator returns True from
+        # the skip_ci branch, _commit_and_push is invoked.
+        assert success is True, (
+            f"Expected retry-success fall-through to return True; "
+            f"got success={success}, final_message={final_message!r}."
+        )
+        assert mock_deps["commit"].called, (
+            "Issue #1001 round 9: post-success path must invoke "
+            "_commit_and_push when resuming from a Step 9 retry success "
+            "token (stored under '9_retry')."
         )
 
     def test_resume_with_step9_continue_cycle_advances_and_reruns_steps_1_through_9(

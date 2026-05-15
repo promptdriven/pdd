@@ -262,6 +262,26 @@ def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[st
     return None
 
 
+def _resolve_cached_step9_output(step_outputs: Dict[str, str]) -> str:
+    """Return the authoritative Step 9 output for resume token resolution.
+
+    Step 9 may run twice in one cycle: the initial pass, plus a retry when the
+    initial pass emits no recognizable loop-control token. The retry output is
+    stored under ``step_outputs["9_retry"]`` (see the retry persistence site
+    in the inner loop); the initial output is ``step_outputs["9"]``. The retry
+    output is the authoritative one when it ran — if the retry succeeded with
+    ``ALL_TESTS_PASS`` but the workflow was interrupted before the next pause,
+    reading only ``"9"`` (which can be tokenless) would let resume fall
+    through to ``CONTINUE_CYCLE`` and silently advance into a fresh cycle even
+    though Step 9 actually succeeded. Prefer the retry output when present
+    and non-empty (#1001).
+    """
+    retry_out = step_outputs.get("9_retry", "")
+    if retry_out:
+        return retry_out
+    return step_outputs.get("9", "")
+
+
 def _post_step9_resume_action(
     step9_output: str,
     current_cycle: int,
@@ -1632,9 +1652,14 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Issue #1001: If Step 9 was the last completed step, branch on its
             # cached output rather than unconditionally advancing the cycle.
+            # Prefer the retry output (stored under "9_retry") when present —
+            # otherwise a retry that emitted ALL_TESTS_PASS but was interrupted
+            # before the post-Step-9 pause could be misread as a tokenless "9"
+            # and silently advance into a fresh cycle.
             if last_completed_step >= 9:
+                step9_cached = _resolve_cached_step9_output(step_outputs)
                 resume_action = _post_step9_resume_action(
-                    step_outputs.get("9", ""), current_cycle, max_cycles, console
+                    step9_cached, current_cycle, max_cycles, console
                 )
                 if resume_action == "ADVANCE_CYCLE":
                     current_cycle += 1
