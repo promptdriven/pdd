@@ -21,7 +21,7 @@
   - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
   - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
   - `--max-review-rounds` (int, default `5`)
-  - `--max-review-cost` (float, default `10.0`)
+  - `--max-review-cost` (float, default `0.0`; deprecated compatibility flag, report-only)
   - `--max-review-minutes` (float, default `90.0`)
   - `--require-all-reviewers-clean/--no-require-all-reviewers-clean` (default true)
   - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit/auth/network/sandbox reviewer failures as `degraded` instead of `failed`, but never marks the active reviewer clean or continues mutation without a completed review)
@@ -33,7 +33,7 @@
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.
-  - If `--review-loop` is set: require PR mode (`--pr` and `--issue`); reject `--no-fix` unless `--review-only` is also set; validate max-review values are positive (`--max-review-rounds >= 1`, cost/minutes > 0).
+  - If `--review-loop` is set: require PR mode (`--pr` and `--issue`); reject `--no-fix` unless `--review-only` is also set; validate max-review values (`--max-review-rounds >= 1`, `--max-review-cost >= 0`, minutes > 0).
   - If `--pr` or `--issue` is set: BOTH must be present; `target` must be `None`; validate `--pr` via `_parse_pr_url(pr_url)` (mention "GitHub pull-request URL" in error); validate `--issue` via `_is_github_issue_url(issue_url_opt)` (mention "GitHub issue URL" in error); use `issue_url_opt` as the effective issue URL.
   - Otherwise (default issue mode): require `target`; validate via `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and message must mention "GitHub issue URL").
 - Force `--no-fix` when `--pr` is set and `--review-loop` is NOT set (legacy PR verification still cannot push fixes). Print a warning to stderr explaining why and how to re-invoke if fixes were intended.

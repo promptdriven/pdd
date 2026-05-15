@@ -1404,9 +1404,8 @@ def run_agentic_split_orchestrator(
         """Budget guard — return abort tuple if --max-cost crossed, else None.
 
         Persists state so the next run without --max-cost (or with a higher
-        one) resumes from ``at_step``. Mirrors the pattern in
-        ``pdd/checkup_review_loop.py:1849-1862`` (max_cost_reached flag +
-        stop_reason).
+        one) resumes from ``at_step`` with the max_cost_reached flag and
+        stop_reason recorded.
 
         MUST be called both at the top of each step iteration AND after every
         ``total_cost += ...`` accumulation that precedes a possible early

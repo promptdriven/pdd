@@ -129,9 +129,12 @@ from ..core.errors import handle_error
 @click.option(
     "--max-review-cost",
     type=float,
-    default=10.0,
+    default=0.0,
     show_default=True,
-    help="Maximum review-loop LLM cost in USD.",
+    help=(
+        "Deprecated compatibility flag. Review-loop cost is reported but does "
+        "not stop the implement/review loop."
+    ),
 )
 @click.option(
     "--max-review-minutes",
@@ -279,9 +282,9 @@ def checkup(
             "--max-review-rounds must be >= 1.",
             param_hint="'--max-review-rounds'",
         )
-    if review_loop and max_review_cost <= 0:
+    if review_loop and max_review_cost < 0:
         raise click.BadParameter(
-            "--max-review-cost must be > 0.",
+            "--max-review-cost must be >= 0.",
             param_hint="'--max-review-cost'",
         )
     if review_loop and max_review_minutes <= 0:
