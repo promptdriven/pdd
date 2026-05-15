@@ -6330,3 +6330,149 @@ class TestNotABugGuardResumeSnapshot:
                 "state_data must include initial_sha for resume to restore it"
             )
             assert isinstance(saved_state["initial_file_hashes"], dict)
+
+
+# ============================================================================
+# Issue #1001: .gh-wrapper artifact filter (runtime defect 1)
+# ============================================================================
+
+
+class TestGhWrapperFilter:
+    """Behavioral tests for _is_intermediate_file filtering .gh-wrapper/** (Issue #1001).
+
+    The agentic e2e fix workflow ships a `gh` wrapper under `.gh-wrapper/`
+    when an executor needs a constrained shell. These wrapper artifacts must
+    never be committed. The filter is the single gate at both the hash-diff
+    staging path and the `_get_modified_and_untracked` fallback path.
+    """
+
+    @pytest.fixture
+    def is_intermediate(self):
+        from pdd.agentic_e2e_fix_orchestrator import _is_intermediate_file
+        return _is_intermediate_file
+
+    def test_filters_top_level_gh_wrapper_files(self, is_intermediate):
+        """.gh-wrapper/gh and .gh-wrapper/git must be filtered."""
+        assert is_intermediate(".gh-wrapper/gh") is True
+        assert is_intermediate(".gh-wrapper/git") is True
+
+    def test_does_not_overfilter_unrelated_names(self, is_intermediate):
+        """Legitimate paths containing 'gh-wrapper' as a substring must NOT
+        be filtered. The check must anchor on the directory boundary."""
+        assert is_intermediate("gh-wrapper-docs.md") is False
+        assert is_intermediate("tools/gh_wrapper.py") is False
+        assert is_intermediate("gh_wrapper.txt") is False
+
+    def test_filters_nested_gh_wrapper_directory(self, is_intermediate):
+        """A .gh-wrapper/ directory anywhere in the path must be filtered."""
+        assert is_intermediate("subdir/.gh-wrapper/gh") is True
+
+    def test_handles_windows_path_separators(self, is_intermediate):
+        """Windows-style backslash separators must be normalized before
+        the .gh-wrapper/ check so the filter is platform-neutral."""
+        assert is_intermediate(".gh-wrapper\\gh") is True
+
+
+# ============================================================================
+# Issue #1001: post-Step-9 resume branching (runtime defect 2)
+# ============================================================================
+
+
+class TestPostStep9ResumeAction:
+    """Behavioral tests for _post_step9_resume_action (Issue #1001).
+
+    On resume, when `last_completed_step >= 9`, the prior buggy code
+    unconditionally advanced the cycle. It must instead branch on the
+    cached Step 9 output:
+      - success tokens (ALL_TESTS_PASS / LOCAL_TESTS_PASS / NOT_A_BUG)
+        preserve state and fall through to Step 11 cleanup + Step 10 CI.
+      - CONTINUE_CYCLE advances when budget remains, surfaces
+        MAX_CYCLES_REACHED otherwise.
+    """
+
+    @pytest.fixture
+    def helper(self):
+        from pdd.agentic_e2e_fix_orchestrator import _post_step9_resume_action
+        return _post_step9_resume_action
+
+    @pytest.fixture
+    def console(self):
+        return MagicMock()
+
+    def test_all_tests_pass_preserves_state(self, helper, console):
+        """ALL_TESTS_PASS in cached Step 9 output → SUCCESS_FALL_THROUGH."""
+        result = helper(
+            "ALL_TESTS_PASS verification succeeded",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "SUCCESS_FALL_THROUGH"
+
+    def test_local_tests_pass_preserves_state(self, helper, console):
+        """LOCAL_TESTS_PASS in cached Step 9 output → SUCCESS_FALL_THROUGH."""
+        result = helper(
+            "LOCAL_TESTS_PASS observed during verification",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "SUCCESS_FALL_THROUGH"
+
+    def test_not_a_bug_preserves_state(self, helper, console):
+        """NOT_A_BUG in cached Step 9 output → SUCCESS_FALL_THROUGH.
+
+        Defensive: a Step 9 output that surfaces NOT_A_BUG must not be
+        treated as "advance the cycle" — the prior Step 3 already
+        determined no bug exists.
+        """
+        result = helper(
+            "NOT_A_BUG — issue determined to be expected behavior",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "SUCCESS_FALL_THROUGH"
+
+    def test_continue_cycle_advances_when_under_budget(self, helper, console):
+        """CONTINUE_CYCLE in cached output + budget remaining → ADVANCE_CYCLE."""
+        result = helper(
+            "CONTINUE_CYCLE — more work needed",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "ADVANCE_CYCLE"
+
+    def test_continue_cycle_max_cycles_reached_surfaces_failure(self, helper, console):
+        """CONTINUE_CYCLE at the budget boundary → MAX_CYCLES_REACHED."""
+        result = helper(
+            "CONTINUE_CYCLE — more work needed",
+            current_cycle=3,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "MAX_CYCLES_REACHED"
+
+    def test_unrecognized_output_advances_when_under_budget(self, helper, console):
+        """Unrecognized Step 9 output + budget remaining → ADVANCE_CYCLE.
+
+        When the resolver cannot identify a token (and the tier-4 LLM
+        classifier is unavailable or returns nothing), an unresolvable
+        cached output should behave like CONTINUE_CYCLE rather than
+        silently dropping the resume into MAX_CYCLES_REACHED.
+        """
+        # Mock the tier-4 LLM classifier so the helper does not make a
+        # real network call. Returning None forces the resolver to fall
+        # through with no token.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.classify_step_output",
+            return_value=None,
+        ):
+            result = helper(
+                "",
+                current_cycle=0,
+                max_cycles=3,
+                console=console,
+            )
+        assert result == "ADVANCE_CYCLE"
