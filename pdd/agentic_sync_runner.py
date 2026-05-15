@@ -141,8 +141,18 @@ class DepGraphFromArchitectureResult(NamedTuple):
 
 
 def _normalize_repo_path(path: str) -> str:
-    """Normalize a repository-relative path for contract comparisons."""
-    return str(path or "").replace("\\", "/").strip().lstrip("./")
+    """Normalize a repository-relative path for contract comparisons.
+
+    Strip a single leading ``./`` segment only. Do NOT use ``str.lstrip("./")``
+    which strips arbitrary leading ``.`` and ``/`` characters and would mangle
+    legitimate paths whose first segment starts with a dot (e.g.
+    ``.pdd/meta/foo.json`` would become ``pdd/meta/foo.json`` and miss the
+    ``.pdd/meta/*.json`` companion glob — Issue #1013 F5 regression).
+    """
+    cleaned = str(path or "").replace("\\", "/").strip()
+    if cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    return cleaned
 
 
 def _git_changed_paths(project_root: Path) -> set[str]:

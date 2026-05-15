@@ -410,7 +410,9 @@ class DurableSyncRunner(AsyncSyncRunner):
         )
         offending: Set[str] = set()
         for raw in paths:
-            normalized = raw.replace(os.sep, "/").lstrip("./")
+            normalized = raw.replace(os.sep, "/").strip()
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
             if normalized in self.allowed_write_paths:
                 continue
             if any(
