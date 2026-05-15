@@ -466,7 +466,7 @@ _pdd_checkup() {
     '--fixer[Fixer role]:fixer:' \
     '--reviewer-fallback[Fallback reviewer when primary fails]:reviewer:' \
     '--max-review-rounds[Max review rounds]:rounds:' \
-    '--max-review-cost[Max review cost (USD)]:cost:' \
+    '--max-review-cost[Deprecated/report-only: total review-loop LLM cost (USD); telemetry only, no longer stops the loop]:cost:' \
     '--max-review-minutes[Max review wall-clock minutes]:minutes:' \
     '--require-all-reviewers-clean[Require all reviewers clean]' \
     '--no-require-all-reviewers-clean[Do not require all reviewers clean]' \

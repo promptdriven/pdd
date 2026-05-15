@@ -1631,6 +1631,86 @@ class TestCheckupReviewLoopRuntime:
         assert "gemini=clean" in report
         assert any(role == "gemini" for role, _ in calls)
 
+    def test_reviewer_fallback_run_review_propagates_deadline_to_parse_repair(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """PR #1036 / issue #1030 regression: the fallback ``_run_review`` call
+        on the ``reviewer_fallback`` path must receive the wall-clock
+        ``deadline`` so its parse-repair pass is skipped after the
+        ``--max-review-minutes`` cap, just like the primary/verifier paths.
+
+        Before the fix, the fallback ``_run_review`` invocation omitted
+        ``deadline``, and ``_run_review`` evaluated ``deadline or float("inf")``,
+        so an unparseable but parse-repair-eligible fallback response triggered
+        an extra LLM call past the hard duration cap.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        # Deterministic simulated wall clock. Initial monotonic() == 0.0, so
+        # the loop computes deadline = 0 + max_minutes * 60. Each LLM call
+        # advances the clock by 200s — primary lands at t=200 (before
+        # deadline), fallback lands at t=400 (past deadline=300).
+        current_time = [0.0]
+
+        def fake_monotonic() -> float:
+            return current_time[0]
+
+        monkeypatch.setattr(mod.time, "monotonic", fake_monotonic)
+
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            current_time[0] += 200.0
+            if role == "codex":
+                # Primary returns parseable JSON with a hard-not-clean
+                # ``degraded`` status so the reviewer_fallback path engages.
+                # Status is degraded (not "failed"), so parse-repair is NOT
+                # eligible for the primary itself.
+                return True, _json("degraded"), 0.1, role
+            # Fallback returns parseable-but-failed output (non-JSON prose
+            # with no provider-failure markers) — exactly the shape that
+            # ``_should_attempt_parse_repair`` accepts. Without the
+            # ``deadline=`` propagation, this would trigger an extra
+            # parse-repair LLM call past the duration cap.
+            return True, "I see some issues but cannot format them as JSON.", 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        parse_repair_attempts: List[str] = []
+
+        def tracked_parse_repair(*args: Any, **kwargs: Any):
+            parse_repair_attempts.append(kwargs.get("reviewer", "?"))
+            return None
+
+        monkeypatch.setattr(mod, "_run_review_parse_repair", tracked_parse_repair)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                reviewer_fallback="gemini",
+                max_minutes=5.0,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Both primary and fallback review-mode invocations happened.
+        assert any(role == "codex" and "review-" in label for role, label in calls)
+        assert any(role == "gemini" and "review-" in label for role, label in calls)
+        # The deadline guard MUST skip parse-repair past the cap. Without the
+        # fix, ``_run_review`` for the fallback would see deadline=None and
+        # fall through to ``float("inf")``, letting parse-repair fire.
+        assert parse_repair_attempts == [], (
+            "Fallback parse-repair must be skipped once the wall-clock "
+            f"deadline has expired; was called for: {parse_repair_attempts!r}"
+        )
+
     def test_reviewer_fallback_also_fails_breaks_loop(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
