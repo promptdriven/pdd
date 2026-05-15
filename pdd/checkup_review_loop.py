@@ -940,7 +940,12 @@ def run_checkup_review_loop(
             # the primary attempt as well as the fallback's takeover.
             fix = fallback_fix
             state.fixes.append(fix)
-            _record_fix_attempts(state, fix_findings, fix)
+            # NOTE: we deliberately do NOT call ``_record_fix_attempts``
+            # again here. The primary attempt already incremented every
+            # finding's ``fix_attempts_by_key`` counter; a second bump
+            # would represent the SAME logical fix round as two attempts
+            # and would prematurely trip the oscillation/no-progress
+            # guards downstream.
 
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
@@ -1567,12 +1572,22 @@ def _maybe_run_fallback_fixer(
     fallback_role = config.fixer_fallback
     if not fallback_role:
         return None
-    # Literal-string equality is the contract here. Alias normalization is
-    # NOT applied — the CLI option type-checks the fallback against the
-    # fixer/reviewer strings directly, and consistency with the test
-    # contract takes precedence over reviewer-side normalization. Callers
-    # that want aliases should resolve them before constructing the config.
-    if fallback_role == primary_fixer or fallback_role == reviewer:
+    # Alias-aware equality. ``--fixer claude --fixer-fallback anthropic``
+    # is the same OAuth credential — promoting ``anthropic`` after
+    # ``claude`` hit a subscription-tier limit is a no-op retry that
+    # defeats the guard. Reuse the same normalization the reviewer
+    # fallback applies (see ``_maybe_run_fallback_reviewer``) so the two
+    # sides agree on what "same role" means. ``_normalize_reviewers``
+    # returns an empty list for unknown/empty roles; guard with a literal
+    # fallback so callers passing a non-canonical string still get a
+    # meaningful equality check rather than IndexError.
+    normalized_fallback = _normalize_reviewers([fallback_role]) or [fallback_role]
+    normalized_primary = _normalize_reviewers([primary_fixer]) or [primary_fixer]
+    normalized_reviewer = _normalize_reviewers([reviewer]) or [reviewer]
+    if (
+        normalized_fallback[0] == normalized_primary[0]
+        or normalized_fallback[0] == normalized_reviewer[0]
+    ):
         return None
 
     # Budget guard. The primary fixer's failed invocation may have already

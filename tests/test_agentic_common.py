@@ -4984,6 +4984,59 @@ class TestCredentialLimitClassification:
         # through to None (no false-permanent classification).
         assert _classify_permanent_error("User hit your limit of 10 items") is None
 
+    def test_credential_limit_does_not_match_prose_with_substrings_apart(self):
+        """Reviewer finding bodies embedded in subprocess stdout can contain
+        BOTH anchors in prose — e.g. a reviewer describing this very bug —
+        with no time-token between them. The pattern must require proximity
+        plus a time-token after ``resets`` so distant-substring prose does
+        NOT classify as ``credential-limit`` (which would short-circuit the
+        rate-limit retry path on benign text).
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(
+                "if you hit your limit, nothing resets automatically"
+            )
+            is None
+        ), (
+            "Loose ``hit your limit.*?resets?`` greedy pattern is matching "
+            "unrelated prose. Tighten the regex to require a time-token after "
+            "``resets`` and cap proximity between the anchors."
+        )
+
+    def test_credential_limit_matches_subscription_envelope_with_full_date(self):
+        """The exact Claude Code envelope with a full date after ``resets``
+        — e.g. ``You've hit your limit · resets May 18, 11pm (UTC)`` — MUST
+        classify as ``credential-limit``. This is the load-bearing case the
+        regex tightening must not regress.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        envelope = (
+            'Exit code 1: {"api_error_status":429,'
+            '"result":"You\'ve hit your limit · resets May 18, '
+            '11pm (UTC)"}'
+        )
+        assert (
+            _classify_permanent_error(envelope) == "credential-limit"
+        )
+
+    def test_credential_limit_matches_subscription_envelope_with_time_only(self):
+        """Same envelope but with only a time-of-day after ``resets`` —
+        the regex must still match when a time token follows the anchor
+        even without a date prefix.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        envelope = (
+            'Exit code 1: {"api_error_status":429,'
+            '"result":"You\'ve hit your limit · resets 11pm (UTC)"}'
+        )
+        assert (
+            _classify_permanent_error(envelope) == "credential-limit"
+        )
+
 
 class TestIssue1072FailureLogging:
     """Tests for _log_agentic_interaction being called even when verbose=False.

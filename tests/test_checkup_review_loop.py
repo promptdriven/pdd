@@ -1637,13 +1637,42 @@ class TestCheckupReviewLoopRuntime:
         """Primary fixer (claude) fails; configured ``fixer_fallback``
         (gemini) succeeds. The loop must NOT stop on the primary failure —
         it must invoke the fallback fixer and then continue into the
-        verify pass."""
+        verify pass.
+
+        This test also pins two contracts the implementer claimed but no
+        existing test verified:
+
+        * ``state.fix_attempts_by_key[k]`` increments EXACTLY ONCE per
+          logical fix round (not twice — even though both the primary and
+          fallback ``FixResult`` are appended to ``state.fixes``). The
+          counter is used by the no-progress/oscillation guard, and a
+          double-bump would prematurely abort the loop on a perfectly
+          healthy primary→fallback rotation.
+        * ``state.fixes`` keeps BOTH ``FixResult`` rows after a
+          successful fallback round so the audit trail records the
+          credential rotation. The primary entry's ``success`` is
+          ``False``; the fallback's is ``True`` and its ``fixer`` is the
+          configured fallback role.
+        """
         from pdd.checkup_review_loop import run_checkup_review_loop
         import pdd.checkup_review_loop as mod
 
         self._patch_io(monkeypatch, tmp_path)
         calls: List[Tuple[str, str]] = []
         finding = self._finding()
+
+        # State-capture seam. ``run_checkup_review_loop`` doesn't return
+        # state — wrap ``_finalize`` (which receives state at the call
+        # site) to capture and forward. Cleaner than refactoring the
+        # signature for one test.
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
             label = kwargs["label"]
@@ -1683,6 +1712,41 @@ class TestCheckupReviewLoopRuntime:
         ), f"fixer_fallback did not run; calls={calls!r}"
         # The loop should not have dead-stopped on "could not address".
         assert "could not address" not in report
+
+        # State-driven assertions: must have captured state via _finalize.
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+
+        # Finding 2: ``_record_fix_attempts`` must be called ONCE per
+        # logical fix round (primary attempt). Calling it again for the
+        # fallback would double-bump the per-finding counter and would
+        # mis-trip the oscillation/no-progress guards downstream.
+        assert state.fix_attempts_by_key, (
+            "no fix_attempts recorded — primary should have incremented it once"
+        )
+        for key, count in state.fix_attempts_by_key.items():
+            assert count == 1, (
+                f"finding {key!r} bumped {count}× in one fix round; "
+                f"expected 1× (primary records, fallback does not double-record)"
+            )
+
+        # Finding 4: ``state.fixes`` keeps BOTH FixResults — the failed
+        # primary AND the succeeding fallback — so the audit trail
+        # records the credential rotation.
+        assert len(state.fixes) >= 2, (
+            f"expected primary+fallback FixResults retained in state.fixes; "
+            f"got len={len(state.fixes)}: {[f.fixer for f in state.fixes]!r}"
+        )
+        primary_entry = state.fixes[0]
+        fallback_entry = state.fixes[1]
+        assert primary_entry.fixer == "claude" and primary_entry.success is False, (
+            f"primary FixResult expected (claude, success=False); got "
+            f"({primary_entry.fixer}, success={primary_entry.success})"
+        )
+        assert fallback_entry.fixer == "gemini" and fallback_entry.success is True, (
+            f"fallback FixResult expected (gemini, success=True); got "
+            f"({fallback_entry.fixer}, success={fallback_entry.success})"
+        )
 
     def test_fixer_fallback_not_configured_breaks_loop(
         self, monkeypatch: Any, tmp_path: Path
@@ -1766,6 +1830,58 @@ class TestCheckupReviewLoopRuntime:
             f"primary fixer must not be retried as its own fallback; got "
             f"{claude_fix_calls!r}"
         )
+
+    def test_fixer_fallback_normalizes_anthropic_alias_against_claude(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``--fixer claude --fixer-fallback anthropic`` MUST be treated as
+        the same provider — promoting ``anthropic`` to fallback after
+        ``claude`` failed would be a no-op retry on the same OAuth
+        credential that just hit a subscription-tier weekly limit.
+        ``_normalize_reviewers`` maps the alias (``anthropic``) to its
+        canonical role (``claude``), so the equality check must operate
+        on normalized roles, not literal strings.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            # Any anthropic fix attempt would have its own label; falling
+            # through here as "clean" would let it succeed and mask the bug.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="anthropic"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Only ONE fix invocation total (the primary) — fallback skipped
+        # because ``anthropic`` normalizes to the same role as ``claude``.
+        fix_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-fix-")
+        ]
+        assert len(fix_calls) == 1, (
+            f"expected exactly one fix attempt (primary, no alias fallback); "
+            f"got {fix_calls!r}"
+        )
+        assert "could not address" in report
 
     def test_fixer_fallback_same_as_reviewer_skips(
         self, monkeypatch: Any, tmp_path: Path
