@@ -131,12 +131,7 @@ from ..core.errors import handle_error
     type=float,
     default=50.0,
     show_default=True,
-    help=(
-        "Deprecated compatibility flag. Review-loop LLM cost is reported as "
-        "telemetry only and no longer stops the loop; ordinary runs proceed "
-        "through codex review -> claude fix -> codex verify until merge-ready "
-        "or --max-review-rounds/--max-review-minutes is reached."
-    ),
+    help="Maximum review-loop LLM cost in USD.",
 )
 @click.option(
     "--max-review-minutes",

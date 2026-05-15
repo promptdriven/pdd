@@ -21,7 +21,7 @@
   - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
   - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
   - `--max-review-rounds` (int, default `5`)
-  - `--max-review-cost` (float, default `50.0`; **deprecated/report-only compatibility** — cost is telemetry and no longer stops the review loop; ordinary runs continue through codex review -> claude fix -> codex verify until merge-ready or `--max-review-rounds`/`--max-review-minutes` is reached)
+  - `--max-review-cost` (float, default `50.0`)
   - `--max-review-minutes` (float, default `90.0`)
   - `--require-all-reviewers-clean/--no-require-all-reviewers-clean` (default true)
   - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit/auth/network/sandbox reviewer failures as `degraded` instead of `failed`, but never marks the active reviewer clean or continues mutation without a completed review)
