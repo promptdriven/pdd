@@ -279,11 +279,14 @@ def _post_step9_resume_action(
       `last_completed_step`, and `step_outputs` intact and fall through
       to Step 11 cleanup + Step 10 CI validation.
     - "ADVANCE_CYCLE" — Step 9 wants another cycle and budget remains.
-    - "MAX_CYCLES_REACHED" — Step 9 wants another cycle but budget is
-      exhausted; the caller must surface this as a non-success exit,
-      reusing the same path Step 9 uses when emitting MAX_CYCLES_REACHED
-      directly (see `_apply_step9_resolved_token` MAX_CYCLES_REACHED
-      handler).
+    - "MAX_CYCLES_REACHED" — Either Step 9 explicitly emitted
+      MAX_CYCLES_REACHED (resolved via the tier-1–3 classifier in
+      `_classify_step_output` or the tier-4 LLM fallback in
+      `_resolve_step9_loop_token`), or Step 9 wants another cycle but
+      the cycle budget is exhausted. In both cases the caller must
+      surface this as a non-success exit, reusing the same path Step 9
+      uses when emitting MAX_CYCLES_REACHED directly (see
+      `_apply_step9_resolved_token` MAX_CYCLES_REACHED handler).
     """
     # Defensive NOT_A_BUG check: Step 9 normally doesn't emit NOT_A_BUG
     # (that's Step 3), but if the cached output surfaces it, treat as
@@ -293,6 +296,11 @@ def _post_step9_resume_action(
     tok = _resolve_step9_loop_token(step9_output, console)
     if tok in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
         return "SUCCESS_FALL_THROUGH"
+    # Explicit terminal token from Step 9 (tier-1–3 detect_control_token
+    # or tier-4 LLM classifier) must NOT be overridden by the budget
+    # check below — Step 9 already declared the loop terminal.
+    if tok == "MAX_CYCLES_REACHED":
+        return "MAX_CYCLES_REACHED"
     if current_cycle < max_cycles:
         return "ADVANCE_CYCLE"
     return "MAX_CYCLES_REACHED"
