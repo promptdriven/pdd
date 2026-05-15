@@ -580,6 +580,11 @@ class ReviewLoopConfig:
     reviewer: Optional[str] = None
     fixer: Optional[str] = None
     reviewer_fallback: Optional[str] = None
+    # Optional secondary fixer role to try once when the primary fixer
+    # cannot address the reviewer's findings (e.g. subscription-tier
+    # credential exhausted). Must differ from the primary fixer and from
+    # the reviewer to preserve reviewer/fixer role independence.
+    fixer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
     max_cost: float = 10.0
@@ -901,10 +906,41 @@ def run_checkup_review_loop(
         _record_fix_attempts(state, fix_findings, fix)
 
         if not fix.success:
-            state.stop_reason = (
-                f"Fixer {fixer} could not address {reviewer}'s findings."
+            fallback_fix = _maybe_run_fallback_fixer(
+                primary_fixer=fixer,
+                primary_fix=fix,
+                reviewer=reviewer,
+                findings=fix_findings,
+                context=context,
+                worktree=worktree,
+                round_number=round_number,
+                state=state,
+                config=config,
+                verbose=verbose,
+                quiet=quiet,
+                artifacts_dir=artifacts_dir,
+                deadline=deadline,
             )
-            break
+            if fallback_fix is None or not fallback_fix.success:
+                # Preserve the existing stop_reason if the fallback path
+                # already wrote one (e.g. budget exhausted before fallback
+                # could run) — the operator-facing detail wins.
+                if not state.stop_reason:
+                    state.stop_reason = (
+                        f"Fixer {fixer} could not address {reviewer}'s findings"
+                        + (
+                            f" (fallback fixer {config.fixer_fallback} also failed)."
+                            if fallback_fix is not None
+                            else "."
+                        )
+                    )
+                break
+            # Fallback succeeded — it now drives the rest of this round.
+            # Both fixes stay in ``state.fixes`` so the audit trail records
+            # the primary attempt as well as the fallback's takeover.
+            fix = fallback_fix
+            state.fixes.append(fix)
+            _record_fix_attempts(state, fix_findings, fix)
 
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
@@ -1493,6 +1529,84 @@ def _maybe_run_fallback_reviewer(
         state.reviewer_status_details[primary_reviewer] = original_detail
         state.reviewer_status[primary_reviewer] = "clean"
     return fallback
+
+
+def _maybe_run_fallback_fixer(
+    *,
+    primary_fixer: str,
+    primary_fix: FixResult,
+    reviewer: str,
+    findings: Sequence[ReviewFinding],
+    context: ReviewLoopContext,
+    worktree: Path,
+    round_number: int,
+    state: ReviewLoopState,
+    config: ReviewLoopConfig,
+    verbose: bool,
+    quiet: bool,
+    artifacts_dir: Path,
+    deadline: float,
+) -> Optional[FixResult]:
+    """Run the configured ``fixer_fallback`` once when the primary fixer fails.
+
+    Mirrors ``_maybe_run_fallback_reviewer`` (Issue #923). Triggers only
+    when:
+    * ``config.fixer_fallback`` is set.
+    * The fallback role differs from both the primary fixer (would be a
+      no-op retry on the same role that just failed) and the active
+      reviewer (reviewer/fixer role independence preserved — promoting
+      the reviewer to fix its own findings collapses the review loop's
+      core design).
+
+    Returns the fallback's ``FixResult`` if it ran, or ``None`` when no
+    fallback was attempted. When a budget cap is already crossed the
+    function marks the budget exhausted on state and sets a descriptive
+    ``stop_reason`` so the operator-facing report attributes the gate
+    correctly rather than reporting a bare "could not address" failure.
+    """
+    fallback_role = config.fixer_fallback
+    if not fallback_role:
+        return None
+    # Literal-string equality is the contract here. Alias normalization is
+    # NOT applied — the CLI option type-checks the fallback against the
+    # fixer/reviewer strings directly, and consistency with the test
+    # contract takes precedence over reviewer-side normalization. Callers
+    # that want aliases should resolve them before constructing the config.
+    if fallback_role == primary_fixer or fallback_role == reviewer:
+        return None
+
+    # Budget guard. The primary fixer's failed invocation may have already
+    # crossed the cost/duration budget; ``_run_fix`` would otherwise push
+    # us past it. Surface a precise stop reason so the final report
+    # explains why the fallback didn't run instead of claiming the primary
+    # "could not address" findings.
+    if _budget_exhausted(config, state, deadline):
+        _mark_budget_exhausted(config, state, deadline)
+        state.stop_reason = (
+            f"Fixer {primary_fixer} could not address {reviewer}'s findings; "
+            f"budget exhausted before fallback fixer {fallback_role} could run."
+        )
+        return None
+
+    if not quiet:
+        console.print(
+            f"[yellow]Primary fixer {primary_fixer} could not address "
+            f"{reviewer}'s findings; running fallback fixer "
+            f"{fallback_role}.[/yellow]"
+        )
+    return _run_fix(
+        fixer=fallback_role,
+        reviewer=reviewer,
+        findings=findings,
+        context=context,
+        worktree=worktree,
+        round_number=round_number,
+        state=state,
+        config=config,
+        verbose=verbose,
+        quiet=quiet,
+        artifacts_dir=artifacts_dir,
+    )
 
 
 def _extract_failure_diagnostics(

@@ -1613,6 +1613,249 @@ class TestCheckupReviewLoopRuntime:
             "| codex | degraded (optional, superseded by gemini) |" in report
         ), report
 
+    # ------------------------------------------------------------------
+    # ``fixer_fallback`` (this PR). Mirrors ``reviewer_fallback`` from
+    # #923: when the primary fixer can't address the reviewer's findings
+    # (because a Claude Code subscription-tier credential is exhausted,
+    # for instance) the loop dead-stops instead of trying a second
+    # configured fixer. These tests pin the fallback contract.
+    # ------------------------------------------------------------------
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "medium",
+            "area": "test",
+            "location": "tests/test_flow.py:12",
+            "evidence": "missing assertion",
+            "finding": "The PR does not test the new workflow.",
+            "required_fix": "Add a regression test.",
+        }
+
+    def test_fixer_fallback_runs_when_primary_fails(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Primary fixer (claude) fails; configured ``fixer_fallback``
+        (gemini) succeeds. The loop must NOT stop on the primary failure —
+        it must invoke the fallback fixer and then continue into the
+        verify pass."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                # Primary fixer hits subscription-tier credential exhaustion.
+                return (
+                    False,
+                    'Exit code 1: {"api_error_status":429,"result":"You\'ve hit your limit · resets May 18, 11pm (UTC)"}',
+                    0.0,
+                    role,
+                )
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                # Fallback fixer succeeds.
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            # Subsequent verify and re-review calls are clean.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fallback fixer's invocation MUST appear; this is the
+        # load-bearing signal that ``_maybe_run_fallback_fixer`` fired.
+        assert any(
+            label == "checkup-review-loop-fix-gemini-for-codex-round1"
+            for _, label in calls
+        ), f"fixer_fallback did not run; calls={calls!r}"
+        # The loop should not have dead-stopped on "could not address".
+        assert "could not address" not in report
+
+    def test_fixer_fallback_not_configured_breaks_loop(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Regression guard for the legacy behavior: with no
+        ``fixer_fallback`` configured, the loop MUST still break with a
+        ``Fixer ... could not address ...`` stop reason."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "fixer failed for unrelated reason", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not address" in report
+        # No fallback was configured; no gemini fixer attempt is allowed.
+        assert not any(
+            label.startswith("checkup-review-loop-fix-gemini-")
+            for _, label in calls
+        ), f"gemini must not run when fixer_fallback is unset; calls={calls!r}"
+
+    def test_fixer_fallback_same_as_primary_skips(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When ``fixer_fallback == fixer``, the fallback would be a
+        no-op retry on the same role that just failed. Skip it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="claude"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not address" in report
+        # Only the primary fix-claude call may exist; no second attempt.
+        claude_fix_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-fix-claude-")
+        ]
+        assert len(claude_fix_calls) == 1, (
+            f"primary fixer must not be retried as its own fallback; got "
+            f"{claude_fix_calls!r}"
+        )
+
+    def test_fixer_fallback_same_as_reviewer_skips(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When ``fixer_fallback == reviewer``, promoting the reviewer to
+        author the fix would collapse the reviewer/fixer role independence
+        the review loop exists to enforce. Skip it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="codex"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not address" in report
+        # codex must NOT have authored a fix. Only its review (and any
+        # later verify) calls are allowed.
+        codex_fix_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-fix-codex-")
+        ]
+        assert not codex_fix_calls, (
+            f"reviewer must not be promoted to fixer fallback; got {codex_fix_calls!r}"
+        )
+
+    def test_fixer_fallback_budget_exhausted(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When the budget is already exhausted at the moment the primary
+        fixer fails, the fallback must NOT be attempted. The stop reason
+        must mention budget exhaustion so the operator sees what gated
+        the fallback."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                # Spend the entire $0.30 budget on the primary fixer call
+                # so the fallback budget guard trips.
+                return False, "fixer failed", 0.30, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini", max_cost=0.30),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fallback must NOT have run — the budget gate cut it off.
+        assert not any(
+            label.startswith("checkup-review-loop-fix-gemini-")
+            for _, label in calls
+        ), f"fallback fixer must not run after budget exhaustion; calls={calls!r}"
+        # The report MUST mention budget exhaustion as the proximate cause
+        # so operators know the fallback was gated, not silently skipped.
+        assert "max-cost-reached: true" in report
+
 
 class TestPromptInjection:
     """Reviewer and fixer prompts must reflect the configured gate, not the
