@@ -2409,9 +2409,12 @@ _HTML_COMMENT_CONTRACT_RE = re.compile(
 # follows the heading. Only whitespace/newlines may precede the fence
 # (anchored via ``\A`` once we slice the text after the heading); the info
 # string MUST be ``text`` or ``json`` per spec (Issue #1013, iter-3 F3 — bare
-# fences are rejected). Captures the inner body.
+# fences are rejected). Captures the language (``text`` / ``json``) into the
+# named ``lang`` group so the parser can branch on the body format
+# (Issue #1013 iter-12 B-1: a ``json`` body must be parsed as a JSON array,
+# not as a line-separated path list).
 _FENCED_BLOCK_RE = re.compile(
-    r"\A\s*```(?:text|json)[ \t]*\n(?P<body>.*?)```",
+    r"\A\s*```(?P<lang>text|json)[ \t]*\n(?P<body>.*?)```",
     re.DOTALL,
 )
 
@@ -2517,11 +2520,25 @@ def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
 
 def _parse_fenced_block_contract(text: str) -> Optional[IssueContract]:
     """Return a contract parsed from a heading + immediately-following fenced
-    code block, else None. The fence MUST be ```` ``` ```` /
-    ```` ```text ```` / ```` ```json ```` and MUST appear immediately after
-    the heading (only whitespace permitted between). When the fence body
-    contains no valid paths, the contract is still returned as an empty
-    (reject-all) contract per Issue #1013."""
+    code block, else None. The fence MUST carry a ``text`` or ``json`` info
+    string (bare fences are rejected per Issue #1013 iter-3 F3) and MUST
+    appear immediately after the heading (only whitespace permitted between).
+
+    Body format depends on the fence language (Issue #1013 iter-12 B-1):
+
+    - ``text``: one repo-relative POSIX path per line; blank lines and lines
+      starting with ``#`` are ignored. Surrounding backticks on a path line
+      are stripped before validation.
+    - ``json``: a JSON array of repo-relative POSIX path strings, e.g.
+      ``["pdd/foo.py", "tests/test_foo.py"]``. Anything else (object,
+      number, string, malformed JSON) returns ``None`` so the caller falls
+      back to permissive mode.
+
+    When the fence body parses syntactically but contains no valid paths
+    (every entry dropped by ``_is_valid_contract_path``), the contract is
+    still returned with ``allowed_paths=()`` — a degenerate but legal
+    reject-all contract per the iter-8 B5 semantics.
+    """
     header_match = _FENCED_BLOCK_HEADER_RE.search(text)
     if not header_match:
         return None
@@ -2531,21 +2548,43 @@ def _parse_fenced_block_contract(text: str) -> Optional[IssueContract]:
     block_match = _FENCED_BLOCK_RE.match(after_header)
     if not block_match:
         return None
+    lang = block_match.group("lang")
     body = block_match.group("body")
-    # One repo-relative path per line; ignore blank lines and "#" comments.
     paths: List[str] = []
     seen: set = set()
-    for raw_line in body.splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#"):
-            continue
-        # Strip surrounding backticks if a user wrapped the path
-        line = line.strip("`").strip()
-        if not _is_valid_contract_path(line):
-            continue
-        if line not in seen:
-            paths.append(line)
-            seen.add(line)
+    if lang == "json":
+        # Issue #1013 iter-12 B-1: a JSON fence holds a JSON array of path
+        # strings, NOT a line-separated list. Parsing failures and any
+        # non-array payload (object, number, string) signal a malformed
+        # contract; return ``None`` so the caller falls back to permissive
+        # mode (matching the HTML-comment branch's tolerance).
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(parsed, list):
+            return None
+        for entry in parsed:
+            if not _is_valid_contract_path(entry):
+                continue
+            candidate = entry.strip()
+            if candidate not in seen:
+                paths.append(candidate)
+                seen.add(candidate)
+    else:
+        # ``text`` fence: one repo-relative path per line; ignore blank
+        # lines and ``#`` comments. Strip surrounding backticks if a user
+        # wrapped the path.
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            line = line.strip("`").strip()
+            if not _is_valid_contract_path(line):
+                continue
+            if line not in seen:
+                paths.append(line)
+                seen.add(line)
     # Empty fenced block is a legal degenerate contract (reject all).
     return IssueContract(
         allowed_paths=tuple(paths),

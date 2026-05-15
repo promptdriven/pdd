@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0, *, allowed_write_set: Optional[Iterable[str]] = None, companion_allowlist: Optional[Iterable[str]] = None, scope_guard_enabled: bool = True)", "returns": "AsyncSyncRunner"},
+      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0, *, allowed_write_set: Optional[Iterable[str]] = None, companion_allowlist: Optional[Iterable[str]] = None, scope_guard_enabled: bool = True, contract_source: Optional[str] = None)", "returns": "AsyncSyncRunner"},
       {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"},
       {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
       {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"}
@@ -27,7 +27,7 @@ Write the `pdd/agentic_sync_runner.py` module.
 Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. Supports state persistence for resumability across runs, phase tracking, and graceful interrupt handling.
 
 % Requirements
-1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0, *, allowed_write_set=None, companion_allowlist=None, scope_guard_enabled=True)`
+1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0, *, allowed_write_set=None, companion_allowlist=None, scope_guard_enabled=True, contract_source=None)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
    - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder
@@ -38,6 +38,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
    - `allowed_write_set: Optional[Iterable[str]]` — repo-relative path strings from the issue split contract that this sync run is permitted to modify. `None` means "no contract was parseable from the issue → run in permissive mode (no enforcement)". An explicit empty iterable means "contract present but empty → reject every change as out-of-scope" (a degenerate but legal contract). Resolved against each module's `cwd`/repo root inside the runner.
    - `companion_allowlist: Optional[Iterable[str]]` — additional glob patterns (e.g. `".pdd/meta/*.json"`) describing companion artifacts that MAY be modified outside the primary `allowed_write_set`. Defaults to `DEFAULT_SYNC_COMPANION_ALLOWLIST` from `agentic_common` (currently `(".pdd/meta/*.json",)`) when `None`. Issue contracts MAY widen the companion allowlist by passing a superset.
    - `scope_guard_enabled: bool` — master switch (default `True`). When `False`, the runner records the parsed contract for diagnostics but performs no enforcement, no revert, and no hard-fail. Maps to the CLI `--no-scope-guard` opt-out.
+   - `contract_source: Optional[str]` — diagnostic label carrying the parse source of the issue contract (`"html-comment"` or `"fenced-block"`, matching `IssueContract.source`) so scope-guard diagnostics and downstream review-loop reporters can surface where the contract was detected. `None` when no contract was parsed (permissive fallback).
    - Tracks per-module state: pending -> running -> success | failed
 2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost) where total_cost includes initial_cost + per-module costs
 3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS = 4`; when `sync_options["total_budget"]` is set, run sequentially and pass only the remaining total budget to each child process so the total budget is not multiplied per module.

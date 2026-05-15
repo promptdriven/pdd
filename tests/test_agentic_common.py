@@ -7249,11 +7249,18 @@ class TestParseIssueContract:
     def test_fenced_block_accepts_only_text_or_json(self):
         """Iter-3 F3: the spec at agentic_common_python.prompt:110 requires
         ``text`` or ``json`` info strings; bare ``` (no language) is NOT
-        accepted as a split-contract fence."""
+        accepted as a split-contract fence.
+
+        Iter-12 B-1: each fence language has its own body format — ``text``
+        is line-separated paths, ``json`` is a JSON array of path strings."""
         from pdd.agentic_common import parse_issue_contract
 
-        for fence in ("```text", "```json"):
-            body = f"## Allowed Write Set\n{fence}\npdd/foo.py\n```\n"
+        cases = (
+            ("```text", "pdd/foo.py"),
+            ("```json", '["pdd/foo.py"]'),
+        )
+        for fence, payload in cases:
+            body = f"## Allowed Write Set\n{fence}\n{payload}\n```\n"
             c = parse_issue_contract(body)
             assert c is not None and c.allowed_paths == ("pdd/foo.py",), fence
             assert c.source == "fenced-block"
@@ -7273,6 +7280,77 @@ class TestParseIssueContract:
         c = parse_issue_contract(body)
         assert isinstance(c, IssueContract)
         assert c.allowed_paths == ()
+
+    def test_fenced_json_array_of_paths_parses_correctly(self):
+        """Iter-12 B-1: a ``json`` fence whose body is a JSON array of path
+        strings must parse to those paths (NOT to a single literal path
+        equal to the raw JSON text)."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Allowed Write Set\n"
+            "```json\n"
+            '["pdd/foo.py", "tests/test_foo.py"]\n'
+            "```\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "fenced-block"
+
+    def test_fenced_json_empty_array_returns_empty_contract(self):
+        """Iter-12 B-1: ``[]`` in a ``json`` fence is a syntactically valid
+        degenerate reject-all contract — the parser MUST return an
+        ``IssueContract`` with ``allowed_paths=()``, NOT a single-element
+        tuple containing the literal string ``'[]'``."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = "## Allowed Write Set\n```json\n[]\n```\n"
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
+        assert c.source == "fenced-block"
+
+    def test_fenced_json_malformed_returns_none(self):
+        """Iter-12 B-1: malformed JSON in a ``json`` fence MUST cause the
+        parser to return ``None`` (permissive fallback), not raise."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = "## Allowed Write Set\n```json\n{not valid json\n```\n"
+        assert parse_issue_contract(body) is None
+
+    def test_fenced_json_object_returns_none(self):
+        """Iter-12 B-1: a JSON *object* in a ``json`` fence is the
+        HTML-comment format leaking into a fence — the fenced-block
+        ``json`` format is documented as an array of paths only, so the
+        parser MUST return ``None`` for objects."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = (
+            "## Allowed Write Set\n"
+            "```json\n"
+            '{"allowed_paths": ["pdd/foo.py"]}\n'
+            "```\n"
+        )
+        assert parse_issue_contract(body) is None
+
+    def test_fenced_text_still_parses_line_by_line(self):
+        """Iter-12 B-1 regression: the ``text`` fence branch MUST keep its
+        original line-by-line semantics after the parser branched on
+        language."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Allowed Write Set\n"
+            "```text\n"
+            "pdd/foo.py\n"
+            "tests/test_foo.py\n"
+            "```\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "fenced-block"
 
     def test_companion_allowlist_rejects_wildcard_only_patterns(self):
         """Iter-10 M-1: wildcard-only patterns (``*``, ``**``, ``**/*``, ``?``)
