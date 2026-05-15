@@ -1879,7 +1879,7 @@ def test_architecture_template_repairs_invalid_interface_type(
     assert saved[0]["interface"]["type"] == "page"
 
 
-def test_postprocess_uses_output_path_as_input_when_llm_enabled(
+def test_postprocess_uses_temp_input_when_llm_enabled(
     mock_ctx,
     temp_dir_setup,
     mock_construct_paths_fixture,
@@ -1887,7 +1887,7 @@ def test_postprocess_uses_output_path_as_input_when_llm_enabled(
     mock_subprocess_run_fixture,
     mock_env_vars,
 ):
-    """When LLM is enabled and an output path is resolved, the post-process input file should be the output path."""
+    """When LLM is enabled, post-process input should not overwrite the output path before gates pass."""
     mock_ctx.obj['local'] = True
 
     # Build a prompt with front matter enabling a post-process script
@@ -1897,6 +1897,7 @@ def test_postprocess_uses_output_path_as_input_when_llm_enabled(
     front_matter_prompt = """---
 language: python
 post_process_python: "./dummy_post_process.py"
+post_process_args: ["{INPUT_FILE}"]
 ---
 Generate a simple module.
 """
@@ -1920,12 +1921,68 @@ Generate a simple module.
         env_vars={"llm": "true"},
     )
 
-    # Output should be written prior to post-process and match generated code
     assert output_file_path.exists()
     assert output_file_path.read_text(encoding="utf-8") == DEFAULT_MOCK_GENERATED_CODE
 
-    # Post-process should be invoked
     assert mock_subprocess_run_fixture.called
+    postprocess_cmd = mock_subprocess_run_fixture.call_args[0][0]
+    assert pathlib.Path(postprocess_cmd[2]).resolve() != output_file_path.resolve()
+
+
+def test_postprocess_gate_failure_restores_existing_output(
+    mock_ctx,
+    temp_dir_setup,
+    mock_construct_paths_fixture,
+    mock_local_generator_fixture,
+    mock_subprocess_run_fixture,
+    mock_env_vars,
+):
+    from pdd.code_generator_main import PublicSurfaceRegressionError
+
+    mock_ctx.obj['local'] = True
+    prompt_file_path = temp_dir_setup["prompts_dir"] / "postprocess_prompt_python.prompt"
+    output_file_path = temp_dir_setup["output_dir"] / "pp_output.py"
+    existing_code = "def stable_api():\n    return 'old'\n"
+    rejected_code = "def replacement_api():\n    return 'new'\n"
+    create_file(output_file_path, existing_code)
+
+    front_matter_prompt = """---
+language: python
+post_process_python: "./dummy_post_process.py"
+post_process_args: ["{INPUT_FILE}"]
+---
+Generate a simple module.
+"""
+    create_file(prompt_file_path, front_matter_prompt)
+    mock_construct_paths_fixture.return_value = (
+        {},
+        {"prompt_file": front_matter_prompt},
+        {"output": str(output_file_path)},
+        "python",
+    )
+    mock_local_generator_fixture.return_value = (
+        rejected_code,
+        DEFAULT_MOCK_COST,
+        DEFAULT_MOCK_MODEL_NAME,
+    )
+
+    def write_rejected_output(*args, **kwargs):
+        output_file_path.write_text(rejected_code, encoding="utf-8")
+        return subprocess.CompletedProcess(args=args[0], returncode=0, stdout="", stderr="")
+
+    mock_subprocess_run_fixture.side_effect = write_rejected_output
+
+    with pytest.raises(PublicSurfaceRegressionError):
+        code_generator_main(
+            mock_ctx,
+            str(prompt_file_path),
+            str(output_file_path),
+            None,
+            False,
+            env_vars={"llm": "true"},
+        )
+
+    assert output_file_path.read_text(encoding="utf-8") == existing_code
 
 
 def test_architecture_postprocess_passes_absolute_input_path(
@@ -2002,7 +2059,7 @@ def test_architecture_postprocess_passes_absolute_input_path(
     assert render_cmd is not None, "render_mermaid.py should run for architecture template"
     input_arg = render_cmd[2]
     assert os.path.isabs(input_arg)
-    assert input_arg == str(expected_output_path.resolve())
+    assert pathlib.Path(input_arg).resolve() != expected_output_path.resolve()
 
 
 def test_architecture_postprocess_rewrites_json_pretty(
@@ -5068,7 +5125,7 @@ class TestArchitectureConformanceErrorTypedException:
 # Tests for public surface and test churn gates (Issue #1012)
 # ---------------------------------------------------------------------------
 class TestSyncCompatibilityGates:
-    def test_public_surface_regression_catches_removed_import_and_helper(self):
+    def test_public_surface_regression_catches_removed_helper_not_import(self):
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
@@ -5096,9 +5153,34 @@ class TestSyncCompatibilityGates:
                 "Update internals only.",
             )
 
-        assert excinfo.value.removed_symbols == ["calculate_sha256", "git"]
         assert "Public surface regression for update_main_Python.prompt:" in str(excinfo.value)
+        assert excinfo.value.removed_symbols == ["calculate_sha256"]
+        assert "git" not in excinfo.value.removed_symbols
         assert "- calculate_sha256" in excinfo.value.repair_directive
+
+    def test_public_surface_regression_ignores_imports_and_assignments(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "import os\n"
+            "from pathlib import Path\n"
+            "PUBLIC_SETTING = True\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "update_main_Python.prompt",
+            "pdd/update_main.py",
+            "python",
+            "Update internals only.",
+        )
 
     def test_public_surface_regression_allows_explicit_breaking_change(self):
         from pdd.code_generator_main import _verify_public_surface_regression

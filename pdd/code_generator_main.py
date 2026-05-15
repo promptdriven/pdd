@@ -253,7 +253,7 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
 
 
 def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
-    """Collect public top-level names plus direct public class methods/imports."""
+    """Collect public top-level functions/classes plus direct public class methods."""
     if (language or "").lower() not in {"python", "py"}:
         return set()
     try:
@@ -279,16 +279,6 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                             names.add(f"{node.name}.{child.name}")
                     elif isinstance(child, ast.ClassDef) and not child.name.startswith("_"):
                         names.add(f"{node.name}.{child.name}")
-        elif isinstance(node, ast.Assign):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
-                    add(target.id)
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            add(node.target.id)
-        elif isinstance(node, (ast.Import, ast.ImportFrom)):
-            for alias in node.names:
-                public_name = alias.asname or alias.name.split(".", 1)[0]
-                add(public_name)
 
     return names
 
@@ -2285,17 +2275,12 @@ def code_generator_main(
                             temp_input_path = str(pathlib.Path(output_path).resolve())
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         else:
-                            # Write payload to a temp file for scripts expecting a file path input
+                            # Write payload to a temp file for scripts expecting a file path input.
+                            # LLM output must not touch output_path until conformance gates pass.
                             suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
-                            if output_path and llm_enabled:
-                                temp_input_path = str(pathlib.Path(output_path).resolve())
-                                pathlib.Path(temp_input_path).parent.mkdir(parents=True, exist_ok=True)
-                                with open(temp_input_path, 'w', encoding='utf-8') as f:
-                                    f.write(stdin_payload or '')
-                            else:
-                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
-                                    tf.write(stdin_payload or '')
-                                    temp_input_path = tf.name
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                                tf.write(stdin_payload or '')
+                                temp_input_path = tf.name
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         # Compute placeholder values
                         app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None
@@ -2344,8 +2329,12 @@ def code_generator_main(
                 finally:
                     if temp_input_path:
                         try:
-                            # Only delete temp files, not the actual output file when llm=false
-                            if llm_enabled or not (output_path and pathlib.Path(output_path).exists() and temp_input_path == str(pathlib.Path(output_path).resolve())):
+                            # Only delete temp files, not the actual output file when llm=false.
+                            is_resolved_output = bool(
+                                output_path
+                                and temp_input_path == str(pathlib.Path(output_path).resolve())
+                            )
+                            if not is_resolved_output:
                                 os.unlink(temp_input_path)
                         except Exception:
                             pass
@@ -2462,6 +2451,18 @@ def code_generator_main(
                         prompt_content=prompt_content,
                     )
                 except (PublicSurfaceRegressionError, TestChurnError) as compat_err:
+                    if output_path and existing_code_content is not None:
+                        try:
+                            pathlib.Path(output_path).write_text(
+                                existing_code_content,
+                                encoding="utf-8",
+                            )
+                        except Exception as restore_err:
+                            if verbose and not quiet:
+                                console.print(
+                                    f"[yellow]Warning: Could not restore {output_path} "
+                                    f"after compatibility gate failure: {restore_err}[/yellow]"
+                                )
                     compat_err.total_cost = float(total_cost or 0.0)
                     compat_err.model_name = model_name or "unknown"
                     raise
