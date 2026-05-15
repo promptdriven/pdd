@@ -7155,6 +7155,126 @@ class TestPostStep9ResumeRoutesToCleanupNotStep1:
             "cached Step 9 success token."
         )
 
+    def test_resume_reverify_failure_persists_failed_marker_before_advancing(
+        self, mock_deps, tmp_path
+    ):
+        """Issue #1001 round 12 (LOW): when resume re-verification fails and
+        the cycle advances, the ``FAILED: VERIFICATION_FAILED_ON_RESUME:``
+        marker MUST be persisted to disk BEFORE ``step_outputs`` is cleared
+        on cycle advance.
+
+        The round-11 re-verify block writes the FAILED marker into
+        ``step_outputs["9"]`` and then takes the ADVANCE_CYCLE branch which
+        resets ``step_outputs = {}``. Without an intermediate
+        ``save_workflow_state`` call, the marker never lands on disk — it
+        is dead code, and the next save in the new cycle starts with an
+        empty ``step_outputs``. This test asserts the marker is observable
+        in AT LEAST ONE call to ``save_workflow_state`` before being
+        cleared.
+
+        Discriminator: temporarily drop the new ``save_workflow_state`` call
+        from the round-11 re-verify block. This test MUST fail because the
+        only saves observable are inside the new cycle's inner loop (after
+        ``step_outputs`` was cleared), so no save call's ``state`` arg
+        carries the ``VERIFICATION_FAILED_ON_RESUME`` substring.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — but state was saved before verify ran",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            # Terminate the new cycle cleanly at Step 9 so the test does
+            # not exhaust the cycle budget.
+            if "step9" in label:
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        # Drive the failure branch of the round-11 re-verify gate.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_stale.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, "stale pass: pytest exit code 1"),
+        ):
+            run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume reverify FAILED marker persistence",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        # The contract: among ALL save_workflow_state calls, AT LEAST ONE
+        # must have been driven with a ``state`` dict whose
+        # ``step_outputs["9"]`` contains the ``VERIFICATION_FAILED_ON_RESUME``
+        # marker. Without the round-12 save call, the marker would have
+        # been clobbered by ``step_outputs = {}`` before any save reached
+        # it. The state dict is the 4th positional argument
+        # (``cwd, issue_number, workflow_type, state, ...``).
+        save_calls = mock_deps["save"].call_args_list
+        assert save_calls, (
+            "Issue #1001 round 12: orchestrator must call "
+            "save_workflow_state at least once during resume — otherwise "
+            "the FAILED marker can never be persisted."
+        )
+
+        def _extract_state(call):
+            # Prefer positional; fall back to kwargs for flexibility.
+            if len(call.args) > 3:
+                return call.args[3]
+            return call.kwargs.get("state", {})
+
+        found = any(
+            "VERIFICATION_FAILED_ON_RESUME"
+            in (_extract_state(c).get("step_outputs", {}) or {}).get("9", "")
+            for c in save_calls
+        )
+        assert found, (
+            "Issue #1001 round 12 (LOW): FAILED VERIFICATION_FAILED_ON_RESUME "
+            "marker must be persisted via save_workflow_state BEFORE the "
+            "cycle is advanced and step_outputs is cleared. Otherwise the "
+            "diagnostic is dead code — the next state save lands after the "
+            "advance with an empty step_outputs and no record of the "
+            "verification failure ever existed on disk.\n"
+            f"Observed save_workflow_state state args (step_outputs['9'] "
+            f"snippets): "
+            f"{[(_extract_state(c).get('step_outputs', {}) or {}).get('9', '')[:80] for c in save_calls]}"
+        )
+
 
 # ============================================================================
 # Issue #1001 round 8: _commit_and_push must filter .gh-wrapper/* in BOTH

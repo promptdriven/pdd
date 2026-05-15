@@ -1776,6 +1776,58 @@ def run_agentic_e2e_fix_orchestrator(
                 step_outputs["9"] = (
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
                 )
+
+                # Issue #1001 round 12 (LOW): persist the FAILED marker BEFORE
+                # the ADVANCE_CYCLE branch clears step_outputs, otherwise the
+                # diagnostic is dead code — the inner-loop's first state save
+                # would only land after cycle advance with an empty step_outputs.
+                # Assemble the full state dict here (state_data is not yet in
+                # scope at this point in the function; it is first defined at
+                # the inner-loop site). The shape mirrors that site exactly so
+                # other fields (total_cost, dev_unit_states, initial_sha, etc.)
+                # are not clobbered on disk.
+                _state_data_resume = {
+                    "workflow": workflow_name,
+                    "issue_url": issue_url,
+                    "issue_number": issue_number,
+                    "current_cycle": current_cycle,
+                    "last_completed_step": last_completed_step,
+                    "step_outputs": step_outputs.copy(),
+                    "dev_unit_states": dev_unit_states.copy(),
+                    "total_cost": total_cost,
+                    "model_used": model_used,
+                    "changed_files": changed_files.copy(),
+                    "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+                    "last_saved_at": datetime.now().isoformat(),
+                    "github_comment_id": github_comment_id,
+                    "initial_file_hashes": dict(initial_file_hashes),
+                    "initial_sha": initial_sha,
+                }
+                try:
+                    new_gh_id = save_workflow_state(
+                        cwd,
+                        issue_number,
+                        workflow_name,
+                        _state_data_resume,
+                        state_dir,
+                        repo_owner,
+                        repo_name,
+                        use_github_state,
+                        github_comment_id,
+                    )
+                    if new_gh_id:
+                        github_comment_id = new_gh_id
+                except Exception as _save_exc:
+                    # Best-effort: the FAILED marker is still observable in
+                    # the in-memory step_outputs if we later save again
+                    # within the same cycle; don't crash resume on a save
+                    # transient.
+                    logger.debug(
+                        "Best-effort resume-reverify state save failed: %s",
+                        _save_exc,
+                        exc_info=True,
+                    )
+
                 if current_cycle < max_cycles:
                     current_cycle += 1
                     last_completed_step = 0
