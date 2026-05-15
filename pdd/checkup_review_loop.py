@@ -647,15 +647,6 @@ class ReviewLoopState:
     last_model: str = "unknown"
     reviewer_status: Dict[str, str] = field(default_factory=dict)
     active_reviewer: Optional[str] = None
-    # Set lazily once ``fixer_fallback`` runs and succeeds. Once set, all
-    # subsequent rounds drive ``_run_fix`` with this role instead of the
-    # original primary, and ``_maybe_run_fallback_fixer`` early-returns.
-    # The one-shot fallback contract documented on ``ReviewLoopConfig``
-    # promises the fallback runs exactly once: re-invoking the exhausted
-    # primary in later rounds (credential-limit resets are hours-to-days)
-    # would just burn another fallback invocation needlessly. Parallel to
-    # ``active_reviewer`` on the reviewer side.
-    active_fixer: Optional[str] = None
     findings_by_key: Dict[str, ReviewFinding] = field(default_factory=dict)
     raw_outputs: List[Tuple[str, str]] = field(default_factory=list)
     fixes: List[FixResult] = field(default_factory=list)
@@ -674,6 +665,15 @@ class ReviewLoopState:
     # ``classification``, ``exit_code``, ``reason`` (last ~20 lines of
     # stderr/stdout), and ``status``.
     reviewer_status_details: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Set lazily once ``fixer_fallback`` runs and succeeds. Once set, all
+    # subsequent rounds drive ``_run_fix`` with this role instead of the
+    # original primary, and ``_maybe_run_fallback_fixer`` early-returns.
+    # The one-shot fallback contract promises the fallback runs exactly
+    # once: re-invoking the exhausted primary in later rounds (credential-
+    # limit resets are hours-to-days) would just burn another fallback
+    # invocation needlessly. Parallel to ``active_reviewer``. Kept at the
+    # end of the field list so positional construction stays stable.
+    active_fixer: Optional[str] = None
 
     @property
     def findings(self) -> List[ReviewFinding]:
