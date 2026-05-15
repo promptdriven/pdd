@@ -6777,3 +6777,276 @@ class TestPostStep9ResumeRoutesToCleanupNotStep1:
             f"Expected MAX_CYCLES_REACHED in new cycle to return False; "
             f"got success={success}, final_message={final_message!r}."
         )
+
+
+# ============================================================================
+# Issue #1001 round 8: _commit_and_push must filter .gh-wrapper/* in BOTH
+# staging paths (hash-diff and fallback). The unit-level filter test
+# (TestGhWrapperFilter) proves _is_intermediate_file works in isolation; these
+# tests prove _commit_and_push ACTUALLY USES it on the right files at the right
+# call sites in a real git repo.
+# ============================================================================
+
+
+class TestCommitAndPushFiltersGhWrapper:
+    """Integration tests for ``_commit_and_push`` filtering ``.gh-wrapper/*``
+    artifacts in BOTH staging paths (Issue #1001 round 8).
+
+    The runtime function has two staging sites:
+
+    1. **Hash-diff path** (``agentic_e2e_fix_orchestrator.py:1317``)
+       -- ``files_to_commit = [f for f in changed_files_raw if not
+       _is_intermediate_file(f)]``. Fires when the hash snapshot DOES detect
+       changes between ``initial_file_hashes`` and the current tree.
+
+    2. **Fallback path** (``agentic_e2e_fix_orchestrator.py:1325``)
+       -- ``fallback_files = [f for f in fallback_files if not
+       _is_intermediate_file(f)]``. Fires when the hash-diff path produces no
+       files (tainted snapshot scenario, #545) and the function calls
+       ``_get_modified_and_untracked`` directly.
+
+    The reviewer's concern (round 8): unit tests of ``_is_intermediate_file``
+    pass in isolation, but a regression could remove the filter call at
+    either site and the unit tests wouldn't catch it. These tests exercise
+    both sites against a real git tree containing real ``.gh-wrapper/gh`` and
+    ``.gh-wrapper/git`` files plus a real source file we DO want committed.
+    """
+
+    @staticmethod
+    def _init_git_repo_with_remote(tmp_path):
+        """Local copy of ``TestIssue545CommitAndPushWithTaintedHashes._init_git_repo_with_remote``.
+
+        Creates a worktree cloned from a bare remote so ``_commit_and_push``
+        can call its real push code path without network mocking. Returns
+        ``(worktree, module)`` where ``module`` is ``worktree / "module.py"``
+        committed with content ``"x = 1\\n"``.
+        """
+        bare = tmp_path / "bare.git"
+        worktree = tmp_path / "worktree"
+
+        subprocess.run(
+            ["git", "init", "--bare", str(bare)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "clone", str(bare), str(worktree)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        module = worktree / "module.py"
+        module.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "push", "-u", "origin", branch],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        return worktree, module
+
+    @staticmethod
+    def _committed_files(worktree) -> set:
+        """Return the set of files in the most recent commit (HEAD)."""
+        result = subprocess.run(
+            ["git", "log", "--name-only", "--pretty=format:", "-1", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        )
+        return {line for line in result.stdout.splitlines() if line.strip()}
+
+    def test_commit_and_push_hash_diff_path_filters_gh_wrapper_files(self, tmp_path):
+        """Hash-diff staging: when ``.gh-wrapper/gh`` and ``.gh-wrapper/git``
+        are 'new' files (not in ``initial_file_hashes``) and ``module.py`` is
+        modified, ``_commit_and_push`` must drop the wrapper files via
+        ``_is_intermediate_file`` before staging.
+
+        Regression for #1001 staging path 1 (``:1317``). Discriminator: if the
+        filter call site is removed (``files_to_commit = changed_files_raw``),
+        ``.gh-wrapper/gh`` and ``.gh-wrapper/git`` appear in the committed
+        tree and this test fails.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _commit_and_push, _get_file_hashes,
+        )
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # 1. Take a clean baseline hash snapshot BEFORE any of the workflow
+        #    changes exist on disk -- this is the "fresh run" pattern the
+        #    hash-diff path is designed for.
+        initial_hashes = _get_file_hashes(worktree)
+
+        # 2. Now create the workflow's outputs on disk:
+        #    - a real source change we DO want committed
+        #    - the .gh-wrapper artifacts we DO NOT want committed
+        module.write_text("x = 2  # the real fix\n")
+        gh_wrapper = worktree / ".gh-wrapper"
+        gh_wrapper.mkdir()
+        (gh_wrapper / "gh").write_text("#!/bin/sh\n# wrapper for gh CLI\n")
+        (gh_wrapper / "git").write_text("#!/bin/sh\n# wrapper for git CLI\n")
+
+        # 3. Call _commit_and_push. With a clean baseline snapshot and three
+        #    files newly differing, the function enters the hash-diff branch
+        #    (not the fallback).
+        success, message = _commit_and_push(
+            cwd=worktree,
+            issue_number=1001,
+            issue_title="Filter .gh-wrapper artifacts on hash-diff path",
+            repo_owner="owner", repo_name="repo",
+            initial_file_hashes=initial_hashes,
+            quiet=True,
+        )
+
+        # 4. The commit must succeed and contain only the real source change.
+        assert success is True, (
+            f"_commit_and_push should have succeeded on the hash-diff path; "
+            f"got message={message!r}"
+        )
+        assert "Committed and pushed" in message, (
+            f"Expected hash-diff path to reach the commit-and-push branch; "
+            f"got message={message!r}"
+        )
+
+        committed = self._committed_files(worktree)
+        assert "module.py" in committed, (
+            f"#1001 hash-diff: module.py must be in the commit "
+            f"(committed files: {committed!r})"
+        )
+        assert ".gh-wrapper/gh" not in committed, (
+            f"#1001 hash-diff path: .gh-wrapper/gh leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1317 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
+        assert ".gh-wrapper/git" not in committed, (
+            f"#1001 hash-diff path: .gh-wrapper/git leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1317 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
+
+    def test_commit_and_push_fallback_path_filters_gh_wrapper_files(self, tmp_path):
+        """Fallback staging: when the hash-diff path produces no files
+        (tainted-snapshot scenario, #545), ``_commit_and_push`` falls back to
+        ``_get_modified_and_untracked``. The fallback MUST also apply
+        ``_is_intermediate_file`` so ``.gh-wrapper/*`` is dropped there too.
+
+        Regression for #1001 staging path 2 (``:1325``).
+
+        How the fallback is forced deterministically:
+
+        * ``_get_file_hashes`` walks ``_get_modified_and_untracked`` to build
+          its dict. If we put all three files (``module.py`` modified,
+          ``.gh-wrapper/gh``, ``.gh-wrapper/git``) on disk BEFORE taking the
+          snapshot, ``initial_file_hashes`` already contains them with their
+          current hashes.
+        * Inside ``_commit_and_push``, ``current_hashes`` is computed AGAIN
+          off the same on-disk state, so it equals ``initial_file_hashes``.
+        * ``changed_files_raw`` is therefore empty, ``files_to_commit`` is
+          empty, and the function enters the fallback ``if not
+          files_to_commit:`` branch.
+        * ``_get_modified_and_untracked`` (called fresh by the fallback)
+          returns the same three files -- but now the staging filter MUST be
+          applied at line :1325, not just :1317.
+
+        Discriminator: spy on ``_get_modified_and_untracked`` and assert it
+        is called TWICE (once from ``_get_file_hashes``, once from the
+        fallback) -- proves the test actually walks the fallback branch
+        rather than passing vacuously.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _commit_and_push, _get_file_hashes,
+        )
+        import pdd.agentic_e2e_fix_orchestrator as orch_mod
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # 1. Put everything on disk BEFORE taking the snapshot -- so the
+        #    snapshot is "tainted" with all three files. This forces the
+        #    hash-diff path to find zero deltas and fall through.
+        module.write_text("x = 2  # the real fix from a prior interrupted run\n")
+        gh_wrapper = worktree / ".gh-wrapper"
+        gh_wrapper.mkdir()
+        (gh_wrapper / "gh").write_text("#!/bin/sh\n# wrapper for gh CLI\n")
+        (gh_wrapper / "git").write_text("#!/bin/sh\n# wrapper for git CLI\n")
+
+        # 2. Capture tainted hashes AFTER all three files exist -- mimics
+        #    the resume scenario where the prior run's state was already on
+        #    disk when the new run's snapshot was taken.
+        tainted_hashes = _get_file_hashes(worktree)
+        # Sanity: tainted snapshot must already contain all three files.
+        assert "module.py" in tainted_hashes
+        assert ".gh-wrapper/gh" in tainted_hashes
+        assert ".gh-wrapper/git" in tainted_hashes
+
+        # 3. Spy on _get_modified_and_untracked so we can prove the fallback
+        #    branch actually fires (it'd be called twice: once inside
+        #    _get_file_hashes at :1303, once at the fallback :1323). Wrap
+        #    rather than replace so the real implementation still runs.
+        original = orch_mod._get_modified_and_untracked
+        spy = MagicMock(wraps=original)
+        with patch.object(orch_mod, "_get_modified_and_untracked", spy):
+            success, message = _commit_and_push(
+                cwd=worktree,
+                issue_number=1001,
+                issue_title="Filter .gh-wrapper artifacts on fallback path",
+                repo_owner="owner", repo_name="repo",
+                initial_file_hashes=tainted_hashes,
+                quiet=True,
+            )
+
+        # 4. Prove the fallback branch was actually walked. The spy must
+        #    record at least 2 calls: one from _get_file_hashes (line 1303
+        #    inside the function body), one from the fallback itself
+        #    (line 1323). Without this assertion, a regression that made the
+        #    hash-diff path detect changes (e.g. via a different snapshot
+        #    behavior) would let this test pass vacuously without ever
+        #    exercising :1325.
+        assert spy.call_count >= 2, (
+            f"Expected _get_modified_and_untracked to be called at least "
+            f"twice (once by _get_file_hashes, once by the fallback at "
+            f":1323); got {spy.call_count} calls. The fallback branch was "
+            f"not exercised -- this test would pass vacuously."
+        )
+
+        # 5. The commit must succeed and contain only the real source change.
+        assert success is True, (
+            f"_commit_and_push should have succeeded on the fallback path; "
+            f"got message={message!r}"
+        )
+        assert "Committed and pushed" in message, (
+            f"Expected fallback path to reach the commit-and-push branch; "
+            f"got message={message!r}"
+        )
+
+        committed = self._committed_files(worktree)
+        assert "module.py" in committed, (
+            f"#1001 fallback: module.py must be in the commit "
+            f"(committed files: {committed!r})"
+        )
+        assert ".gh-wrapper/gh" not in committed, (
+            f"#1001 fallback path: .gh-wrapper/gh leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1325 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
+        assert ".gh-wrapper/git" not in committed, (
+            f"#1001 fallback path: .gh-wrapper/git leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1325 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
