@@ -872,6 +872,7 @@ Options:
 - `--durable-branch TEXT`: Durable mode only. Override the durable checkpoint branch name. Default is `sync/issue-<N>` derived from the GitHub issue. Refused if it resolves to `main`, `master`, or the repository default branch.
 - `--no-resume`: Durable mode only. Ignore existing `PDD-Sync-Checkpoint-V1` commit trailers on the durable branch and re-run every selected module. By default, durable sync reads checkpoint trailers (`PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>`) and skips modules already checkpointed for the same issue, which is what makes a cloud rerun safely resume completed work after a partial failure.
 - `--durable-max-parallel INT`: Durable mode only. Cap how many module worktrees run concurrently. Defaults to the standard runner concurrency. A total budget still forces sequential execution.
+- `--no-scope-guard`: Issue-sync only. Disable the split-contract scope guard for this run. By default, when the linked GitHub issue declares an allowed write set (split contract), `pdd sync` enforces it and rejects out-of-scope generated artifacts. Pass this flag only when intentionally overriding contract enforcement (e.g. recovering from a stale contract). See "Split-Contract Scope Guard" below.
 
 **Durable Issue Sync** (`--durable`):
 
@@ -1059,6 +1060,61 @@ Options (agentic mode):
 - `--no-github-state`: Disable GitHub state persistence, use local-only
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
+
+**Split-Contract Scope Guard** (Issue #1013):
+
+When the linked GitHub issue declares an allowed write set (a "split contract"), `pdd sync` enforces it: each per-module subprocess is followed by a scope check that reverts tracked changes and removes untracked new files that fall outside the contract. Companion artifacts under `.pdd/meta/*.json` are auto-allowed because they are sync's own fingerprint bookkeeping; issues may opt additional companions (e.g. examples or architecture entries) into the allowlist explicitly.
+
+The contract is read from the issue body or any of its comments in one of three forms (tried in priority order — the first match wins):
+
+1. An HTML-comment block (preferred — invisible in rendered Markdown):
+   ```html
+   <!-- PDD_ISSUE_CONTRACT
+   {
+     "allowed_paths": [
+       "pdd/update_main.py",
+       "pdd/prompts/update_main_python.prompt",
+       "tests/test_update_main.py"
+     ],
+     "companion_allowlist": [".pdd/meta/*.json"]
+   }
+   -->
+   ```
+2. A fenced code block under a heading like `### Allowed Write Set` or `### Split Contract`:
+   ```text
+   pdd/update_main.py
+   pdd/prompts/update_main_python.prompt
+   tests/test_update_main.py
+   ```
+3. A bullet list under an inline `**Allowed write set:**` label (the
+   real-world shape used by sub-issues such as #1005):
+
+   ```markdown
+   ## Split Contract
+   **Command sequence:** change → sync
+   **Allowed write set:**
+   - `pdd/update_main.py`
+   - `pdd/prompts/update_main_python.prompt`
+   - `tests/test_update_main.py`
+   **Acceptance criteria:**
+   - ...
+   ```
+
+   The heading regex is the same as form 2; the inline `**Allowed write set:**` label discriminates the bullet list so unrelated bullets earlier in the body (e.g. a `## Files` section) are NOT captured. Each bullet is one repo-relative POSIX path with optional surrounding backticks. The list terminates at the next `**Label:**` (such as `**Acceptance criteria:**`), a `---` rule, another heading, a non-blank non-bullet line, or end of body.
+
+When an out-of-scope change is detected, the run records a hard failure for that module with a diagnostic of the form:
+
+```
+Scope guard reverted N out-of-scope file(s) for module '<basename>' (contract source: <source>):
+  - path/relative/to/repo
+  - another/path
+Allowed write set:
+  - path/from/contract
+Companion allowlist:
+  - .pdd/meta/*.json
+```
+
+This blocks the per-module success record so dependent modules do not schedule on top of an out-of-scope sync, and checkup/review-loop reports surface the failure instead of letting unrelated artifacts land in the PR. When no contract marker is present, the scope guard falls back to permissive mode — no enforcement, no reverts — preserving existing behavior for issues that have not opted in. Use `--no-scope-guard` to disable enforcement for a single run when you intentionally need to override the contract.
 
 ### 1a. sync-architecture
 

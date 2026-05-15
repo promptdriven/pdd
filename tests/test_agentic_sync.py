@@ -18,12 +18,14 @@ pytestmark = pytest.mark.timeout(450)
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
     _analyze_global_sync_modules,
+    _arch_path_in_scope,
     _architecture_module_basenames,
     _architecture_sync_modules,
     _augment_architecture_from_pr_branch,
     _build_scoped_global_dep_graph,
     _branch_diff_is_runtime_llm_only,
     _detect_modules_from_branch_diff,
+    _enforce_orchestrator_scope,
     _filter_already_synced,
     _find_project_root,
     _is_catchall_match,
@@ -31,6 +33,7 @@ from pdd.agentic_sync import (
     _is_runtime_llm_template,
     _llm_fix_dry_run_failure,
     _load_architecture_json,
+    _extract_allowed_write_paths,
     _parse_llm_response,
     _print_global_sync_plan,
     _resolve_module_cwd,
@@ -41,8 +44,10 @@ from pdd.agentic_sync import (
     run_agentic_sync,
     run_global_sync,
 )
+from pdd.agentic_common import IssueContract
 from pdd.agentic_sync_runner import (
     DepGraphFromArchitectureResult,
+    _hash_baseline_paths,
     build_dep_graph_from_architecture,
 )
 
@@ -190,6 +195,64 @@ class TestParseLlmResponse:
         response2 = 'MODULES_TO_SYNC: ["a"]\nDEPS_VALID: FALSE\n'
         _, valid2, _ = _parse_llm_response(response2)
         assert valid2 is False
+
+
+class TestExtractAllowedWritePaths:
+    """
+    Issue #1013 (F1, F3, F16): the deprecated ``_extract_allowed_write_paths``
+    wrapper now delegates to :func:`pdd.agentic_common.parse_issue_contract`,
+    which only recognizes two structured contract formats: HTML-comment
+    blocks and heading+fenced-block. The legacy loose-markdown parsing tested
+    here previously is intentionally NOT supported by the new contract API —
+    deeper coverage lives in ``tests/test_agentic_common.py``.
+    """
+
+    def test_extracts_split_contract_allowed_paths_from_fenced_block(self):
+        issue = """
+## Allowed Write Set
+```text
+pdd/update_main.py
+pdd/prompts/update_main_python.prompt
+tests/test_update_main.py
+```
+
+But sync wrote other files.
+"""
+        assert _extract_allowed_write_paths(issue) == [
+            "pdd/update_main.py",
+            "pdd/prompts/update_main_python.prompt",
+            "tests/test_update_main.py",
+        ]
+
+    def test_extracts_split_contract_allowed_paths_from_html_comment(self):
+        issue = """
+Some discussion.
+
+<!-- PDD_ISSUE_CONTRACT
+{"allowed_paths": ["pdd/update_main.py", "tests/test_update_main.py"]}
+-->
+
+More discussion.
+"""
+        assert _extract_allowed_write_paths(issue) == [
+            "pdd/update_main.py",
+            "tests/test_update_main.py",
+        ]
+
+    def test_returns_empty_without_contract_marker(self):
+        assert _extract_allowed_write_paths("Touch `pdd/foo.py` if needed.") == []
+
+    def test_ignores_loose_markdown_bullets_without_structured_block(self):
+        # The legacy markdown-bullet format is no longer supported; the new
+        # contract API requires either an HTML-comment or a fenced block.
+        issue = """
+## Split Contract
+Allowed write set:
+
+  * `pdd/update_main.py`
+  * `tests/test_update_main.py`
+"""
+        assert _extract_allowed_write_paths(issue) == []
 
 
 # ---------------------------------------------------------------------------
@@ -1651,6 +1714,1795 @@ class TestRunAgenticSync:
 
 
 # ---------------------------------------------------------------------------
+# Iter-26: orchestrator-level scope guard for the LLM dependency-correction
+# step. The per-module scope guard runs INSIDE the runner; the dependency-
+# correction step writes architecture.json BEFORE any runner exists. If the
+# split-contract allowed write set does not include ``architecture.json``,
+# the orchestrator must skip the correction so the contract is not silently
+# violated. These tests cover the gate decision plus the already-synced
+# early-return path which dispatches no runner at all.
+# ---------------------------------------------------------------------------
+
+
+# A bullet-list contract that the parser in pdd.agentic_common recognizes.
+# The ``**Allowed write set:**`` inline label is the discriminator; ``## Split
+# Contract`` is just the surrounding heading. NOTE: architecture.json is NOT
+# in this allow set, so the orchestrator must skip the deps-correction step.
+_CONTRACT_BODY_ARCH_OUT_OF_SCOPE = (
+    "Fix foo.\n"
+    "\n"
+    "## Split Contract\n"
+    "\n"
+    "**Allowed write set:**\n"
+    "\n"
+    "- `pdd/foo.py`\n"
+)
+
+# Same shape but architecture.json IS in the allow set — the correction should
+# be applied.
+_CONTRACT_BODY_ARCH_IN_SCOPE = (
+    "Fix foo.\n"
+    "\n"
+    "## Split Contract\n"
+    "\n"
+    "**Allowed write set:**\n"
+    "\n"
+    "- `pdd/foo.py`\n"
+    "- `architecture.json`\n"
+)
+
+# Iter-28 B-2: contract allows a NESTED architecture path. Used by the
+# nested-arch B-2 tests to assert the gate compares the real ``arch_path``
+# (resolved repo-relative) rather than the literal string ``architecture.json``.
+_CONTRACT_BODY_NESTED_ARCH_IN_SCOPE = (
+    "Fix foo.\n"
+    "\n"
+    "## Split Contract\n"
+    "\n"
+    "**Allowed write set:**\n"
+    "\n"
+    "- `pdd/foo.py`\n"
+    "- `frontend/architecture.json`\n"
+)
+
+
+class TestDependencyCorrectionsScopeGuard:
+    """Verify the orchestrator-level scope gate on
+    ``_apply_architecture_corrections``. The gate runs BEFORE any runner is
+    dispatched, so per-module scope enforcement cannot catch this write."""
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_skipped_when_arch_outside_contract(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        mock_find_root,
+        tmp_path,
+        capsys,
+    ):
+        """Contract excludes architecture.json → corrections must NOT run."""
+        # Iter-32 B-1: pin project root to tmp_path so the dispatch-boundary
+        # orchestrator scope guard sweeps a clean tmp tree (the real repo
+        # has dirty worktrees that would trip the guard).
+        _init_git_repo(tmp_path)
+        mock_find_root.return_value = tmp_path
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_OUT_OF_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            [{"filename": "foo_python.prompt", "dependencies": []}],
+            tmp_path / "architecture.json",
+        )
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, msg, cost, model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=False,  # capture the skip-warning text
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_not_called()
+        captured = capsys.readouterr()
+        # Warning text from the orchestrator skip branch. Rich console may
+        # line-wrap the message at any width, so we collapse whitespace
+        # before substring-matching for the discriminating phrase.
+        flat = " ".join(captured.out.split())
+        assert "Sync scope guard: skipping LLM dependency corrections" in flat
+        assert "architecture.json is outside" in flat
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_applied_when_arch_in_contract(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        mock_find_root,
+        tmp_path,
+    ):
+        """Contract includes architecture.json → corrections must run."""
+        # Iter-32 B-1: init git in tmp_path so the dispatch-boundary
+        # orchestrator scope guard's working-tree probes succeed.
+        _init_git_repo(tmp_path)
+        mock_find_root.return_value = tmp_path
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        mock_apply_corrections.return_value = arch_data
+
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_IN_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            arch_data,
+            tmp_path / "architecture.json",
+        )
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_called_once()
+
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_applied_when_no_contract(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        tmp_path,
+    ):
+        """No contract markers → permissive mode preserves pre-iter-26 behavior."""
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        mock_apply_corrections.return_value = arch_data
+
+        # No HTML comment, no fenced block, no ``**Allowed write set:**`` label.
+        issue_data = {
+            "title": "Fix foo",
+            "body": "Just fix foo, no contract here.",
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            arch_data,
+            tmp_path / "architecture.json",
+        )
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_called_once()
+
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_applied_when_scope_guard_disabled(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        tmp_path,
+    ):
+        """``--no-scope-guard`` bypasses the gate even when arch is out of scope."""
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        mock_apply_corrections.return_value = arch_data
+
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_OUT_OF_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (
+            arch_data,
+            tmp_path / "architecture.json",
+        )
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            scope_guard=False,
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_called_once()
+
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.DurableSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=[])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_already_synced_early_return_does_not_leak_arch_changes(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_durable_runner_cls,
+        mock_async_runner_cls,
+        mock_apply_corrections,
+        tmp_path,
+    ):
+        """Defensive: even if every module is already synced and the runner is
+        never dispatched, the orchestrator must NOT write architecture.json
+        out-of-scope. Verifies both the mock-level assertion AND that no
+        ``M architecture.json`` shows up in a real git repo's ``git status``
+        after the orchestrator returns its early "already synced" success.
+        """
+        # Build a tiny git repo with a committed architecture.json so any
+        # subsequent write would show as a tracked modification.
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=repo,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=repo,
+            check=True,
+        )
+        arch_file = repo / "architecture.json"
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        arch_file.write_text(json.dumps(arch_data, indent=2))
+        subprocess.run(
+            ["git", "add", "architecture.json"], cwd=repo, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "--quiet", "-m", "init arch"],
+            cwd=repo,
+            check=True,
+        )
+
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_OUT_OF_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        mock_load_arch.return_value = (arch_data, arch_file)
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": repo}, [], 0.0)
+
+        old_cwd = Path.cwd()
+        try:
+            os.chdir(repo)
+            success, msg, _cost, _model = run_agentic_sync(
+                "https://github.com/owner/repo/issues/1", quiet=True
+            )
+        finally:
+            os.chdir(old_cwd)
+
+        # Orchestrator returns the "already synced" early-success path.
+        assert success is True
+        assert "already synced" in msg.lower()
+
+        # The gate must have refused the only out-of-contract write the
+        # orchestrator can perform.
+        mock_apply_corrections.assert_not_called()
+        # No runner is dispatched on the already-synced path.
+        mock_async_runner_cls.assert_not_called()
+        mock_durable_runner_cls.assert_not_called()
+
+        # Defense-in-depth: a real git status check confirms the on-disk
+        # architecture.json is untouched.
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert "architecture.json" not in status.stdout
+
+    # ------------------------------------------------------------------
+    # Iter-28 B-2: nested arch_path bypass
+    # ------------------------------------------------------------------
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_skipped_for_nested_arch_outside_contract(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        mock_find_root,
+        tmp_path,
+    ):
+        """Contract allows the literal string ``architecture.json`` but the
+        REAL arch path is ``frontend/architecture.json``. Iter-28 B-2: the
+        gate must compare the resolved arch path, not the bare string, so
+        the nested arch write is rejected."""
+        # Iter-32 B-1: init git + pin root so the dispatch-boundary scope
+        # guard sweeps a clean tmp tree.
+        _init_git_repo(tmp_path)
+        mock_find_root.return_value = tmp_path
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        # Contract allows root architecture.json only — NOT the nested path.
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_IN_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        # arch_path resolves nested: frontend/architecture.json under
+        # tmp_path. The literal-string gate would have matched the contract's
+        # ``architecture.json`` entry and let the write through; the
+        # resolved-path gate must NOT.
+        nested_arch = tmp_path / "frontend" / "architecture.json"
+        (tmp_path / "frontend").mkdir()
+        mock_load_arch.return_value = (arch_data, nested_arch)
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_not_called()
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_applied_for_nested_arch_in_contract(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        mock_find_root,
+        tmp_path,
+    ):
+        """Contract explicitly allows ``frontend/architecture.json`` and the
+        arch path matches → gate must permit the write."""
+        # Iter-32 B-1: init git so the dispatch-boundary scope guard's
+        # working-tree probes succeed.
+        _init_git_repo(tmp_path)
+        mock_find_root.return_value = tmp_path
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        mock_apply_corrections.return_value = arch_data
+
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_NESTED_ARCH_IN_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        nested_arch = tmp_path / "frontend" / "architecture.json"
+        (tmp_path / "frontend").mkdir()
+        mock_load_arch.return_value = (arch_data, nested_arch)
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_called_once()
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_skipped_for_arch_outside_project_root(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        mock_find_root,
+        tmp_path,
+    ):
+        """``arch_path`` resolves outside ``project_root`` → never in scope.
+
+        Defense-in-depth: even if some upstream bug threads an arch path
+        outside the repo root into the orchestrator, ``_arch_path_in_scope``
+        catches the ``ValueError`` from ``relative_to`` and returns False so
+        the write is refused.
+        """
+        # Iter-32 B-1: init git + pin root so the dispatch-boundary scope
+        # guard sweeps a clean tmp tree.
+        _init_git_repo(tmp_path)
+        mock_find_root.return_value = tmp_path
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_IN_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        # Force an arch path that resolves OUTSIDE project_root.
+        outside_arch = (tmp_path.parent / "outside_root" / "architecture.json").resolve()
+        outside_arch.parent.mkdir(parents=True, exist_ok=True)
+        mock_load_arch.return_value = (arch_data, outside_arch)
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _arch_path_in_scope (iter-28 B-2 helper, unit-level)
+# ---------------------------------------------------------------------------
+
+
+class TestArchPathInScope:
+    """Unit-level coverage of the resolved-path scope check used by the
+    iter-26 orchestrator gate, post-iter-28 B-2."""
+
+    @staticmethod
+    def _contract(*allowed: str) -> IssueContract:
+        return IssueContract(
+            allowed_paths=tuple(allowed),
+            companion_allowlist=(),
+            source="test",
+        )
+
+    def test_no_contract_permissive(self, tmp_path):
+        """No contract → always in scope (pre-iter-26 behavior preserved)."""
+        assert _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=None,
+            scope_guard=True,
+        )
+
+    def test_scope_guard_disabled_bypasses_check(self, tmp_path):
+        """``--no-scope-guard`` → always in scope, contract ignored."""
+        contract = self._contract("pdd/foo.py")  # arch NOT in contract
+        assert _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=False,
+        )
+
+    def test_literal_arch_in_contract_match(self, tmp_path):
+        """Root arch + contract allows ``architecture.json`` → in scope."""
+        contract = self._contract("pdd/foo.py", "architecture.json")
+        assert _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_nested_arch_with_literal_contract_rejected(self, tmp_path):
+        """Nested arch + contract only allows literal ``architecture.json``
+        → out of scope (the iter-28 B-2 fix)."""
+        contract = self._contract("pdd/foo.py", "architecture.json")
+        assert not _arch_path_in_scope(
+            tmp_path / "frontend" / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_nested_arch_with_nested_contract_match(self, tmp_path):
+        """Nested arch + contract names the same nested path → in scope."""
+        contract = self._contract("pdd/foo.py", "frontend/architecture.json")
+        assert _arch_path_in_scope(
+            tmp_path / "frontend" / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_arch_outside_project_root_rejected(self, tmp_path):
+        """``arch_path`` outside the repo → out of scope (ValueError → False)."""
+        contract = self._contract("architecture.json")
+        outside = (tmp_path.parent / "outside_root" / "architecture.json").resolve()
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        assert not _arch_path_in_scope(
+            outside,
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_empty_contract_allowed_paths_rejected(self, tmp_path):
+        """Empty ``allowed_paths`` tuple → no path is in scope."""
+        contract = self._contract()  # ``allowed_paths=()``
+        assert not _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _enforce_orchestrator_scope (iter-30 unified orchestrator scope guard)
+# ---------------------------------------------------------------------------
+
+
+def _init_git_repo(tmp_path: Path) -> None:
+    """Create a minimal git repo at *tmp_path* for orchestrator scope tests."""
+    subprocess.run(
+        ["git", "init", "--quiet", "--initial-branch=main", str(tmp_path)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test"],
+        check=True,
+    )
+    # Seed with a committed file so HEAD exists.
+    seed = tmp_path / ".pddrc"
+    seed.write_text("# pddrc\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "-A"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "--quiet", "-m", "init"],
+        check=True,
+    )
+
+
+def _hash_baseline_single(project_root: Path, rel: str) -> str:
+    """Tiny helper: SHA-1 of the file at *project_root / rel* (for baseline maps)."""
+    import hashlib
+    return hashlib.sha1((project_root / rel).read_bytes()).hexdigest()
+
+
+class TestEnforceOrchestratorScope:
+    """Iter-30: unit-level coverage of the orchestrator scope guard helper.
+
+    These tests exercise :func:`_enforce_orchestrator_scope` directly. Higher-
+    level integration tests that drive :func:`run_agentic_sync` end-to-end are
+    in :class:`TestOrchestratorScopeGuardIntegration`.
+    """
+
+    @staticmethod
+    def _contract(*allowed: str) -> IssueContract:
+        return IssueContract(
+            allowed_paths=tuple(allowed),
+            companion_allowlist=(),
+            source="test",
+        )
+
+    def test_no_op_when_no_contract(self, tmp_path):
+        """``issue_contract is None`` → permissive, returns None unconditionally."""
+        _init_git_repo(tmp_path)
+        out_of_scope = tmp_path / "wild.py"
+        out_of_scope.write_text("unsanctioned\n", encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=None,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is None
+        # Permissive mode preserves the file on disk.
+        assert out_of_scope.exists()
+
+    def test_no_op_when_scope_guard_disabled(self, tmp_path):
+        """``scope_guard=False`` → no-op even with a contract."""
+        _init_git_repo(tmp_path)
+        out_of_scope = tmp_path / "wild.py"
+        out_of_scope.write_text("unsanctioned\n", encoding="utf-8")
+
+        contract = self._contract("pdd/foo.py")
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=False,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is None
+        assert out_of_scope.exists()
+
+    def test_reverts_untracked_out_of_contract_writes(self, tmp_path):
+        """Untracked out-of-contract file → reverted, diagnostic returned."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        out_of_scope = tmp_path / "outside.py"
+        out_of_scope.write_text("oops\n", encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is not None
+        assert "outside.py" in result
+        assert "Orchestrator scope guard" in result
+        assert not out_of_scope.exists()
+
+    def test_preserves_pre_existing_baseline_path(self, tmp_path):
+        """Pre-existing untracked file in baseline (unchanged SHA) → preserved."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        user_wip = tmp_path / "userwip.py"
+        user_wip.write_text("user code\n", encoding="utf-8")
+
+        # Snapshot the baseline (matches what run_agentic_sync does).
+        baseline = {"userwip.py": _hash_baseline_single(tmp_path, "userwip.py")}
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed=baseline,
+            baseline_ignored={},
+            quiet=True,
+        )
+        # Unchanged baseline → no revert needed.
+        assert result is None
+        assert user_wip.exists()
+
+    def test_detects_baseline_clobber(self, tmp_path):
+        """Baseline path overwritten with different content → flagged & reverted."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        user_wip = tmp_path / "userwip.py"
+        user_wip.write_text("original\n", encoding="utf-8")
+        baseline = {"userwip.py": _hash_baseline_single(tmp_path, "userwip.py")}
+
+        # Now clobber the baseline.
+        user_wip.write_text("CLOBBERED by LLM\n", encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed=baseline,
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is not None
+        assert "userwip.py" in result
+        # The file is gone after the revert helper sweeps it (untracked +
+        # not allowed → removed).
+        assert not user_wip.exists()
+
+    def test_companion_allowlist_default_auto_allows_pdd_meta(self, tmp_path):
+        """``.pdd/meta/*.json`` is auto-allowed by DEFAULT_SYNC_COMPANION_ALLOWLIST."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        meta_file = meta_dir / "foo_python.json"
+        meta_file.write_text('{"fingerprint": "x"}', encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        # Companion-allowlisted → no revert, no diagnostic.
+        assert result is None
+        assert meta_file.exists()
+
+    def test_pdd_audit_logs_do_not_trip_orchestrator_guard(self, tmp_path):
+        """Iter-36 B-1: PDD's own audit logs at ``.pdd/agentic-logs/`` written
+        by :func:`run_agentic_task` during the orchestrator's pre-dispatch
+        LLM calls MUST NOT hard-fail a contracted sync run. The audit log is
+        tool infrastructure (NEVER part of a contract) and the internal
+        allowlist auto-allows it without the contract needing to opt in.
+
+        Baseline snapshot is empty (the log appears AFTER snapshot, mid-run);
+        the guard MUST still return None purely on the internal allowlist
+        match.
+        """
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+
+        # Audit log appears AFTER baseline snapshot — this is the realistic
+        # scenario: ``run_agentic_task`` writes a session record during the
+        # LLM call that itself happens between snapshot and guard.
+        log_dir = tmp_path / ".pdd" / "agentic-logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "session_20251215_120000.jsonl"
+        log_file.write_text('{"label": "step1"}\n', encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is None, (
+            f"iter-36 B-1: PDD audit log under .pdd/agentic-logs/ must be "
+            f"auto-allowed by the internal allowlist; got diagnostic: "
+            f"{result!r}"
+        )
+        # The log must still exist — internal-allowlisted, not reverted.
+        assert log_file.exists()
+
+    def test_orchestrator_guard_flags_deleted_untracked_baseline(self, tmp_path):
+        """Iter-36 B-3: untracked baseline files that disappear between
+        snapshot and guard MUST be surfaced as ``remaining`` (hard-fail) by
+        the orchestrator guard. Prior to iter-36 the orchestrator silently
+        ``continue``d on ``current_hash is None`` and lost user WIP without
+        a trace. Mirrors the per-module guard's iter-34 fix.
+        """
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        user_wip = tmp_path / "userwip.py"
+        user_wip.write_text("user code\n", encoding="utf-8")
+
+        # Snapshot the baseline (untracked WIP captured at orchestrator entry).
+        baseline = {"userwip.py": _hash_baseline_single(tmp_path, "userwip.py")}
+
+        # Orchestrator deletes the WIP before runner dispatch — simulate by
+        # deleting the file after snapshot.
+        user_wip.unlink()
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed=baseline,
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is not None, (
+            "iter-36 B-3: deletion of untracked baseline WIP must hard-fail "
+            "the orchestrator — silent data loss otherwise"
+        )
+        assert "userwip.py" in result, (
+            f"iter-36 B-3: deleted baseline path must appear in diagnostic, "
+            f"got: {result!r}"
+        )
+
+    def test_orchestrator_guard_flags_deleted_ignored_baseline(self, tmp_path):
+        """Iter-36 B-3 (symmetric): pre-existing gitignored baseline files
+        that disappear between snapshot and guard MUST also surface in the
+        orchestrator's ``remaining`` set. ``git ls-files --ignored`` only
+        lists files that currently exist, so a deleted ignored baseline
+        leaves no trail in the ignored-rescan loop.
+        """
+        _init_git_repo(tmp_path)
+        # gitignore must be committed before the cache file is created so
+        # the cache is treated as a tracked-ignore at baseline time.
+        gi = tmp_path / ".gitignore"
+        gi.write_text("cache.bin\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "--quiet", "-m", "gi"],
+            check=True,
+        )
+
+        contract = self._contract("pdd/foo.py")
+        cache = tmp_path / "cache.bin"
+        cache.write_text("user cache\n", encoding="utf-8")
+
+        # Baseline snapshot of the ignored file.
+        baseline_ignored = {
+            "cache.bin": _hash_baseline_single(tmp_path, "cache.bin")
+        }
+
+        # Orchestrator deletes the cache before runner dispatch.
+        cache.unlink()
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored=baseline_ignored,
+            quiet=True,
+        )
+        assert result is not None, (
+            "iter-36 B-3: deletion of pre-existing ignored baseline must "
+            "hard-fail the orchestrator — git ls-files --ignored cannot see it"
+        )
+        assert "cache.bin" in result, (
+            f"iter-36 B-3: deleted ignored baseline must appear in diagnostic, "
+            f"got: {result!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator scope guard integration (iter-30)
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorScopeGuardIntegration:
+    """Iter-30: integration tests that drive :func:`run_agentic_sync` and
+    verify the orchestrator scope guard reverts/preserves correctly at the
+    early-return boundary."""
+
+    _ISSUE_BODY_WITH_BULLET_CONTRACT = (
+        "Title: feat: foo\n\n"
+        "## Allowed Write Set\n\n"
+        "**Allowed write set:**\n"
+        "- pdd/foo.py\n"
+    )
+    _ISSUE_BODY_NO_CONTRACT = "Title: feat: foo\n\nNo structured contract here."
+
+    def _issue_payload(self, body: str) -> str:
+        return json.dumps({"title": "Test", "body": body, "comments_url": ""})
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_reverts_out_of_contract_llm_writes(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """LLM writes an out-of-contract file during identify-modules →
+        orchestrator scope guard reverts before the orchestrator returns.
+
+        The mock for ``run_agentic_task`` writes ``outside.py`` to disk and
+        returns an empty module list, so the orchestrator hits the
+        "LLM identified no modules to sync" early return (line ~1925). The
+        scope guard wrap on that return must observe and revert the write.
+        """
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            # Simulate LLM writing an out-of-contract file mid-call.
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            # Return a parse-failing response so we land on the
+            # "no modules to sync" early return inside the scope guard.
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is False
+        assert "Orchestrator scope guard" in msg
+        assert "outside.py" in msg
+        assert not (tmp_path / "outside.py").exists(), (
+            "scope guard must revert the out-of-contract write"
+        )
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_preserves_pre_existing_baseline(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """User WIP that pre-exists at orchestrator entry → preserved."""
+        _init_git_repo(tmp_path)
+        # Pre-existing dirty user WIP.
+        (tmp_path / "userwip.py").write_text("user work in progress\n", encoding="utf-8")
+
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        # LLM does NOT touch userwip.py; just returns no modules.
+        mock_agentic_task.return_value = (
+            True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+        )
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        # Pre-existing untracked file MUST be preserved by the baseline rule.
+        assert (tmp_path / "userwip.py").exists()
+        assert (tmp_path / "userwip.py").read_text(encoding="utf-8") == (
+            "user work in progress\n"
+        )
+        # Scope guard MUST NOT mention userwip.py in the diagnostic.
+        assert "userwip.py" not in msg
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_detects_baseline_clobber(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """LLM overwrites a baseline path with new content → flagged."""
+        _init_git_repo(tmp_path)
+        (tmp_path / "userwip.py").write_text("original\n", encoding="utf-8")
+
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            # Clobber pre-existing baseline path.
+            (tmp_path / "userwip.py").write_text(
+                "CLOBBERED by malicious LLM\n", encoding="utf-8"
+            )
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is False
+        assert "Orchestrator scope guard" in msg
+        assert "userwip.py" in msg
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_no_op_when_no_contract(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Permissive mode: no contract on issue → no revert, existing
+        behavior preserved."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_NO_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        # No contract → permissive mode → no revert, no diagnostic.
+        assert "Orchestrator scope guard" not in msg
+        assert (tmp_path / "outside.py").exists()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_no_op_with_no_scope_guard_flag(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """``scope_guard=False`` → explicit opt-out, no revert, existing
+        behavior preserved (matches iter-26 / iter-28 gate semantics)."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            scope_guard=False,
+        )
+
+        # Explicit opt-out → no revert, no diagnostic.
+        assert "Orchestrator scope guard" not in msg
+        assert (tmp_path / "outside.py").exists()
+
+    # ---------------------------------------------------------------------
+    # Iter-32 B-1: dispatch-boundary scope guard
+    # ---------------------------------------------------------------------
+    # iter-30 wrapped every EARLY-RETURN site with
+    # ``_orch_scope_check_return``. The natural completion (iter-32) is to
+    # also gate the SUCCESSFUL DISPATCH path so pre-dispatch out-of-contract
+    # writes are not snapshotted as ``_baseline_changed_paths`` by the
+    # runner and silently preserved for the entire sync session.
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_scope_guard_blocks_dispatch_when_predispatch_writes_out_of_contract(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Pre-dispatch out-of-contract write that survives past all
+        early-return sites → orchestrator scope guard blocks dispatch and
+        reverts the write before the runner is constructed."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            # Simulate the LLM identify-modules call writing an
+            # out-of-contract file mid-call AND returning a valid module
+            # list so the flow proceeds toward dispatch (skipping the
+            # iter-30 early-return wrap).
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            return True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+        # Skip dry-run early-return: report success with a cwd for "foo".
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        # Skip "all already synced" early-return: keep "foo" in the list.
+        mock_filter_synced.return_value = ["foo"]
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is False
+        assert "before dispatch" in msg
+        assert "outside.py" in msg
+        assert not (tmp_path / "outside.py").exists(), (
+            "dispatch-boundary scope guard must revert the out-of-contract write"
+        )
+        # Runner was NEVER constructed because dispatch was aborted.
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_scope_guard_allows_dispatch_when_clean(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Clean working tree at dispatch boundary → runner constructed
+        and dispatched normally."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        # LLM does NOT write anything out-of-contract; returns a valid
+        # module list.
+        mock_agentic_task.return_value = (
+            True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_filter_synced.return_value = ["foo"]
+        # Provide a runnable runner mock so the dispatch can complete.
+        mock_runner_cls.return_value.run.return_value = (True, "ok", 0.0)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        assert msg == "ok"
+        assert "before dispatch" not in msg
+        # Runner WAS constructed and .run() WAS called.
+        mock_runner_cls.assert_called_once()
+        mock_runner_cls.return_value.run.assert_called_once()
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_scope_guard_dispatch_check_is_no_op_with_no_contract(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Permissive mode (no contract markers) → dispatch-boundary check
+        is a no-op even when the LLM wrote out-of-contract files."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_NO_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            return True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_filter_synced.return_value = ["foo"]
+        mock_runner_cls.return_value.run.return_value = (True, "ok", 0.0)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        # Permissive mode → dispatch proceeds, no revert, file preserved.
+        assert success is True
+        assert "before dispatch" not in msg
+        assert (tmp_path / "outside.py").exists()
+        mock_runner_cls.assert_called_once()
+        mock_runner_cls.return_value.run.assert_called_once()
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_scope_guard_dispatch_check_is_no_op_with_scope_guard_disabled(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """``scope_guard=False`` (opt-out) with a contract present →
+        dispatch-boundary check is a no-op."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            return True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_filter_synced.return_value = ["foo"]
+        mock_runner_cls.return_value.run.return_value = (True, "ok", 0.0)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            scope_guard=False,
+        )
+
+        # Opt-out → dispatch proceeds, no revert, file preserved.
+        assert success is True
+        assert "before dispatch" not in msg
+        assert (tmp_path / "outside.py").exists()
+        mock_runner_cls.assert_called_once()
+        mock_runner_cls.return_value.run.assert_called_once()
+
+    # ---------------------------------------------------------------------
+    # Iter-38 M-1: fail-closed baseline acquisition at orchestrator init.
+    # When ``_git_changed_paths`` / ``_git_ignored_paths`` return ``None``
+    # (transient git lock contention, missing binary, OSError) the
+    # orchestrator MUST abort BEFORE any pre-dispatch LLM call or shell
+    # command. An empty baseline produced by a silent scan failure would
+    # later let the pre-dispatch scope guard revert pre-existing user WIP.
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_aborts_when_baseline_changed_scan_fails(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Init-time ``_git_changed_paths`` returns ``None`` → orchestrator
+        fail-closes before any LLM call or runner construction."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+        # Patch the helpers on the agentic_sync module (where they're
+        # imported by name) — the orchestrator looks them up here.
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", lambda _root: None)
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", lambda _root: set())
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is False
+        assert "fail-closed" in msg
+        assert "baseline" in msg
+        # Downstream LLM / runner construction MUST NOT have run.
+        mock_agentic_task.assert_not_called()
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_aborts_when_baseline_ignored_scan_fails(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Init-time ``_git_ignored_paths`` returns ``None`` → orchestrator
+        fail-closes before any LLM call or runner construction."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", lambda _root: set())
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", lambda _root: None)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is False
+        assert "fail-closed" in msg
+        mock_agentic_task.assert_not_called()
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_proceeds_when_baseline_scans_succeed(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Regression: both baseline scans succeed (empty set is a valid
+        success result) → orchestrator proceeds normally."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+        # Successful scans returning empty sets (clean worktree).
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", lambda _root: set())
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", lambda _root: set())
+
+        mock_agentic_task.return_value = (
+            True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_filter_synced.return_value = ["foo"]
+        mock_runner_cls.return_value.run.return_value = (True, "ok", 0.0)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        assert "fail-closed" not in msg
+        mock_runner_cls.assert_called_once()
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_does_not_fail_closed_in_permissive_mode(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Permissive mode (no contract on issue) → baseline scan is never
+        invoked, so a hypothetical ``None`` return from the helpers does
+        NOT trigger the fail-closed abort. Run proceeds normally."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_NO_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        called = {"changed": 0, "ignored": 0}
+
+        def fake_changed(_root):
+            called["changed"] += 1
+            return None  # Would fail-close if the gate let us reach here.
+
+        def fake_ignored(_root):
+            called["ignored"] += 1
+            return None
+
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", fake_changed)
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", fake_ignored)
+
+        mock_agentic_task.return_value = (
+            True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_filter_synced.return_value = ["foo"]
+        mock_runner_cls.return_value.run.return_value = (True, "ok", 0.0)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        # Init-time helpers are gated on (scope_guard AND issue_contract is
+        # not None). In permissive mode they MUST NOT be called for the
+        # baseline acquisition, so the fail-closed abort cannot trigger.
+        assert called["changed"] == 0, (
+            "permissive mode must not invoke the init-time changed scan"
+        )
+        assert called["ignored"] == 0, (
+            "permissive mode must not invoke the init-time ignored scan"
+        )
+        assert success is True
+        assert "fail-closed" not in msg
+        mock_runner_cls.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
 # _resolve_module_cwd
 # ---------------------------------------------------------------------------
 
@@ -2215,6 +4067,172 @@ class TestRunDryRunValidation:
         assert len(errors) == 1
         assert "changed: prompt contract preflight failed" in errors[0]
         assert "includes no existing module source context" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# _llm_fix_dry_run_failure safe-argv (iter-30 B-2 replacement)
+# ---------------------------------------------------------------------------
+
+
+class TestLlmFixDryRunSafeArgv:
+    """Iter-30: the orchestrator no longer executes an LLM-supplied shell
+    string. The LLM only returns ``SYNC_CWD: <path>``; the orchestrator
+    builds the argv itself and runs with ``shell=False``. Closes iter-29 B-2
+    (shell injection at the orchestrator level)."""
+
+    @staticmethod
+    def _llm_response(cwd_value: str) -> str:
+        return f"SYNC_CWD: {cwd_value}\n"
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_uses_safe_argv_not_shell(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """LLM returns ``SYNC_CWD: subdir`` → argv is a list, shell=False."""
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("subdir"),
+            0.01,
+            "anthropic",
+        )
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is True
+        assert cwd == subdir.resolve()
+        assert err == ""
+
+        # argv must be a list (not a string), shell must be False.
+        call_args, call_kwargs = mock_subprocess.call_args
+        argv = call_args[0]
+        assert isinstance(argv, list), "argv must be a list — shell=False shape"
+        assert call_kwargs.get("shell", False) is False
+        assert "--dry-run" in argv
+        assert "sync" in argv
+        assert "foo" in argv
+        # cwd is the resolved SYNC_CWD path, not the project root.
+        assert call_kwargs.get("cwd") == str(subdir.resolve())
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_rejects_path_outside_project_root(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """LLM returns ``SYNC_CWD: /etc`` (outside project root) → reject."""
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("/etc"),
+            0.01,
+            "anthropic",
+        )
+
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is False
+        assert cwd is None
+        assert "outside project root" in err
+        mock_subprocess.assert_not_called()
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_rejects_legacy_sync_cmd_format(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """Stale-cache ``SYNC_CMD: pdd sync foo`` → reject with migration error."""
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            "SYNC_CMD: pdd --force sync foo --dry-run --agentic --no-steer\n",
+            0.01,
+            "anthropic",
+        )
+
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is False
+        assert cwd is None
+        assert "SYNC_CWD" in err
+        assert "legacy" in err.lower()
+        mock_subprocess.assert_not_called()
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_rejects_shell_metachars_in_cwd(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """SYNC_CWD containing shell metacharacters is rejected defensively."""
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("subdir; rm -rf /"),
+            0.01,
+            "anthropic",
+        )
+
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is False
+        assert cwd is None
+        assert "forbidden character" in err
+        mock_subprocess.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

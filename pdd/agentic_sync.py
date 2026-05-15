@@ -16,17 +16,32 @@ import re
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Tuple
 
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
-from .agentic_common import run_agentic_task
+from .agentic_common import (
+    DEFAULT_SYNC_COMPANION_ALLOWLIST,
+    PDD_INTERNAL_PATH_ALLOWLIST,
+    IssueContract,
+    _is_valid_companion_pattern,
+    _matches_companion_pattern_anchored,
+    _revert_out_of_scope_changes,
+    parse_issue_contract,
+    run_agentic_task,
+)
+from .agentic_common_worktree import revert_out_of_scope_changes_with_dirs
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
     _basename_from_architecture_filename,
+    _classify_baseline_path,
     _find_pdd_executable,
+    _git_changed_paths,
+    _git_ignored_paths,
+    _hash_baseline_paths,
+    _hash_file,
     build_dep_graph_from_architecture_data,
 )
 from .durable_sync_runner import DurableSyncRunner
@@ -963,8 +978,16 @@ def run_global_sync(
     one_session: bool = False,
     local: bool = False,
     timeout_adder: float = 0.0,
+    scope_guard: bool = True,
 ) -> Tuple[bool, str, float, str]:
     """Run project-wide Tier 1 global sync from architecture.json."""
+    # Per ``agentic_sync_python.prompt`` § Global Sync 1: the ``scope_guard``
+    # kwarg is accepted for CLI signature parity with ``run_agentic_sync`` but
+    # has no effect in global mode. Global sync has no issue body to parse, so
+    # the runner is always constructed in permissive fallback mode regardless
+    # of ``scope_guard``. The kwarg exists so ``pdd sync --no-scope-guard``
+    # does not raise ``TypeError`` when dispatched into global mode.
+    _ = scope_guard
     project_root = _find_project_root(Path.cwd())
     all_modules, architecture, arch_path = _architecture_sync_modules(project_root)
     if not architecture:
@@ -1254,6 +1277,17 @@ def _run_single_dry_run(
         return False, str(e)
 
 
+# Iter-30 B-2: shell metacharacters disallowed in the LLM-supplied
+# ``SYNC_CWD`` value. We build the argv ourselves and pass ``shell=False``
+# so injection via the cwd string is impossible by construction, but reject
+# these characters anyway as defense-in-depth — a path containing them is
+# almost certainly the LLM ignoring the new prompt shape and trying to send
+# a shell fragment.
+_SYNC_CWD_FORBIDDEN_CHARS: Tuple[str, ...] = (
+    ";", "&", "|", "<", ">", "`", "$", "(", ")", "\n", "\r",
+)
+
+
 def _llm_fix_dry_run_failure(
     basename: str,
     project_root: Path,
@@ -1262,7 +1296,16 @@ def _llm_fix_dry_run_failure(
     verbose: bool = False,
     reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, Optional[Path], float, str]:
-    """Ask the LLM to suggest the correct cwd/command when dry-run fails.
+    """Ask the LLM to suggest the correct cwd when dry-run fails.
+
+    Iter-30 B-2 replaces the prior ``shell=True`` exec of an LLM-supplied
+    string with a hardened approach: the LLM only identifies a working
+    directory (``SYNC_CWD: <relative-or-absolute path>``) and the orchestrator
+    builds the ``pdd --force sync <basename> --dry-run --agentic --no-steer``
+    argv itself, then executes with ``shell=False``. This closes iter-29 B-2
+    (LLM shell injection at the orchestrator level) — ``shell=True`` with an
+    LLM-provided string allowed ``rm``/redirects/chained writes that the
+    iter-28 ``--dry-run`` flag injection could not block.
 
     Returns:
         Tuple of (success, suggested_cwd_or_None, llm_cost, error_msg).
@@ -1325,68 +1368,139 @@ def _llm_fix_dry_run_failure(
     if not llm_success:
         return False, None, llm_cost, f"LLM failed to suggest fix: {llm_output}"
 
-    # Parse SYNC_CMD from response
-    cmd_match = re.search(r"SYNC_CMD:\s*(.+)", llm_output)
-    if not cmd_match:
-        return False, None, llm_cost, "LLM response did not contain SYNC_CMD marker"
+    # Iter-30: explicitly reject the legacy ``SYNC_CMD:`` shape so a stale
+    # cached LLM response surfaces a clear migration error rather than a
+    # vague "no SYNC_CWD marker" message. The new prompt only asks for the
+    # cwd; if the response carries the old shell-command shape the LLM is
+    # acting on a prior cached version of the prompt and must be re-asked
+    # with the iter-30 wording.
+    if "SYNC_CWD:" not in llm_output and "SYNC_CMD:" in llm_output:
+        return (
+            False,
+            None,
+            llm_cost,
+            (
+                "LLM returned legacy ``SYNC_CMD:`` format. The orchestrator now "
+                "builds the sync argv itself and only expects ``SYNC_CWD: <path>`` "
+                "from the LLM. Re-run; this usually clears after one retry."
+            ),
+        )
 
-    suggested_cmd = cmd_match.group(1).strip()
+    cwd_match = re.search(r"SYNC_CWD:\s*(.+)", llm_output)
+    if not cwd_match:
+        return False, None, llm_cost, "LLM response did not contain SYNC_CWD marker"
 
-    # Safety: reject commands that don't look like a pdd sync invocation
-    if "pdd" not in suggested_cmd or "sync" not in suggested_cmd:
-        return False, None, llm_cost, f"LLM suggested unexpected command: {suggested_cmd}"
+    raw_cwd = cwd_match.group(1).strip()
+    if not raw_cwd:
+        return False, None, llm_cost, "LLM returned an empty SYNC_CWD value"
 
-    # Append a pwd marker after the command so we can extract the effective cwd.
-    # This avoids fragile regex parsing of cd segments from the command string.
-    pwd_marker = "__PDD_EFFECTIVE_CWD__"
-    augmented_cmd = f"{suggested_cmd} && echo {pwd_marker} && pwd"
+    # Strip surrounding quotes the LLM may emit.
+    if (raw_cwd.startswith('"') and raw_cwd.endswith('"')) or (
+        raw_cwd.startswith("'") and raw_cwd.endswith("'")
+    ):
+        raw_cwd = raw_cwd[1:-1].strip()
+        if not raw_cwd:
+            return False, None, llm_cost, "LLM returned an empty SYNC_CWD value"
 
-    # Run the suggested command directly via shell from project root.
-    # This handles relative cd paths, chained cd's, etc. naturally.
+    # Defense-in-depth: reject any shell metacharacter. We pass ``shell=False``
+    # downstream so injection through the cwd is structurally impossible, but
+    # a path containing these characters is almost certainly the LLM trying
+    # to smuggle a shell fragment past the new prompt shape.
+    for ch in _SYNC_CWD_FORBIDDEN_CHARS:
+        if ch in raw_cwd:
+            return (
+                False,
+                None,
+                llm_cost,
+                (
+                    f"LLM SYNC_CWD value contains forbidden character "
+                    f"{ch!r}; refusing to execute: {raw_cwd!r}"
+                ),
+            )
+
+    # Resolve relative-to-project-root or absolute paths. Both are accepted
+    # so long as the resolved location lives under ``project_root``.
+    candidate = Path(raw_cwd)
+    if not candidate.is_absolute():
+        candidate = project_root / candidate
+    try:
+        resolved_cwd = candidate.resolve()
+    except (OSError, RuntimeError) as exc:
+        return (
+            False,
+            None,
+            llm_cost,
+            f"Failed to resolve SYNC_CWD path {raw_cwd!r}: {exc}",
+        )
+
+    project_root_resolved = project_root.resolve()
+    try:
+        resolved_cwd.relative_to(project_root_resolved)
+    except ValueError:
+        return (
+            False,
+            None,
+            llm_cost,
+            (
+                f"SYNC_CWD resolves outside project root "
+                f"({resolved_cwd} not under {project_root_resolved}); "
+                "refusing to execute."
+            ),
+        )
+
+    if not resolved_cwd.is_dir():
+        return (
+            False,
+            None,
+            llm_cost,
+            f"SYNC_CWD does not resolve to a directory: {resolved_cwd}",
+        )
+
+    # Build the argv ourselves — the LLM never sees or supplies a shell line.
+    pdd_exe = _find_pdd_executable()
+    if pdd_exe:
+        cmd: List[str] = [pdd_exe]
+    else:
+        cmd = [sys.executable, "-m", "pdd"]
+    cmd.extend(
+        ["--force", "sync", basename, "--dry-run", "--agentic", "--no-steer"]
+    )
+
     try:
         result = subprocess.run(
-            augmented_cmd,
-            shell=True,
-            cwd=str(project_root),
+            cmd,
+            cwd=str(resolved_cwd),
+            shell=False,
             capture_output=True,
             text=True,
             timeout=60,
             env={**os.environ, "PDD_FORCE": "1", "CI": "1"},
         )
     except subprocess.TimeoutExpired:
-        return False, None, llm_cost, f"LLM suggested command timed out: {suggested_cmd}"
-    except Exception as e:
-        return False, None, llm_cost, f"Failed to run LLM suggested command: {e}"
-
-    if result.returncode == 0:
-        # Extract effective cwd from the pwd output after our marker
-        stdout_lines = result.stdout.strip().splitlines()
-        effective_cwd = project_root.resolve()
-        for i, line in enumerate(stdout_lines):
-            if line.strip() == pwd_marker and i + 1 < len(stdout_lines):
-                effective_cwd = Path(stdout_lines[i + 1].strip()).resolve()
-                break
-
-        # Validate resolved cwd is within project root
-        try:
-            effective_cwd.relative_to(project_root.resolve())
-        except ValueError:
-            return (
-                False,
-                None,
-                llm_cost,
-                f"LLM command resolves outside project root: {suggested_cmd}",
-            )
-
-        return True, effective_cwd, llm_cost, ""
-    else:
-        err_output = result.stderr or result.stdout or f"Exit code {result.returncode}"
         return (
             False,
             None,
             llm_cost,
-            f"LLM suggested command failed: {err_output[:500]}",
+            f"LLM-suggested cwd dry-run timed out at {resolved_cwd}",
         )
+    except Exception as e:  # pragma: no cover — defensive
+        return (
+            False,
+            None,
+            llm_cost,
+            f"Failed to run dry-run probe at {resolved_cwd}: {e}",
+        )
+
+    if result.returncode == 0:
+        return True, resolved_cwd, llm_cost, ""
+
+    err_output = result.stderr or result.stdout or f"Exit code {result.returncode}"
+    return (
+        False,
+        None,
+        llm_cost,
+        f"LLM-suggested cwd dry-run failed at {resolved_cwd}: {err_output[:500]}",
+    )
 
 
 def _run_dry_run_validation(
@@ -1593,6 +1707,444 @@ def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, 
     return modules_to_sync, deps_valid, deps_corrections
 
 
+def _extract_allowed_write_paths(issue_text: str) -> List[str]:
+    """
+    Deprecated thin wrapper around :func:`parse_issue_contract` (Issue #1013, F3).
+
+    This helper used to do its own loose markdown scan for allowed-write
+    paths. It now delegates to the structured contract parser in
+    :mod:`pdd.agentic_common` so the public contract API (HTML-comment JSON,
+    fenced-block, and bullet-list formats) is the single source of truth.
+    The wrapper is kept for one release so any external caller that imported
+    the private name does not crash at import time; it returns an empty list
+    whenever :func:`parse_issue_contract` cannot find a valid contract.
+    """
+    contract = parse_issue_contract(issue_text)
+    return list(contract.allowed_paths) if contract is not None else []
+
+
+def _enforce_orchestrator_scope(
+    project_root: Path,
+    issue_contract: Optional[IssueContract],
+    scope_guard: bool,
+    baseline_changed: Dict[str, Optional[str]],
+    baseline_ignored: Dict[str, Optional[str]],
+    *,
+    quiet: bool = False,
+) -> Optional[str]:
+    """Iter-30: scope-guard the orchestrator's pre-dispatch write surface.
+
+    Reverts any working-tree changes that fall outside the issue contract's
+    allowed write set + companion allowlist + the baseline of pre-existing
+    files captured at orchestrator entry. Returns ``None`` when the working
+    tree is clean (within scope), else returns a multi-line diagnostic
+    string describing what was reverted and what (if anything) could not be
+    reverted.
+
+    Permissive when ``issue_contract is None`` or ``scope_guard is False`` —
+    returns ``None`` unconditionally, matching the spec for the per-module
+    scope guard in :class:`AsyncSyncRunner._enforce_scope_guard`.
+
+    Why this exists (iter-29 → iter-30 promotion):
+        The per-module scope guard in :class:`AsyncSyncRunner` only runs
+        AFTER the runner is constructed and only for per-module sync
+        subprocesses. The orchestrator does write-capable work BEFORE the
+        runner exists — LLM module identification (write-capable
+        :func:`run_agentic_task`), LLM dry-run-fix subprocesses,
+        :func:`_apply_architecture_corrections`, etc. Each pre-dispatch
+        write site is unguarded by the per-module scope guard, so iter-26,
+        iter-28 and iter-29 each kept finding new orchestrator-level
+        bypasses. This unified guard runs at every orchestrator return site
+        between the baseline snapshot and the runner dispatch, replacing the
+        per-site patches.
+
+    Args:
+        project_root: Repo root the orchestrator is operating against
+            (always the user's main checkout, in both async and durable
+            mode — the orchestrator does not branch to worktrees).
+        issue_contract: Parsed contract for the issue, or ``None`` when no
+            structured contract was found (permissive mode).
+        scope_guard: ``True`` when the runner-level scope guard is enabled
+            (CLI default). ``False`` when the user passed ``--no-scope-guard``.
+            ``False`` short-circuits to a no-op for the same reason the
+            per-module guard does.
+        baseline_changed: Snapshot of working-tree changes (``git status
+            --porcelain --untracked-files=all``) at orchestrator entry,
+            mapping repo-relative POSIX paths to init-time SHA-1. Only
+            byte-identical content is auto-allowed (iter-24); divergent
+            SHAs fall through to the contract check so a clobber surfaces.
+        baseline_ignored: Snapshot of gitignored paths (``git ls-files
+            --others --ignored --exclude-standard``) at orchestrator entry,
+            same SHA-aware preservation rule as ``baseline_changed``
+            (iter-20 + iter-24).
+        quiet: When True, suppress the stderr echo of the diagnostic.
+
+    Returns:
+        ``None`` when working tree is clean within the contract OR when
+        enforcement is disabled (permissive mode, or ``--no-scope-guard``).
+        Diagnostic string otherwise — callers prepend it to the return
+        message so the user sees what was reverted.
+    """
+    if not scope_guard or issue_contract is None:
+        return None
+
+    # Build the allowed-files set. Same shape as
+    # ``AsyncSyncRunner._enforce_scope_guard`` (iter-14 anchored matcher +
+    # iter-24 SHA-aware baseline preservation), specialised for the
+    # orchestrator's project_root cwd: there is no per-module ``module_cwd``
+    # to anchor the rglob/companion matcher against, so the orchestrator
+    # uses the repo root as both ``repo_root`` and ``module_cwd`` — every
+    # pre-dispatch write the orchestrator can produce is repo-rooted.
+    repo_root = project_root.resolve()
+
+    allowed_paths_iter = tuple(issue_contract.allowed_paths or ())
+    allowed_files: set[Path] = set()
+    for rel in allowed_paths_iter:
+        if not rel:
+            continue
+        allowed_files.add((repo_root / rel).resolve())
+
+    # Companion allowlist union with DEFAULT — mirrors the iter-26 gate
+    # in :func:`_arch_path_in_scope`'s neighbour and the runner's own
+    # ``__init__`` union. Order preserved for log determinism.
+    allowlist: Tuple[str, ...] = tuple(
+        dict.fromkeys(
+            tuple(issue_contract.companion_allowlist or ())
+            + tuple(DEFAULT_SYNC_COMPANION_ALLOWLIST)
+        )
+    )
+
+    # rglob for currently-on-disk companion files. The orchestrator scope
+    # guard cannot rely on a single module_cwd, so the scan is repo-wide
+    # — same union as the per-module guard, just with a wider net.
+    #
+    # Iter-36 B-1/B-2: ``PDD_INTERNAL_PATH_ALLOWLIST`` is a SEPARATE pass
+    # (not merged into ``allowlist``) because internal patterns are
+    # interpreted as REPO-ROOT-anchored while user-facing companion
+    # patterns are anchored against the iteration root for the loop they
+    # appear in. The orchestrator happens to iterate repo-rooted anyway,
+    # but keeping the passes separate preserves parity with the per-module
+    # guard (which iterates module-rooted) and matches the documented
+    # semantics of ``PDD_INTERNAL_PATH_ALLOWLIST``.
+    for path in repo_root.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            rel_posix = path.resolve().relative_to(repo_root).as_posix()
+        except ValueError:
+            continue
+        if _matches_companion(rel_posix, allowlist):
+            allowed_files.add(path.resolve())
+        elif _matches_internal(rel_posix, PDD_INTERNAL_PATH_ALLOWLIST):
+            allowed_files.add(path.resolve())
+
+    # Also pick up companion-shaped tracked deletions (sync legitimately
+    # removes ``.pdd/meta/foo_python.json`` when a module is renamed; the
+    # revert helper would otherwise resurrect it).
+    #
+    # Iter-36 B-1/B-2: same internal-allowlist parallel pass — a tracked
+    # deletion of ``.pdd/agentic_sync_state.json`` (e.g. between sync
+    # invocations) must NOT be resurrected by the revert helper.
+    #
+    # Iter-38 M-1: ``_git_changed_paths`` now returns ``None`` on scan
+    # failure (was empty set). Enforcement-time scan failures are already
+    # handled separately downstream; here we treat ``None`` as the empty
+    # set so iteration is a no-op rather than crashing.
+    for rel_posix in (_git_changed_paths(repo_root) or set()):
+        absolute = (repo_root / rel_posix).resolve()
+        if _matches_companion(rel_posix, allowlist):
+            allowed_files.add(absolute)
+        elif _matches_internal(rel_posix, PDD_INTERNAL_PATH_ALLOWLIST):
+            allowed_files.add(absolute)
+
+    # Iter-24 SHA-aware preservation of pre-existing changed baseline.
+    #
+    # Iter-36 B-3: mirror :meth:`AsyncSyncRunner._enforce_scope_guard`'s
+    # iter-34 ``baseline_deleted`` set — when ``current_hash is None``,
+    # the pre-existing file is gone from disk. For TRACKED baselines git
+    # status surfaces this as ``D `` and the re-scan picks it up, but
+    # UNTRACKED baselines leave no trail; without this collection the
+    # orchestrator silently passes a sync-side deletion of user WIP.
+    #
+    # Iter-40 M-1 (unreadable vs missing): use
+    # :func:`_classify_baseline_path` to distinguish "file deleted" from
+    # "file exists but unreadable" (permission flip, locked file). The
+    # latter case must NOT be flagged as deleted — preserve by name to
+    # avoid the false-deletion diagnostic and prevent downstream revert
+    # helpers from attempting to remove a still-present path.
+    baseline_deleted: set[str] = set()
+    for rel_posix, baseline_hash in baseline_changed.items():
+        status = _classify_baseline_path(repo_root, rel_posix)
+        if status.missing:
+            # File was deleted after baseline — surface it via the
+            # ``remaining`` set below regardless of whether it was tracked
+            # or untracked (we can't distinguish from the snapshot, and
+            # even the tracked-deletion case warrants a hard-fail).
+            baseline_deleted.add(rel_posix)
+            continue
+        if status.sha is None:
+            # Iter-40 M-1: present but unreadable. Preserve by name —
+            # same conservative carve-out as the unreadable-at-snapshot
+            # branch below — so a permission-flaky baseline is not
+            # misreported as deleted.
+            allowed_files.add((repo_root / rel_posix).resolve())
+            continue
+        if baseline_hash is None or status.sha == baseline_hash:
+            # Unreadable at snapshot (preserve by name) or unchanged content
+            # → preserve.
+            allowed_files.add((repo_root / rel_posix).resolve())
+
+    # Iter-36 B-3: symmetric pass for ignored baseline. The orchestrator
+    # re-scan only sees files that ``git ls-files --ignored`` currently
+    # lists; deleted ignored baselines (e.g. user-side ``cache.bin`` erased
+    # before runner dispatch) leave no trail there. Iterate the ignored
+    # baseline directly to catch the deletion. Present-but-changed
+    # ignored baselines are already surfaced by
+    # :func:`_orchestrator_remaining_out_of_scope_paths`'s ignored loop.
+    #
+    # Iter-40 M-1: same unreadable-vs-missing discrimination.
+    for rel_posix, baseline_hash in baseline_ignored.items():
+        status = _classify_baseline_path(repo_root, rel_posix)
+        if status.missing:
+            baseline_deleted.add(rel_posix)
+        elif status.sha is None:
+            # Present but unreadable — preserve by name.
+            allowed_files.add((repo_root / rel_posix).resolve())
+
+    tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
+    untracked_reverted = revert_out_of_scope_changes_with_dirs(
+        repo_root, allowed_dirs=set(), allowed_files=allowed_files
+    )
+
+    seen: set[str] = set()
+    offending: List[str] = []
+    for path in list(tracked_reverted) + list(untracked_reverted):
+        try:
+            rel = Path(path).resolve().relative_to(repo_root).as_posix()
+        except ValueError:
+            rel = str(path)
+        if rel in seen:
+            continue
+        if (repo_root / rel).resolve() in allowed_files:
+            continue
+        seen.add(rel)
+        offending.append(rel)
+
+    # Iter-9 fail-closed re-scan: either revert helper can fail silently
+    # and return []. We re-scan the working tree after revert to be sure
+    # the contract is now satisfied; anything still on disk that is not
+    # allowed becomes the "unrecovered" set.
+    #
+    # Iter-36 B-3: union with ``baseline_deleted`` so an orchestrator-side
+    # deletion of a pre-existing untracked/ignored baseline path
+    # hard-fails the run. Mirrors :meth:`AsyncSyncRunner._enforce_scope_guard`'s
+    # iter-34 union for the per-module guard.
+    remaining_raw = _orchestrator_remaining_out_of_scope_paths(
+        repo_root, allowed_files, baseline_ignored
+    )
+    offending_set = set(offending)
+    remaining = sorted(
+        (set(remaining_raw) | baseline_deleted) - offending_set
+    )
+
+    if not offending and not remaining:
+        return None
+
+    source = issue_contract.source or "<unknown>"
+    allowed_lines = (
+        "\n".join(f"  - {p}" for p in sorted(allowed_paths_iter))
+        or "  - <empty>"
+    )
+    companion_lines = (
+        "\n".join(f"  - {p}" for p in allowlist) or "  - <empty>"
+    )
+    if offending:
+        offending_lines = "\n".join(f"  - {p}" for p in offending)
+        header = (
+            f"Orchestrator scope guard reverted {len(offending)} "
+            f"out-of-scope file(s) before runner dispatch "
+            f"(contract source: {source}):\n{offending_lines}"
+        )
+    else:
+        header = (
+            "Orchestrator scope guard detected out-of-scope artifacts "
+            f"before runner dispatch (contract source: {source}) but the "
+            "revert helpers reported no successful reverts."
+        )
+
+    parts = [header]
+    if remaining:
+        unrecovered_lines = "\n".join(f"  - {p}" for p in remaining)
+        parts.append(
+            "Unrecovered (revert failed, manual cleanup required):\n"
+            f"{unrecovered_lines}"
+        )
+    parts.append(f"Allowed write set:\n{allowed_lines}")
+    parts.append(f"Companion allowlist:\n{companion_lines}")
+    diagnostic = "\n".join(parts)
+
+    if not quiet:
+        # F8 parity with the per-module scope guard: echo diagnostic to
+        # stderr immediately so the user sees what was reverted before
+        # the orchestrator's combined return message appears.
+        print(diagnostic, file=sys.stderr)
+    return diagnostic
+
+
+def _matches_companion(rel_posix: str, allowlist: Iterable[str]) -> bool:
+    """Anchored companion-allowlist match for orchestrator scope guard.
+
+    Iter-30: thin wrapper around the iter-14 module-relative anchored
+    matcher used by :class:`AsyncSyncRunner._enforce_scope_guard`. Kept
+    local to the orchestrator so the orchestrator and the per-module
+    guard share semantics without the orchestrator importing the runner's
+    instance method.
+    """
+    for pattern in allowlist:
+        if not pattern:
+            continue
+        if not _is_valid_companion_pattern(pattern):
+            continue
+        if _matches_companion_pattern_anchored(rel_posix, pattern):
+            return True
+    return False
+
+
+def _matches_internal(rel_posix: str, internal_allowlist: Iterable[str]) -> bool:
+    """Iter-36 B-1/B-2: anchored match for PDD-internal infrastructure paths.
+
+    Distinct from :func:`_matches_companion` so internal allowlist patterns
+    bypass the user-facing :func:`_is_valid_companion_pattern` gate (the
+    internal list is curated, not parsed from user input) but still go
+    through the iter-14 segment-aware anchored matcher so e.g.
+    ``subdir/.pdd/agentic-logs/x.jsonl`` does NOT match — only top-level
+    ``.pdd/agentic-logs/x.jsonl`` does.
+    """
+    for pattern in internal_allowlist:
+        if not pattern:
+            continue
+        if _matches_companion_pattern_anchored(rel_posix, pattern):
+            return True
+    return False
+
+
+def _orchestrator_remaining_out_of_scope_paths(
+    repo_root: Path,
+    allowed_files: set[Path],
+    baseline_ignored: Dict[str, Optional[str]],
+) -> List[str]:
+    """Iter-30 fail-closed re-scan for the orchestrator scope guard.
+
+    Re-runs the iter-9 + iter-20 + iter-24 re-scan logic from
+    :meth:`AsyncSyncRunner._remaining_out_of_scope_paths` but parameterised
+    on the orchestrator's snapshots (the runner uses its own instance
+    state). Returns the sentinel ``["<git-status-failed>"]`` when either
+    of the underlying git probes fails so the orchestrator surfaces the
+    failure rather than silently passing.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_root), "status",
+             "--porcelain", "--untracked-files=all"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ["<git-status-failed>"]
+    if result.returncode != 0:
+        return ["<git-status-failed>"]
+
+    remaining: set[str] = set()
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        payload = line[3:].strip()
+        if not payload:
+            continue
+        if " -> " in payload:
+            old_raw, new_raw = payload.split(" -> ", 1)
+            entry_paths = [old_raw.strip().strip('"'),
+                           new_raw.strip().strip('"')]
+        else:
+            entry_paths = [payload.strip('"')]
+        for rel in entry_paths:
+            rel = rel.strip()
+            if rel.startswith("./"):
+                rel = rel[2:]
+            if not rel:
+                continue
+            absolute = (repo_root / rel).resolve()
+            if absolute in allowed_files:
+                continue
+            remaining.add(rel)
+
+    try:
+        ignored_result = subprocess.run(
+            ["git", "-C", str(repo_root), "ls-files",
+             "--others", "--ignored", "--exclude-standard"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return ["<git-status-failed>"]
+    if ignored_result.returncode != 0:
+        return ["<git-status-failed>"]
+
+    for line in ignored_result.stdout.splitlines():
+        rel = line.strip().strip('"')
+        if rel.startswith("./"):
+            rel = rel[2:]
+        if not rel:
+            continue
+        if rel in baseline_ignored:
+            baseline_hash = baseline_ignored[rel]
+            current_hash = _hash_file(repo_root, rel)
+            if current_hash is not None and (
+                baseline_hash is None or current_hash == baseline_hash
+            ):
+                continue
+        absolute = (repo_root / rel).resolve()
+        if absolute in allowed_files:
+            continue
+        remaining.add(rel)
+
+    return sorted(remaining)
+
+
+def _arch_path_in_scope(
+    arch_path: Path,
+    project_root: Path,
+    issue_contract: Optional[IssueContract],
+    scope_guard: bool,
+) -> bool:
+    """Return True if *arch_path* is in the issue contract's allowed write set.
+
+    Iter-28 B-2: the iter-26 gate compared the literal string
+    ``"architecture.json"`` against the contract. That bypassed the guard when
+    the project uses a nested architecture (e.g. ``frontend/architecture.json``)
+    — the literal check would either falsely allow a write the contract
+    forbids, or falsely block a write the contract permits. The check now
+    resolves the ACTUAL ``arch_path`` to a repo-relative POSIX path and
+    compares that against the contract.
+
+    The gate is bypassed (returns True) when:
+    - no contract was parsed (``issue_contract`` is None → permissive mode), or
+    - ``--no-scope-guard`` was passed (``scope_guard`` is False).
+
+    Returns False when ``arch_path`` resolves outside ``project_root`` — that
+    is treated as out-of-scope by definition (the contract is repo-relative,
+    so a path outside the repo cannot be allowed by it).
+    """
+    if issue_contract is None or scope_guard is False:
+        return True
+    try:
+        arch_rel = (
+            arch_path.resolve().relative_to(project_root.resolve()).as_posix()
+        )
+    except ValueError:
+        # arch_path resolves outside project_root — by definition not in scope.
+        return False
+    return arch_rel in tuple(issue_contract.allowed_paths or ())
+
+
 def _apply_architecture_corrections(
     arch_path: Path,
     architecture: List[Dict[str, Any]],
@@ -1666,6 +2218,7 @@ def run_agentic_sync(
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
+    scope_guard: bool = True,
 ) -> Tuple[bool, str, float, str]:
     """
     Run agentic sync workflow: identify modules from a GitHub issue and sync in parallel.
@@ -1737,6 +2290,7 @@ def run_agentic_sync(
 
     # 5. Build issue content
     issue_content = f"Title: {title}\n\nDescription:\n{body}\n"
+    comment_bodies: List[str] = []
     if comments_data and isinstance(comments_data, list):
         issue_content += "\nComments:\n"
         for comment in comments_data:
@@ -1744,6 +2298,55 @@ def run_agentic_sync(
                 c_user = comment.get("user", {}).get("login", "unknown")
                 c_body = comment.get("body", "")
                 issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
+                if isinstance(c_body, str) and c_body:
+                    comment_bodies.append(c_body)
+
+    # Issue #1013 — split-contract scope guard (F3, F4, F6, F11):
+    # Parse the structured contract from the issue body first, then comments,
+    # *regardless* of whether scope-guard enforcement is enabled — the
+    # ``--no-scope-guard`` opt-out should still record the parsed contract
+    # for diagnostics. The runner short-circuits enforcement when
+    # ``scope_guard_enabled=False`` (see AsyncSyncRunner._enforce_scope_guard).
+    issue_contract: Optional[IssueContract] = parse_issue_contract(
+        body, comment_bodies
+    )
+    if not quiet:
+        if not scope_guard:
+            # F7: this is the single user-facing log line for the
+            # ``--no-scope-guard`` opt-out. The runner no longer logs the
+            # same state on entry — kept here so it's closer to the user.
+            console.print(
+                "[yellow]Sync scope guard: disabled via --no-scope-guard[/yellow]"
+            )
+        elif issue_contract is not None:
+            console.print(
+                f"[dim]Sync scope guard: contract loaded from "
+                f"{issue_contract.source} "
+                f"({len(issue_contract.allowed_paths)} allowed paths)[/dim]"
+            )
+        else:
+            console.print(
+                "[dim]Sync scope guard: no contract on issue — "
+                "running in permissive mode[/dim]"
+            )
+
+    # Resolve effective allow set / companion allowlist for the runner.
+    # ``None`` (permissive) is preserved when no contract was parsed so the
+    # runner can distinguish "no contract" from "explicit empty contract".
+    # The runner unions the companion allowlist with
+    # DEFAULT_SYNC_COMPANION_ALLOWLIST in its __init__ (F4); we still pre-union
+    # here so the durable runner's parent __init__ does the same dedup pass.
+    if issue_contract is not None:
+        allowed_write_paths: Optional[List[str]] = list(issue_contract.allowed_paths)
+        effective_companion_allowlist: Tuple[str, ...] = tuple(
+            dict.fromkeys(
+                tuple(issue_contract.companion_allowlist)
+                + tuple(DEFAULT_SYNC_COMPANION_ALLOWLIST)
+            )
+        )
+    else:
+        allowed_write_paths = None
+        effective_companion_allowlist = tuple(DEFAULT_SYNC_COMPANION_ALLOWLIST)
 
     issue_content = _escape_format_braces(issue_content)
 
@@ -1754,6 +2357,81 @@ def run_agentic_sync(
     if architecture is None:
         if not quiet:
             console.print("[yellow]No architecture.json found, falling back to include-based dependency graph[/yellow]")
+
+    # Iter-30: orchestrator-level scope guard baseline snapshot. The
+    # per-module scope guard in :class:`AsyncSyncRunner` only enforces AFTER
+    # the runner is constructed, so any pre-dispatch LLM call or shell
+    # command in this orchestrator can produce out-of-contract writes that
+    # the per-module guard never sees. We snapshot the changed + ignored
+    # working tree now, run the orchestrator's pre-dispatch work, then
+    # invoke :func:`_enforce_orchestrator_scope` at every early return so
+    # any orchestrator-level violation is reverted before the function
+    # exits. Gated on ``scope_guard AND issue_contract is not None`` so
+    # non-contract runs and explicit ``--no-scope-guard`` opt-outs skip the
+    # baseline cost (mirrors the per-module guard's gate in
+    # :class:`AsyncSyncRunner.__init__`). The orchestrator's cwd is the
+    # user's main checkout in BOTH async and durable mode — durable mode
+    # only branches to worktrees inside :class:`DurableSyncRunner.run`,
+    # which runs after this guard is no longer relevant.
+    if scope_guard and issue_contract is not None:
+        # Iter-38 M-1 (fail-closed baseline acquisition): the helpers now
+        # return ``None`` on transient git failure (lock contention, missing
+        # binary, OSError) instead of an empty set. Without this
+        # discrimination an init-time scan failure here would silently
+        # produce an empty baseline that the orchestrator scope guard
+        # later treats as "no pre-existing files," so any pre-existing
+        # user WIP could be reverted/deleted by the pre-dispatch check.
+        # When EITHER scan fails we abort BEFORE any LLM call or shell
+        # command runs in this orchestrator. The runner has its own
+        # symmetric guard in :meth:`AsyncSyncRunner.run`.
+        _raw_orch_changed = _git_changed_paths(project_root)
+        _raw_orch_ignored = _git_ignored_paths(project_root)
+        if _raw_orch_changed is None or _raw_orch_ignored is None:
+            msg = (
+                "Scope guard fail-closed: could not snapshot working-tree "
+                "baseline at orchestrator init (git scan failed). Aborting "
+                "before any pre-dispatch LLM/shell work to prevent "
+                "false-positive reverts of pre-existing user files."
+            )
+            if use_github_state:
+                _post_error_comment(owner, repo, issue_number, msg)
+            return False, msg, 0.0, ""
+        _orch_baseline_changed: Dict[str, Optional[str]] = _hash_baseline_paths(
+            project_root, _raw_orch_changed
+        )
+        _orch_baseline_ignored: Dict[str, Optional[str]] = _hash_baseline_paths(
+            project_root, _raw_orch_ignored
+        )
+    else:
+        _orch_baseline_changed = {}
+        _orch_baseline_ignored = {}
+
+    def _orch_scope_check_return(
+        msg: str, cost: float, prov: str, success: bool
+    ) -> Tuple[bool, str, float, str]:
+        """Iter-30: wrap an early return with orchestrator scope-guard enforcement.
+
+        Closes the entire class of orchestrator-level scope bypasses that
+        iter-26, iter-28, and iter-29 each found a new instance of. When the
+        scope guard reverts anything, the return is forced to ``success=False``
+        and the diagnostic is appended to the caller's message so the user
+        sees what was reverted before the orchestrator returned.
+        """
+        scope_diagnostic = _enforce_orchestrator_scope(
+            project_root,
+            issue_contract,
+            scope_guard,
+            _orch_baseline_changed,
+            _orch_baseline_ignored,
+            quiet=quiet,
+        )
+        if scope_diagnostic is None:
+            return success, msg, cost, prov
+        combined = (
+            f"{msg}\n\nOrchestrator scope guard: out-of-contract artifacts "
+            f"detected before dispatch:\n{scope_diagnostic}"
+        )
+        return False, combined, cost, prov
 
     # 7. Try git diff-based module detection first (deterministic, free)
     branch_modules = _detect_modules_from_branch_diff(project_root)
@@ -1780,7 +2458,7 @@ def run_agentic_sync(
                 "skipping LLM identification.[/green]"
             )
             console.print(f"[green]{msg}[/green]")
-        return True, msg, llm_cost, provider
+        return _orch_scope_check_return(msg, llm_cost, provider, success=True)
     else:
         # 7b. Fall back to LLM-based module identification
         prompt_template = load_prompt_template("agentic_sync_identify_modules_LLM")
@@ -1814,7 +2492,7 @@ def run_agentic_sync(
             msg = f"LLM failed to identify modules: {llm_output}"
             if use_github_state:
                 _post_error_comment(owner, repo, issue_number, msg)
-            return False, msg, llm_cost, provider
+            return _orch_scope_check_return(msg, llm_cost, provider, success=False)
 
         # 9. Parse LLM response
         modules_to_sync, deps_valid, deps_corrections = _parse_llm_response(llm_output)
@@ -1831,11 +2509,11 @@ def run_agentic_sync(
                 msg = "All modules are already synced — nothing to do."
                 if not quiet:
                     console.print(f"[green]{msg}[/green]")
-                return True, msg, llm_cost, provider
+                return _orch_scope_check_return(msg, llm_cost, provider, success=True)
             msg = "LLM identified no modules to sync"
             if use_github_state:
                 _post_error_comment(owner, repo, issue_number, msg)
-            return False, msg, llm_cost, provider
+            return _orch_scope_check_return(msg, llm_cost, provider, success=False)
 
     # LLM returns basenames from architecture.json filenames (e.g., "crm_models_Python").
     # pdd sync expects basenames without the language suffix (e.g., "crm_models").
@@ -1867,7 +2545,7 @@ def run_agentic_sync(
         msg = "All modules are already synced — nothing to do."
         if not quiet:
             console.print(f"[green]{msg}[/green]")
-        return True, msg, llm_cost, provider
+        return _orch_scope_check_return(msg, llm_cost, provider, success=True)
 
     # 9.4 Augment architecture with entries from the PR branch (new modules created by pdd-change)
     architecture = _augment_architecture_from_pr_branch(architecture, project_root, issue_number)
@@ -1881,12 +2559,34 @@ def run_agentic_sync(
         msg = f"No valid modules to sync (all basenames were invalid: {invalid_basenames})"
         if use_github_state:
             _post_error_comment(owner, repo, issue_number, msg)
-        return False, msg, llm_cost, provider
+        return _orch_scope_check_return(msg, llm_cost, provider, success=False)
 
     if not quiet:
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")
 
     # 10. Apply dependency corrections if needed
+    #
+    # Iter-26: scope-guard the LLM dependency-correction step. This runs
+    # at the ORCHESTRATOR level — before the runner exists — so the per-
+    # module scope guard cannot catch it. If the issue contract does not
+    # include the ACTUAL ``arch_path`` (as a repo-relative POSIX path) in
+    # its allowed write set, skip the correction so the contract is not
+    # silently violated. Pre-existing behavior is preserved when no contract
+    # was parsed (``issue_contract`` is None → permissive mode) or when the
+    # arch path IS in the contract (legitimate architecture-touching PRs).
+    # ``--no-scope-guard`` (``scope_guard is False``) is treated as an
+    # explicit opt-out and also bypasses the gate.
+    #
+    # Iter-28 B-2: use the resolved ``arch_path`` rather than the literal
+    # string ``"architecture.json"``. A nested arch path such as
+    # ``frontend/architecture.json`` would otherwise either bypass the gate
+    # (when the contract allows ``architecture.json`` literally but the
+    # actual file is nested) or be incorrectly skipped (when the contract
+    # allows the nested path explicitly). The actual file being written is
+    # the source of truth, delegated to :func:`_arch_path_in_scope`.
+    arch_in_scope = _arch_path_in_scope(
+        arch_path, project_root, issue_contract, scope_guard
+    )
     if not deps_valid and deps_corrections and architecture is not None:
         if dry_run:
             if not quiet:
@@ -1894,9 +2594,18 @@ def run_agentic_sync(
                     "[yellow]Dry run: dependency corrections were suggested; "
                     "architecture.json was not modified.[/yellow]"
                 )
+        elif not arch_in_scope:
+            if not quiet:
+                console.print(
+                    "[yellow]Sync scope guard: skipping LLM dependency "
+                    "corrections — architecture.json is outside the issue "
+                    "split-contract allowed write set. Add architecture.json "
+                    "to the contract or rerun with --no-scope-guard to apply "
+                    "corrections.[/yellow]"
+                )
         elif not quiet:
             console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
-        if not dry_run:
+        if not dry_run and arch_in_scope:
             architecture = _apply_architecture_corrections(arch_path, architecture, deps_corrections, quiet)
 
     # 11. Build dependency graph
@@ -1948,7 +2657,7 @@ def run_agentic_sync(
             console.print(f"[red]{msg}[/red]")
         if use_github_state:
             _post_error_comment(owner, repo, issue_number, msg)
-        return False, msg, llm_cost, provider
+        return _orch_scope_check_return(msg, llm_cost, provider, success=False)
 
     if not quiet:
         for bn, cwd in module_cwds.items():
@@ -1971,14 +2680,14 @@ def run_agentic_sync(
         msg = "All modules are already synced — nothing to do."
         if not quiet:
             console.print(f"[green]{msg}[/green]")
-        return True, msg, llm_cost, provider
+        return _orch_scope_check_return(msg, llm_cost, provider, success=True)
 
     if dry_run:
         module_list = ", ".join(modules_to_sync)
         msg = f"Dry run complete: {len(modules_to_sync)} module(s) would sync: {module_list}"
         if not quiet:
             console.print(f"[green]{msg}[/green]")
-        return True, msg, llm_cost, provider
+        return _orch_scope_check_return(msg, llm_cost, provider, success=True)
 
     # 12. Run parallel sync
     sync_options = {
@@ -1999,6 +2708,47 @@ def run_agentic_sync(
         "cwd": project_root,
     } if use_github_state else None
 
+    contract_source: Optional[str] = (
+        issue_contract.source if issue_contract is not None else None
+    )
+
+    # Iter-32 B-1: orchestrator scope guard at the dispatch boundary.
+    # iter-30 wrapped every early-return site with
+    # :func:`_orch_scope_check_return`, but the SUCCESSFUL DISPATCH path —
+    # where the orchestrator constructs ``AsyncSyncRunner`` or
+    # ``DurableSyncRunner`` and calls ``.run()`` — was intentionally left
+    # unwrapped (the runner has its own per-module guard). The gap: any
+    # pre-dispatch write from LLM module identification, dry-run validation,
+    # ``_apply_architecture_corrections``, etc. that does NOT trigger an
+    # early return reaches the runner, where the very first thing
+    # :class:`AsyncSyncRunner.__init__` does is snapshot the working tree
+    # as ``_baseline_changed_paths``. That baseline AUTO-ALLOWS those
+    # writes for the entire sync session (per-module guard preserves
+    # baseline paths). Run the orchestrator guard one last time here so
+    # out-of-contract pre-dispatch writes are reverted and dispatch fails
+    # with a clear diagnostic BEFORE the runner snapshots them.
+    #
+    # Single check before the ``if durable: ... else: ...`` branch covers
+    # both async and durable construction sites — the only intervening
+    # logic is the runner-class selection, which has no write side
+    # effects.
+    scope_diagnostic = _enforce_orchestrator_scope(
+        project_root,
+        issue_contract,
+        scope_guard,
+        _orch_baseline_changed,
+        _orch_baseline_ignored,
+        quiet=quiet,
+    )
+    if scope_diagnostic is not None:
+        combined = (
+            f"Orchestrator scope guard hard-fail before dispatch: "
+            f"out-of-contract artifacts detected.\n{scope_diagnostic}"
+        )
+        if use_github_state:
+            _post_error_comment(owner, repo, issue_number, combined)
+        return False, combined, llm_cost, provider
+
     if durable:
         runner = DurableSyncRunner(
             basenames=modules_to_sync,
@@ -2015,6 +2765,10 @@ def run_agentic_sync(
             issue_url=issue_url,
             module_cwds=module_cwds,
             initial_cost=llm_cost,
+            allowed_write_set=allowed_write_paths,
+            companion_allowlist=effective_companion_allowlist,
+            scope_guard_enabled=scope_guard,
+            contract_source=contract_source,
         )
     else:
         runner = AsyncSyncRunner(
@@ -2027,6 +2781,10 @@ def run_agentic_sync(
             issue_url=issue_url,
             module_cwds=module_cwds,
             initial_cost=llm_cost,
+            allowed_write_set=allowed_write_paths,
+            companion_allowlist=effective_companion_allowlist,
+            scope_guard_enabled=scope_guard,
+            contract_source=contract_source,
         )
 
     runner_success, runner_msg, total_cost = runner.run()

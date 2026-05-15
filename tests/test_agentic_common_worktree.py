@@ -519,16 +519,60 @@ class TestRevertOutOfScopeChanges:
             assert result == []
 
     def test_handles_renames(self):
+        """Iter-8 B5b: renames are reverted atomically — both old and new
+        sides appear in the result list, and the helper invokes
+        ``git restore --staged --worktree --source=HEAD`` (not the old
+        ``git checkout HEAD --``) so the rename destination is properly
+        removed from the working tree."""
         porcelain = "R  old.py -> new.py\n"
         with patch(f"{MODULE}.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 _cp(stdout=porcelain),
-                _cp(),  # checkout
+                _cp(),  # restore
             ]
             result = revert_out_of_scope_changes_with_dirs(
                 Path("/repo"), allowed_dirs=set(), allowed_files=set()
             )
-            assert Path("new.py") in result
+            assert Path("old.py") in result and Path("new.py") in result
+            # Verify the second subprocess call used ``git restore`` with
+            # BOTH paths (atomic rename revert).
+            restore_call = mock_run.call_args_list[1]
+            args = restore_call.args[0]
+            assert "restore" in args
+            assert "old.py" in args and "new.py" in args
+
+    def test_partial_rename_atomic_revert(self, tmp_path):
+        """Iter-8 B5b (worktree helper): when one side of a rename is
+        allowed and the other is not, the rename must be reverted as a
+        unit. Uses a real ``tmp_path`` git repo because mocks would not
+        catch the actual half-staged state.
+        """
+        import subprocess as _sp
+        env = {**os.environ, "GIT_AUTHOR_NAME": "T", "GIT_AUTHOR_EMAIL": "t@t",
+               "GIT_COMMITTER_NAME": "T", "GIT_COMMITTER_EMAIL": "t@t"}
+        _sp.run(["git", "init", "-b", "main", str(tmp_path)], check=True,
+                capture_output=True, env=env)
+        (tmp_path / "old.py").write_text("c\n")
+        _sp.run(["git", "-C", str(tmp_path), "add", "-A"], check=True,
+                capture_output=True, env=env)
+        _sp.run(["git", "-C", str(tmp_path), "commit", "-m", "init"],
+                check=True, capture_output=True, env=env)
+        _sp.run(["git", "-C", str(tmp_path), "mv", "old.py", "new.py"],
+                check=True, capture_output=True, env=env)
+
+        # Allow only one side of the rename.
+        allowed = {(tmp_path / "old.py").resolve()}
+        revert_out_of_scope_changes_with_dirs(
+            tmp_path, allowed_dirs=set(), allowed_files=allowed
+        )
+
+        status = _sp.run(
+            ["git", "-C", str(tmp_path), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"Partial rename must be fully undone; got: {status!r}"
+        )
 
     def test_handles_git_status_failure(self):
         with patch(f"{MODULE}.subprocess.run", return_value=_cp(returncode=1)):

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import functools
 import os
 import signal
@@ -15,7 +16,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rich.console import Console
 
@@ -43,6 +44,36 @@ _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "ope
 # Semantic matching is restricted to the tail to prevent false positives
 # when LLMs quote/discuss a status without declaring it (Issue #865).
 _SEMANTIC_TAIL_LINES = 30
+
+# Issue #1013 — sync scope guard: glob patterns for companion artifacts that
+# ``pdd sync`` MAY touch as legitimate metadata even when an issue split
+# contract narrows the primary write set. Only fingerprint metadata under
+# ``.pdd/meta/`` is auto-allowed; everything else (architecture.json, examples,
+# unrelated prompts, README/CHANGELOG, etc.) must be opted-in by the contract's
+# own ``companion_allowlist`` field.
+DEFAULT_SYNC_COMPANION_ALLOWLIST: Tuple[str, ...] = (".pdd/meta/*.json",)
+
+# Issue #1013 iter-36 B-1/B-2: PDD's own infrastructure writes during a
+# guarded sync run (audit logs, runner state, etc.). These are NEVER part
+# of a contract — they're internal artifacts the tool produces as side
+# effects of running. The scope guard (both orchestrator-level and
+# per-module) MUST auto-allow them or it would hard-fail every contracted
+# run.
+#
+# Distinct from DEFAULT_SYNC_COMPANION_ALLOWLIST: the user-facing default
+# may be widened by an issue's ``companion_allowlist`` field; this set is
+# fixed tool infrastructure and is NOT user-extensible. Patterns here are
+# always interpreted as REPO-ROOT-anchored (matched against a path
+# computed relative to the repo root), not module-relative, because the
+# infrastructure writes happen at the top of the project regardless of
+# which module is being synced.
+PDD_INTERNAL_PATH_ALLOWLIST: Tuple[str, ...] = (
+    ".pdd/agentic-logs/*",           # session audit logs (run_agentic_task)
+    ".pdd/agentic-logs/*/*",         # nested per-task subdirs if any
+    ".pdd/agentic_sync_state.json",  # runner state file
+    ".pdd/bug-state/*",              # bug command state
+    ".pdd/checkup-review-loop/*",    # checkup state
+)
 
 # Semantic fallback patterns for when LLMs paraphrase instead of emitting exact tokens.
 # Each token maps to a list of regex patterns that capture common paraphrases.
@@ -2259,7 +2290,13 @@ def _revert_out_of_scope_changes(
         List of paths that were reverted.
     """
     cwd_str = str(cwd.resolve())
-    if not any(str(p).startswith(cwd_str) for p in allowed_paths):
+    # Iter-8 B5a (empty contract reject-all): when ``allowed_paths`` is
+    # non-empty, skip when none of the entries fall under *cwd* — that is
+    # the historical "scope guard for a different module" optimization.
+    # When ``allowed_paths`` is EMPTY, however, the caller is asking for a
+    # reject-all sweep (Issue #1013 degenerate-empty contract). Don't
+    # short-circuit; proceed with revert.
+    if allowed_paths and not any(str(p).startswith(cwd_str) for p in allowed_paths):
         return []
     try:
         result = subprocess.run(
@@ -2280,31 +2317,585 @@ def _revert_out_of_scope_changes(
     for line in result.stdout.splitlines():
         if len(line) < 4:
             continue
-        rel_path = line[3:].strip()
-        full_path = (cwd / rel_path).resolve()
-        if full_path not in allowed_paths:
-            to_restore.append(rel_path)
-            reverted.append(full_path)
+        payload = line[3:].strip()
+        # Iter-6 B2 (rename revert bug): ``git status --porcelain`` reports
+        # renames as ``R  old -> new``. Treating the whole payload as one
+        # path caused ``git checkout HEAD --`` to be called with a literal
+        # ``"old -> new"`` arg, which silently failed and left the rename
+        # in place. Split renames so both source and destination surface.
+        if " -> " in payload:
+            old_raw, new_raw = payload.split(" -> ", 1)
+            entry_paths = [old_raw.strip().strip('"'), new_raw.strip().strip('"')]
+            is_rename = True
+        else:
+            entry_paths = [payload.strip('"')]
+            is_rename = False
+        entry_paths = [p for p in entry_paths if p]
+        if not entry_paths:
+            continue
+        # Iter-7 B4 (partial-rename revert): a rename is an atomic git
+        # operation. If EITHER side of the rename is out of scope, the
+        # rename as a whole has to be undone — restoring only one side
+        # leaves the working tree in a half-renamed state (``D old`` or
+        # ``A new`` depending on which side was in scope).
+        full_paths = [(cwd / rel).resolve() for rel in entry_paths]
+        out_of_scope = any(fp not in allowed_paths for fp in full_paths)
+        if is_rename:
+            if out_of_scope:
+                for rel, fp in zip(entry_paths, full_paths):
+                    to_restore.append(rel)
+                    reverted.append(fp)
+        else:
+            for rel, fp in zip(entry_paths, full_paths):
+                if fp not in allowed_paths:
+                    to_restore.append(rel)
+                    reverted.append(fp)
     if to_restore:
+        # Iter-6 B2: use ``git restore --staged --worktree --source=HEAD``
+        # so staged renames are correctly undone (``git checkout HEAD --``
+        # cannot remove a rename destination unknown to HEAD). Falls back
+        # to the legacy command for git < 2.23.
+        checkout_failed = False
         try:
-            subprocess.run(
-                ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + to_restore,
+            restore_result = subprocess.run(
+                ["git", "-C", str(cwd), "restore",
+                 "--staged", "--worktree", "--source=HEAD", "--"] + to_restore,
                 capture_output=True, timeout=30,
             )
+            if restore_result.returncode != 0:
+                stderr = (restore_result.stderr or b"").decode(errors="replace")
+                if "'restore' is not a git command" in stderr:
+                    legacy = subprocess.run(
+                        ["git", "-C", str(cwd), "checkout", "HEAD", "--"]
+                        + to_restore,
+                        capture_output=True, timeout=30,
+                    )
+                    if legacy.returncode != 0:
+                        checkout_failed = True
+                        _scope_guard_logger.warning(
+                            "Scope guard: legacy git checkout returned %d "
+                            "for %d file(s): %s",
+                            legacy.returncode, len(to_restore),
+                            (legacy.stderr or b"").decode(errors="replace").strip(),
+                        )
+                else:
+                    checkout_failed = True
+                    _scope_guard_logger.warning(
+                        "Scope guard: git restore returned %d for %d file(s): %s",
+                        restore_result.returncode, len(to_restore), stderr.strip(),
+                    )
         except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
             _scope_guard_logger.warning(
-                "Scope guard: git checkout failed for %d file(s): %s",
+                "Scope guard: git restore failed for %d file(s): %s",
                 len(to_restore), exc,
             )
+            checkout_failed = True
+        if checkout_failed:
             reverted.clear()
-        else:
-            if reverted:
-                _scope_guard_logger.info(
-                    "Scope guard reverted %d out-of-scope file(s): %s",
-                    len(reverted),
-                    ", ".join(str(p.name) for p in reverted[:10]),
-                )
+        elif reverted:
+            _scope_guard_logger.info(
+                "Scope guard reverted %d out-of-scope file(s): %s",
+                len(reverted),
+                ", ".join(str(p.name) for p in reverted[:10]),
+            )
     return reverted
+
+
+# ---------------------------------------------------------------------------
+# Issue #1013 — split-contract scope guard: issue body / comment parser
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class IssueContract:
+    """
+    Parsed split-contract declaration extracted from a GitHub issue body or
+    comment.
+
+    Attributes:
+        allowed_paths: Repo-relative POSIX path strings the linked sync run is
+            permitted to modify as its primary write set. Resolved against the
+            module's repo root by the caller (this dataclass does NOT resolve
+            to absolute filesystem paths).
+        companion_allowlist: Glob patterns (e.g. ``".pdd/meta/*.json"``) for
+            companion artifacts the run MAY touch outside the primary write
+            set. The caller unions this with
+            :data:`DEFAULT_SYNC_COMPANION_ALLOWLIST` to produce the effective
+            allowlist.
+        source: Diagnostic label describing where the contract was detected
+            (currently ``"html-comment"``, ``"fenced-block"``, or
+            ``"bullet-list"``).
+    """
+
+    allowed_paths: Tuple[str, ...]
+    companion_allowlist: Tuple[str, ...]
+    source: str
+
+
+# Matches the heading line introducing a fenced-block contract. Case-insensitive
+# multiline match so the heading can be ``## Allowed Write Set``,
+# ``# split-contract``, etc.
+_FENCED_BLOCK_HEADER_RE = re.compile(
+    r"^\s*(?:#+\s*)?(?:allowed[\s_-]*write[\s_-]*set|split[\s_-]*contract)\b.*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Matches the HTML-comment JSON block, e.g.::
+#
+#     <!-- PDD_ISSUE_CONTRACT
+#     {"allowed_paths": ["pdd/foo.py"]}
+#     -->
+_HTML_COMMENT_CONTRACT_RE = re.compile(
+    r"<!--\s*PDD_ISSUE_CONTRACT\s*(?P<json>.*?)\s*-->",
+    re.DOTALL,
+)
+
+# Matches a fenced code block (```text``` or ```json```) that IMMEDIATELY
+# follows the heading. Only whitespace/newlines may precede the fence
+# (anchored via ``\A`` once we slice the text after the heading); the info
+# string MUST be ``text`` or ``json`` per spec (Issue #1013, iter-3 F3 — bare
+# fences are rejected). Captures the language (``text`` / ``json``) into the
+# named ``lang`` group so the parser can branch on the body format
+# (Issue #1013 iter-12 B-1: a ``json`` body must be parsed as a JSON array,
+# not as a line-separated path list).
+_FENCED_BLOCK_RE = re.compile(
+    r"\A\s*```(?P<lang>text|json)[ \t]*\n(?P<body>.*?)```",
+    re.DOTALL,
+)
+
+# Issue #1013 iter-18 B-1: third declaration format — bullet-list contract.
+# Matches the bold inline label ``**Allowed write set:**`` that introduces the
+# bullet list. Anchored to its own line; surrounding whitespace tolerated;
+# optional whitespace inside the bold delimiters.
+_BULLET_LIST_LABEL_RE = re.compile(
+    r"^\s*\*\*\s*allowed\s+write\s+set\s*:\s*\*\*\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Matches one ``-``/``*``/``+`` bullet line whose content is captured.
+_BULLET_LINE_RE = re.compile(
+    r"^\s*[-*+]\s+(?P<entry>.+?)\s*$"
+)
+
+# Matches another bold inline label (e.g. ``**Acceptance criteria:**``).
+# Used as a stop terminator while scanning bullets.
+_NEXT_LABEL_RE = re.compile(
+    r"^\s*\*\*[^*\n]+\*\*\s*$"
+)
+
+
+def _is_valid_contract_path(raw: object) -> bool:
+    """
+    Return True iff *raw* is a non-empty repo-relative POSIX path string with
+    no traversal segments and no Windows separators.
+
+    Validation runs inside the parser so a malformed entry never reaches the
+    runner. Per Issue #1013 spec, syntactically invalid entries are dropped
+    silently; the *contract* itself remains valid even if the resulting
+    ``allowed_paths`` ends up empty (empty contract → reject-all enforcement,
+    see :func:`parse_issue_contract`).
+    """
+    if not isinstance(raw, str):
+        return False
+    candidate = raw.strip()
+    if not candidate:
+        return False
+    if "\\" in candidate:
+        return False
+    if candidate.startswith("/"):
+        return False
+    # Reject parent-traversal segments at any position
+    parts = candidate.split("/")
+    if any(part == ".." for part in parts):
+        return False
+    return True
+
+
+def _is_valid_companion_pattern(raw: object) -> bool:
+    """
+    Return True iff *raw* is a repo-relative companion glob pattern with at
+    least one literal-character anchor and no ``**`` doublestar segment.
+
+    Issue #1013 iter-10 M-1: ``companion_allowlist`` accepts arbitrary glob
+    patterns, so a contract that declares ``*``, ``**``, or ``**/*`` would
+    let ``_matches_companion_allowlist`` auto-allow repo-wide changes and
+    bypass the split-contract write set. Reject patterns whose every
+    segment is wildcard-only (no character outside ``*?``), as well as
+    absolute, Windows-separator, traversal, and empty patterns.
+
+    Issue #1013 iter-14 M-1/M-2: also reject patterns whose any segment is
+    exactly ``**``. The segment-aware matcher (``fnmatch.fnmatchcase`` per
+    segment) treats ``**`` as just another wildcard segment, which would
+    let a contract like ``**/foo.json`` auto-allow ``foo.json`` at any
+    depth — exactly the suffix-match foot-gun ``PurePosixPath.match``
+    exhibited. Contracts that genuinely need a depth-wildcard companion
+    artifact should enumerate the directories explicitly.
+    """
+    if not isinstance(raw, str):
+        return False
+    candidate = raw.strip()
+    if not candidate:
+        return False
+    if "\\" in candidate:
+        return False
+    if candidate.startswith("/"):
+        return False
+    parts = candidate.split("/")
+    if any(part == ".." for part in parts):
+        return False
+    # Iter-14: reject doublestar segments. ``**`` only has well-defined
+    # semantics for recursive matching, which the anchored segment-aware
+    # matcher does NOT implement (it requires equal segment counts).
+    if any(part == "**" for part in parts):
+        return False
+    # At least one segment MUST contain a literal character (anything
+    # outside ``*?``); otherwise the pattern is wildcard-only and would
+    # match arbitrary repo paths, defeating the scope guard.
+    for segment in parts:
+        if not segment:
+            continue
+        if any(ch not in "*?" for ch in segment):
+            return True
+    return False
+
+
+def _matches_companion_pattern_anchored(rel_posix: str, pattern: str) -> bool:
+    """
+    Issue #1013 iter-14 M-1/M-2: anchored, segment-aware glob match for
+    companion allowlist patterns.
+
+    Unlike :meth:`pathlib.PurePosixPath.match` (which matches from the
+    right and lets ``.pdd/meta/*.json`` falsely match
+    ``subdir/.pdd/meta/foo.json``), this matcher requires path and
+    pattern to align segment-by-segment from the START of the path with
+    equal segment count. Each segment is matched via
+    :func:`fnmatch.fnmatchcase` for ``*`` / ``?`` semantics.
+
+    Returns False on invalid patterns (already filtered by
+    :func:`_is_valid_companion_pattern`); callers should validate first
+    so an invalid pattern can never auto-allow a path.
+    """
+    if not pattern or not rel_posix:
+        return False
+    path_parts = rel_posix.replace("\\", "/").strip("/").split("/")
+    pattern_parts = pattern.replace("\\", "/").strip("/").split("/")
+    if len(path_parts) != len(pattern_parts):
+        return False
+    return all(
+        fnmatch.fnmatchcase(pp, patp)
+        for pp, patp in zip(path_parts, pattern_parts)
+    )
+
+
+def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
+    """Return a contract parsed from a ``<!-- PDD_ISSUE_CONTRACT ... -->`` block, else None."""
+    match = _HTML_COMMENT_CONTRACT_RE.search(text)
+    if not match:
+        return None
+    raw_json = match.group("json").strip()
+    if not raw_json:
+        return None
+    try:
+        parsed = json.loads(raw_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    raw_allowed = parsed.get("allowed_paths")
+    if not isinstance(raw_allowed, list):
+        return None
+    # Drop syntactically invalid entries silently. Per Issue #1013, a
+    # syntactically valid contract with an empty ``allowed_paths`` is a
+    # legal degenerate contract meaning "reject every change" — keep it.
+    allowed = tuple(p.strip() for p in raw_allowed if _is_valid_contract_path(p))
+    raw_companion = parsed.get("companion_allowlist", [])
+    if not isinstance(raw_companion, list):
+        raw_companion = []
+    # Issue #1013 iter-10 M-1: drop wildcard-only / absolute / traversal /
+    # Windows-separator patterns silently so a contract cannot declare
+    # ``*``/``**``/``**/*`` and bypass the split-contract write set.
+    companion = tuple(
+        p.strip() for p in raw_companion if _is_valid_companion_pattern(p)
+    )
+    return IssueContract(
+        allowed_paths=allowed,
+        companion_allowlist=companion,
+        source="html-comment",
+    )
+
+
+def _parse_fenced_block_contract(text: str) -> Optional[IssueContract]:
+    """Return a contract parsed from a heading + immediately-following fenced
+    code block, else None. The fence MUST carry a ``text`` or ``json`` info
+    string (bare fences are rejected per Issue #1013 iter-3 F3) and MUST
+    appear immediately after the heading (only whitespace permitted between).
+
+    Body format depends on the fence language (Issue #1013 iter-12 B-1):
+
+    - ``text``: one repo-relative POSIX path per line; blank lines and lines
+      starting with ``#`` are ignored. Surrounding backticks on a path line
+      are stripped before validation.
+    - ``json``: a JSON array of repo-relative POSIX path strings, e.g.
+      ``["pdd/foo.py", "tests/test_foo.py"]``. Anything else (object,
+      number, string, malformed JSON) returns ``None`` so the caller falls
+      back to permissive mode.
+
+    When the fence body parses syntactically but contains no valid paths
+    (every entry dropped by ``_is_valid_contract_path``), the contract is
+    still returned with ``allowed_paths=()`` — a degenerate but legal
+    reject-all contract per the iter-8 B5 semantics.
+    """
+    header_match = _FENCED_BLOCK_HEADER_RE.search(text)
+    if not header_match:
+        return None
+    after_header = text[header_match.end():]
+    # ``\A``-anchored regex: the fence must IMMEDIATELY follow the heading
+    # (only whitespace/newlines between heading end and the opening fence).
+    block_match = _FENCED_BLOCK_RE.match(after_header)
+    if not block_match:
+        return None
+    lang = block_match.group("lang")
+    body = block_match.group("body")
+    paths: List[str] = []
+    seen: set = set()
+    if lang == "json":
+        # Issue #1013 iter-12 B-1: a JSON fence holds a JSON array of path
+        # strings, NOT a line-separated list. Parsing failures and any
+        # non-array payload (object, number, string) signal a malformed
+        # contract; return ``None`` so the caller falls back to permissive
+        # mode (matching the HTML-comment branch's tolerance).
+        try:
+            parsed = json.loads(body)
+        except (ValueError, TypeError):
+            return None
+        if not isinstance(parsed, list):
+            return None
+        for entry in parsed:
+            if not _is_valid_contract_path(entry):
+                continue
+            candidate = entry.strip()
+            if candidate not in seen:
+                paths.append(candidate)
+                seen.add(candidate)
+    else:
+        # ``text`` fence: one repo-relative path per line; ignore blank
+        # lines and ``#`` comments. Strip surrounding backticks if a user
+        # wrapped the path.
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            line = line.strip("`").strip()
+            if not _is_valid_contract_path(line):
+                continue
+            if line not in seen:
+                paths.append(line)
+                seen.add(line)
+    # Empty fenced block is a legal degenerate contract (reject all).
+    return IssueContract(
+        allowed_paths=tuple(paths),
+        companion_allowlist=(),
+        source="fenced-block",
+    )
+
+
+def _parse_bullet_list_contract(text: str) -> Optional[IssueContract]:
+    """Return a contract parsed from a heading + ``**Allowed write set:**``
+    inline label + bullet list, else ``None``. This is the third supported
+    format (Issue #1013 iter-18 B-1), motivated by the real-world shape used
+    in #1005 where the contract is written as Markdown bullets under a bold
+    inline label rather than inside a fenced code block or HTML comment.
+
+    Algorithm:
+
+    1. Find a heading line matching :data:`_FENCED_BLOCK_HEADER_RE`
+       (``## Split Contract`` / ``## Allowed Write Set`` / etc.).
+    2. After the heading, scan forward for the inline label line
+       ``**Allowed write set:**`` (case-insensitive). The label is the
+       discriminator — bullets BEFORE the label (e.g. under a ``## Files``
+       section earlier in the body) MUST NOT be picked up.
+    3. Collect contiguous ``-`` / ``*`` / ``+`` bullets that follow the
+       label, skipping blank lines. Stop the list at the first of:
+
+       - another ``**Label:**`` line (e.g. ``**Acceptance criteria:**``)
+       - a ``---`` horizontal rule
+       - another ``#``-prefixed heading
+       - a non-blank line that is not a bullet
+       - end of body.
+
+    4. Each captured bullet entry has its surrounding backticks stripped
+       (users write ``- `pdd/foo.py``` because they're showing code paths),
+       then is validated by :func:`_is_valid_contract_path`. Invalid entries
+       are dropped silently — same policy as the other branches.
+    5. An empty bullet list (no valid paths captured) is still returned as a
+       degenerate reject-all contract per the iter-8 B5 semantics.
+    """
+    header_match = _FENCED_BLOCK_HEADER_RE.search(text)
+    if not header_match:
+        return None
+    after_header = text[header_match.end():]
+    label_match = _BULLET_LIST_LABEL_RE.search(after_header)
+    if not label_match:
+        return None
+
+    body = after_header[label_match.end():]
+    paths: List[str] = []
+    seen: set = set()
+    for raw_line in body.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            # Blank line: do not terminate; bullets can be separated by
+            # blank lines in some Markdown styles. Continue scanning.
+            continue
+        if stripped.startswith("---"):
+            break
+        if stripped.startswith("#"):
+            break
+        # Another bold inline label (e.g. ``**Acceptance criteria:**``)
+        # terminates the bullet list.
+        if _NEXT_LABEL_RE.match(raw_line):
+            break
+        bullet_match = _BULLET_LINE_RE.match(raw_line)
+        if not bullet_match:
+            # First non-blank, non-terminator, non-bullet line ends the list.
+            break
+        entry = bullet_match.group("entry").strip()
+        # Users wrap code-shaped paths in backticks; strip a single layer of
+        # surrounding backticks before validation.
+        entry = entry.strip("`").strip()
+        if not _is_valid_contract_path(entry):
+            continue
+        if entry not in seen:
+            paths.append(entry)
+            seen.add(entry)
+
+    return IssueContract(
+        allowed_paths=tuple(paths),
+        companion_allowlist=(),
+        source="bullet-list",
+    )
+
+
+def _parse_contract_from_text(text: Optional[str]) -> Optional[IssueContract]:
+    """Try HTML-comment first, then fenced-block, then bullet-list. Returns
+    ``None`` when no branch matches.
+
+    Priority order (Issue #1013 iter-18 B-1): HTML comment is authoritative
+    (spec-preferred form, invisible in rendered Markdown), then fenced block
+    (the existing iter-3 form), then bullet list (the real-world shape used
+    in #1005 and similar issues). The first branch that returns a
+    non-``None`` :class:`IssueContract` wins.
+    """
+    if not text:
+        return None
+    try:
+        html_contract = _parse_html_comment_contract(text)
+    except Exception:  # noqa: BLE001 — parser MUST NOT raise on any input
+        html_contract = None
+    if html_contract is not None:
+        return html_contract
+    try:
+        fenced_contract = _parse_fenced_block_contract(text)
+    except Exception:  # noqa: BLE001 — parser MUST NOT raise on any input
+        fenced_contract = None
+    if fenced_contract is not None:
+        return fenced_contract
+    try:
+        return _parse_bullet_list_contract(text)
+    except Exception:  # noqa: BLE001 — parser MUST NOT raise on any input
+        return None
+
+
+def parse_issue_contract(
+    issue_body: Optional[str],
+    issue_comments: Optional[List[str]] = None,
+) -> Optional[IssueContract]:
+    """
+    Parse an issue split-contract from an issue body or its comments.
+
+    Three declaration formats are supported (Issue #1013):
+
+    1. HTML-comment block (authoritative, spec-preferred)::
+
+           <!-- PDD_ISSUE_CONTRACT
+           {"allowed_paths": ["pdd/foo.py"],
+            "companion_allowlist": [".pdd/meta/*.json"]}
+           -->
+
+       JSON ``allowed_paths`` is required (list of repo-relative path
+       strings); ``companion_allowlist`` is optional (list of glob patterns).
+
+    2. Fenced-code-block following a heading line matching
+       ``allowed write set`` or ``split contract``::
+
+           ## Allowed Write Set
+           ```text
+           pdd/foo.py
+           tests/test_foo.py
+           ```
+
+       One repo-relative path per line; blank lines and ``#``-prefixed
+       comments are ignored. ``json`` info-string fences carry a JSON array
+       of repo-relative path strings instead.
+
+    3. Bullet-list under a ``**Allowed write set:**`` inline label
+       (Issue #1013 iter-18 B-1 — the real-world shape used in #1005)::
+
+           ## Split Contract
+           **Command sequence:** change → sync
+           **Allowed write set:**
+           - `pdd/foo.py`
+           - `tests/test_foo.py`
+           **Acceptance criteria:**
+           - ...
+
+       The heading discriminator is the same regex as branch 2; the inline
+       ``**Allowed write set:**`` label tells the parser where the bullets
+       start so unrelated bullet lists earlier in the body (e.g. a
+       ``## Files`` section) are NOT captured. Each bullet is one
+       repo-relative POSIX path with optional surrounding backticks. The
+       list terminates at the next ``**Label:**``, a ``---`` rule, another
+       heading, a non-blank non-bullet line, or end of body.
+
+    Branches are tried in this priority order; the first match wins.
+
+    The body is scanned first; if no contract is found there, each comment is
+    scanned in order. When both sources declare a contract, the body wins
+    (issues are edited authoritatively; comments are append-only and may carry
+    stale snapshots from earlier workflow steps).
+
+    Path entries are validated as repo-relative POSIX paths: syntactically
+    invalid entries (absolute, containing ``..``, empty, or using Windows
+    separators ``\\``) are dropped silently. A syntactically valid contract
+    whose ``allowed_paths`` ends up empty (either declared as ``[]`` or
+    reduced to ``[]`` after dropping invalid entries) is still returned as
+    an :class:`IssueContract` with ``allowed_paths=()``; the caller treats
+    that as a degenerate "reject every change" contract. The parser returns
+    ``None`` only when there is no parseable marker at all or when the
+    marker payload is syntactically malformed. Resolution to absolute
+    filesystem paths is the caller's job once it knows the repo root.
+
+    The parser MUST NOT raise on any input: malformed JSON, missing fields,
+    unexpected types, or absent markers all return ``None``.
+
+    Args:
+        issue_body: Raw issue body markdown.
+        issue_comments: Optional list of raw issue comment markdown bodies
+            (oldest first or newest first is fine; the parser picks the first
+            comment with a valid contract).
+
+    Returns:
+        Parsed :class:`IssueContract` or ``None`` when no valid contract is
+        present.
+    """
+    body_contract = _parse_contract_from_text(issue_body)
+    if body_contract is not None:
+        return body_contract
+    for comment in issue_comments or []:
+        contract = _parse_contract_from_text(comment)
+        if contract is not None:
+            return contract
+    return None
+
 
 _CLAUDE_OAUTH_PROBE_TIMEOUT_SECONDS = 10
 _ANTHROPIC_KEY_STRIP_NOTICE_LOGGED: Dict[str, bool] = {}

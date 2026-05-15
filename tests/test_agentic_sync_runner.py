@@ -2550,6 +2550,1780 @@ class TestModuleCwds:
         assert popen_kwargs["cwd"] == str(custom_cwd)
 
 
+class TestAllowedWriteSet:
+    """
+    Issue #1013 (F14): the legacy ``allowed_write_paths`` kwarg was removed.
+    Only ``allowed_write_set`` is accepted by ``AsyncSyncRunner``. Deeper
+    behavioural coverage for the new ``_enforce_scope_guard`` helper lives
+    in ``TestEnforceScopeGuard`` below.
+    """
+
+    def test_allowed_write_set_forces_sequential_execution(self):
+        runner = AsyncSyncRunner(
+            basenames=["a", "b"],
+            dep_graph={"a": [], "b": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner.max_workers == 1
+
+    def test_permissive_mode_when_no_contract(self):
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=None,
+        )
+
+        assert runner.allowed_write_paths is None
+        assert runner.scope_guard_enabled is True
+        # No contract → no forced sequential execution
+        assert runner.max_workers == 4
+
+    def test_explicit_empty_contract_rejects_all_changes(self):
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=[],
+        )
+
+        # Empty-but-present contract is still "contract present"; max_workers
+        # is forced to 1 and the allow set is the empty set (NOT None).
+        assert runner.allowed_write_paths == set()
+        assert runner.max_workers == 1
+
+    def test_async_runner_project_root_kwarg_overrides_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-18 M-1: the new keyword-only ``project_root`` kwarg MUST
+        override the default ``Path.cwd()`` and MUST be applied BEFORE the
+        baseline-changed-paths snapshot is taken — otherwise subclasses
+        (e.g. ``DurableSyncRunner``) cannot pin the baseline to a known
+        repo root.
+        """
+        import subprocess
+
+        # Initialise a real git repo at ``durable_root`` so the baseline
+        # snapshot's ``git status`` invocation actually runs.
+        durable_root = tmp_path / "durable_root"
+        durable_root.mkdir()
+        subprocess.run(
+            ["git", "init", "-b", "main", str(durable_root)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(durable_root), "config", "user.email", "t@t.invalid"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(durable_root), "config", "user.name", "T"],
+            check=True,
+            capture_output=True,
+        )
+        (durable_root / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(durable_root), "add", "README.md"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(durable_root), "commit", "-m", "init"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Dirty file inside durable_root (should appear in baseline).
+        (durable_root / "dirty.py").write_text("user wip")
+
+        # The CALLER's cwd is a different directory entirely. A dirty file
+        # there MUST NOT leak into the runner's baseline.
+        caller_cwd = tmp_path / "caller_cwd"
+        caller_cwd.mkdir()
+        (caller_cwd / "out.py").write_text("dirty file in caller cwd")
+        monkeypatch.chdir(caller_cwd)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+            project_root=durable_root,
+        )
+
+        assert runner.project_root == durable_root.resolve()
+        assert "dirty.py" in runner._baseline_changed_paths
+        assert "out.py" not in runner._baseline_changed_paths
+
+
+class TestBaselineFailClosed:
+    """Issue #1013 iter-38 M-1: when the init-time baseline scan fails
+    (transient git lock contention, missing binary, OSError), the runner
+    MUST record ``_baseline_acquisition_failed=True`` and abort
+    :meth:`run` before any write-capable work runs. An empty baseline
+    indistinguishable from "scan succeeded, worktree clean" would cause
+    the scope guard to later flag pre-existing user WIP as out-of-scope
+    and revert/delete it.
+    """
+
+    def test_async_runner_aborts_when_baseline_changed_scan_fails(
+        self, monkeypatch
+    ):
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: None)
+        monkeypatch.setattr(mod, "_git_ignored_paths", lambda _root: set())
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is True
+        assert runner._baseline_changed_paths == {}
+        assert runner._baseline_ignored_paths == {}
+
+        success, msg, cost = runner.run()
+        assert success is False
+        assert "fail-closed" in msg
+        assert "baseline" in msg
+        assert cost == 0.0
+
+    def test_async_runner_aborts_when_baseline_ignored_scan_fails(
+        self, monkeypatch
+    ):
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: set())
+        monkeypatch.setattr(mod, "_git_ignored_paths", lambda _root: None)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is True
+        success, msg, _cost = runner.run()
+        assert success is False
+        assert "fail-closed" in msg
+
+    def test_async_runner_aborts_when_baseline_scan_raises_oserror(
+        self, monkeypatch
+    ):
+        """Verify the actual subprocess exception path: ``_git_changed_paths``
+        catches ``OSError`` and returns ``None``, which must propagate to
+        the fail-closed flag."""
+        from pdd import agentic_sync_runner as mod
+
+        def boom(*_args, **_kwargs):
+            raise OSError("git binary missing")
+
+        monkeypatch.setattr(mod.subprocess, "run", boom)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is True
+        success, msg, _cost = runner.run()
+        assert success is False
+        assert "fail-closed" in msg
+
+    def test_async_runner_no_flag_when_baseline_scan_fails_in_permissive_mode(
+        self, monkeypatch
+    ):
+        """When ``allowed_write_set`` is ``None`` (permissive), the helpers
+        are never called and no failure can be recorded — the run proceeds."""
+        from pdd import agentic_sync_runner as mod
+
+        called = {"changed": 0, "ignored": 0}
+
+        def fake_changed(_root):
+            called["changed"] += 1
+            return None
+
+        def fake_ignored(_root):
+            called["ignored"] += 1
+            return None
+
+        monkeypatch.setattr(mod, "_git_changed_paths", fake_changed)
+        monkeypatch.setattr(mod, "_git_ignored_paths", fake_ignored)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=None,
+        )
+
+        # Gate is off → helpers MUST NOT be called and the flag MUST be False.
+        assert called["changed"] == 0
+        assert called["ignored"] == 0
+        assert runner._baseline_acquisition_failed is False
+
+    def test_async_runner_no_flag_when_scope_guard_disabled(self, monkeypatch):
+        """``scope_guard_enabled=False`` skips the baseline scan entirely —
+        even an OSError from ``subprocess.run`` cannot trigger fail-closed."""
+        from pdd import agentic_sync_runner as mod
+
+        def boom(*_args, **_kwargs):
+            raise OSError("would explode if reached")
+
+        monkeypatch.setattr(mod.subprocess, "run", boom)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+            scope_guard_enabled=False,
+        )
+
+        assert runner._baseline_acquisition_failed is False
+
+    def test_async_runner_no_flag_when_scan_succeeds(self, monkeypatch):
+        """Regression: a successful scan returning an EMPTY set (clean
+        worktree) must NOT trigger fail-closed — only ``None`` does."""
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: set())
+        monkeypatch.setattr(mod, "_git_ignored_paths", lambda _root: set())
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is False
+        assert runner._baseline_changed_paths == {}
+        assert runner._baseline_ignored_paths == {}
+
+
+class TestEnforceScopeGuard:
+    """Issue #1013 (F9): direct behavioural coverage for ``_enforce_scope_guard``
+    and ``_matches_companion_allowlist``. The constructor-state checks above
+    establish baseline; these tests exercise the methods themselves.
+    """
+
+    def _make_runner(self, **kwargs):
+        defaults = {
+            "basenames": ["mod"],
+            "dep_graph": {"mod": []},
+            "sync_options": {},
+            "github_info": None,
+            "quiet": True,
+        }
+        defaults.update(kwargs)
+        return AsyncSyncRunner(**defaults)
+
+    def test_returns_none_when_permissive_mode(self, tmp_path):
+        runner = self._make_runner(allowed_write_set=None)
+        assert runner._enforce_scope_guard("mod", tmp_path) is None
+
+    def test_returns_none_when_scope_guard_disabled(self, tmp_path):
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            scope_guard_enabled=False,
+        )
+        assert runner._enforce_scope_guard("mod", tmp_path) is None
+
+    def test_companion_allowlist_strict_pathlib_match(self):
+        """F3: ``.pdd/meta/*.json`` must NOT match nested directories."""
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        # Top-level companion match → allowed
+        assert runner._matches_companion_allowlist(
+            ".pdd/meta/foo_python.json", runner.companion_allowlist
+        ) is True
+        # Nested under companion dir → rejected (pathlib semantics)
+        assert runner._matches_companion_allowlist(
+            ".pdd/meta/nested/foo_python.json", runner.companion_allowlist
+        ) is False
+        # Unrelated path → rejected
+        assert runner._matches_companion_allowlist(
+            "pdd/unrelated.py", runner.companion_allowlist
+        ) is False
+
+    def test_companion_allowlist_unions_default(self):
+        """F4: caller-supplied allowlist is always unioned with the default."""
+        from pdd.agentic_common import DEFAULT_SYNC_COMPANION_ALLOWLIST
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=["docs/*.md"],
+        )
+        # Both caller pattern AND default appear in effective allowlist
+        assert "docs/*.md" in runner.companion_allowlist
+        for default in DEFAULT_SYNC_COMPANION_ALLOWLIST:
+            assert default in runner.companion_allowlist
+
+    def test_diagnostic_format_has_scope_guard_reverted_prefix(
+        self, tmp_path, monkeypatch
+    ):
+        """Verify the spec-required diagnostic prefix is emitted."""
+        # Stub the revert helpers so the test does not require a real git repo:
+        # _enforce_scope_guard composes the diagnostic from their return values.
+        from pdd import agentic_sync_runner as mod
+
+        offending = tmp_path / "out_of_scope.txt"
+        offending.write_text("oops")
+        monkeypatch.setattr(
+            mod,
+            "_revert_out_of_scope_changes",
+            lambda _root, _allowed: [offending],
+        )
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.contract_source = "html-comment"
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+        assert diagnostic is not None
+        assert diagnostic.startswith(
+            "Scope guard reverted 1 out-of-scope file(s) for module 'mod' "
+            "(contract source: html-comment):"
+        )
+        assert "Allowed write set:" in diagnostic
+        assert "Companion allowlist:" in diagnostic
+
+    def test_companion_glob_scoped_to_module_cwd_not_sibling(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-3 F1: a sibling module's companion artifact (under a different
+        ``module_cwd``) must NOT be auto-allowed. The rglob must scope to
+        the current module's cwd only.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        # Build a fake repo with two module dirs; place ``.pdd/meta/foo.json``
+        # under EACH so the companion glob would match both if scanned at
+        # repo level.
+        repo = tmp_path
+        module_a = repo / "mod_a"
+        module_b = repo / "mod_b"
+        for m in (module_a, module_b):
+            (m / ".pdd" / "meta").mkdir(parents=True)
+            (m / ".pdd" / "meta" / "x.json").write_text("{}")
+
+        captured_allowed = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        # Skip git toplevel resolution; pretend repo root == tmp_path.
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: repo.resolve()
+        )
+
+        runner._enforce_scope_guard("mod_a", module_a)
+
+        files = captured_allowed["files"]
+        assert (module_a / ".pdd" / "meta" / "x.json").resolve() in files
+        # Sibling module's companion artifact must NOT be auto-allowed.
+        assert (module_b / ".pdd" / "meta" / "x.json").resolve() not in files
+
+    def test_run_entry_does_not_log_permissive_mode_again(self, capsys):
+        """Iter-18 m-1: ``run_agentic_sync`` already emits one user-facing
+        line per invocation covering all three states (disabled / contract
+        loaded / no contract). The runner used to emit a second duplicate
+        line on ``run()`` entry — removed in iter-18 so the operator sees
+        a single authoritative status line.
+        """
+        runner = self._make_runner(
+            allowed_write_set=None,
+            quiet=False,
+        )
+        runner.basenames = []
+        runner.run()
+        out = capsys.readouterr().out
+        # The runner-side duplicate is gone.
+        assert "permissive mode" not in out
+
+    def test_run_entry_does_not_log_opt_out_warning_again(self, capsys):
+        """Iter-18 m-1: caller-side log owns the opt-out warning; the
+        runner-side duplicate was removed.
+        """
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            scope_guard_enabled=False,
+            quiet=False,
+        )
+        runner.basenames = []
+        runner.run()
+        out = capsys.readouterr().out
+        assert "--no-scope-guard" not in out
+
+    def test_pre_existing_untracked_files_are_preserved(self, tmp_path):
+        """Iter-6 B1 (data-loss bug): a user's pre-existing untracked file
+        (``scratch.txt``) must NOT be removed by the scope guard. Uses a
+        real ``git init`` repo because the bug only reproduces when the
+        revert helpers actually touch the filesystem.
+        """
+        subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email",
+                        "t@t.invalid"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name",
+                        "T"], check=True, capture_output=True)
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "README.md"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"],
+                       check=True, capture_output=True)
+
+        scratch = tmp_path / "scratch.txt"
+        scratch.write_text("user work-in-progress — do not delete")
+        assert scratch.exists()
+
+        from unittest.mock import patch
+        with patch("pdd.agentic_sync_runner.Path.cwd", return_value=tmp_path):
+            runner = self._make_runner(
+                allowed_write_set=["pdd/foo.py"],
+                companion_allowlist=[".pdd/meta/*.json"],
+            )
+        runner.project_root = tmp_path
+
+        assert "scratch.txt" in runner._baseline_changed_paths
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert scratch.exists(), (
+            "scope guard incorrectly deleted user's pre-existing scratch.txt"
+        )
+        assert diagnostic is None or "scratch.txt" not in diagnostic
+
+    # ---------------------------------------------------------------------
+    # Iter-24 M-1: hash-aware baseline preservation
+    # ---------------------------------------------------------------------
+
+    def test_baseline_preservation_clobber_is_detected(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-24 M-1 (baseline-clobber bug, codex iter-23 repro): a
+        pre-existing dirty file outside the contract MUST be flagged when
+        sync overwrites it with different content. Name-based preservation
+        (iter-6 B1) silently auto-allowed any same-named write."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing dirty file outside the contract — codex repro.
+        outside = tmp_path / "outside.py"
+        outside.write_text("user wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "outside.py" in runner._baseline_changed_paths
+        baseline_hash = runner._baseline_changed_paths["outside.py"]
+        assert baseline_hash is not None, (
+            "iter-24: baseline SHA must be captured for readable files"
+        )
+
+        # Simulate sync (buggy LLM) clobbering the file with different
+        # content.
+        outside.write_text("sync clobbered")
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-24: clobbered baseline file must hard-fail the module"
+        )
+        assert "outside.py" in diagnostic, (
+            "iter-24: clobbered path must appear in the diagnostic"
+        )
+
+    def test_baseline_preservation_unchanged_file_still_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-24 M-1 (iter-6 B1 regression): an unchanged pre-existing
+        dirty file MUST still be auto-allowed (preserved). The iter-24 fix
+        adds content-awareness but does not break the iter-6 B1 carve-out
+        for unchanged user WIP."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        outside = tmp_path / "outside.py"
+        outside.write_text("user wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # Sync did NOT touch outside.py — content unchanged.
+        assert outside.read_text() == "user wip"
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is None, (
+            f"iter-24: unchanged baseline file must be preserved, got: "
+            f"{diagnostic!r}"
+        )
+
+    def test_baseline_preservation_deleted_file_drops_from_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-24 M-1: when a baseline path is deleted between init and
+        scope-guard time, the iter-24 logic skips it (``current_hash is
+        None``). The deleted path MUST NOT appear in ``allowed_files`` —
+        use a TRACKED-AND-MODIFIED baseline path so ``git status`` shows
+        the deletion (advisor #3 fix). Capture the revert helpers' allowed
+        set to assert directly."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        # Commit ``outside.py`` so it's tracked; then dirty it. ``git
+        # status`` will list the subsequent deletion as ``D ``.
+        (tmp_path / "outside.py").write_text("tracked content")
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "outside.py", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+        outside = tmp_path / "outside.py"
+        outside.write_text("dirty content")  # now tracked + modified
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "outside.py" in runner._baseline_changed_paths
+
+        # Simulate the file being deleted between baseline snapshot and
+        # scope-guard run.
+        outside.unlink()
+
+        captured_allowed: Dict[str, set] = {}
+
+        def fake_revert(_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        runner._enforce_scope_guard("mod", tmp_path)
+
+        # The KEY assertion: the deleted baseline path was NOT auto-allowed.
+        deleted_abs = (tmp_path / "outside.py").resolve()
+        assert deleted_abs not in captured_allowed["files"], (
+            "iter-24: deleted baseline path must not be in allowed_files; "
+            f"got: {captured_allowed['files']}"
+        )
+
+    # ---------------------------------------------------------------------
+    # Iter-34 M-3: baseline-deletion blind spot
+    # ---------------------------------------------------------------------
+
+    def test_baseline_deletion_of_untracked_file_is_flagged(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-34 M-3 (baseline-deletion blind spot, codex iter-33): a
+        user's pre-existing UNTRACKED dirty file that gets deleted during
+        sync MUST hard-fail the module. Untracked baselines have no git
+        record, so ``git status`` leaves no trail after deletion — the
+        iter-24 logic dropped the baseline entry on ``current_hash is
+        None`` and silently lost the WIP."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing UNTRACKED WIP outside the contract.
+        userwip = tmp_path / "userwip.py"
+        userwip.write_text("wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "userwip.py" in runner._baseline_changed_paths, (
+            "iter-34: untracked WIP must be captured in baseline"
+        )
+        assert runner._baseline_changed_paths["userwip.py"] is not None, (
+            "iter-34: baseline SHA must be captured for readable WIP"
+        )
+
+        # Simulate sync deleting the file (e.g. refactor removed it).
+        userwip.unlink()
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-34: deletion of untracked baseline WIP must hard-fail "
+            "the module — silent data loss otherwise"
+        )
+        assert "userwip.py" in diagnostic, (
+            f"iter-34: deleted baseline path must appear in diagnostic, "
+            f"got: {diagnostic!r}"
+        )
+
+    def test_baseline_deletion_of_ignored_file_is_flagged(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-34 M-3 (symmetric): a pre-existing gitignored baseline
+        file that gets deleted during sync MUST hard-fail the module.
+        ``git ls-files --ignored`` only lists files that currently exist,
+        so a deletion is invisible to the ignored-rescan loop — a
+        dedicated baseline iteration is required."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / ".gitignore").write_text("cache.bin\n")
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing gitignored file BEFORE the runner is constructed.
+        cache = tmp_path / "cache.bin"
+        cache.write_text("user cache")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "cache.bin" in runner._baseline_ignored_paths, (
+            "iter-34: pre-existing ignored file must be captured in baseline"
+        )
+        assert runner._baseline_ignored_paths["cache.bin"] is not None, (
+            "iter-34: baseline SHA must be captured for readable ignored file"
+        )
+
+        # Simulate sync deleting the gitignored cache.
+        cache.unlink()
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-34: deletion of ignored baseline file must hard-fail "
+            "the module — git ls-files --ignored leaves no trail"
+        )
+        assert "cache.bin" in diagnostic, (
+            f"iter-34: deleted ignored baseline must appear in diagnostic, "
+            f"got: {diagnostic!r}"
+        )
+
+    # ---------------------------------------------------------------------
+    # Iter-40 M-1: unreadable vs missing baseline discrimination
+    # ---------------------------------------------------------------------
+
+    def test_baseline_unreadable_file_is_not_misclassified_as_deleted(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-40 M-1: an unreadable (but still on disk) baseline file
+        MUST NOT be flagged as deleted. The iter-34 deletion-detection
+        branch previously collapsed "file gone" and "file unreadable"
+        (permission flip, locked file) to the same ``current_hash is None``
+        signal and treated both as deletions. That falsely claimed the
+        file was removed AND asked downstream revert helpers to remove
+        a still-present path. The :func:`_classify_baseline_path` helper
+        distinguishes the two; the unreadable case falls through to the
+        legacy preserve-by-name carve-out."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing UNTRACKED WIP — the same shape as iter-34's test.
+        userwip = tmp_path / "userwip.py"
+        userwip.write_text("wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "userwip.py" in runner._baseline_changed_paths, (
+            "iter-40: untracked WIP must be captured in baseline"
+        )
+        assert runner._baseline_changed_paths["userwip.py"] is not None, (
+            "iter-40: baseline SHA must be captured for readable WIP"
+        )
+
+        # Iter-40: simulate permission flip / locked file by injecting a
+        # ``PermissionError`` for the baseline path while leaving the file
+        # itself on disk. Patching the module's ``open`` attribute is
+        # more reliable than ``os.chmod(path, 0)`` — macOS root,
+        # filesystem ACLs, and Spotlight can all defeat the latter. The
+        # module's function bodies use the unqualified name ``open``,
+        # which Python's LEGB lookup resolves via the module namespace
+        # before falling back to the builtin, so a ``setattr(mod, "open",
+        # ...)`` does intercept the call.
+        import builtins
+        wip_resolved = userwip.resolve()
+        builtin_open = builtins.open
+
+        def _open_with_block(path, *args, **kwargs):
+            try:
+                resolved = Path(path).resolve()
+            except (OSError, TypeError):
+                return builtin_open(path, *args, **kwargs)
+            if resolved == wip_resolved:
+                raise PermissionError("simulated permission flip")
+            return builtin_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(mod, "open", _open_with_block, raising=False)
+
+        captured_allowed: Dict[str, set] = {}
+
+        def fake_revert(_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        # The file is still on disk, so it cannot have been "deleted":
+        # the diagnostic must NOT flag it as out-of-scope.
+        assert userwip.exists(), (
+            "iter-40 precondition: the unreadable file must still exist"
+        )
+        assert diagnostic is None or "userwip.py" not in diagnostic, (
+            "iter-40: unreadable baseline file must be preserved by name "
+            "(not flagged as deleted). "
+            f"diagnostic={diagnostic!r}"
+        )
+        # The path must end up in the allowed set so downstream revert
+        # helpers do not try to remove it.
+        assert wip_resolved in captured_allowed["files"], (
+            "iter-40: unreadable baseline path must be auto-allowed "
+            "(preserve by name) so revert helpers do not remove it; "
+            f"got allowed_files={captured_allowed['files']}"
+        )
+
+    def test_baseline_missing_file_still_flagged_as_deleted(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-40 M-1 regression for iter-34: actual deletion of a
+        pre-existing untracked baseline file MUST still hard-fail the
+        module. The iter-40 discrimination helper preserves the iter-34
+        behaviour for the genuinely-missing case."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        userwip = tmp_path / "userwip.py"
+        userwip.write_text("wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # GENUINE deletion — iter-34 path must still fire.
+        userwip.unlink()
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-40: genuinely-deleted untracked baseline must still "
+            "hard-fail the module — iter-34 regression"
+        )
+        assert "userwip.py" in diagnostic, (
+            f"iter-40: deleted baseline path must still appear in diagnostic, "
+            f"got: {diagnostic!r}"
+        )
+
+    def test_wildcard_only_companion_pattern_does_not_auto_allow(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-10 M-1: a wildcard-only pattern (``**/*``) that bypassed the
+        parser (e.g. constructed directly, injected through a non-issue
+        code path) MUST NOT cause ``_matches_companion_allowlist`` to
+        auto-allow repo-wide writes. The defense-in-depth filter inside
+        the runner rejects wildcard-only patterns the same way the parser
+        does."""
+        from pdd import agentic_sync_runner as mod
+
+        repo = tmp_path
+        # Create an out-of-scope file under the module's cwd.
+        unrelated = repo / "unrelated"
+        unrelated.mkdir()
+        offending = unrelated / "file.py"
+        offending.write_text("out of scope")
+
+        captured_allowed = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            # Pretend we reverted the out-of-scope file so the diagnostic
+            # path returns a non-None message; the assertion below is on
+            # the auto-allow decision, not on the revert mechanics.
+            return [offending]
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            # Inject the dangerous wildcard-only pattern directly,
+            # bypassing the parser.
+            companion_allowlist=["**/*"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: repo.resolve()
+        )
+        # iter-9 M-1 re-scan needs git; stub it out — this test only
+        # cares about the auto-allow decision feeding ``fake_revert``.
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: [],
+        )
+
+        # The defense-in-depth filter must reject ``**/*`` directly.
+        assert runner._matches_companion_allowlist(
+            "unrelated/file.py", ("**/*",)
+        ) is False
+
+        diagnostic = runner._enforce_scope_guard("mod", repo)
+        # The offending file must NOT be in the auto-allowed set despite
+        # the wildcard-only pattern living in self.companion_allowlist.
+        assert offending.resolve() not in captured_allowed.get("files", set()), (
+            "wildcard-only companion pattern must NOT auto-allow "
+            "repo-wide writes (iter-10 M-1)"
+        )
+        # Because fake_revert returned the offending file, the diagnostic
+        # is non-None — confirming the scope guard did flag it.
+        assert diagnostic is not None
+
+    def test_nested_meta_path_is_not_auto_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-14 M-1: the default companion pattern ``.pdd/meta/*.json``
+        was previously matched with ``PurePosixPath.match`` (suffix-based),
+        which falsely matched any path ending in ``.pdd/meta/<file>.json``
+        — including ``subdir/.pdd/meta/bar.json``. The anchored matcher
+        MUST treat the default pattern as TOP-LEVEL, so a nested path is
+        out of scope even though it carries the right basename and dir
+        suffix.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        repo = tmp_path
+        # Create an out-of-scope file at a NESTED .pdd/meta path — the
+        # exact bug shape: a fingerprint-shaped file under a subdir.
+        nested = repo / "subdir" / ".pdd" / "meta"
+        nested.mkdir(parents=True)
+        offending = nested / "bar.json"
+        offending.write_text("{}", encoding="utf-8")
+
+        captured_allowed = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return [offending]
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: repo.resolve()
+        )
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: [],
+        )
+
+        # Direct matcher assertion: anchored, segment-aware match must
+        # REJECT a nested .pdd/meta/*.json path against the top-level
+        # pattern (the iter-14 M-1 bug shape).
+        assert runner._matches_companion_allowlist(
+            "subdir/.pdd/meta/bar.json", (".pdd/meta/*.json",)
+        ) is False
+
+        diagnostic = runner._enforce_scope_guard("mod", repo)
+        # Nested file must NOT be auto-allowed even though it is shaped
+        # like the default companion pattern.
+        assert offending.resolve() not in captured_allowed.get("files", set()), (
+            "nested .pdd/meta path must NOT be auto-allowed by the "
+            "default top-level companion pattern (iter-14 M-1)"
+        )
+        assert diagnostic is not None
+
+    def test_deleted_companion_in_git_status_is_preserved(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-4 F1: when sync legitimately deletes ``.pdd/meta/foo.json``,
+        the file no longer exists on disk so ``rglob`` misses it. The
+        deletion appears in ``git status`` as tracked ``D ``; the runner
+        MUST still treat it as auto-allowed so the revert helper does not
+        resurrect it and hard-fail the module."""
+        from pdd import agentic_sync_runner as mod
+
+        # No file is created on disk — simulates the post-delete state.
+        deleted_rel = ".pdd/meta/old_module_python.json"
+
+        monkeypatch.setattr(
+            mod, "_git_changed_paths", lambda _root: {deleted_rel}
+        )
+        captured = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured["allowed"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        # Iter-34 M-3: clear the baseline snapshot taken from the real
+        # working tree so this test isolates the rglob/_git_changed_paths
+        # companion-allowlist behavior under inspection.
+        runner._baseline_changed_paths = {}
+        runner._baseline_ignored_paths = {}
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+        # The iter-9 M-1 post-revert re-scan calls ``git status``; this test
+        # uses a tmp_path without a real ``git init`` and only cares about
+        # the rglob/_git_changed_paths companion-allowlist behavior, so stub
+        # the re-scan to return [] (matching the helpers' mocked behavior).
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: [],
+        )
+
+        diagnostic = runner._enforce_scope_guard("old_module", tmp_path)
+        assert diagnostic is None, (
+            "Deleted companion artifact should be auto-allowed, not flagged"
+        )
+        assert (tmp_path / deleted_rel).resolve() in captured["allowed"]
+
+    # ------------------------------------------------------------------
+    # Iter-9 M-1: fail-closed boundary — re-scan after revert helpers
+    # ------------------------------------------------------------------
+    def _init_repo(self, tmp_path):
+        """Create a minimal git repo so re-scan ``git status`` succeeds."""
+        subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email",
+                        "t@t.invalid"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name",
+                        "T"], check=True, capture_output=True)
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "README.md"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"],
+                       check=True, capture_output=True)
+
+    def test_fail_open_regression_unrecovered_path_hard_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-9 M-1: when both revert helpers return ``[]`` (simulating
+        helper failure) AND an out-of-scope file remains on disk, the scope
+        guard MUST hard-fail by returning a diagnostic that surfaces the
+        unrecovered path under ``Unrecovered``."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_repo(tmp_path)
+        # Out-of-scope untracked file the revert helper "failed" to remove.
+        stray = tmp_path / "stray.txt"
+        stray.write_text("contract violation")
+
+        # Simulate both helpers fail-open (returning []).
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "Fail-open regression: helpers returned [] but stray.txt still "
+            "violates the contract; guard must hard-fail."
+        )
+        assert "Unrecovered" in diagnostic
+        assert "stray.txt" in diagnostic
+
+    def test_clean_working_tree_returns_none(self, tmp_path, monkeypatch):
+        """No out-of-scope files on disk AND both helpers return [] →
+        guard MUST return ``None`` (the in-scope path)."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_repo(tmp_path)
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        # Iter-34 M-3: ``_make_runner`` snapshots the baseline from the
+        # current working directory (the real ``pdd`` repo when the test
+        # didn't chdir). Reset the snapshot to ``{}`` so the post-fix
+        # baseline-deletion scan does not flag pre-existing dirty paths
+        # from the developer's working tree as silently deleted.
+        runner._baseline_changed_paths = {}
+        runner._baseline_ignored_paths = {}
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        assert runner._enforce_scope_guard("mod", tmp_path) is None
+
+    def test_mixed_success_reverted_and_unrecovered_both_surface(
+        self, tmp_path, monkeypatch
+    ):
+        """Helpers report some reverted paths AND additional out-of-scope
+        paths remain. Diagnostic MUST contain both 'reverted' and
+        'Unrecovered' sections. Companion-allowlisted files (e.g.
+        ``.pdd/meta/<basename>.json`` under ``module_cwd``) must NOT appear
+        under Unrecovered — they are auto-allowed."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_repo(tmp_path)
+
+        # Companion-allowlisted file under module_cwd: must be auto-allowed.
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        companion = meta_dir / "mod_python.json"
+        companion.write_text("{}")
+        # Out-of-scope untracked file the helpers "failed" to remove.
+        stray = tmp_path / "stray.txt"
+        stray.write_text("contract violation")
+
+        reverted_path = tmp_path / "pdd" / "reverted_already.py"
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes",
+            lambda _root, _allowed: [reverted_path],
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None
+        # Reverted-side: existing diagnostic prefix surfaces the revert count.
+        assert "Scope guard reverted 1 out-of-scope file(s)" in diagnostic
+        assert "pdd/reverted_already.py" in diagnostic
+        # Unrecovered-side: the stray file shows up under the new section.
+        assert "Unrecovered" in diagnostic
+        assert "stray.txt" in diagnostic
+        # Companion artifact must NOT be flagged.
+        assert ".pdd/meta/mod_python.json" not in diagnostic
+
+    def test_git_status_failed_sentinel_surfaces_in_diagnostic(
+        self, tmp_path, monkeypatch
+    ):
+        """When the post-revert ``git status`` itself fails (timeout, missing
+        binary, non-zero return), ``_remaining_out_of_scope_paths`` returns
+        the sentinel ``['<git-status-failed>']`` and the diagnostic MUST
+        clearly indicate the failure under ``Unrecovered`` so operators do
+        not silently trust an unobservable working tree."""
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+        # Force the re-scan to report the sentinel directly.
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: ["<git-status-failed>"],
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "Sentinel ['<git-status-failed>'] must hard-fail the module."
+        )
+        assert "Unrecovered" in diagnostic
+        # Allow the sentinel wording to evolve — just check the failure
+        # indicator is present.
+        assert "git-status-failed" in diagnostic
+
+    # ---------------------------------------------------------------------
+    # Iter-20 M-1: gitignored out-of-scope detection
+    # ---------------------------------------------------------------------
+
+    @staticmethod
+    def _init_git_repo(repo_root: Path) -> None:
+        """Initialise a minimal committed git repo for ignored-scan tests."""
+        subprocess.run(
+            ["git", "init", "-b", "main", str(repo_root)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo_root), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo_root), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (repo_root / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(repo_root), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo_root), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+    def test_gitignored_out_of_scope_file_is_detected(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1: a sync that writes to a gitignored path outside the
+        contract (e.g. ``build/junk.txt`` under ``.gitignore: build/``) is
+        invisible to ``git status --untracked-files=all`` — but the second
+        ``git ls-files --ignored`` scan MUST catch it and surface it via the
+        ``<remaining>`` set so ``_enforce_scope_guard`` hard-fails."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("build/\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "ignore build"],
+            check=True, capture_output=True,
+        )
+
+        # Construct the runner FIRST (empty ignored baseline), then create
+        # the gitignored stray AFTER — simulates sync writing it.
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+        # Iter-24 M-1: baseline snapshots are now Dict[str, Optional[str]].
+        assert runner._baseline_ignored_paths == {}, (
+            "no ignored files exist yet — baseline must be empty"
+        )
+
+        # Sync writes a gitignored file outside the contract.
+        (tmp_path / "build").mkdir()
+        (tmp_path / "build" / "junk.txt").write_text("bad")
+
+        # Revert helpers can't see gitignored files — simulate them
+        # returning empty as Codex's repro describes.
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "gitignored out-of-scope file must hard-fail the module"
+        )
+        assert "build/junk.txt" in diagnostic
+        assert "Unrecovered" in diagnostic
+
+    def test_gitignored_baseline_file_is_not_falsely_flagged(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1: pre-existing gitignored files (snapshotted at runner
+        init) MUST NOT be flagged as the sync run's out-of-scope writes."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("cache.bin\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "ignore cache"],
+            check=True, capture_output=True,
+        )
+
+        # Create the gitignored file BEFORE constructing the runner so it
+        # lands in the baseline ignored set.
+        (tmp_path / "cache.bin").write_text("user cache")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "cache.bin" in runner._baseline_ignored_paths, (
+            "pre-existing ignored file must be captured in baseline"
+        )
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is None, (
+            "pre-existing ignored file must not be flagged: "
+            f"got {diagnostic!r}"
+        )
+
+    def test_gitignored_companion_artifact_is_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1 integration: when the user has ``.pdd/`` in
+        ``.gitignore`` (this very project does — see commit a7ce5f0ee), the
+        fingerprint metadata file ``.pdd/meta/mod_python.json`` is gitignored
+        — but it's also in the default companion allowlist, so the existing
+        ``rglob`` + companion-match path in ``_enforce_scope_guard`` adds it
+        to ``allowed_files``. The new ignored-files scan MUST skip it.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text(".pdd/\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "ignore .pdd"],
+            check=True, capture_output=True,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # Sync writes a companion-allowed fingerprint file — also gitignored.
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+        (tmp_path / ".pdd" / "meta" / "mod_python.json").write_text("{}")
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is None, (
+            "gitignored companion artifact must remain auto-allowed: "
+            f"got {diagnostic!r}"
+        )
+
+    def test_ignored_scan_failure_returns_sentinel(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1 fail-closed: when the ``git ls-files --ignored`` scan
+        itself fails (here: forced FileNotFoundError), the remaining-paths
+        helper MUST return the existing ``<git-status-failed>`` sentinel so
+        ``_enforce_scope_guard`` hard-fails rather than treating an
+        unobservable worktree as clean.
+
+        The status scan succeeds (returning an empty set); only the ignored
+        scan fails. The sentinel symmetry across both scans is what the
+        iter-19 review flagged as required.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            # The status scan keeps working; the ignored scan blows up.
+            if (
+                isinstance(cmd, list)
+                and "ls-files" in cmd
+                and "--ignored" in cmd
+            ):
+                raise FileNotFoundError("git ls-files unavailable")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(
+            mod.subprocess, "run", fake_run
+        )
+
+        result = runner._remaining_out_of_scope_paths(
+            tmp_path.resolve(), allowed_files=set()
+        )
+        assert result == ["<git-status-failed>"], (
+            "ignored-scan failure must surface the sentinel"
+        )
+
+    # ---------------------------------------------------------------------
+    # Iter-36 B-1/B-2: PDD-internal-path allowlist
+    # ---------------------------------------------------------------------
+
+    def test_pdd_audit_logs_do_not_trip_runner_guard(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-36 B-1: PDD's own audit logs at ``.pdd/agentic-logs/`` written
+        by :func:`run_agentic_task` during a per-module sync MUST NOT
+        hard-fail the per-module scope guard. The audit log is tool
+        infrastructure (NEVER part of a contract) and the internal allowlist
+        auto-allows it.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # Audit log appears AFTER runner init — simulates run_agentic_task
+        # writing a session record during the per-module subprocess.
+        log_dir = tmp_path / ".pdd" / "agentic-logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "session_20251215_120000.jsonl"
+        log_file.write_text('{"label": "step1"}\n', encoding="utf-8")
+
+        # Real revert helpers — internal allowlist must keep the log alive.
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+        assert diagnostic is None, (
+            f"iter-36 B-1: PDD audit log under .pdd/agentic-logs/ must be "
+            f"auto-allowed by the internal allowlist in the per-module "
+            f"guard; got diagnostic: {diagnostic!r}"
+        )
+        assert log_file.exists(), (
+            "iter-36 B-1: internal-allowlisted audit log must not be removed"
+        )
+
+    def test_pdd_audit_logs_do_not_trip_runner_guard_multi_module(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-36 B-1/B-2 multi-module variant: when ``module_cwd`` is a
+        subdirectory (multi-module sync), the audit log under
+        ``<repo_root>/.pdd/agentic-logs/`` is REPO-rooted, not module-rooted.
+        The internal allowlist pass must scan repo-rooted so it still matches
+        — a module-rooted-only pass would miss it.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        # Module lives at <repo_root>/mod_a/; audit log lives at
+        # <repo_root>/.pdd/agentic-logs/.
+        module_cwd = tmp_path / "mod_a"
+        module_cwd.mkdir()
+        log_dir = tmp_path / ".pdd" / "agentic-logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "session_20251215_120000.jsonl"
+        log_file.write_text('{"label": "step1"}\n', encoding="utf-8")
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod_a", module_cwd)
+        assert diagnostic is None, (
+            f"iter-36 B-1/B-2: in multi-module sync the audit log lives at "
+            f"repo-rooted .pdd/agentic-logs/, NOT module-rooted; a "
+            f"module-rooted-only allowlist pass would miss it. "
+            f"Got diagnostic: {diagnostic!r}"
+        )
+        assert log_file.exists()
+
+    def test_runner_state_file_does_not_trip_per_module_guard(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-36 B-2: ``.pdd/agentic_sync_state.json`` written by
+        :meth:`AsyncSyncRunner._record_result` after the previous module's
+        scope guard runs is on disk when the NEXT module's guard runs in a
+        multi-module sync. Without the internal allowlist, the next module's
+        guard hard-fails on the previous module's state file. Verify the
+        state file is auto-allowed.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        # Simulate previous-module state file present on disk.
+        state_dir = tmp_path / ".pdd"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_file = state_dir / "agentic_sync_state.json"
+        state_file.write_text('{"version": 1, "modules": {}}', encoding="utf-8")
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+        assert diagnostic is None, (
+            f"iter-36 B-2: runner state file at .pdd/agentic_sync_state.json "
+            f"must be auto-allowed by the internal allowlist; "
+            f"got diagnostic: {diagnostic!r}"
+        )
+        assert state_file.exists(), (
+            "iter-36 B-2: internal-allowlisted state file must not be removed"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking
 # ---------------------------------------------------------------------------

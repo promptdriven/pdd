@@ -20,6 +20,11 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from .agentic_common import (
+    PDD_INTERNAL_PATH_ALLOWLIST,
+    _is_valid_companion_pattern,
+    _matches_companion_pattern_anchored,
+)
 from .agentic_sync_runner import AsyncSyncRunner, MAX_WORKERS
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
@@ -47,6 +52,10 @@ class DurableSyncRunner(AsyncSyncRunner):
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Path]] = None,
         initial_cost: float = 0.0,
+        allowed_write_set: Optional[List[str]] = None,
+        companion_allowlist: Optional[List[str]] = None,
+        scope_guard_enabled: bool = True,
+        contract_source: Optional[str] = None,
     ) -> None:
         self.issue_number = issue_number
         self.git_root = project_root.resolve()
@@ -62,6 +71,14 @@ class DurableSyncRunner(AsyncSyncRunner):
         self._run_id = uuid.uuid4().hex[:8]
         self._prepared = False
 
+        # Issue #1013 iter-18 M-1 (durable baseline-paths bug): forward the
+        # resolved ``git_root`` into ``AsyncSyncRunner.__init__`` via the new
+        # ``project_root`` kwarg so the baseline-changed-paths snapshot is
+        # taken against the durable worktree's repo root rather than against
+        # the caller's current working directory. The previous post-super()
+        # assignment to ``self.project_root`` ran *after* the snapshot, which
+        # captured dirty files from the caller's main checkout and let them
+        # bypass the scope guard inside the durable worktree.
         super().__init__(
             basenames=basenames,
             dep_graph=dep_graph,
@@ -72,8 +89,37 @@ class DurableSyncRunner(AsyncSyncRunner):
             issue_url=issue_url,
             module_cwds={},
             initial_cost=initial_cost,
+            allowed_write_set=allowed_write_set,
+            companion_allowlist=companion_allowlist,
+            scope_guard_enabled=scope_guard_enabled,
+            contract_source=contract_source,
+            project_root=self.git_root,
         )
-        self.project_root = self.git_root
+
+        # Issue #1013 iter-22 M-1 (durable baseline-leakage bug): per-module
+        # durable worktrees are freshly created via ``git worktree add`` and
+        # have no pre-existing user WIP by construction. Whatever surfaces in
+        # a worktree at scope-guard time was put there BY this sync run, so
+        # the iter-6 B1 "preserve user's pre-existing untracked files"
+        # carve-out — which exists for the in-place async case where sync
+        # runs inside the user's main checkout — has no analog in durable
+        # mode. iter-18 pinned the baseline snapshot to ``self.git_root``
+        # (the main checkout), but in production ``git_root`` IS the user's
+        # main checkout where dirty WIP lives; the actual per-module sync
+        # then runs inside ``.pdd/worktrees/sync-issue-<N>-<basename>/``, a
+        # DIFFERENT directory. Inheriting the main checkout's baseline LEAKS
+        # the caller's dirty paths into the worktree's allow set (see
+        # ``_enforce_scope_guard``: each baseline ``rel_posix`` is resolved
+        # against the scope-guard-time ``repo_root``, which is the per-module
+        # worktree root), bypassing the split contract. Clear the baseline
+        # so each fresh module worktree starts clean.
+        #
+        # Iter-24 M-1: baseline snapshots are now ``Dict[str, Optional[str]]``
+        # (path → SHA-1) for content-aware preservation; clear to empty dicts
+        # so iteration in ``_enforce_scope_guard`` and
+        # ``_remaining_out_of_scope_paths`` remains a no-op.
+        self._baseline_changed_paths = {}
+        self._baseline_ignored_paths = {}
         if self.total_budget is not None:
             self.max_workers = 1
         elif durable_max_parallel is not None:
@@ -91,6 +137,36 @@ class DurableSyncRunner(AsyncSyncRunner):
         """Durable mode leaves local runner state untouched."""
 
     def run(self) -> Tuple[bool, str, float]:
+        # Iter-40 M-2 (durable init ordering): iter-38 added a
+        # fail-closed abort to :meth:`AsyncSyncRunner.run` when the
+        # init-time baseline scan returned ``None``, but the durable
+        # subclass calls :meth:`_prepare_durable_branch` BEFORE
+        # delegating to ``super().run()`` — so a baseline-acquisition
+        # failure on the main checkout would leave durable side effects
+        # (worktree creation, branch checkout, remote pushes) in place
+        # before the fail-closed check ran. Hoist the check above
+        # ``_prepare_durable_branch`` so no durable infrastructure is
+        # touched when the baseline scan failed.
+        #
+        # The flag reflects the MAIN CHECKOUT's git scan (see iter-22:
+        # the durable runner intentionally inherits the main-checkout
+        # baseline via ``super().__init__(project_root=self.git_root)``
+        # and only clears the *paths* afterward — the flag is
+        # preserved). That is precisely the scan we want to abort on:
+        # the main checkout is where the orchestrator scope guard
+        # operates.
+        if getattr(self, "_baseline_acquisition_failed", False):
+            return (
+                False,
+                (
+                    "Scope guard fail-closed: could not snapshot working-tree "
+                    "baseline at runner init (git scan failed). Aborting "
+                    "before any write-capable work to prevent false-positive "
+                    "reverts of pre-existing user files."
+                ),
+                self.initial_cost,
+            )
+
         ok, message = self._prepare_durable_branch()
         if not ok:
             return False, message, self.initial_cost
@@ -353,14 +429,39 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         self._force_add_module_metadata(basename, module_worktree)
 
+        # Iter-6 B3 (rename detection bug): ``--name-only`` for a staged
+        # rename ``git mv old new`` emits ONLY ``new``. A contract that
+        # allows ``new`` but not ``old`` would pass validation while the
+        # rename silently deletes the out-of-scope ``old``. Use
+        # ``--name-status -M`` so rename lines surface as
+        # ``R<score>\told\tnew`` and BOTH paths count for scope checking.
         names = self._git(
-            ["diff", "--cached", "--name-only", "--diff-filter=ACMRTD"],
+            ["diff", "--cached", "--name-status", "-M", "--diff-filter=ACMRTD"],
             cwd=module_worktree,
         )
         if names.returncode != 0:
             return False, f"Failed to inspect staged changes: {_combined_output(names)}", False
 
-        changed_paths = [line.strip() for line in names.stdout.splitlines() if line.strip()]
+        changed_paths: List[str] = []
+        for raw in names.stdout.splitlines():
+            line = raw.rstrip("\n")
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            # Whether the entry is a rename/copy (R/C with similarity score)
+            # or a single-path status (A/M/D/T), every column past the
+            # status code is a path that should be scope-checked.
+            changed_paths.extend(p.strip() for p in parts[1:] if p.strip())
+        out_of_scope = self._out_of_scope_staged_paths(
+            changed_paths, basename, module_worktree
+        )
+        if out_of_scope:
+            return (
+                False,
+                "Durable sync refuses to checkpoint path(s) outside the issue "
+                "split-contract allowed write set: " + ", ".join(out_of_scope),
+                False,
+            )
         unsafe = self._unsafe_staged_paths(basename, changed_paths)
         if unsafe:
             return (
@@ -372,6 +473,120 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         empty = not changed_paths
         return True, "", empty
+
+    def _out_of_scope_staged_paths(
+        self,
+        paths: List[str],
+        basename: str,
+        module_worktree: Path,
+    ) -> List[str]:
+        """
+        Return staged paths that violate the issue split-contract.
+
+        Issue #1013 (F5, F13): when no contract is parsed,
+        ``self.allowed_write_paths is None`` and durable sync runs in
+        permissive mode — never reject. When a contract is present, accept
+        both contract paths AND companion-allowlist matches (e.g.
+        ``.pdd/meta/*.json``) so fingerprint metadata can still be
+        checkpointed alongside the primary write set.
+
+        Issue #1013 iter-16 M-1: in a multi-module repo where
+        ``module_cwd`` is a SUBDIRECTORY of the worktree (e.g.
+        ``worktree/pkg``), staged paths surface relative to the worktree
+        git root (e.g. ``pkg/.pdd/meta/foo.json``). Companion-allowlist
+        patterns describe MODULE-RELATIVE artifacts (e.g.
+        ``.pdd/meta/*.json``), so the staged path must be stripped of the
+        module cwd prefix before the anchored matcher runs. Mirrors the
+        async runner's iter-14 M-1 part-2 fix. Paths that sit OUTSIDE the
+        module's cwd (sibling-module artifacts) never auto-allow — see
+        F1 iter-3.
+        """
+        # Permissive mode: scope_guard disabled or no contract parsed.
+        if not self.scope_guard_enabled or self.allowed_write_paths is None:
+            return []
+        allowlist = tuple(self.companion_allowlist)
+        # Resolve the module's cwd relative to its worktree once. For a
+        # single-module sync where ``module_cwd == module_worktree``, this
+        # is ``"."`` (or ``""`` if the helper ever returned the worktree
+        # path itself) and we treat it as "no prefix to strip".
+        module_cwd = self._module_cwd_for_worktree(basename, module_worktree)
+        try:
+            module_cwd_rel = module_cwd.resolve().relative_to(
+                module_worktree.resolve()
+            ).as_posix()
+        except ValueError:
+            module_cwd_rel = ""
+        if module_cwd_rel in ("", "."):
+            module_cwd_rel = ""
+
+        offending: Set[str] = set()
+        for raw in paths:
+            normalized = raw.replace(os.sep, "/").strip()
+            if normalized.startswith("./"):
+                normalized = normalized[2:]
+            # Allowed-write-set match is REPO-RELATIVE by contract (the
+            # split contract is declared with repo-rooted paths) and stays
+            # unchanged.
+            if normalized in self.allowed_write_paths:
+                continue
+            # Issue #1013 iter-42 M-1 (durable PDD_INTERNAL parity): PDD's
+            # own infrastructure writes (audit logs, runner state, etc.)
+            # are NEVER part of a contract — they're internal artifacts
+            # the tool produces as side effects of running. Mirror the
+            # async per-module guard (iter-36 B-1/B-2 at
+            # ``agentic_sync_runner.py`` line ~2376/~2408) so the durable
+            # checkpoint-staging validation honors the same allowlist;
+            # otherwise contracted durable runs hard-fail on PDD's own
+            # audit logs / state file. The internal allowlist patterns
+            # are REPO-ROOT-anchored (the writes happen at the top of
+            # the project regardless of module_cwd), so this check runs
+            # BEFORE the module_cwd prefix stripping below and matches
+            # against ``normalized`` (the raw repo-relative form).
+            internal_matched = False
+            for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                if _matches_companion_pattern_anchored(normalized, pattern):
+                    internal_matched = True
+                    break
+            if internal_matched:
+                continue
+            # F3 (Issue #1013): companion glob matching uses anchored,
+            # segment-aware semantics so ``.pdd/meta/*.json`` does NOT
+            # match nested paths like ``.pdd/meta/nested/foo.json`` or
+            # ``subdir/.pdd/meta/foo.json``. Iter-14 M-2: replaced
+            # ``PurePosixPath.match`` (suffix-based, falsely matched
+            # ``subdir/.pdd/meta/foo.json``) with the centralized
+            # anchored matcher in ``agentic_common``.
+            #
+            # Iter-16 M-1: for multi-module sync, strip the module_cwd
+            # prefix before matching so the module-relative pattern works
+            # against the repo-relative staged path. Paths outside the
+            # module's cwd are sibling artifacts and never auto-allow.
+            if module_cwd_rel:
+                prefix = module_cwd_rel + "/"
+                if not normalized.startswith(prefix):
+                    offending.add(normalized)
+                    continue
+                candidate_rel = normalized[len(prefix):]
+            else:
+                candidate_rel = normalized
+
+            matched = False
+            for pattern in allowlist:
+                if not pattern:
+                    continue
+                # Issue #1013 iter-10 M-1 (defense-in-depth): a
+                # wildcard-only / doublestar / absolute / traversal
+                # pattern that slipped past the parser must NOT
+                # auto-allow repo-wide writes.
+                if not _is_valid_companion_pattern(pattern):
+                    continue
+                if _matches_companion_pattern_anchored(candidate_rel, pattern):
+                    matched = True
+                    break
+            if matched:
+                continue
+            offending.add(normalized)
+        return sorted(offending)
 
     def _force_add_module_metadata(self, basename: str, module_worktree: Path) -> None:
         safe = basename.replace("/", "_")
@@ -399,6 +614,26 @@ class DurableSyncRunner(AsyncSyncRunner):
         for path in paths:
             normalized = path.replace(os.sep, "/")
             lower = normalized.lower()
+            # Issue #1013 iter-42 M-1 (durable PDD_INTERNAL parity): PDD's
+            # own infrastructure writes (e.g. ``.pdd/agentic-logs/*``,
+            # ``.pdd/agentic_sync_state.json``) match neither a contract's
+            # allowed_write_set nor the user-facing companion allowlist;
+            # they're tool internals. The unsafe-path rules below would
+            # otherwise classify ``.pdd/agentic-logs/foo.jsonl`` as
+            # unsafe via the ``_pdd_path_index`` branch (because it sits
+            # under ``.pdd/`` but is NOT a recognized meta artifact). The
+            # async per-module guard already exempts these patterns;
+            # mirror it here so a contracted durable run does not
+            # hard-fail at checkpoint on its own audit logs / state file.
+            # Patterns are REPO-ROOT-anchored — match the raw normalized
+            # path without stripping any module prefix.
+            internal_matched = False
+            for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                if _matches_companion_pattern_anchored(normalized, pattern):
+                    internal_matched = True
+                    break
+            if internal_matched:
+                continue
             pdd_index = _pdd_path_index(normalized)
             if pdd_index is not None:
                 matching_meta_prefix = next(

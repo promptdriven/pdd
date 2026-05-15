@@ -389,8 +389,14 @@ def revert_out_of_scope_changes_with_dirs(
     reverted: List[Path] = []
 
     try:
+        # ``--untracked-files=all`` (a.k.a. ``-uall``) forces git to list every
+        # individual untracked file even when ``status.showUntrackedFiles`` is
+        # ``normal`` or when bare ``-u`` would be interpreted as "default mode"
+        # by older git releases. Without this, an untracked directory would be
+        # reported as a single ``?? path/`` entry and the os.remove below would
+        # leave the contained files behind. (Issue #1013, F5.)
         result = subprocess.run(
-            ["git", "status", "--porcelain", "-u"],
+            ["git", "status", "--porcelain", "--untracked-files=all"],
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -410,6 +416,16 @@ def revert_out_of_scope_changes_with_dirs(
         logger.warning("OS error running git status: %s", exc)
         return reverted
 
+    def _scope_check_path(filepath_str: str) -> bool:
+        """Return True if *filepath_str* is in-scope (allowed)."""
+        for prefix in allowed_dirs:
+            if filepath_str.startswith(prefix):
+                return True
+        abs_path = (cwd / filepath_str).resolve()
+        if abs_path in allowed_files:
+            return True
+        return False
+
     for line in result.stdout.splitlines():
         if len(line) < 4:
             continue
@@ -417,28 +433,51 @@ def revert_out_of_scope_changes_with_dirs(
         status = line[:2]
         filepath_raw = line[3:]
 
-        # Handle renames: "R  old_name -> new_name"
+        # Iter-8 B5b (worktree-helper rename bug): renames are reported as
+        # ``R  old -> new``. Previously this helper kept only the destination,
+        # so a partial-rename out-of-scope situation (allowed=new, old
+        # disallowed) silently deleted ``old`` without reverting. Treat
+        # renames atomically: if EITHER side is out of scope, restore both.
         if " -> " in filepath_raw:
-            filepath_raw = filepath_raw.split(" -> ")[-1]
+            old_raw, new_raw = filepath_raw.split(" -> ", 1)
+            old_path = old_raw.strip().strip('"')
+            new_path = new_raw.strip().strip('"')
+            if _scope_check_path(old_path) and _scope_check_path(new_path):
+                continue
+            # Out-of-scope rename: undo via ``git restore --staged --worktree
+            # --source=HEAD`` so the destination unknown-to-HEAD is removed.
+            try:
+                restore = subprocess.run(
+                    ["git", "restore", "--staged", "--worktree",
+                     "--source=HEAD", "--", old_path, new_path],
+                    cwd=str(cwd),
+                    capture_output=True,
+                    text=True,
+                    timeout=30,
+                )
+                if restore.returncode == 0:
+                    logger.info(
+                        "Reverted out-of-scope rename: %s -> %s",
+                        old_path, new_path,
+                    )
+                    reverted.append(Path(old_path))
+                    reverted.append(Path(new_path))
+                else:
+                    logger.warning(
+                        "Failed to revert rename %s -> %s: %s",
+                        old_path, new_path,
+                        (restore.stderr or "").strip(),
+                    )
+            except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+                logger.warning("git restore failed for rename: %s", exc)
+            continue
 
         filepath_str = filepath_raw.strip().strip('"')
 
         # ------------------------------------------------------------------
         # Scope check
         # ------------------------------------------------------------------
-        in_scope = False
-
-        for prefix in allowed_dirs:
-            if filepath_str.startswith(prefix):
-                in_scope = True
-                break
-
-        if not in_scope:
-            abs_path = (cwd / filepath_str).resolve()
-            if abs_path in allowed_files:
-                in_scope = True
-
-        if in_scope:
+        if _scope_check_path(filepath_str):
             continue
 
         # ------------------------------------------------------------------
@@ -448,9 +487,27 @@ def revert_out_of_scope_changes_with_dirs(
         rel_path = Path(filepath_str)
 
         if is_untracked:
+            # Defensive: even with ``--untracked-files=all`` above, exotic git
+            # configs / submodule edge cases could conceivably hand us a path
+            # ending in ``/`` (an untracked directory). Detect and use
+            # ``shutil.rmtree`` so contained files don't get left behind.
+            # (Issue #1013, F5.)
+            target = cwd / filepath_str
             try:
-                os.remove(str(cwd / filepath_str))
-                logger.info("Removed untracked out-of-scope file: %s", filepath_str)
+                if filepath_str.endswith("/") or (
+                    target.exists() and target.is_dir() and not target.is_symlink()
+                ):
+                    shutil.rmtree(str(target))
+                    logger.info(
+                        "Removed untracked out-of-scope directory: %s",
+                        filepath_str,
+                    )
+                else:
+                    os.remove(str(target))
+                    logger.info(
+                        "Removed untracked out-of-scope file: %s",
+                        filepath_str,
+                    )
                 reverted.append(rel_path)
             except OSError as exc:
                 logger.warning("Failed to remove %s: %s", filepath_str, exc)

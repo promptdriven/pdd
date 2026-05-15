@@ -128,6 +128,16 @@
             "name": "clear_workflow_state",
             "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None",
             "returns": "None"
+          },
+          {
+            "name": "parse_issue_contract",
+            "signature": "(issue_body: Optional[str], issue_comments: Optional[List[str]] = None) -> Optional[IssueContract]",
+            "returns": "Optional[IssueContract]"
+          },
+          {
+            "name": "_revert_out_of_scope_changes",
+            "signature": "(cwd: Path, allowed_paths: set[Path]) -> List[Path]",
+            "returns": "List[Path]"
           }
         ]
       }
@@ -7264,7 +7274,7 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int], scope_guard: bool = True) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7272,7 +7282,7 @@
           },
           {
             "name": "run_global_sync",
-            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float) -> Tuple[bool, str, float, str]",
+            "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float, scope_guard: bool = True) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder is forwarded via sync_options so --timeout-adder stretches the per-module wall-clock cap on the global-sync path the same way it does on run_agentic_sync"
@@ -7324,7 +7334,7 @@
         "functions": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
+            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0, *, allowed_write_set: Optional[Iterable[str]] = None, companion_allowlist: Optional[Iterable[str]] = None, scope_guard_enabled: bool = True)",
             "returns": "AsyncSyncRunner",
             "sideEffects": [
               "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps"

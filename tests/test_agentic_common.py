@@ -4689,6 +4689,170 @@ def _init_test_git_repo(path):
 class TestRevertOutOfScopeChanges:
     """Tests for _revert_out_of_scope_changes scope guard utility."""
 
+    def test_reverts_out_of_scope_staged_rename(self, tmp_path):
+        """Iter-6 B2 (rename revert bug): ``git status --porcelain`` reports
+        renames as ``R  old -> new``. The helper used to treat the whole
+        payload as one path, so the subsequent ``git checkout HEAD --``
+        was passed a literal ``"old -> new"`` and silently failed.
+
+        After the fix both source and destination are restored and
+        ``git status`` is clean.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "old.py").write_text("contents\n")
+        (proj / "in_scope.py").write_text("in_scope\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv", "old.py", "new.py"],
+                        check=True, capture_output=True)
+
+        allowed = {(proj / "in_scope.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"git status should be clean after rename revert; got: {status!r}"
+        )
+        assert (proj / "old.py").exists()
+        assert not (proj / "new.py").exists()
+        assert len(reverted) >= 1
+
+    def test_partial_rename_restores_both_sides_when_source_allowed(self, tmp_path):
+        """Iter-7 B4 (partial-rename bug): a rename is atomic. If the
+        contract allows the SOURCE (``old``) but NOT the destination
+        (``new``), restoring only ``new`` leaves ``D old`` staged. Fix:
+        when either side of a rename is out of scope, revert BOTH so the
+        rename is fully undone.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        # Contract allows source but not destination.
+        allowed = {(proj / "pdd" / "old.py").resolve()}
+        _revert_out_of_scope_changes(proj, allowed)
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"git status should be clean — rename must be fully undone; "
+            f"got: {status!r}"
+        )
+        assert (proj / "pdd" / "old.py").exists()
+        assert not (proj / "pdd" / "new.py").exists()
+
+    def test_partial_rename_restores_both_sides_when_destination_allowed(
+        self, tmp_path
+    ):
+        """Iter-7 B4 (partial-rename bug): inverse of the above. If the
+        contract allows the DESTINATION but NOT the source, restoring only
+        ``old`` leaves ``A new`` staged. The whole rename must be reverted.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        # Contract allows destination but not source.
+        allowed = {(proj / "pdd" / "new.py").resolve()}
+        _revert_out_of_scope_changes(proj, allowed)
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"git status should be clean — rename must be fully undone; "
+            f"got: {status!r}"
+        )
+        assert (proj / "pdd" / "old.py").exists()
+        assert not (proj / "pdd" / "new.py").exists()
+
+    def test_rename_left_in_place_when_both_sides_allowed(self, tmp_path):
+        """Iter-7 B4 negative case: when BOTH sides of the rename are in
+        scope, the rename must NOT be reverted — only out-of-scope changes
+        get touched.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        allowed = {
+            (proj / "pdd" / "old.py").resolve(),
+            (proj / "pdd" / "new.py").resolve(),
+        }
+        _revert_out_of_scope_changes(proj, allowed)
+
+        # Rename should remain staged.
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert "R" in status and "old.py" in status and "new.py" in status, (
+            f"In-scope rename must remain staged; got: {status!r}"
+        )
+
+    def test_empty_contract_reverts_rename_fully(self, tmp_path):
+        """Iter-8 B5a (empty-contract early-exit) + B5b: a reject-all
+        empty contract (``allowed_paths=set()``) used to short-circuit
+        the helper. After the fix, the helper proceeds with revert; the
+        rename is fully undone.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        # Empty contract: nothing is allowed → revert everything.
+        _revert_out_of_scope_changes(proj, set())
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"Empty contract must revert all changes including renames; "
+            f"got: {status!r}"
+        )
+
     def test_reverts_deleted_files(self, tmp_path):
         """Deleted files outside allowed set must be restored."""
         from pdd.agentic_common import _revert_out_of_scope_changes
@@ -7120,3 +7284,491 @@ class TestIssue814BillingErrorsPermanent:
         )
         # 3. No backoff sleep — permanent errors must NOT delay the fallback
         sleep_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1013 — IssueContract / parse_issue_contract regression coverage (F9)
+# ---------------------------------------------------------------------------
+
+class TestParseIssueContract:
+    """Regression coverage for ``pdd.agentic_common.parse_issue_contract``.
+
+    Exercises the prompt-level requirements at
+    ``pdd/prompts/agentic_common_python.prompt:21`` (item 21 — issue contract
+    parsing) and the F1+F2 hardening done in Issue #1013 review iteration 2.
+    """
+
+    def test_html_comment_happy_path_returns_contract(self):
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py", "tests/test_foo.py"],'
+            ' "companion_allowlist": [".pdd/meta/*.json"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.companion_allowlist == (".pdd/meta/*.json",)
+        assert c.source == "html-comment"
+
+    def test_empty_allowed_paths_returns_reject_all_contract(self):
+        """F1: an explicit empty contract is a valid 'reject every change'
+        contract, NOT permissive fallback."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = '<!-- PDD_ISSUE_CONTRACT\n{"allowed_paths": []}\n-->'
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
+        assert c.source == "html-comment"
+
+    def test_malformed_json_returns_none(self):
+        from pdd.agentic_common import parse_issue_contract
+
+        body = "<!-- PDD_ISSUE_CONTRACT\n{not valid json}\n-->"
+        assert parse_issue_contract(body) is None
+
+    def test_body_marker_wins_over_comment_marker(self):
+        from pdd.agentic_common import parse_issue_contract
+
+        body = '<!-- PDD_ISSUE_CONTRACT\n{"allowed_paths": ["from_body.py"]}\n-->'
+        comment = (
+            '<!-- PDD_ISSUE_CONTRACT\n{"allowed_paths": ["from_comment.py"]}\n-->'
+        )
+        c = parse_issue_contract(body, [comment])
+        assert c is not None
+        assert c.allowed_paths == ("from_body.py",)
+
+    def test_path_traversal_entries_are_dropped_but_contract_kept(self):
+        """F1: syntactically invalid entries are dropped silently; the
+        contract itself remains valid even if filtering leaves it empty."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["../escape", "/absolute", "pdd/ok.py"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/ok.py",)
+
+    def test_fenced_block_only_text_or_json_languages_are_accepted(self):
+        """F2: the parser must reject arbitrary fence info strings such as
+        ``python`` or ``bash`` — only empty / ``text`` / ``json`` are
+        accepted."""
+        from pdd.agentic_common import parse_issue_contract
+
+        for lang in ("python", "bash", "yaml", "shell"):
+            body = f"## Allowed Write Set\n```{lang}\npdd/foo.py\n```\n"
+            assert parse_issue_contract(body) is None, (
+                f"fence language {lang!r} must be rejected"
+            )
+
+    def test_fenced_block_must_immediately_follow_heading(self):
+        """F2: a fence that appears later in the body (after intervening
+        prose) must NOT be picked up — only whitespace is allowed between
+        the heading and the fence."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = (
+            "## Allowed Write Set\n\n"
+            "Some discussion paragraph here.\n\n"
+            "```text\npdd/foo.py\n```\n"
+        )
+        assert parse_issue_contract(body) is None
+
+    def test_fenced_block_accepts_only_text_or_json(self):
+        """Iter-3 F3: the spec at agentic_common_python.prompt:110 requires
+        ``text`` or ``json`` info strings; bare ``` (no language) is NOT
+        accepted as a split-contract fence.
+
+        Iter-12 B-1: each fence language has its own body format — ``text``
+        is line-separated paths, ``json`` is a JSON array of path strings."""
+        from pdd.agentic_common import parse_issue_contract
+
+        cases = (
+            ("```text", "pdd/foo.py"),
+            ("```json", '["pdd/foo.py"]'),
+        )
+        for fence, payload in cases:
+            body = f"## Allowed Write Set\n{fence}\n{payload}\n```\n"
+            c = parse_issue_contract(body)
+            assert c is not None and c.allowed_paths == ("pdd/foo.py",), fence
+            assert c.source == "fenced-block"
+
+    def test_fenced_block_rejects_bare_fence(self):
+        """Iter-3 F3: bare ``` fence (no language) must be rejected."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = "## Allowed Write Set\n```\npdd/foo.py\n```\n"
+        assert parse_issue_contract(body) is None
+
+    def test_fenced_block_empty_body_returns_empty_contract(self):
+        """F1: an empty fenced block is a degenerate but legal contract."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = "## Allowed Write Set\n```text\n```\n"
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
+
+    def test_fenced_json_array_of_paths_parses_correctly(self):
+        """Iter-12 B-1: a ``json`` fence whose body is a JSON array of path
+        strings must parse to those paths (NOT to a single literal path
+        equal to the raw JSON text)."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Allowed Write Set\n"
+            "```json\n"
+            '["pdd/foo.py", "tests/test_foo.py"]\n'
+            "```\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "fenced-block"
+
+    def test_fenced_json_empty_array_returns_empty_contract(self):
+        """Iter-12 B-1: ``[]`` in a ``json`` fence is a syntactically valid
+        degenerate reject-all contract — the parser MUST return an
+        ``IssueContract`` with ``allowed_paths=()``, NOT a single-element
+        tuple containing the literal string ``'[]'``."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = "## Allowed Write Set\n```json\n[]\n```\n"
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
+        assert c.source == "fenced-block"
+
+    def test_fenced_json_malformed_returns_none(self):
+        """Iter-12 B-1: malformed JSON in a ``json`` fence MUST cause the
+        parser to return ``None`` (permissive fallback), not raise."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = "## Allowed Write Set\n```json\n{not valid json\n```\n"
+        assert parse_issue_contract(body) is None
+
+    def test_fenced_json_object_returns_none(self):
+        """Iter-12 B-1: a JSON *object* in a ``json`` fence is the
+        HTML-comment format leaking into a fence — the fenced-block
+        ``json`` format is documented as an array of paths only, so the
+        parser MUST return ``None`` for objects."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = (
+            "## Allowed Write Set\n"
+            "```json\n"
+            '{"allowed_paths": ["pdd/foo.py"]}\n'
+            "```\n"
+        )
+        assert parse_issue_contract(body) is None
+
+    def test_fenced_text_still_parses_line_by_line(self):
+        """Iter-12 B-1 regression: the ``text`` fence branch MUST keep its
+        original line-by-line semantics after the parser branched on
+        language."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Allowed Write Set\n"
+            "```text\n"
+            "pdd/foo.py\n"
+            "tests/test_foo.py\n"
+            "```\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "fenced-block"
+
+    def test_companion_allowlist_rejects_wildcard_only_patterns(self):
+        """Iter-10 M-1: wildcard-only patterns (``*``, ``**``, ``**/*``, ``?``)
+        would let a contract auto-allow repo-wide changes; the parser MUST
+        drop them silently."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py"],'
+            ' "companion_allowlist": ["*", "**", "**/*", "?"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.companion_allowlist == ()
+        assert c.allowed_paths == ("pdd/foo.py",)
+
+    def test_companion_allowlist_keeps_anchored_patterns(self):
+        """Iter-10 M-1: patterns with at least one literal-character segment
+        anchor remain valid. Iter-14 M-1/M-2: ``**``-bearing patterns are
+        ALSO dropped now (segment-aware matcher requires equal segment
+        counts, so a doublestar segment would be ambiguous)."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py"],'
+            ' "companion_allowlist": [".pdd/meta/*.json", "architecture.json",'
+            ' "tests/test_*.py", "**/foo.json"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        # ``**/foo.json`` is dropped by the iter-14 doublestar rule;
+        # the three remaining anchored patterns are kept.
+        assert c.companion_allowlist == (
+            ".pdd/meta/*.json",
+            "architecture.json",
+            "tests/test_*.py",
+        )
+
+    def test_companion_allowlist_rejects_traversal_and_absolute(self):
+        """Iter-10 M-1: absolute paths, parent-traversal, and Windows
+        separators in companion patterns must be dropped silently."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py"],'
+            ' "companion_allowlist": ["../foo", "/etc/passwd", "tests\\\\bar"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.companion_allowlist == ()
+
+    def test_default_companion_allowlist_passes_validation(self):
+        """Iter-10 M-1: the shipped default allowlist MUST itself pass the
+        validator — otherwise the runner's defense-in-depth filter would
+        strip every entry and the scope guard would have no companions."""
+        from pdd.agentic_common import (
+            DEFAULT_SYNC_COMPANION_ALLOWLIST,
+            _is_valid_companion_pattern,
+        )
+
+        assert DEFAULT_SYNC_COMPANION_ALLOWLIST
+        for pattern in DEFAULT_SYNC_COMPANION_ALLOWLIST:
+            assert _is_valid_companion_pattern(pattern), pattern
+
+    def test_anchored_matcher_rejects_nested_default_pattern(self):
+        """Iter-14 M-1/M-2: the anchored, segment-aware matcher MUST treat
+        ``.pdd/meta/*.json`` as a TOP-LEVEL pattern — paths nested under
+        any other directory (``subdir/.pdd/meta/foo.json``) MUST NOT auto-
+        allow, because ``PurePosixPath.match`` is suffix-based and would
+        let a contract violator bypass the guard by writing fingerprint-
+        shaped files under any prefix.
+        """
+        from pdd.agentic_common import _matches_companion_pattern_anchored
+
+        # Intended: top-level match auto-allows.
+        assert _matches_companion_pattern_anchored(
+            ".pdd/meta/foo.json", ".pdd/meta/*.json"
+        ) is True
+        # Bug repro: nested-prefix path must NOT match.
+        assert _matches_companion_pattern_anchored(
+            "subdir/.pdd/meta/foo.json", ".pdd/meta/*.json"
+        ) is False
+        # Deeper-prefix path must NOT match.
+        assert _matches_companion_pattern_anchored(
+            "a/b/c/.pdd/meta/foo.json", ".pdd/meta/*.json"
+        ) is False
+        # Path nested UNDER the meta dir (different segment count) must
+        # NOT match — preserves the iter-3 F3 strict-pathlib semantics.
+        assert _matches_companion_pattern_anchored(
+            ".pdd/meta/sub/foo.json", ".pdd/meta/*.json"
+        ) is False
+
+    def test_anchored_matcher_handles_segment_wildcards(self):
+        """Iter-14 M-1/M-2: ``*`` matches a single segment only. The
+        matcher MUST NOT collapse multiple segments into one wildcard.
+        """
+        from pdd.agentic_common import _matches_companion_pattern_anchored
+
+        assert _matches_companion_pattern_anchored(
+            "tests/foo.txt", "tests/*.txt"
+        ) is True
+        # Segment count mismatch — ``*`` does not span ``sub/foo.txt``.
+        assert _matches_companion_pattern_anchored(
+            "tests/sub/foo.txt", "tests/*.txt"
+        ) is False
+
+    def test_is_valid_companion_pattern_rejects_doublestar(self):
+        """Iter-14 M-1/M-2: ``**`` segments are rejected at parse time so
+        the segment-aware matcher never sees them. The validator MUST
+        reject both pure ``**`` and any pattern with a ``**`` segment.
+        """
+        from pdd.agentic_common import _is_valid_companion_pattern
+
+        # Pure wildcard-only patterns (already iter-10 territory).
+        assert _is_valid_companion_pattern("**") is False
+        # Iter-14: ``**`` SEGMENTS rejected even when paired with literals.
+        assert _is_valid_companion_pattern("**/foo.json") is False
+        assert _is_valid_companion_pattern("foo/**") is False
+        assert _is_valid_companion_pattern("foo/**/bar.json") is False
+        # Regression: the shipped default and other anchored patterns
+        # without ``**`` segments remain valid.
+        assert _is_valid_companion_pattern(".pdd/meta/*.json") is True
+        assert _is_valid_companion_pattern("architecture.json") is True
+        assert _is_valid_companion_pattern("tests/test_*.py") is True
+
+    # ------------------------------------------------------------------
+    # Issue #1013 iter-18 B-1: bullet-list contract format
+    # ------------------------------------------------------------------
+
+    def test_bullet_list_contract_from_issue_1005(self):
+        """Iter-18 B-1: the real-world #1005 issue body (verbatim) MUST
+        parse to the three paths under ``**Allowed write set:**`` and
+        NOT the six unrelated paths under the earlier ``## Files``
+        section.
+        """
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Problem\n"
+            "Single-file `pdd update <code>` clears stale `_run.json` reports but does not reliably save a fingerprint on success. This leaves `.pdd/meta/` looking partially synced.\n"
+            "\n"
+            "## Files\n"
+            "- `pdd/update_main.py`\n"
+            "- `pdd/prompts/update_main_python.prompt`\n"
+            "- `pdd/prompts/agentic_update_python.prompt`\n"
+            "- `.pdd/meta/update_main_python.json`\n"
+            "- `.pdd/meta/update_main_python_run.json`\n"
+            "- `tests/test_update_main.py` (regression test)\n"
+            "\n"
+            "## Desired Behavior\n"
+            "...\n"
+            "\n"
+            "---\n"
+            "## Split Contract\n"
+            "**Command sequence:** change → sync\n"
+            "**Allowed write set:**\n"
+            "- `pdd/update_main.py`\n"
+            "- `pdd/prompts/update_main_python.prompt`\n"
+            "- `tests/test_update_main.py`\n"
+            "**Acceptance criteria:**\n"
+            "- Successful `pdd update <code>` writes a current fingerprint to `.pdd/meta/<module>.json`.\n"
+            "- Finalization failure produces an explicit user-visible warning (no silent stale metadata).\n"
+            "- Regression test in `tests/test_update_main.py` covers fingerprint save on success and the warning path on finalization failure.\n"
+            "**Independently mergeable:** True\n"
+            "**Scope rule:** Do not expand beyond this contract or implement sibling sub-issue work. If the contract is insufficient, report the gap instead.\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == (
+            "pdd/update_main.py",
+            "pdd/prompts/update_main_python.prompt",
+            "tests/test_update_main.py",
+        )
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_stops_at_next_label(self):
+        """Iter-18 B-1: the ``**Acceptance criteria:**`` label terminates
+        the bullet list — bullets under it MUST NOT join the write set.
+        """
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- pdd/foo.py\n"
+            "- tests/test_foo.py\n"
+            "**Acceptance criteria:**\n"
+            "- a thing\n"
+            "- another thing\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_stops_at_horizontal_rule(self):
+        """Iter-18 B-1: ``---`` terminates the bullet list."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- pdd/foo.py\n"
+            "- tests/test_foo.py\n"
+            "---\n"
+            "Other section\n"
+            "- not_in_contract.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+
+    def test_bullet_list_strips_backticks_on_paths(self):
+        """Iter-18 B-1: backtick-wrapped paths in bullets are accepted; the
+        backticks are stripped before validation."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- `pdd/foo.py`\n"
+            "- `tests/test_foo.py`\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_under_allowed_write_set_heading(self):
+        """Iter-18 B-1: ``## Allowed Write Set`` is an accepted heading
+        (matches the same regex as ``## Split Contract``)."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Allowed Write Set\n"
+            "**Allowed write set:**\n"
+            "- pdd/foo.py\n"
+            "- tests/test_foo.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_with_no_valid_paths(self):
+        """Iter-18 B-1: bullets that are all invalid (parent-traversal,
+        absolute, etc.) reduce to a degenerate reject-all contract per
+        the iter-8 B5 semantics — the contract is still returned with
+        ``allowed_paths=()``, NOT ``None``."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- ../escape\n"
+            "- /absolute/path\n"
+            "- pdd\\windows_sep.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
+        assert c.source == "bullet-list"
+
+    def test_html_comment_wins_over_bullet_list(self):
+        """Iter-18 B-1: when BOTH formats appear, the HTML-comment branch
+        wins (spec-preferred priority order is preserved)."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            '<!-- PDD_ISSUE_CONTRACT\n'
+            '{"allowed_paths": ["from_html.py"]}\n'
+            '-->\n'
+            "\n"
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- from_bullets.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("from_html.py",)
+        assert c.source == "html-comment"

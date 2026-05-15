@@ -121,6 +121,17 @@ DEFAULT_SYNC_BUDGET = 20.0
     default=None,
     help="Maximum parallel module worktrees in durable mode. Default: current runner concurrency.",
 )
+@click.option(
+    "--no-scope-guard",
+    "no_scope_guard",
+    is_flag=True,
+    default=False,
+    help="Issue-sync only. Disable the split-contract scope guard for this run. "
+    "By default, when the linked GitHub issue declares an allowed write set "
+    "(split contract), `pdd sync` enforces it and rejects out-of-scope generated "
+    "artifacts. Pass this flag only when intentionally overriding contract "
+    "enforcement (e.g. recovering from a stale contract).",
+)
 @click.pass_context
 @track_cost
 def sync(
@@ -143,6 +154,7 @@ def sync(
     durable_branch: Optional[str],
     no_resume: bool,
     durable_max_parallel: Optional[int],
+    no_scope_guard: bool,
 ) -> Optional[Tuple[str, float, str]]:
     """
     Synchronize prompts with code and tests.
@@ -179,6 +191,7 @@ def sync(
             max_attempts=max_attempts,
             one_session=effective_one_session,
             timeout_adder=timeout_adder,
+            scope_guard=not no_scope_guard,
         )
 
     # Detect GitHub issue URL -> dispatch to agentic sync
@@ -208,6 +221,7 @@ def sync(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            scope_guard=not no_scope_guard,
         )
 
     if durable or durable_branch or no_resume or durable_max_parallel is not None:
@@ -255,6 +269,7 @@ def _run_agentic_sync_dispatch(
     durable_branch: Optional[str] = None,
     no_resume: bool = False,
     durable_max_parallel: Optional[int] = None,
+    scope_guard: bool = True,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to agentic sync runner for GitHub issue URLs."""
     ctx.ensure_object(dict)
@@ -281,6 +296,7 @@ def _run_agentic_sync_dispatch(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            scope_guard=scope_guard,
         )
 
         if not quiet:
@@ -314,6 +330,7 @@ def _run_global_sync_dispatch(
     max_attempts: Optional[int],
     one_session: bool = False,
     timeout_adder: float = 0.0,
+    scope_guard: bool = True,
 ) -> Optional[Tuple[str, float, str]]:
     """Dispatch to global sync runner for no-argument `pdd sync`."""
     ctx.ensure_object(dict)
@@ -337,6 +354,7 @@ def _run_global_sync_dispatch(
             one_session=one_session,
             local=ctx.obj.get("local", False),
             timeout_adder=timeout_adder,
+            scope_guard=scope_guard,
         )
 
         if not quiet:

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv as _csv
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -18,13 +19,22 @@ import sys
 import tempfile
 import threading
 import time
+from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 from rich.console import Console
 
+from .agentic_common import (
+    DEFAULT_SYNC_COMPANION_ALLOWLIST,
+    PDD_INTERNAL_PATH_ALLOWLIST,
+    _is_valid_companion_pattern,
+    _matches_companion_pattern_anchored,
+    _revert_out_of_scope_changes,
+)
+from .agentic_common_worktree import revert_out_of_scope_changes_with_dirs
 from .construct_paths import _is_known_language
 
 console = Console()
@@ -131,6 +141,244 @@ class DepGraphFromArchitectureResult(NamedTuple):
 
     graph: Dict[str, List[str]]
     warnings: List[str]
+
+
+def _normalize_repo_path(path: str) -> str:
+    """Normalize a repository-relative path for contract comparisons.
+
+    Strip a single leading ``./`` segment only. Do NOT use ``str.lstrip("./")``
+    which strips arbitrary leading ``.`` and ``/`` characters and would mangle
+    legitimate paths whose first segment starts with a dot (e.g.
+    ``.pdd/meta/foo.json`` would become ``pdd/meta/foo.json`` and miss the
+    ``.pdd/meta/*.json`` companion glob — Issue #1013 F5 regression).
+    """
+    cleaned = str(path or "").replace("\\", "/").strip()
+    if cleaned.startswith("./"):
+        cleaned = cleaned[2:]
+    return cleaned
+
+
+def _git_changed_paths(project_root: Path) -> Optional[set[str]]:
+    """Return changed paths from git status, or ``None`` on scan failure.
+
+    Iter-38 M-1 (fail-closed baseline acquisition): previously returned an
+    empty set on any subprocess failure or non-zero return, indistinguishable
+    from "scan succeeded but worktree was clean." That ambiguity let a
+    transient git failure at runner/orchestrator init time produce an empty
+    baseline that the scope guard later treats as "user had nothing dirty,"
+    so any pre-existing user file is falsely flagged as out-of-scope and
+    reverted/deleted.
+
+    A successful scan that finds no changes returns an empty set; only
+    failures (OSError, ``subprocess.SubprocessError``, non-zero return code)
+    return ``None``. Init-time callers MUST treat ``None`` as a fail-closed
+    abort signal (see :class:`AsyncSyncRunner.__init__` and
+    :func:`pdd.agentic_sync.run_agentic_sync`). Enforcement-time callers
+    that already have a separate ``<git-status-failed>`` policy (see
+    :meth:`_remaining_out_of_scope_paths`) treat ``None`` as the empty set
+    via ``or set()``.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain", "--untracked-files=all"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        if len(line) < 4:
+            continue
+        payload = line[3:].strip()
+        if not payload:
+            continue
+        if " -> " in payload:
+            old_path, new_path = payload.split(" -> ", 1)
+            paths.add(_normalize_repo_path(old_path.strip('"')))
+            paths.add(_normalize_repo_path(new_path.strip('"')))
+        else:
+            paths.add(_normalize_repo_path(payload.strip('"')))
+    return {p for p in paths if p}
+
+
+def _git_ignored_paths(project_root: Path) -> Optional[set[str]]:
+    """Return repo-relative POSIX paths of git-ignored files (Issue #1013 iter-20).
+
+    Uses ``git ls-files --others --ignored --exclude-standard`` to enumerate
+    every individual ignored file (no directory entries, no status prefix).
+    May be slow on repos with large ignored trees (``node_modules/``,
+    ``build/``, etc.) — callers MUST gate the call on
+    ``scope_guard_enabled AND allowed_write_paths is not None`` so non-contract
+    runs do not pay the cost.
+
+    Iter-38 M-1 (fail-closed baseline acquisition): returns ``None`` on any
+    subprocess failure or non-zero return, NOT an empty set. The init-time
+    callers that snapshot the baseline (see :class:`AsyncSyncRunner.__init__`
+    and :func:`pdd.agentic_sync.run_agentic_sync`) MUST treat ``None`` as a
+    fail-closed abort signal — otherwise a transient git failure at init
+    silently produces an empty baseline that the scope guard later treats as
+    "no pre-existing files," so any pre-existing user WIP is falsely flagged
+    as out-of-scope and reverted/deleted.
+
+    Enforcement-time callers (post-revert re-scan in
+    :meth:`_remaining_out_of_scope_paths`) handle ignored-scan failures with
+    the separate ``<git-status-failed>`` sentinel; those sites treat ``None``
+    as the empty set via ``or set()``.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--others", "--ignored", "--exclude-standard"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        rel = _normalize_repo_path(line.strip().strip('"'))
+        if rel:
+            paths.add(rel)
+    return paths
+
+
+def _hash_file(project_root: Path, rel_posix: str) -> Optional[str]:
+    """Return the SHA-1 of *rel_posix* under *project_root*, or None.
+
+    Issue #1013 iter-24 (M-1) baseline-clobber fix: the scope guard preserves
+    pre-existing dirty/untracked paths (iter-6 B1) so the sync run does not
+    delete unrelated user WIP. The original implementation matched paths by
+    NAME only, which let a buggy LLM SILENTLY OVERWRITE an out-of-scope
+    baseline file with different content — the post-revert re-scan saw the
+    name in the baseline and skipped the contract check.
+
+    This hash is captured per baseline path at runner init and re-computed
+    at scope-guard time; only an unchanged SHA (same bytes on disk) is
+    treated as pre-existing user WIP and auto-allowed. A divergent SHA
+    falls through to the contract check, surfacing the clobber.
+
+    SHA-1 is sufficient — this is clobber detection, not adversarial
+    collision resistance. Returns ``None`` when the file cannot be read
+    (missing, permission denied, etc.); callers MUST treat ``None`` as
+    "no fingerprint available" and decide policy explicitly.
+
+    Iter-40 M-1: callers that need to DISCRIMINATE between missing and
+    unreadable (the iter-34 deletion-detection paths in the scope guards)
+    must use :func:`_classify_baseline_path` instead — this helper collapses
+    both cases to ``None`` and is kept for the snapshot-time + re-scan
+    sites where the fall-through "preserve by name" / "surface as
+    out-of-scope" semantics are already correct.
+    """
+    try:
+        path = (project_root / rel_posix).resolve()
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except (OSError, FileNotFoundError):
+        return None
+    return hashlib.sha1(data).hexdigest()
+
+
+class _BaselinePathStatus(NamedTuple):
+    """Result of re-classifying a baseline file at scope-guard time.
+
+    Iter-40 M-1: the iter-34 deletion-detection branches in the per-module
+    and orchestrator scope guards previously collapsed "file missing" and
+    "file unreadable" to the same ``current_hash is None`` signal, then
+    treated both as deletions. A pre-existing baseline file that became
+    UNREADABLE mid-sync (permission flip, locked file) was falsely flagged
+    as deleted — and downstream revert helpers were asked to remove a
+    path that still exists on disk.
+
+    Fields:
+        sha: SHA-1 hex digest when the file was successfully hashed, else
+            ``None``.
+        missing: True when the file no longer exists on disk (the iter-34
+            deletion case), False otherwise. When False AND ``sha is None``
+            the file exists but could not be read (permission, OSError).
+    """
+
+    sha: Optional[str]
+    missing: bool
+
+
+def _classify_baseline_path(
+    project_root: Path, rel_posix: str
+) -> _BaselinePathStatus:
+    """Discriminated re-hash for baseline preservation at enforcement time.
+
+    Iter-40 M-1 fix for the deletion blind spot (iter-34) which previously
+    treated unreadable files as deleted. Returns:
+
+    - ``_BaselinePathStatus(hex_sha, False)`` — file exists and was hashed
+    - ``_BaselinePathStatus(None, True)``    — file is gone (iter-34 deletion)
+    - ``_BaselinePathStatus(None, False)``   — file exists but unreadable
+      (permission flip / OSError) → callers SHOULD preserve by name to
+      avoid the false-deletion diagnostic + the downstream revert-helper
+      attempt to remove a still-present path.
+
+    This helper is intentionally NOT a replacement for :func:`_hash_file`.
+    The snapshot-time callsite (:func:`_hash_baseline_paths`) and the
+    re-scan loops in :meth:`AsyncSyncRunner._remaining_out_of_scope_paths`
+    + :func:`_orchestrator_remaining_out_of_scope_paths` already do the
+    right thing on a collapsed ``None`` — they either record ``None`` as
+    "no fingerprint available" (snapshot) or fall through to surfacing
+    the path as out-of-scope (re-scan, where git already listed the file).
+    Only the iter-34 baseline-iteration sites in
+    :meth:`AsyncSyncRunner._enforce_scope_guard` and
+    :func:`pdd.agentic_sync._enforce_orchestrator_scope` need the
+    discriminated answer.
+    """
+    try:
+        path = (project_root / rel_posix).resolve()
+    except OSError:
+        # Path resolution itself failed — treat as unreadable, preserve.
+        return _BaselinePathStatus(None, False)
+    # ``exists()`` is the primary "missing" probe. ``open()`` below still
+    # has a defensive ``FileNotFoundError`` catch in case the file is
+    # raced out from under us between the two syscalls.
+    if not path.exists():
+        return _BaselinePathStatus(None, True)
+    try:
+        with open(path, "rb") as handle:
+            data = handle.read()
+    except FileNotFoundError:
+        # Raced removal between exists() and open() — treat as missing.
+        return _BaselinePathStatus(None, True)
+    except OSError:
+        # PermissionError / locked file / generic IO — file is present
+        # but cannot be read. Distinct from missing.
+        return _BaselinePathStatus(None, False)
+    return _BaselinePathStatus(hashlib.sha1(data).hexdigest(), False)
+
+
+def _hash_baseline_paths(
+    project_root: Path, paths: Iterable[str]
+) -> Dict[str, Optional[str]]:
+    """Map each repo-relative path under *project_root* to its SHA-1.
+
+    Iter-30: extracted helper. Previously this was an inline dict
+    comprehension in :class:`AsyncSyncRunner.__init__` (mirrored twice for
+    the changed-paths and ignored-paths baselines). The orchestrator scope
+    guard now reuses it to snapshot baseline before any pre-dispatch LLM
+    call or shell command runs in :func:`pdd.agentic_sync.run_agentic_sync`.
+
+    Returns:
+        Dict from repo-relative POSIX path to SHA-1 hex string. ``None`` is
+        recorded when the file cannot be read at snapshot time — callers
+        (the scope guard) must treat ``None`` as "no fingerprint available"
+        and decide preservation policy explicitly. See :func:`_hash_file`.
+    """
+    return {rel: _hash_file(project_root, rel) for rel in paths}
 
 
 # ---------------------------------------------------------------------------
@@ -820,6 +1068,11 @@ class AsyncSyncRunner:
         module_cwds: Optional[Dict[str, Any]] = None,
         module_targets: Optional[Dict[str, str]] = None,
         initial_cost: float = 0.0,
+        allowed_write_set: Optional[Iterable[str]] = None,
+        companion_allowlist: Optional[Iterable[str]] = None,
+        scope_guard_enabled: bool = True,
+        contract_source: Optional[str] = None,
+        project_root: Optional[Path] = None,
     ):
         self.basenames: List[str] = list(basenames)
         self.dep_graph: Dict[str, List[str]] = {
@@ -830,13 +1083,130 @@ class AsyncSyncRunner:
         self.quiet = quiet
         self.verbose = verbose
         self.issue_url = issue_url
-        self.project_root: Path = Path.cwd()
+        # Issue #1013 iter-18 M-1 (durable baseline-paths bug): allow callers
+        # (notably ``DurableSyncRunner``) to pin ``project_root`` to a known
+        # repo root BEFORE the baseline-changed-paths snapshot is taken
+        # below. Without this kwarg the snapshot would always read
+        # ``git status`` from the caller's current working directory, so a
+        # dirty file in the user's main checkout would be auto-allowed in
+        # the durable worktree's scope guard.
+        self.project_root: Path = (
+            Path(project_root).resolve() if project_root is not None else Path.cwd()
+        )
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
         self.initial_cost = float(initial_cost or 0.0)
 
+        # Issue #1013 — split-contract scope guard (F5, F9, F14, F4, F6):
+        # Track contract presence separately from set truthiness. ``None``
+        # means "no contract → permissive fallback"; an explicit empty
+        # iterable means "contract present but empty → reject everything"
+        # (degenerate but legal). The single accepted kwarg name is
+        # ``allowed_write_set``; the legacy ``allowed_write_paths`` alias is
+        # gone per F14.
+        #
+        # F6: the parsed contract is recorded for diagnostics *regardless* of
+        # whether scope-guard enforcement is enabled. ``_enforce_scope_guard``
+        # short-circuits on ``scope_guard_enabled=False``, so storing the
+        # contract in opt-out mode is safe and matches the spec requirement
+        # that disabled runners still see the parsed contract.
+        self.scope_guard_enabled: bool = bool(scope_guard_enabled)
+        self.contract_source: Optional[str] = contract_source
+        if allowed_write_set is not None:
+            self.allowed_write_paths: Optional[Set[str]] = {
+                _normalize_repo_path(path)
+                for path in allowed_write_set
+                if isinstance(path, str) and path.strip()
+            }
+        else:
+            self.allowed_write_paths = None
+        # F4: the effective companion allowlist is *always* the caller-provided
+        # patterns unioned with DEFAULT_SYNC_COMPANION_ALLOWLIST. Order is
+        # preserved (caller patterns first, defaults appended) and duplicates
+        # are removed deterministically. Passing an empty iterable still
+        # produces at least the default; passing ``None`` is identical to
+        # passing an empty iterable.
+        provided: Tuple[str, ...] = tuple(
+            p for p in (companion_allowlist or ())
+            if isinstance(p, str) and p
+        )
+        self.companion_allowlist: Tuple[str, ...] = tuple(
+            dict.fromkeys(provided + tuple(DEFAULT_SYNC_COMPANION_ALLOWLIST))
+        )
+
+        # Per-`git toplevel` locks for scope-guard git operations (F12).
+        # Modules may share a repo root (shared-worktree non-durable sync) so
+        # the lock key MUST resolve to the actual git toplevel, not the raw
+        # module_cwd path — otherwise two modules in the same repo get
+        # separate locks and the race we're trying to prevent reappears.
+        self._scope_guard_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._scope_guard_locks_lock = threading.Lock()
+
+        # Iter-6 B1 (data-loss bug): snapshot the working-tree changed/untracked
+        # set BEFORE any module sync runs. Pre-existing untracked files
+        # (e.g. user's ``scratch.txt``) are not the sync run's responsibility
+        # and MUST be preserved by the scope guard.
+        #
+        # Iter-24 M-1 (baseline-clobber bug): the snapshot is now a DICT
+        # mapping repo-relative POSIX path → init-time SHA-1 instead of a
+        # bare set. ``_enforce_scope_guard`` re-hashes each baseline path at
+        # check time; ONLY paths whose content is byte-identical to the init
+        # snapshot are auto-allowed. Name-based preservation let a buggy LLM
+        # silently OVERWRITE pre-existing dirty files outside the contract
+        # (the iter-23 codex repro). Empty dict — never bare set — when the
+        # gate (``scope_guard_enabled AND allowed_write_paths is not None``)
+        # is off, so the dict.items() loops in the enforcement path are
+        # safe no-ops.
+        #
+        # Iter-20 M-1 (gitignored fail-open): also snapshot pre-existing
+        # gitignored files (e.g. user-side ``build/cache.bin`` under a
+        # repo-wide ``.gitignore: build/``). ``git status`` does not show
+        # ignored files by default, so without this baseline a sync that
+        # writes to a gitignored path outside the allowed write set would be
+        # invisible to the post-revert re-scan and the module would be
+        # marked successful with the contract violated on disk.
+        #
+        # Iter-24 M-1: same dict-with-SHA shape as ``_baseline_changed_paths``.
+        #
+        # Iter-38 M-1 (fail-closed baseline acquisition): the helpers now
+        # return ``None`` on scan failure (transient git lock contention,
+        # missing binary, OSError) instead of an empty set. Without this
+        # discrimination an init-time scan failure would silently produce
+        # an empty baseline that the scope guard later treats as "no
+        # pre-existing files," so any pre-existing user WIP is falsely
+        # flagged as out-of-scope and reverted/deleted. When EITHER scan
+        # returns ``None`` we record ``_baseline_acquisition_failed = True``
+        # and :meth:`run` aborts before any write-capable work. The flag
+        # is internal — public signatures are unchanged.
+        if self.scope_guard_enabled and self.allowed_write_paths is not None:
+            _raw_changed = _git_changed_paths(self.project_root)
+            _raw_ignored = _git_ignored_paths(self.project_root)
+            if _raw_changed is None or _raw_ignored is None:
+                self._baseline_acquisition_failed: bool = True
+                self._baseline_changed_paths: Dict[str, Optional[str]] = {}
+                self._baseline_ignored_paths: Dict[str, Optional[str]] = {}
+            else:
+                self._baseline_acquisition_failed = False
+                self._baseline_changed_paths = _hash_baseline_paths(
+                    self.project_root, _raw_changed
+                )
+                self._baseline_ignored_paths = _hash_baseline_paths(
+                    self.project_root, _raw_ignored
+                )
+        else:
+            self._baseline_acquisition_failed = False
+            self._baseline_changed_paths = {}
+            self._baseline_ignored_paths = {}
+
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
+        # When a contract narrows writes AND scope-guard enforcement is
+        # active, serialise across modules so the per-cwd lock isn't fighting
+        # parallel git status / git checkout calls. With ``--no-scope-guard``
+        # the contract is recorded for diagnostics only — no enforcement runs
+        # — so parallelism is preserved (F6).
+        if self.scope_guard_enabled and self.allowed_write_paths is not None:
+            self.max_workers = 1
 
         self.module_states: Dict[str, ModuleState] = {
             b: ModuleState() for b in self.basenames
@@ -1419,6 +1789,34 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     def run(self) -> Tuple[bool, str, float]:
         """Run all syncs respecting dependencies."""
+        # Issue #1013 iter-18 m-1: scope-guard run-entry logging is owned by
+        # the sync layer (`pdd/agentic_sync.py` ``run_agentic_sync``), which
+        # emits a single user-facing line per invocation covering all three
+        # states (disabled / contract loaded / no contract). The runner used
+        # to log the permissive-fallback and opt-out states a second time
+        # here, which produced a duplicate line for every sync. Removed so
+        # the operator sees one authoritative status line.
+
+        # Iter-38 M-1 (fail-closed baseline acquisition): the __init__
+        # baseline-scan helpers (``_git_changed_paths`` / ``_git_ignored_paths``)
+        # now return ``None`` on transient git failure (lock contention,
+        # missing binary, OSError) rather than an empty set. An empty
+        # baseline indistinguishable from "scan succeeded, worktree clean"
+        # would later cause the scope guard to flag pre-existing user WIP
+        # as out-of-scope and revert/delete it. When the init recorded a
+        # failed acquisition, abort BEFORE any write-capable work runs.
+        if getattr(self, "_baseline_acquisition_failed", False):
+            return (
+                False,
+                (
+                    "Scope guard fail-closed: could not snapshot working-tree "
+                    "baseline at runner init (git scan failed). Aborting "
+                    "before any write-capable work to prevent false-positive "
+                    "reverts of pre-existing user files."
+                ),
+                self.initial_cost,
+            )
+
         if not self.basenames:
             return True, "No modules to sync", self.initial_cost
 
@@ -1651,6 +2049,25 @@ class AsyncSyncRunner:
         last_stdout = ""
         last_stderr = ""
         repair_directive: Optional[str] = None
+        module_cwd = Path(self.module_cwds.get(basename, self.project_root))
+
+        def _apply_scope_guard(
+            success: bool, total_cost: float, error: str
+        ) -> Tuple[bool, float, str]:
+            """
+            Wrap the result of a per-module attempt with scope-guard
+            enforcement (Issue #1013, F6, F7, F8). Runs after every attempt —
+            success OR failure — before returning so out-of-scope artifacts
+            are reverted even when ``pdd sync`` itself failed.
+            """
+            diagnostic = self._enforce_scope_guard(basename, module_cwd)
+            if diagnostic is None:
+                return success, total_cost, error
+            scope_failure = (
+                "Scope guard hard-fail: out-of-scope artifacts detected\n"
+                + diagnostic
+            )
+            return False, total_cost, scope_failure
 
         for attempt in range(MAX_CONFORMANCE_ATTEMPTS):
             success, cost, error, stdout, stderr = self._run_attempt(
@@ -1664,12 +2081,12 @@ class AsyncSyncRunner:
             last_stderr = stderr
 
             if success:
-                return True, total_cost, ""
+                return _apply_scope_guard(True, total_cost, "")
 
             conformance = _parse_conformance_failure(stdout, stderr)
             if conformance is None:
                 # Not a conformance failure: do not retry
-                return False, total_cost, error
+                return _apply_scope_guard(False, total_cost, error)
 
             new_directive, new_missing = conformance
             if last_missing is not None and new_missing == last_missing:
@@ -1688,11 +2105,513 @@ class AsyncSyncRunner:
                 )
                 break
 
-        # Hard-failure path: include structured conformance block
+        # Hard-failure path: include structured conformance block, then run
+        # the scope guard so a failing conformance loop still cleans up
+        # out-of-scope writes the LLM made on the way to the failure.
         hard_block = self._build_conformance_hard_failure(
             basename, last_error, last_stdout, last_stderr
         )
-        return False, total_cost, hard_block
+        return _apply_scope_guard(False, total_cost, hard_block)
+
+    # ------------------------------------------------------------------
+    # Issue #1013 — split-contract scope guard
+    # ------------------------------------------------------------------
+
+    def _resolve_repo_root(self, module_cwd: Path) -> Path:
+        """
+        Return the git toplevel for *module_cwd*, falling back to *module_cwd*
+        when git is unavailable or the directory is not in a repo.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(module_cwd), "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return module_cwd
+        if result.returncode != 0:
+            return module_cwd
+        toplevel = result.stdout.strip()
+        if not toplevel:
+            return module_cwd
+        return Path(toplevel)
+
+    def _scope_guard_lock(self, repo_root: Path) -> threading.Lock:
+        """Return a per-repo-root :class:`threading.Lock` (F12)."""
+        key = str(repo_root.resolve())
+        with self._scope_guard_locks_lock:
+            return self._scope_guard_locks[key]
+
+    def _matches_companion_allowlist(
+        self, rel_posix_path: str, allowlist: Iterable[str]
+    ) -> bool:
+        """Return True if *rel_posix_path* matches any companion glob.
+
+        Issue #1013 iter-14 M-1: uses
+        :func:`_matches_companion_pattern_anchored` (segment-aware,
+        anchored at the START of the path) rather than
+        :meth:`pathlib.PurePosixPath.match`. The pathlib matcher is
+        suffix-based when the pattern is relative, so
+        ``.pdd/meta/*.json`` falsely matches ``subdir/.pdd/meta/foo.json``
+        — letting a contract violator bypass the guard by writing
+        fingerprint-shaped files nested under any directory.
+        """
+        for pattern in allowlist:
+            if not pattern:
+                continue
+            # Issue #1013 iter-10 M-1 (defense-in-depth): even if a
+            # wildcard-only / doublestar pattern slipped past the parser,
+            # refuse to treat it as auto-allowing repo-wide writes.
+            if not _is_valid_companion_pattern(pattern):
+                continue
+            if _matches_companion_pattern_anchored(rel_posix_path, pattern):
+                return True
+        return False
+
+    def _remaining_out_of_scope_paths(
+        self, repo_root: Path, allowed_files: Set[Path]
+    ) -> List[str]:
+        """
+        Iter-9 M-1 (fail-closed boundary): re-scan the worktree after the
+        revert helpers have run and return any repo-relative paths still NOT
+        in *allowed_files*.
+
+        This guards against silent fail-open when either revert helper
+        cannot inspect / revert / remove an out-of-scope path (git timeout,
+        permission error, restore failure). Those helpers log a warning and
+        return ``[]``; without this re-scan ``_enforce_scope_guard`` would
+        treat the empty list as "nothing was out of scope" and let the
+        module succeed with the contract still violated on disk.
+
+        Iter-20 M-1 (gitignored fail-open): the standard ``git status`` scan
+        does NOT report gitignored files. A sync that writes outside the
+        contract into a gitignored path (e.g. ``build/junk.txt`` under a
+        repo-wide ``.gitignore: build/``) would be invisible. A SECOND scan
+        via ``git ls-files --others --ignored --exclude-standard`` enumerates
+        every individual ignored file; results not in ``allowed_files`` and
+        not in ``self._baseline_ignored_paths`` (pre-existing ignored files
+        the user owned BEFORE sync ran) are added to the ``remaining`` set.
+
+        Returns:
+            Sorted list of POSIX repo-relative paths still out of scope, OR
+            the sentinel ``["<git-status-failed>"]`` when EITHER the
+            ``git status`` scan OR the ``git ls-files --ignored`` scan
+            cannot be executed (timeout / missing git / non-zero return).
+            The sentinel is consistent with the warning-log + empty-list
+            style used elsewhere in the scope guard, but still forces
+            ``_enforce_scope_guard`` to hard-fail rather than treat the
+            unobservable working tree as clean.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo_root), "status",
+                 "--porcelain", "--untracked-files=all"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return ["<git-status-failed>"]
+        if result.returncode != 0:
+            return ["<git-status-failed>"]
+
+        remaining: Set[str] = set()
+        for line in result.stdout.splitlines():
+            if len(line) < 4:
+                continue
+            payload = line[3:].strip()
+            if not payload:
+                continue
+            # Renames: ``R  old -> new``. Both sides count.
+            if " -> " in payload:
+                old_raw, new_raw = payload.split(" -> ", 1)
+                entry_paths = [old_raw.strip().strip('"'),
+                               new_raw.strip().strip('"')]
+            else:
+                entry_paths = [payload.strip('"')]
+            for rel in entry_paths:
+                rel = _normalize_repo_path(rel)
+                if not rel:
+                    continue
+                absolute = (repo_root / rel).resolve()
+                if absolute in allowed_files:
+                    continue
+                remaining.add(rel)
+
+        # Iter-20 M-1: scan for gitignored files that the standard
+        # ``git status`` pass above cannot see. ``git ls-files
+        # --others --ignored --exclude-standard`` lists every individual
+        # ignored file (no directory rollup, no status prefix).
+        try:
+            ignored_result = subprocess.run(
+                ["git", "-C", str(repo_root), "ls-files",
+                 "--others", "--ignored", "--exclude-standard"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return ["<git-status-failed>"]
+        if ignored_result.returncode != 0:
+            return ["<git-status-failed>"]
+
+        # Iter-24 M-1: ``_baseline_ignored_paths`` is now a Dict[path, SHA].
+        # ``getattr`` fallback keeps the runtime robust against subclasses
+        # that bypass __init__ (none in-tree today, but the iter-20 fallback
+        # used ``set()`` for the same reason); we still expect a mapping.
+        baseline_ignored = getattr(self, "_baseline_ignored_paths", {})
+        for line in ignored_result.stdout.splitlines():
+            rel = _normalize_repo_path(line.strip().strip('"'))
+            if not rel:
+                continue
+            # Iter-6 B1 / iter-24 M-1: pre-existing ignored files snapshotted
+            # at runner init are NOT the sync run's responsibility — but ONLY
+            # if their content is byte-identical to the init snapshot. A
+            # clobbered ignored baseline path must surface as out-of-scope.
+            if rel in baseline_ignored:
+                baseline_hash = baseline_ignored[rel]
+                current_hash = _hash_file(repo_root, rel)
+                # ``current_hash is None`` means the file disappeared from
+                # disk between the init snapshot and now — but the ignored
+                # scan still listed it, which is contradictory. Fall through
+                # to surface it; the diagnostic is the safer direction.
+                if (current_hash is not None
+                        and (baseline_hash is None
+                             or current_hash == baseline_hash)):
+                    # Unchanged baseline (or unreadable at init → preserve
+                    # by name, same conservative carve-out as the changed
+                    # baseline branch in ``_enforce_scope_guard``).
+                    continue
+            absolute = (repo_root / rel).resolve()
+            # Companion-allowlisted files (e.g. ``.pdd/meta/*.json`` when
+            # the user has ``.pdd/`` in ``.gitignore``) are in
+            # ``allowed_files`` via the rglob pass in ``_enforce_scope_guard``.
+            if absolute in allowed_files:
+                continue
+            remaining.add(rel)
+
+        return sorted(remaining)
+
+    def _enforce_scope_guard(
+        self, basename: str, module_cwd: Path
+    ) -> Optional[str]:
+        """
+        Issue #1013 split-contract enforcement after each per-module sync.
+
+        Returns:
+            ``None`` when the module is in scope (or enforcement is disabled);
+            a multi-line diagnostic string when out-of-scope artifacts were
+            detected and reverted/removed.
+
+        This is a no-op when ``self.scope_guard_enabled`` is False or
+        ``self.allowed_write_paths is None`` (no parseable contract).
+        """
+        if not self.scope_guard_enabled:
+            return None
+        if self.allowed_write_paths is None:
+            return None
+
+        repo_root = self._resolve_repo_root(Path(module_cwd))
+        lock = self._scope_guard_lock(repo_root)
+        with lock:
+            # Resolve contract paths to absolute paths under the repo root.
+            allowed_files: Set[Path] = set()
+            for rel in self.allowed_write_paths:
+                if not rel:
+                    continue
+                allowed_files.add((repo_root / rel).resolve())
+
+            # Auto-allow companion artifacts (e.g. ``.pdd/meta/*.json``) that
+            # currently exist or are about to be created under the repo
+            # root. We add them to the allowed-files set so the helpers in
+            # ``agentic_common`` / ``agentic_common_worktree`` skip them.
+            # ``self.companion_allowlist`` already includes DEFAULT_*
+            # (unioned in __init__ per F4); no fallback needed here.
+            # F1 (Issue #1013 iter-3): only files UNDER ``module_cwd`` count
+            # as companion artifacts — never auto-allow a sibling module's
+            # ``.pdd/meta/*.json`` just because it lives in the same repo.
+            #
+            # Iter-14 M-1: companion patterns are matched MODULE-RELATIVE,
+            # not repo-relative. The pattern ``.pdd/meta/*.json`` describes
+            # fingerprint metadata at the top of each module's working
+            # directory; in a multi-module repo where ``module_cwd`` is a
+            # subdirectory (e.g. ``mod_a/``), the file lives at
+            # ``mod_a/.pdd/meta/x.json`` relative to the repo root but at
+            # ``.pdd/meta/x.json`` relative to the module — and the latter
+            # is what the segment-aware anchored matcher must see. (The old
+            # ``PurePosixPath.match`` suffix-matching obscured this by
+            # accidentally auto-allowing the repo-relative form, which also
+            # auto-allowed any ``subdir/.pdd/meta/foo.json`` — the bug.)
+            allowlist = tuple(self.companion_allowlist)
+            cwd_path = Path(module_cwd).resolve()
+            for path in cwd_path.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    rel_posix = path.resolve().relative_to(cwd_path).as_posix()
+                except ValueError:
+                    continue
+                if self._matches_companion_allowlist(rel_posix, allowlist):
+                    allowed_files.add(path.resolve())
+
+            # Iter-36 B-1/B-2: PDD-internal infrastructure paths
+            # (``.pdd/agentic-logs/*``, ``.pdd/agentic_sync_state.json``,
+            # etc.) are written by the tool itself during a guarded run
+            # (audit logs from ``run_agentic_task``; runner state file
+            # from ``_record_result`` after each module). They are
+            # NEVER part of a contract. This pass is SEPARATE from the
+            # user-facing companion pass above because internal patterns
+            # are REPO-ROOT-anchored (the writes happen at the top of
+            # the project regardless of which module is being synced) —
+            # in the multi-module case ``module_cwd`` is a subdirectory
+            # and the audit log under ``<repo_root>/.pdd/agentic-logs/``
+            # would NOT match a module-rooted match pass.
+            for path in repo_root.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    repo_rel_posix = (
+                        path.resolve().relative_to(repo_root).as_posix()
+                    )
+                except ValueError:
+                    continue
+                for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                    if _matches_companion_pattern_anchored(
+                        repo_rel_posix, pattern
+                    ):
+                        allowed_files.add(path.resolve())
+                        break
+
+            # Iter-4 F1: rglob only sees files that still exist on disk. Sync
+            # legitimately DELETES companion artifacts (e.g. ``.pdd/meta/foo_python.json``
+            # when a module is renamed/removed); those deletions appear in
+            # ``git status`` as tracked ``D ``. Without this pass the revert
+            # helper would resurrect the deleted companion and hard-fail.
+            #
+            # Iter-14 M-1: ``_git_changed_paths`` returns repo-relative paths;
+            # scope to ``cwd_path`` FIRST, then match the module-relative form
+            # against the companion pattern (same semantics as the rglob loop
+            # above).
+            #
+            # Iter-38 M-1: ``_git_changed_paths`` now returns ``None`` on
+            # scan failure (was empty set). Enforcement-time scan failures
+            # are already handled by the ``<git-status-failed>`` sentinel in
+            # :meth:`_remaining_out_of_scope_paths`; here we just treat
+            # ``None`` as the empty set so the iteration is a no-op rather
+            # than crashing.
+            for rel_posix in (_git_changed_paths(repo_root) or set()):
+                absolute = (repo_root / rel_posix).resolve()
+                # Iter-36 B-1/B-2: tracked deletion of a PDD-internal
+                # artifact (e.g. ``.pdd/agentic_sync_state.json`` between
+                # runs) must not be resurrected by the revert helper.
+                # Match against the REPO-relative form before the
+                # module-cwd scoping below.
+                matched_internal = False
+                for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                    if _matches_companion_pattern_anchored(rel_posix, pattern):
+                        allowed_files.add(absolute)
+                        matched_internal = True
+                        break
+                if matched_internal:
+                    continue
+                try:
+                    module_rel_posix = absolute.relative_to(cwd_path).as_posix()
+                except ValueError:
+                    # Outside the module's cwd — scoped out by F1 iter-3.
+                    continue
+                if not self._matches_companion_allowlist(module_rel_posix, allowlist):
+                    continue
+                allowed_files.add(absolute)
+
+            # Iter-6 B1 (data-loss bug): pre-existing untracked files
+            # captured at runner __init__ are NEVER out-of-scope. Without
+            # this pass, a user's ``scratch.txt`` or unrelated WIP under
+            # the repo root would be removed by the revert helper.
+            #
+            # Iter-24 M-1 (baseline-clobber bug): preservation is now
+            # CONTENT-AWARE. Re-hash each baseline path against the
+            # init-time SHA. Only byte-identical content is auto-allowed;
+            # divergent SHAs fall through to the contract check so a
+            # sync-side clobber is surfaced. Note: the init hash uses
+            # ``self.project_root`` and the enforcement hash uses
+            # ``repo_root`` — in the non-durable async case those resolve
+            # to the same path; the durable runner clears the baseline
+            # entirely (iter-22) so this loop is a no-op there.
+            #
+            # Iter-34 M-3 (baseline-deletion blind spot, codex iter-33):
+            # ``current_hash is None`` means the baseline file is GONE
+            # from disk. For TRACKED baseline paths, ``git status`` will
+            # surface this as ``D `` and ``_remaining_out_of_scope_paths``
+            # picks it up; but for UNTRACKED baseline paths (the user's
+            # local WIP captured at init) git has no record — the
+            # deletion is invisible to every subsequent scan and the
+            # module would succeed with the WIP silently lost. Collect
+            # the deletions here and union them into the diagnostic's
+            # ``remaining`` set below.
+            #
+            # Iter-40 M-1 (unreadable vs missing): the previous code
+            # collapsed "file missing" and "file unreadable" (permission
+            # flip, locked file) into the same ``current_hash is None``
+            # signal, then treated both as deletions. A pre-existing
+            # baseline file that became UNREADABLE mid-sync would be
+            # falsely flagged as deleted, the diagnostic would lie about
+            # the file being removed, and downstream revert helpers
+            # would attempt to remove a still-present path. The
+            # :func:`_classify_baseline_path` helper distinguishes the
+            # two; unreadable falls through to the legacy iter-6 B1
+            # preserve-by-name carve-out (same as the unreadable-at-init
+            # branch), while genuinely-missing flows the iter-34 path.
+            baseline_deleted: Set[str] = set()
+            for rel_posix, baseline_hash in self._baseline_changed_paths.items():
+                status = _classify_baseline_path(repo_root, rel_posix)
+                if status.missing:
+                    # Iter-34 M-3: baseline file is GONE. Surface it as
+                    # unrecovered regardless of whether it was tracked
+                    # or untracked at init — we can't distinguish the
+                    # two from the baseline snapshot, and even the
+                    # tracked-deletion case warrants a hard-fail (the
+                    # user didn't expect their pre-existing file to be
+                    # removed by sync).
+                    baseline_deleted.add(rel_posix)
+                    continue
+                if status.sha is None:
+                    # Iter-40 M-1: file exists but unreadable now
+                    # (permission flip, locked file, transient OSError).
+                    # Preserve by name — same conservative carve-out as
+                    # the unreadable-at-init branch below — so a
+                    # permission-flaky baseline path is not misreported
+                    # as deleted.
+                    allowed_files.add((repo_root / rel_posix).resolve())
+                    continue
+                if baseline_hash is None:
+                    # Couldn't hash at init (the file was unreadable
+                    # then). Be conservative and preserve by name, the
+                    # legacy iter-6 B1 behaviour — avoids false-positives
+                    # on permission-flaky paths that pre-date the run.
+                    allowed_files.add((repo_root / rel_posix).resolve())
+                    continue
+                if status.sha == baseline_hash:
+                    # Unchanged user WIP — preserve.
+                    allowed_files.add((repo_root / rel_posix).resolve())
+                # else: sync (or some other writer) clobbered the file.
+                # Do NOT add to allowed_files — let the contract check
+                # flag it as out-of-scope.
+
+            # Iter-34 M-3: symmetric pass for ignored baseline paths.
+            # ``_remaining_out_of_scope_paths`` only sees files that
+            # ``git ls-files --ignored`` currently lists, so a deleted
+            # gitignored baseline file (e.g. user-side ``cache.bin``
+            # erased by sync) leaves no trail in either scan. Iterate
+            # the ignored baseline directly to catch the deletion.
+            #
+            # Iter-40 M-1: same unreadable-vs-missing discrimination —
+            # an unreadable ignored baseline must NOT be flagged as
+            # deleted. Preserve by name so the diagnostic does not
+            # falsely claim the file was removed.
+            for rel_posix, baseline_hash in self._baseline_ignored_paths.items():
+                status = _classify_baseline_path(repo_root, rel_posix)
+                if status.missing:
+                    baseline_deleted.add(rel_posix)
+                elif status.sha is None:
+                    # File exists but unreadable — preserve by name.
+                    allowed_files.add((repo_root / rel_posix).resolve())
+                # Present-but-changed ignored baselines are already
+                # surfaced by ``_remaining_out_of_scope_paths``'s
+                # ignored loop (the hash comparison there falls through
+                # to ``remaining.add`` on divergence). Don't duplicate
+                # that work here.
+
+            tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
+            untracked_reverted = revert_out_of_scope_changes_with_dirs(
+                repo_root, allowed_dirs=set(), allowed_files=allowed_files
+            )
+
+            # Combine while preserving order and uniqueness for the diagnostic.
+            seen: Set[str] = set()
+            offending: List[str] = []
+            for path in list(tracked_reverted) + list(untracked_reverted):
+                try:
+                    rel = Path(path).resolve().relative_to(repo_root).as_posix()
+                except ValueError:
+                    rel = str(path)
+                if rel in seen:
+                    continue
+                # Filter out anything that ended up in the allowed set —
+                # e.g. companion artifacts that the helpers do not revert
+                # but that we still surface as no-ops.
+                if (repo_root / rel).resolve() in allowed_files:
+                    continue
+                seen.add(rel)
+                offending.append(rel)
+
+            # Iter-9 M-1 (fail-closed boundary): re-scan the worktree after
+            # the revert helpers have run. Either helper can fail silently
+            # (git timeout, permission error, restore failure) and return
+            # ``[]``. Without this re-scan we would conclude "nothing was
+            # out of scope" and let the module succeed with the contract
+            # still violated on disk.
+            remaining_raw = self._remaining_out_of_scope_paths(
+                repo_root, allowed_files
+            )
+            # Filter out paths already surfaced as ``offending`` so the
+            # re-scan does not double-list. In practice when helpers succeed
+            # the path is gone from ``git status``; when helpers fail with
+            # ``reverted.clear()`` ``offending`` is empty. Defensive filter.
+            #
+            # Iter-34 M-3: union with ``baseline_deleted`` so a sync-side
+            # deletion of a pre-existing untracked/ignored baseline path
+            # hard-fails the module. For tracked baselines ``git status``
+            # already surfaces the deletion as ``D ``, so the union just
+            # dedups via set semantics.
+            offending_set = set(offending)
+            remaining = sorted(
+                (set(remaining_raw) | baseline_deleted) - offending_set
+            )
+
+            if not offending and not remaining:
+                return None
+
+            source = self.contract_source or "<unknown>"
+            allowed_lines = "\n".join(
+                f"  - {p}" for p in sorted(self.allowed_write_paths)
+            ) or "  - <empty>"
+            companion_lines = "\n".join(
+                f"  - {p}" for p in allowlist
+            ) or "  - <empty>"
+
+            # Header line shape depends on whether anything was actually
+            # reverted. When ``offending`` is empty but ``remaining`` is
+            # non-empty, emitting "reverted 0 out-of-scope file(s)" plus an
+            # empty bullet list reads incorrectly; use a distinct header.
+            if offending:
+                offending_lines = "\n".join(f"  - {p}" for p in offending)
+                header = (
+                    f"Scope guard reverted {len(offending)} out-of-scope "
+                    f"file(s) for module '{basename}' "
+                    f"(contract source: {source}):\n"
+                    f"{offending_lines}"
+                )
+            else:
+                header = (
+                    f"Scope guard detected out-of-scope artifacts for "
+                    f"module '{basename}' (contract source: {source}) "
+                    f"but the revert helpers reported no successful reverts."
+                )
+
+            parts = [header]
+            if remaining:
+                unrecovered_lines = "\n".join(f"  - {p}" for p in remaining)
+                parts.append(
+                    "Unrecovered (revert failed, manual cleanup required):\n"
+                    f"{unrecovered_lines}"
+                )
+            parts.append(f"Allowed write set:\n{allowed_lines}")
+            parts.append(f"Companion allowlist:\n{companion_lines}")
+            diagnostic = "\n".join(parts)
+            # F8 (Issue #1013): print the diagnostic to stderr immediately
+            # after reverting. ``maintenance.py`` separately echoes the
+            # assembled module-failure error at the end of the run — two
+            # distinct events, so keep both.
+            print(diagnostic, file=sys.stderr)
+            return diagnostic
 
     def _build_conformance_hard_failure(
         self,
