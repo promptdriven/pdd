@@ -913,7 +913,10 @@ def _print_global_sync_plan(
 ) -> None:
     """Render a concise global sync dry-run plan."""
     console.print("[bold]Global sync dry run:[/bold]")
-    console.print(f"  Tier 1 (prompt staleness): {len(ordered_modules)} module(s) stale")
+    if len(ordered_modules) == 0:
+        console.print("  Tier 1 (prompt staleness): [green]0 module(s) stale[/green]")
+    else:
+        console.print(f"  Tier 1 (prompt staleness): {len(ordered_modules)} module(s) stale")
     console.print(f"  Total architecture modules scanned: {len(analysis.all_modules)}")
     console.print(f"  Estimated cost: ${analysis.estimated_cost:.2f}")
     if budget is not None:

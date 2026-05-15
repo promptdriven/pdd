@@ -32,9 +32,11 @@ from pdd.agentic_sync import (
     _llm_fix_dry_run_failure,
     _load_architecture_json,
     _parse_llm_response,
+    _print_global_sync_plan,
     _resolve_module_cwd,
     _run_dry_run_validation,
     _run_single_dry_run,
+    GlobalSyncAnalysis,
     GlobalSyncModule,
     run_agentic_sync,
     run_global_sync,
@@ -1160,6 +1162,64 @@ class TestRunGlobalSync:
         ansi_output = recorder.export_text(clear=False, styles=True)
         assert "\x1b[32m" not in ansi_output
         assert "\x1b[1;32m" not in ansi_output
+
+    def test_dry_run_plan_zero_stale_renders_green(self, monkeypatch):
+        from rich.console import Console as _RichConsole
+        import pdd.agentic_sync as agentic_sync_module
+
+        recorder = _RichConsole(record=True, width=200, force_terminal=True)
+        monkeypatch.setattr(agentic_sync_module, "console", recorder)
+
+        analysis = GlobalSyncAnalysis(
+            modules_to_sync=[],
+            module_cwds={},
+            module_targets={},
+            estimated_cost=0.0,
+            module_operations={},
+            skipped_modules=[],
+            all_modules=["mod_a"],
+        )
+        _print_global_sync_plan(analysis, [], [], budget=None, verbose=False)
+
+        plain_output = recorder.export_text(clear=False)
+        assert "Tier 1 (prompt staleness): 0 module(s) stale" in plain_output
+        ansi_output = recorder.export_text(clear=False, styles=True)
+        # Rich number-highlighting splits the styled run into multiple ANSI
+        # segments, so the literal "module(s) stale" substring is not present
+        # in the ANSI text. Locate the plan line by its "Tier" prefix and
+        # confirm green markers appear on it.
+        plan_line = next(
+            line for line in ansi_output.splitlines() if "Tier" in line
+        )
+        assert "\x1b[32m" in plan_line or "\x1b[1;32m" in plan_line
+
+    def test_dry_run_plan_nonzero_stale_not_green(self, monkeypatch):
+        from rich.console import Console as _RichConsole
+        import pdd.agentic_sync as agentic_sync_module
+
+        recorder = _RichConsole(record=True, width=200, force_terminal=True)
+        monkeypatch.setattr(agentic_sync_module, "console", recorder)
+
+        analysis = GlobalSyncAnalysis(
+            modules_to_sync=["mod_a"],
+            module_cwds={},
+            module_targets={},
+            estimated_cost=0.0,
+            module_operations={"mod_a": ["generate"]},
+            skipped_modules=[],
+            all_modules=["mod_a"],
+        )
+        _print_global_sync_plan(analysis, ["mod_a"], [], budget=None, verbose=False)
+
+        plain_output = recorder.export_text(clear=False)
+        assert "Tier 1 (prompt staleness): 1 module(s) stale" in plain_output
+        ansi_output = recorder.export_text(clear=False, styles=True)
+        # The nonzero stale plan line must NOT carry green success styling.
+        plan_line = next(
+            line for line in ansi_output.splitlines() if "Tier" in line
+        )
+        assert "\x1b[32m" not in plan_line
+        assert "\x1b[1;32m" not in plan_line
 
 
 # ---------------------------------------------------------------------------
