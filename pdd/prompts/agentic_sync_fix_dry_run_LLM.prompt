@@ -13,22 +13,23 @@ You are debugging a failed `pdd sync` dry-run for module "{basename}".
 The dry-run failed when running `pdd sync {basename} --dry-run` from `{attempted_cwd}`.
 This usually means the prompt file was not found, or the working directory is wrong.
 
-Determine the correct working directory and output the full command to run.
+Determine the correct working directory from which `pdd sync {basename}` should be invoked.
 Look at where .pddrc files are located and which subdirectory contains the relevant prompt files.
 
 ## Output Format
-Output the full shell command on a single line, prefixed with `SYNC_CMD:`.
-The command MUST use `cd <dir> && pdd --force sync {basename} --dry-run --agentic --no-steer`.
+Output the working directory ONLY as a single line, prefixed with `SYNC_CWD:`.
+The value MUST be a path relative to the project root (use `.` for the project root itself)
+or an absolute path that resolves under the project root. Do NOT emit a shell command.
+Do NOT include any shell metacharacters (`;`, `&`, `|`, `<`, `>`, `` ` ``, `$`, `(`, `)`, newline).
 
-The command MUST include `--dry-run`. This invocation is a probe to validate
-the working directory only — it must never perform a real sync. If `--dry-run`
-is omitted, the orchestrator will inject it automatically before executing,
-but you should always emit it explicitly so the intent is unambiguous.
+The orchestrator will build and execute the `pdd sync {basename} --dry-run` argv itself
+from this working directory. You only need to identify the directory.
 
-SYNC_CMD: cd <relative-path-from-project-root> && pdd --force sync {basename} --dry-run --agentic --no-steer
+SYNC_CWD: <relative-path-from-project-root>
 
 Examples:
-- SYNC_CMD: cd examples/hello && pdd --force sync {basename} --dry-run --agentic --no-steer
-- SYNC_CMD: cd . && pdd --force sync {basename} --dry-run --agentic --no-steer
+- SYNC_CWD: examples/hello
+- SYNC_CWD: .
+- SYNC_CWD: frontend
 
-Only output ONE SYNC_CMD line. Do not output SYNC_CWD.
+Only output ONE SYNC_CWD line. Do not output SYNC_CMD.

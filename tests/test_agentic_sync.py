@@ -25,9 +25,9 @@ from pdd.agentic_sync import (
     _build_scoped_global_dep_graph,
     _branch_diff_is_runtime_llm_only,
     _detect_modules_from_branch_diff,
+    _enforce_orchestrator_scope,
     _filter_already_synced,
     _find_project_root,
-    _inject_dry_run_flag,
     _is_catchall_match,
     _is_github_issue_url,
     _is_runtime_llm_template,
@@ -45,6 +45,7 @@ from pdd.agentic_sync import (
 from pdd.agentic_common import IssueContract
 from pdd.agentic_sync_runner import (
     DepGraphFromArchitectureResult,
+    _hash_baseline_paths,
     build_dep_graph_from_architecture,
 )
 
@@ -2236,49 +2237,445 @@ class TestArchPathInScope:
 
 
 # ---------------------------------------------------------------------------
-# _inject_dry_run_flag (iter-28 B-1 helper, unit-level)
+# _enforce_orchestrator_scope (iter-30 unified orchestrator scope guard)
 # ---------------------------------------------------------------------------
 
 
-class TestInjectDryRunFlag:
-    """Unit-level coverage of the ``--dry-run`` injector used by the
-    LLM dry-run fallback executor."""
+def _init_git_repo(tmp_path: Path) -> None:
+    """Create a minimal git repo at *tmp_path* for orchestrator scope tests."""
+    subprocess.run(
+        ["git", "init", "--quiet", "--initial-branch=main", str(tmp_path)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.email", "test@example.com"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "config", "user.name", "Test"],
+        check=True,
+    )
+    # Seed with a committed file so HEAD exists.
+    seed = tmp_path / ".pddrc"
+    seed.write_text("# pddrc\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "add", "-A"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", str(tmp_path), "commit", "--quiet", "-m", "init"],
+        check=True,
+    )
 
-    def test_injects_after_sync_token(self):
-        assert _inject_dry_run_flag("pdd sync foo") == "pdd sync --dry-run foo"
 
-    def test_idempotent_when_dry_run_already_present(self):
-        assert (
-            _inject_dry_run_flag("pdd sync foo --dry-run")
-            == "pdd sync foo --dry-run"
+def _hash_baseline_single(project_root: Path, rel: str) -> str:
+    """Tiny helper: SHA-1 of the file at *project_root / rel* (for baseline maps)."""
+    import hashlib
+    return hashlib.sha1((project_root / rel).read_bytes()).hexdigest()
+
+
+class TestEnforceOrchestratorScope:
+    """Iter-30: unit-level coverage of the orchestrator scope guard helper.
+
+    These tests exercise :func:`_enforce_orchestrator_scope` directly. Higher-
+    level integration tests that drive :func:`run_agentic_sync` end-to-end are
+    in :class:`TestOrchestratorScopeGuardIntegration`.
+    """
+
+    @staticmethod
+    def _contract(*allowed: str) -> IssueContract:
+        return IssueContract(
+            allowed_paths=tuple(allowed),
+            companion_allowlist=(),
+            source="test",
         )
 
-    def test_injects_into_cd_chained_command(self):
-        assert (
-            _inject_dry_run_flag("cd subdir && pdd sync foo")
-            == "cd subdir && pdd sync --dry-run foo"
+    def test_no_op_when_no_contract(self, tmp_path):
+        """``issue_contract is None`` → permissive, returns None unconditionally."""
+        _init_git_repo(tmp_path)
+        out_of_scope = tmp_path / "wild.py"
+        out_of_scope.write_text("unsanctioned\n", encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=None,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is None
+        # Permissive mode preserves the file on disk.
+        assert out_of_scope.exists()
+
+    def test_no_op_when_scope_guard_disabled(self, tmp_path):
+        """``scope_guard=False`` → no-op even with a contract."""
+        _init_git_repo(tmp_path)
+        out_of_scope = tmp_path / "wild.py"
+        out_of_scope.write_text("unsanctioned\n", encoding="utf-8")
+
+        contract = self._contract("pdd/foo.py")
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=False,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is None
+        assert out_of_scope.exists()
+
+    def test_reverts_untracked_out_of_contract_writes(self, tmp_path):
+        """Untracked out-of-contract file → reverted, diagnostic returned."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        out_of_scope = tmp_path / "outside.py"
+        out_of_scope.write_text("oops\n", encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is not None
+        assert "outside.py" in result
+        assert "Orchestrator scope guard" in result
+        assert not out_of_scope.exists()
+
+    def test_preserves_pre_existing_baseline_path(self, tmp_path):
+        """Pre-existing untracked file in baseline (unchanged SHA) → preserved."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        user_wip = tmp_path / "userwip.py"
+        user_wip.write_text("user code\n", encoding="utf-8")
+
+        # Snapshot the baseline (matches what run_agentic_sync does).
+        baseline = {"userwip.py": _hash_baseline_single(tmp_path, "userwip.py")}
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed=baseline,
+            baseline_ignored={},
+            quiet=True,
+        )
+        # Unchanged baseline → no revert needed.
+        assert result is None
+        assert user_wip.exists()
+
+    def test_detects_baseline_clobber(self, tmp_path):
+        """Baseline path overwritten with different content → flagged & reverted."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        user_wip = tmp_path / "userwip.py"
+        user_wip.write_text("original\n", encoding="utf-8")
+        baseline = {"userwip.py": _hash_baseline_single(tmp_path, "userwip.py")}
+
+        # Now clobber the baseline.
+        user_wip.write_text("CLOBBERED by LLM\n", encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed=baseline,
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is not None
+        assert "userwip.py" in result
+        # The file is gone after the revert helper sweeps it (untracked +
+        # not allowed → removed).
+        assert not user_wip.exists()
+
+    def test_companion_allowlist_default_auto_allows_pdd_meta(self, tmp_path):
+        """``.pdd/meta/*.json`` is auto-allowed by DEFAULT_SYNC_COMPANION_ALLOWLIST."""
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        meta_file = meta_dir / "foo_python.json"
+        meta_file.write_text('{"fingerprint": "x"}', encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        # Companion-allowlisted → no revert, no diagnostic.
+        assert result is None
+        assert meta_file.exists()
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator scope guard integration (iter-30)
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorScopeGuardIntegration:
+    """Iter-30: integration tests that drive :func:`run_agentic_sync` and
+    verify the orchestrator scope guard reverts/preserves correctly at the
+    early-return boundary."""
+
+    _ISSUE_BODY_WITH_BULLET_CONTRACT = (
+        "Title: feat: foo\n\n"
+        "## Allowed Write Set\n\n"
+        "**Allowed write set:**\n"
+        "- pdd/foo.py\n"
+    )
+    _ISSUE_BODY_NO_CONTRACT = "Title: feat: foo\n\nNo structured contract here."
+
+    def _issue_payload(self, body: str) -> str:
+        return json.dumps({"title": "Test", "body": body, "comments_url": ""})
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_reverts_out_of_contract_llm_writes(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """LLM writes an out-of-contract file during identify-modules →
+        orchestrator scope guard reverts before the orchestrator returns.
+
+        The mock for ``run_agentic_task`` writes ``outside.py`` to disk and
+        returns an empty module list, so the orchestrator hits the
+        "LLM identified no modules to sync" early return (line ~1925). The
+        scope guard wrap on that return must observe and revert the write.
+        """
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            # Simulate LLM writing an out-of-contract file mid-call.
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            # Return a parse-failing response so we land on the
+            # "no modules to sync" early return inside the scope guard.
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
         )
 
-    def test_does_not_match_sync_architecture(self):
-        # ``pdd sync-architecture`` is a different subcommand; the regex
-        # lookahead refuses to match so injection leaves the command alone.
-        assert (
-            _inject_dry_run_flag("pdd sync-architecture")
-            == "pdd sync-architecture"
+        assert success is False
+        assert "Orchestrator scope guard" in msg
+        assert "outside.py" in msg
+        assert not (tmp_path / "outside.py").exists(), (
+            "scope guard must revert the out-of-contract write"
+        )
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_preserves_pre_existing_baseline(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """User WIP that pre-exists at orchestrator entry → preserved."""
+        _init_git_repo(tmp_path)
+        # Pre-existing dirty user WIP.
+        (tmp_path / "userwip.py").write_text("user work in progress\n", encoding="utf-8")
+
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        # LLM does NOT touch userwip.py; just returns no modules.
+        mock_agentic_task.return_value = (
+            True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
         )
 
-    def test_does_not_match_synchronize(self):
-        assert _inject_dry_run_flag("pdd synchronize") == "pdd synchronize"
-
-    def test_injects_at_end_of_command(self):
-        # ``pdd sync`` with no trailing arg → injection still lands.
-        assert _inject_dry_run_flag("pdd sync") == "pdd sync --dry-run"
-
-    def test_injects_before_ampersand_chain(self):
-        assert (
-            _inject_dry_run_flag("pdd sync && echo done")
-            == "pdd sync --dry-run && echo done"
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
         )
+
+        # Pre-existing untracked file MUST be preserved by the baseline rule.
+        assert (tmp_path / "userwip.py").exists()
+        assert (tmp_path / "userwip.py").read_text(encoding="utf-8") == (
+            "user work in progress\n"
+        )
+        # Scope guard MUST NOT mention userwip.py in the diagnostic.
+        assert "userwip.py" not in msg
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_detects_baseline_clobber(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """LLM overwrites a baseline path with new content → flagged."""
+        _init_git_repo(tmp_path)
+        (tmp_path / "userwip.py").write_text("original\n", encoding="utf-8")
+
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            # Clobber pre-existing baseline path.
+            (tmp_path / "userwip.py").write_text(
+                "CLOBBERED by malicious LLM\n", encoding="utf-8"
+            )
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is False
+        assert "Orchestrator scope guard" in msg
+        assert "userwip.py" in msg
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_no_op_when_no_contract(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Permissive mode: no contract on issue → no revert, existing
+        behavior preserved."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_NO_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        # No contract → permissive mode → no revert, no diagnostic.
+        assert "Orchestrator scope guard" not in msg
+        assert (tmp_path / "outside.py").exists()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_no_op_with_no_scope_guard_flag(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """``scope_guard=False`` → explicit opt-out, no revert, existing
+        behavior preserved (matches iter-26 / iter-28 gate semantics)."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        def llm_side_effect(*_args, **_kwargs):
+            (tmp_path / "outside.py").write_text("LLM wrote me\n", encoding="utf-8")
+            return True, "MODULES_TO_SYNC: []\nDEPS_VALID: true", 0.01, "anthropic"
+
+        mock_agentic_task.side_effect = llm_side_effect
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            scope_guard=False,
+        )
+
+        # Explicit opt-out → no revert, no diagnostic.
+        assert "Orchestrator scope guard" not in msg
+        assert (tmp_path / "outside.py").exists()
 
 
 # ---------------------------------------------------------------------------
@@ -2849,47 +3246,45 @@ class TestRunDryRunValidation:
 
 
 # ---------------------------------------------------------------------------
-# _llm_fix_dry_run_failure --dry-run injection (iter-28 B-1)
+# _llm_fix_dry_run_failure safe-argv (iter-30 B-2 replacement)
 # ---------------------------------------------------------------------------
 
 
-class TestLlmFixDryRunInjection:
-    """Verify that LLM-suggested sync commands always get ``--dry-run``.
-
-    Iter-28 B-1: the orchestrator-level dry-run LLM fallback executes the
-    LLM's suggested command via shell. If the LLM forgets ``--dry-run`` the
-    command would perform a real sync write before the scope-guarded runner
-    exists. The orchestrator must inject ``--dry-run`` (and refuse to execute
-    if injection cannot land) to keep the probe non-destructive.
-    """
+class TestLlmFixDryRunSafeArgv:
+    """Iter-30: the orchestrator no longer executes an LLM-supplied shell
+    string. The LLM only returns ``SYNC_CWD: <path>``; the orchestrator
+    builds the argv itself and runs with ``shell=False``. Closes iter-29 B-2
+    (shell injection at the orchestrator level)."""
 
     @staticmethod
-    def _llm_response(cmd: str) -> str:
-        return f"SYNC_CMD: {cmd}\n"
+    def _llm_response(cwd_value: str) -> str:
+        return f"SYNC_CWD: {cwd_value}\n"
 
     @patch("pdd.agentic_sync.subprocess.run")
     @patch("pdd.agentic_sync.run_agentic_task")
     @patch("pdd.agentic_sync.load_prompt_template")
-    def test_llm_fix_dry_run_injects_dry_run_flag(
+    def test_llm_fix_dry_run_uses_safe_argv_not_shell(
         self,
         mock_load_prompt,
         mock_agentic_task,
         mock_subprocess,
         tmp_path,
     ):
-        """LLM omits ``--dry-run`` → orchestrator injects it before exec."""
+        """LLM returns ``SYNC_CWD: subdir`` → argv is a list, shell=False."""
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
         mock_load_prompt.return_value = (
             "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
         )
         mock_agentic_task.return_value = (
             True,
-            self._llm_response("pdd sync foo"),
+            self._llm_response("subdir"),
             0.01,
             "anthropic",
         )
         mock_subprocess.return_value = MagicMock(
             returncode=0,
-            stdout=f"__PDD_EFFECTIVE_CWD__\n{tmp_path}\n",
+            stdout="",
             stderr="",
         )
 
@@ -2901,132 +3296,118 @@ class TestLlmFixDryRunInjection:
         )
 
         assert ok is True
-        assert cwd == tmp_path.resolve()
+        assert cwd == subdir.resolve()
         assert err == ""
-        # Captured subprocess command must contain the injected flag in the
-        # correct token position (right after ``sync``).
-        executed_cmd = mock_subprocess.call_args[0][0]
-        assert "pdd sync --dry-run foo" in executed_cmd
+
+        # argv must be a list (not a string), shell must be False.
+        call_args, call_kwargs = mock_subprocess.call_args
+        argv = call_args[0]
+        assert isinstance(argv, list), "argv must be a list — shell=False shape"
+        assert call_kwargs.get("shell", False) is False
+        assert "--dry-run" in argv
+        assert "sync" in argv
+        assert "foo" in argv
+        # cwd is the resolved SYNC_CWD path, not the project root.
+        assert call_kwargs.get("cwd") == str(subdir.resolve())
 
     @patch("pdd.agentic_sync.subprocess.run")
     @patch("pdd.agentic_sync.run_agentic_task")
     @patch("pdd.agentic_sync.load_prompt_template")
-    def test_llm_fix_dry_run_preserves_existing_dry_run_flag(
+    def test_llm_fix_dry_run_rejects_path_outside_project_root(
         self,
         mock_load_prompt,
         mock_agentic_task,
         mock_subprocess,
         tmp_path,
     ):
-        """LLM already includes ``--dry-run`` → command unchanged."""
+        """LLM returns ``SYNC_CWD: /etc`` (outside project root) → reject."""
         mock_load_prompt.return_value = (
             "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
         )
         mock_agentic_task.return_value = (
             True,
-            self._llm_response("pdd sync foo --dry-run"),
+            self._llm_response("/etc"),
             0.01,
             "anthropic",
         )
-        mock_subprocess.return_value = MagicMock(
-            returncode=0,
-            stdout=f"__PDD_EFFECTIVE_CWD__\n{tmp_path}\n",
-            stderr="",
-        )
 
-        ok, _cwd, _cost, _err = _llm_fix_dry_run_failure(
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
             basename="foo",
             project_root=tmp_path,
             dry_run_error="prompt not found",
             quiet=True,
         )
 
-        assert ok is True
-        executed_cmd = mock_subprocess.call_args[0][0]
-        # Only one ``--dry-run`` appears in the executed command (the LLM's
-        # own copy was preserved verbatim, no second copy was injected).
-        assert executed_cmd.count("--dry-run") == 1
-        assert "pdd sync foo --dry-run" in executed_cmd
-
-    @patch("pdd.agentic_sync.subprocess.run")
-    @patch("pdd.agentic_sync.run_agentic_task")
-    @patch("pdd.agentic_sync.load_prompt_template")
-    def test_llm_fix_dry_run_handles_cd_chained_command(
-        self,
-        mock_load_prompt,
-        mock_agentic_task,
-        mock_subprocess,
-        tmp_path,
-    ):
-        """LLM emits ``cd subdir && pdd sync foo`` → injection still lands."""
-        subdir = tmp_path / "subdir"
-        subdir.mkdir()
-        mock_load_prompt.return_value = (
-            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
-        )
-        mock_agentic_task.return_value = (
-            True,
-            self._llm_response("cd subdir && pdd sync foo"),
-            0.01,
-            "anthropic",
-        )
-        mock_subprocess.return_value = MagicMock(
-            returncode=0,
-            stdout=f"__PDD_EFFECTIVE_CWD__\n{subdir}\n",
-            stderr="",
-        )
-
-        ok, _cwd, _cost, _err = _llm_fix_dry_run_failure(
-            basename="foo",
-            project_root=tmp_path,
-            dry_run_error="prompt not found",
-            quiet=True,
-        )
-
-        assert ok is True
-        executed_cmd = mock_subprocess.call_args[0][0]
-        assert "cd subdir && pdd sync --dry-run foo" in executed_cmd
-
-    @patch("pdd.agentic_sync.subprocess.run")
-    @patch("pdd.agentic_sync.run_agentic_task")
-    @patch("pdd.agentic_sync.load_prompt_template")
-    def test_llm_fix_dry_run_does_not_inject_into_sync_architecture(
-        self,
-        mock_load_prompt,
-        mock_agentic_task,
-        mock_subprocess,
-        tmp_path,
-    ):
-        """``pdd sync-architecture`` is a different subcommand — must not match.
-
-        The regex (``\\bpdd\\s+sync`` with whitespace/end-of-string lookahead)
-        deliberately rejects ``pdd sync-architecture`` so the injection cannot
-        produce ``pdd sync --dry-run-architecture``. The downstream paranoia
-        check then refuses to execute the un-injected command, since the
-        scope-guarded runner does not exist at this point.
-        """
-        mock_load_prompt.return_value = (
-            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
-        )
-        mock_agentic_task.return_value = (
-            True,
-            self._llm_response("pdd sync-architecture"),
-            0.01,
-            "anthropic",
-        )
-
-        ok, cwd, _cost, err = _llm_fix_dry_run_failure(
-            basename="foo",
-            project_root=tmp_path,
-            dry_run_error="prompt not found",
-            quiet=True,
-        )
-
-        # Paranoia check must reject the command outright.
         assert ok is False
         assert cwd is None
-        assert "--dry-run" in err
-        # And subprocess.run must NEVER be invoked for a non-injectable cmd.
+        assert "outside project root" in err
+        mock_subprocess.assert_not_called()
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_rejects_legacy_sync_cmd_format(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """Stale-cache ``SYNC_CMD: pdd sync foo`` → reject with migration error."""
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            "SYNC_CMD: pdd --force sync foo --dry-run --agentic --no-steer\n",
+            0.01,
+            "anthropic",
+        )
+
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is False
+        assert cwd is None
+        assert "SYNC_CWD" in err
+        assert "legacy" in err.lower()
+        mock_subprocess.assert_not_called()
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_rejects_shell_metachars_in_cwd(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """SYNC_CWD containing shell metacharacters is rejected defensively."""
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("subdir; rm -rf /"),
+            0.01,
+            "anthropic",
+        )
+
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is False
+        assert cwd is None
+        assert "forbidden character" in err
         mock_subprocess.assert_not_called()
 
 

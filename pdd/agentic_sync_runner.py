@@ -253,6 +253,26 @@ def _hash_file(project_root: Path, rel_posix: str) -> Optional[str]:
     return hashlib.sha1(data).hexdigest()
 
 
+def _hash_baseline_paths(
+    project_root: Path, paths: Iterable[str]
+) -> Dict[str, Optional[str]]:
+    """Map each repo-relative path under *project_root* to its SHA-1.
+
+    Iter-30: extracted helper. Previously this was an inline dict
+    comprehension in :class:`AsyncSyncRunner.__init__` (mirrored twice for
+    the changed-paths and ignored-paths baselines). The orchestrator scope
+    guard now reuses it to snapshot baseline before any pre-dispatch LLM
+    call or shell command runs in :func:`pdd.agentic_sync.run_agentic_sync`.
+
+    Returns:
+        Dict from repo-relative POSIX path to SHA-1 hex string. ``None`` is
+        recorded when the file cannot be read at snapshot time — callers
+        (the scope guard) must treat ``None`` as "no fingerprint available"
+        and decide preservation policy explicitly. See :func:`_hash_file`.
+    """
+    return {rel: _hash_file(project_root, rel) for rel in paths}
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
