@@ -53,6 +53,28 @@ _SEMANTIC_TAIL_LINES = 30
 # own ``companion_allowlist`` field.
 DEFAULT_SYNC_COMPANION_ALLOWLIST: Tuple[str, ...] = (".pdd/meta/*.json",)
 
+# Issue #1013 iter-36 B-1/B-2: PDD's own infrastructure writes during a
+# guarded sync run (audit logs, runner state, etc.). These are NEVER part
+# of a contract — they're internal artifacts the tool produces as side
+# effects of running. The scope guard (both orchestrator-level and
+# per-module) MUST auto-allow them or it would hard-fail every contracted
+# run.
+#
+# Distinct from DEFAULT_SYNC_COMPANION_ALLOWLIST: the user-facing default
+# may be widened by an issue's ``companion_allowlist`` field; this set is
+# fixed tool infrastructure and is NOT user-extensible. Patterns here are
+# always interpreted as REPO-ROOT-anchored (matched against a path
+# computed relative to the repo root), not module-relative, because the
+# infrastructure writes happen at the top of the project regardless of
+# which module is being synced.
+PDD_INTERNAL_PATH_ALLOWLIST: Tuple[str, ...] = (
+    ".pdd/agentic-logs/*",           # session audit logs (run_agentic_task)
+    ".pdd/agentic-logs/*/*",         # nested per-task subdirs if any
+    ".pdd/agentic_sync_state.json",  # runner state file
+    ".pdd/bug-state/*",              # bug command state
+    ".pdd/checkup-review-loop/*",    # checkup state
+)
+
 # Semantic fallback patterns for when LLMs paraphrase instead of emitting exact tokens.
 # Each token maps to a list of regex patterns that capture common paraphrases.
 # Patterns are checked only after exact and case-insensitive matching fail,

@@ -29,6 +29,7 @@ from rich.console import Console
 
 from .agentic_common import (
     DEFAULT_SYNC_COMPANION_ALLOWLIST,
+    PDD_INTERNAL_PATH_ALLOWLIST,
     _is_valid_companion_pattern,
     _matches_companion_pattern_anchored,
     _revert_out_of_scope_changes,
@@ -2218,6 +2219,34 @@ class AsyncSyncRunner:
                 if self._matches_companion_allowlist(rel_posix, allowlist):
                     allowed_files.add(path.resolve())
 
+            # Iter-36 B-1/B-2: PDD-internal infrastructure paths
+            # (``.pdd/agentic-logs/*``, ``.pdd/agentic_sync_state.json``,
+            # etc.) are written by the tool itself during a guarded run
+            # (audit logs from ``run_agentic_task``; runner state file
+            # from ``_record_result`` after each module). They are
+            # NEVER part of a contract. This pass is SEPARATE from the
+            # user-facing companion pass above because internal patterns
+            # are REPO-ROOT-anchored (the writes happen at the top of
+            # the project regardless of which module is being synced) —
+            # in the multi-module case ``module_cwd`` is a subdirectory
+            # and the audit log under ``<repo_root>/.pdd/agentic-logs/``
+            # would NOT match a module-rooted match pass.
+            for path in repo_root.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    repo_rel_posix = (
+                        path.resolve().relative_to(repo_root).as_posix()
+                    )
+                except ValueError:
+                    continue
+                for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                    if _matches_companion_pattern_anchored(
+                        repo_rel_posix, pattern
+                    ):
+                        allowed_files.add(path.resolve())
+                        break
+
             # Iter-4 F1: rglob only sees files that still exist on disk. Sync
             # legitimately DELETES companion artifacts (e.g. ``.pdd/meta/foo_python.json``
             # when a module is renamed/removed); those deletions appear in
@@ -2230,6 +2259,19 @@ class AsyncSyncRunner:
             # above).
             for rel_posix in _git_changed_paths(repo_root):
                 absolute = (repo_root / rel_posix).resolve()
+                # Iter-36 B-1/B-2: tracked deletion of a PDD-internal
+                # artifact (e.g. ``.pdd/agentic_sync_state.json`` between
+                # runs) must not be resurrected by the revert helper.
+                # Match against the REPO-relative form before the
+                # module-cwd scoping below.
+                matched_internal = False
+                for pattern in PDD_INTERNAL_PATH_ALLOWLIST:
+                    if _matches_companion_pattern_anchored(rel_posix, pattern):
+                        allowed_files.add(absolute)
+                        matched_internal = True
+                        break
+                if matched_internal:
+                    continue
                 try:
                     module_rel_posix = absolute.relative_to(cwd_path).as_posix()
                 except ValueError:

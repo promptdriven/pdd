@@ -2669,6 +2669,129 @@ class TestEnforceOrchestratorScope:
         assert result is None
         assert meta_file.exists()
 
+    def test_pdd_audit_logs_do_not_trip_orchestrator_guard(self, tmp_path):
+        """Iter-36 B-1: PDD's own audit logs at ``.pdd/agentic-logs/`` written
+        by :func:`run_agentic_task` during the orchestrator's pre-dispatch
+        LLM calls MUST NOT hard-fail a contracted sync run. The audit log is
+        tool infrastructure (NEVER part of a contract) and the internal
+        allowlist auto-allows it without the contract needing to opt in.
+
+        Baseline snapshot is empty (the log appears AFTER snapshot, mid-run);
+        the guard MUST still return None purely on the internal allowlist
+        match.
+        """
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+
+        # Audit log appears AFTER baseline snapshot — this is the realistic
+        # scenario: ``run_agentic_task`` writes a session record during the
+        # LLM call that itself happens between snapshot and guard.
+        log_dir = tmp_path / ".pdd" / "agentic-logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "session_20251215_120000.jsonl"
+        log_file.write_text('{"label": "step1"}\n', encoding="utf-8")
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is None, (
+            f"iter-36 B-1: PDD audit log under .pdd/agentic-logs/ must be "
+            f"auto-allowed by the internal allowlist; got diagnostic: "
+            f"{result!r}"
+        )
+        # The log must still exist — internal-allowlisted, not reverted.
+        assert log_file.exists()
+
+    def test_orchestrator_guard_flags_deleted_untracked_baseline(self, tmp_path):
+        """Iter-36 B-3: untracked baseline files that disappear between
+        snapshot and guard MUST be surfaced as ``remaining`` (hard-fail) by
+        the orchestrator guard. Prior to iter-36 the orchestrator silently
+        ``continue``d on ``current_hash is None`` and lost user WIP without
+        a trace. Mirrors the per-module guard's iter-34 fix.
+        """
+        _init_git_repo(tmp_path)
+        contract = self._contract("pdd/foo.py")
+        user_wip = tmp_path / "userwip.py"
+        user_wip.write_text("user code\n", encoding="utf-8")
+
+        # Snapshot the baseline (untracked WIP captured at orchestrator entry).
+        baseline = {"userwip.py": _hash_baseline_single(tmp_path, "userwip.py")}
+
+        # Orchestrator deletes the WIP before runner dispatch — simulate by
+        # deleting the file after snapshot.
+        user_wip.unlink()
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed=baseline,
+            baseline_ignored={},
+            quiet=True,
+        )
+        assert result is not None, (
+            "iter-36 B-3: deletion of untracked baseline WIP must hard-fail "
+            "the orchestrator — silent data loss otherwise"
+        )
+        assert "userwip.py" in result, (
+            f"iter-36 B-3: deleted baseline path must appear in diagnostic, "
+            f"got: {result!r}"
+        )
+
+    def test_orchestrator_guard_flags_deleted_ignored_baseline(self, tmp_path):
+        """Iter-36 B-3 (symmetric): pre-existing gitignored baseline files
+        that disappear between snapshot and guard MUST also surface in the
+        orchestrator's ``remaining`` set. ``git ls-files --ignored`` only
+        lists files that currently exist, so a deleted ignored baseline
+        leaves no trail in the ignored-rescan loop.
+        """
+        _init_git_repo(tmp_path)
+        # gitignore must be committed before the cache file is created so
+        # the cache is treated as a tracked-ignore at baseline time.
+        gi = tmp_path / ".gitignore"
+        gi.write_text("cache.bin\n", encoding="utf-8")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"], check=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "--quiet", "-m", "gi"],
+            check=True,
+        )
+
+        contract = self._contract("pdd/foo.py")
+        cache = tmp_path / "cache.bin"
+        cache.write_text("user cache\n", encoding="utf-8")
+
+        # Baseline snapshot of the ignored file.
+        baseline_ignored = {
+            "cache.bin": _hash_baseline_single(tmp_path, "cache.bin")
+        }
+
+        # Orchestrator deletes the cache before runner dispatch.
+        cache.unlink()
+
+        result = _enforce_orchestrator_scope(
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+            baseline_changed={},
+            baseline_ignored=baseline_ignored,
+            quiet=True,
+        )
+        assert result is not None, (
+            "iter-36 B-3: deletion of pre-existing ignored baseline must "
+            "hard-fail the orchestrator — git ls-files --ignored cannot see it"
+        )
+        assert "cache.bin" in result, (
+            f"iter-36 B-3: deleted ignored baseline must appear in diagnostic, "
+            f"got: {result!r}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Orchestrator scope guard integration (iter-30)

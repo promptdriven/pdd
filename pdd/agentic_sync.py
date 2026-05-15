@@ -23,6 +23,7 @@ from rich.console import Console
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
 from .agentic_common import (
     DEFAULT_SYNC_COMPANION_ALLOWLIST,
+    PDD_INTERNAL_PATH_ALLOWLIST,
     IssueContract,
     _is_valid_companion_pattern,
     _matches_companion_pattern_anchored,
@@ -1815,6 +1816,15 @@ def _enforce_orchestrator_scope(
     # rglob for currently-on-disk companion files. The orchestrator scope
     # guard cannot rely on a single module_cwd, so the scan is repo-wide
     # — same union as the per-module guard, just with a wider net.
+    #
+    # Iter-36 B-1/B-2: ``PDD_INTERNAL_PATH_ALLOWLIST`` is a SEPARATE pass
+    # (not merged into ``allowlist``) because internal patterns are
+    # interpreted as REPO-ROOT-anchored while user-facing companion
+    # patterns are anchored against the iteration root for the loop they
+    # appear in. The orchestrator happens to iterate repo-rooted anyway,
+    # but keeping the passes separate preserves parity with the per-module
+    # guard (which iterates module-rooted) and matches the documented
+    # semantics of ``PDD_INTERNAL_PATH_ALLOWLIST``.
     for path in repo_root.rglob("*"):
         if not path.is_file():
             continue
@@ -1824,25 +1834,57 @@ def _enforce_orchestrator_scope(
             continue
         if _matches_companion(rel_posix, allowlist):
             allowed_files.add(path.resolve())
+        elif _matches_internal(rel_posix, PDD_INTERNAL_PATH_ALLOWLIST):
+            allowed_files.add(path.resolve())
 
     # Also pick up companion-shaped tracked deletions (sync legitimately
     # removes ``.pdd/meta/foo_python.json`` when a module is renamed; the
     # revert helper would otherwise resurrect it).
+    #
+    # Iter-36 B-1/B-2: same internal-allowlist parallel pass — a tracked
+    # deletion of ``.pdd/agentic_sync_state.json`` (e.g. between sync
+    # invocations) must NOT be resurrected by the revert helper.
     for rel_posix in _git_changed_paths(repo_root):
         absolute = (repo_root / rel_posix).resolve()
         if _matches_companion(rel_posix, allowlist):
             allowed_files.add(absolute)
+        elif _matches_internal(rel_posix, PDD_INTERNAL_PATH_ALLOWLIST):
+            allowed_files.add(absolute)
 
     # Iter-24 SHA-aware preservation of pre-existing changed baseline.
+    #
+    # Iter-36 B-3: mirror :meth:`AsyncSyncRunner._enforce_scope_guard`'s
+    # iter-34 ``baseline_deleted`` set — when ``current_hash is None``,
+    # the pre-existing file is gone from disk. For TRACKED baselines git
+    # status surfaces this as ``D `` and the re-scan picks it up, but
+    # UNTRACKED baselines leave no trail; without this collection the
+    # orchestrator silently passes a sync-side deletion of user WIP.
+    baseline_deleted: set[str] = set()
     for rel_posix, baseline_hash in baseline_changed.items():
         current_hash = _hash_file(repo_root, rel_posix)
         if current_hash is None:
-            # File was deleted after baseline. Let revert helpers decide.
+            # File was deleted after baseline — surface it via the
+            # ``remaining`` set below regardless of whether it was tracked
+            # or untracked (we can't distinguish from the snapshot, and
+            # even the tracked-deletion case warrants a hard-fail).
+            baseline_deleted.add(rel_posix)
             continue
         if baseline_hash is None or current_hash == baseline_hash:
             # Unreadable at snapshot (preserve by name) or unchanged content
             # → preserve.
             allowed_files.add((repo_root / rel_posix).resolve())
+
+    # Iter-36 B-3: symmetric pass for ignored baseline. The orchestrator
+    # re-scan only sees files that ``git ls-files --ignored`` currently
+    # lists; deleted ignored baselines (e.g. user-side ``cache.bin`` erased
+    # before runner dispatch) leave no trail there. Iterate the ignored
+    # baseline directly to catch the deletion. Present-but-changed
+    # ignored baselines are already surfaced by
+    # :func:`_orchestrator_remaining_out_of_scope_paths`'s ignored loop.
+    for rel_posix, baseline_hash in baseline_ignored.items():
+        current_hash = _hash_file(repo_root, rel_posix)
+        if current_hash is None:
+            baseline_deleted.add(rel_posix)
 
     tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
     untracked_reverted = revert_out_of_scope_changes_with_dirs(
@@ -1867,11 +1909,18 @@ def _enforce_orchestrator_scope(
     # and return []. We re-scan the working tree after revert to be sure
     # the contract is now satisfied; anything still on disk that is not
     # allowed becomes the "unrecovered" set.
+    #
+    # Iter-36 B-3: union with ``baseline_deleted`` so an orchestrator-side
+    # deletion of a pre-existing untracked/ignored baseline path
+    # hard-fails the run. Mirrors :meth:`AsyncSyncRunner._enforce_scope_guard`'s
+    # iter-34 union for the per-module guard.
     remaining_raw = _orchestrator_remaining_out_of_scope_paths(
         repo_root, allowed_files, baseline_ignored
     )
     offending_set = set(offending)
-    remaining = [p for p in remaining_raw if p not in offending_set]
+    remaining = sorted(
+        (set(remaining_raw) | baseline_deleted) - offending_set
+    )
 
     if not offending and not remaining:
         return None
@@ -1930,6 +1979,24 @@ def _matches_companion(rel_posix: str, allowlist: Iterable[str]) -> bool:
         if not pattern:
             continue
         if not _is_valid_companion_pattern(pattern):
+            continue
+        if _matches_companion_pattern_anchored(rel_posix, pattern):
+            return True
+    return False
+
+
+def _matches_internal(rel_posix: str, internal_allowlist: Iterable[str]) -> bool:
+    """Iter-36 B-1/B-2: anchored match for PDD-internal infrastructure paths.
+
+    Distinct from :func:`_matches_companion` so internal allowlist patterns
+    bypass the user-facing :func:`_is_valid_companion_pattern` gate (the
+    internal list is curated, not parsed from user input) but still go
+    through the iter-14 segment-aware anchored matcher so e.g.
+    ``subdir/.pdd/agentic-logs/x.jsonl`` does NOT match — only top-level
+    ``.pdd/agentic-logs/x.jsonl`` does.
+    """
+    for pattern in internal_allowlist:
+        if not pattern:
             continue
         if _matches_companion_pattern_anchored(rel_posix, pattern):
             return True

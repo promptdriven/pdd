@@ -3848,6 +3848,134 @@ class TestEnforceScopeGuard:
             "ignored-scan failure must surface the sentinel"
         )
 
+    # ---------------------------------------------------------------------
+    # Iter-36 B-1/B-2: PDD-internal-path allowlist
+    # ---------------------------------------------------------------------
+
+    def test_pdd_audit_logs_do_not_trip_runner_guard(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-36 B-1: PDD's own audit logs at ``.pdd/agentic-logs/`` written
+        by :func:`run_agentic_task` during a per-module sync MUST NOT
+        hard-fail the per-module scope guard. The audit log is tool
+        infrastructure (NEVER part of a contract) and the internal allowlist
+        auto-allows it.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # Audit log appears AFTER runner init — simulates run_agentic_task
+        # writing a session record during the per-module subprocess.
+        log_dir = tmp_path / ".pdd" / "agentic-logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "session_20251215_120000.jsonl"
+        log_file.write_text('{"label": "step1"}\n', encoding="utf-8")
+
+        # Real revert helpers — internal allowlist must keep the log alive.
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+        assert diagnostic is None, (
+            f"iter-36 B-1: PDD audit log under .pdd/agentic-logs/ must be "
+            f"auto-allowed by the internal allowlist in the per-module "
+            f"guard; got diagnostic: {diagnostic!r}"
+        )
+        assert log_file.exists(), (
+            "iter-36 B-1: internal-allowlisted audit log must not be removed"
+        )
+
+    def test_pdd_audit_logs_do_not_trip_runner_guard_multi_module(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-36 B-1/B-2 multi-module variant: when ``module_cwd`` is a
+        subdirectory (multi-module sync), the audit log under
+        ``<repo_root>/.pdd/agentic-logs/`` is REPO-rooted, not module-rooted.
+        The internal allowlist pass must scan repo-rooted so it still matches
+        — a module-rooted-only pass would miss it.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        # Module lives at <repo_root>/mod_a/; audit log lives at
+        # <repo_root>/.pdd/agentic-logs/.
+        module_cwd = tmp_path / "mod_a"
+        module_cwd.mkdir()
+        log_dir = tmp_path / ".pdd" / "agentic-logs"
+        log_dir.mkdir(parents=True)
+        log_file = log_dir / "session_20251215_120000.jsonl"
+        log_file.write_text('{"label": "step1"}\n', encoding="utf-8")
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod_a", module_cwd)
+        assert diagnostic is None, (
+            f"iter-36 B-1/B-2: in multi-module sync the audit log lives at "
+            f"repo-rooted .pdd/agentic-logs/, NOT module-rooted; a "
+            f"module-rooted-only allowlist pass would miss it. "
+            f"Got diagnostic: {diagnostic!r}"
+        )
+        assert log_file.exists()
+
+    def test_runner_state_file_does_not_trip_per_module_guard(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-36 B-2: ``.pdd/agentic_sync_state.json`` written by
+        :meth:`AsyncSyncRunner._record_result` after the previous module's
+        scope guard runs is on disk when the NEXT module's guard runs in a
+        multi-module sync. Without the internal allowlist, the next module's
+        guard hard-fails on the previous module's state file. Verify the
+        state file is auto-allowed.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        monkeypatch.chdir(tmp_path)
+
+        # Simulate previous-module state file present on disk.
+        state_dir = tmp_path / ".pdd"
+        state_dir.mkdir(parents=True, exist_ok=True)
+        state_file = state_dir / "agentic_sync_state.json"
+        state_file.write_text('{"version": 1, "modules": {}}', encoding="utf-8")
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+        assert diagnostic is None, (
+            f"iter-36 B-2: runner state file at .pdd/agentic_sync_state.json "
+            f"must be auto-allowed by the internal allowlist; "
+            f"got diagnostic: {diagnostic!r}"
+        )
+        assert state_file.exists(), (
+            "iter-36 B-2: internal-allowlisted state file must not be removed"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking
