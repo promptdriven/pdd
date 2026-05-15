@@ -326,12 +326,45 @@ def test_unsafe_staged_paths_rejects_sensitive_artifacts(tmp_path: Path):
 
 
 def test_allowed_write_set_rejects_out_of_scope_checkpoint_paths(tmp_path: Path):
+    """
+    Issue #1013 (F5, F13, F14): kwarg is now ``allowed_write_set`` (the
+    ``allowed_write_paths`` alias was removed) and ``.pdd/meta/*.json`` is
+    auto-allowed via ``DEFAULT_SYNC_COMPANION_ALLOWLIST`` — only paths
+    outside both the contract AND the companion allowlist are rejected.
+    """
     repo = _init_repo_with_remote(tmp_path)
-    runner = _runner(repo, allowed_write_paths=["src/app.py"])
+    runner = _runner(repo, allowed_write_set=["src/app.py"])
 
     assert runner._out_of_scope_staged_paths(
         ["src/app.py", "architecture.json", ".pdd/meta/foo_python.json"]
-    ) == [".pdd/meta/foo_python.json", "architecture.json"]
+    ) == ["architecture.json"]
+
+
+def test_allowed_write_set_none_means_permissive_for_durable_runner(tmp_path: Path):
+    """
+    Issue #1013 (F9): when no contract is parsed (``allowed_write_set=None``),
+    durable sync runs in permissive mode — out-of-scope rejection is a no-op.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo, allowed_write_set=None)
+
+    assert runner._out_of_scope_staged_paths(
+        ["src/app.py", "architecture.json", "anything/else.txt"]
+    ) == []
+
+
+def test_allowed_write_set_empty_rejects_everything_for_durable_runner(tmp_path: Path):
+    """
+    Issue #1013 (F9): explicit empty contract means "reject every primary
+    write" — though companion artifacts still pass via the default allowlist.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(repo, allowed_write_set=[])
+
+    result = runner._out_of_scope_staged_paths(
+        ["src/app.py", ".pdd/meta/foo_python.json"]
+    )
+    assert result == ["src/app.py"]
 
 
 def test_push_failure_preserves_local_checkpoint_and_next_run_pushes_it(tmp_path: Path):

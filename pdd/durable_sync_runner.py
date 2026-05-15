@@ -8,6 +8,7 @@ durable branch before marking the module complete.
 # pylint: disable=too-few-public-methods
 from __future__ import annotations
 
+import fnmatch
 import os
 import re
 import shutil
@@ -20,6 +21,7 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
+from .agentic_common import DEFAULT_SYNC_COMPANION_ALLOWLIST
 from .agentic_sync_runner import AsyncSyncRunner, MAX_WORKERS
 
 CHECKPOINT_TRAILER = "PDD-Sync-Checkpoint-V1"
@@ -47,10 +49,10 @@ class DurableSyncRunner(AsyncSyncRunner):
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Path]] = None,
         initial_cost: float = 0.0,
-        allowed_write_paths: Optional[List[str]] = None,
         allowed_write_set: Optional[List[str]] = None,
         companion_allowlist: Optional[List[str]] = None,
         scope_guard_enabled: bool = True,
+        contract_source: Optional[str] = None,
     ) -> None:
         self.issue_number = issue_number
         self.git_root = project_root.resolve()
@@ -76,10 +78,10 @@ class DurableSyncRunner(AsyncSyncRunner):
             issue_url=issue_url,
             module_cwds={},
             initial_cost=initial_cost,
-            allowed_write_paths=allowed_write_paths,
             allowed_write_set=allowed_write_set,
             companion_allowlist=companion_allowlist,
             scope_guard_enabled=scope_guard_enabled,
+            contract_source=contract_source,
         )
         self.project_root = self.git_root
         if self.total_budget is not None:
@@ -390,15 +392,33 @@ class DurableSyncRunner(AsyncSyncRunner):
         return True, "", empty
 
     def _out_of_scope_staged_paths(self, paths: List[str]) -> List[str]:
-        if not self.allowed_write_paths:
+        """
+        Return staged paths that violate the issue split-contract.
+
+        Issue #1013 (F5, F13): when no contract is parsed,
+        ``self.allowed_write_paths is None`` and durable sync runs in
+        permissive mode — never reject. When a contract is present, accept
+        both contract paths AND companion-allowlist matches (e.g.
+        ``.pdd/meta/*.json``) so fingerprint metadata can still be
+        checkpointed alongside the primary write set.
+        """
+        # Permissive mode: scope_guard disabled or no contract parsed.
+        if not self.scope_guard_enabled or self.allowed_write_paths is None:
             return []
-        return sorted(
-            {
-                path.replace(os.sep, "/").lstrip("./")
-                for path in paths
-                if path.replace(os.sep, "/").lstrip("./") not in self.allowed_write_paths
-            }
+        allowlist = (
+            tuple(self.companion_allowlist) or DEFAULT_SYNC_COMPANION_ALLOWLIST
         )
+        offending: Set[str] = set()
+        for raw in paths:
+            normalized = raw.replace(os.sep, "/").lstrip("./")
+            if normalized in self.allowed_write_paths:
+                continue
+            if any(
+                fnmatch.fnmatch(normalized, pattern) for pattern in allowlist
+            ):
+                continue
+            offending.add(normalized)
+        return sorted(offending)
 
     def _force_add_module_metadata(self, basename: str, module_worktree: Path) -> None:
         safe = basename.replace("/", "_")
