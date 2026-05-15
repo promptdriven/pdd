@@ -3232,6 +3232,240 @@ class TestEnforceScopeGuard:
         # indicator is present.
         assert "git-status-failed" in diagnostic
 
+    # ---------------------------------------------------------------------
+    # Iter-20 M-1: gitignored out-of-scope detection
+    # ---------------------------------------------------------------------
+
+    @staticmethod
+    def _init_git_repo(repo_root: Path) -> None:
+        """Initialise a minimal committed git repo for ignored-scan tests."""
+        subprocess.run(
+            ["git", "init", "-b", "main", str(repo_root)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo_root), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo_root), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (repo_root / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(repo_root), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(repo_root), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+    def test_gitignored_out_of_scope_file_is_detected(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1: a sync that writes to a gitignored path outside the
+        contract (e.g. ``build/junk.txt`` under ``.gitignore: build/``) is
+        invisible to ``git status --untracked-files=all`` — but the second
+        ``git ls-files --ignored`` scan MUST catch it and surface it via the
+        ``<remaining>`` set so ``_enforce_scope_guard`` hard-fails."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("build/\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "ignore build"],
+            check=True, capture_output=True,
+        )
+
+        # Construct the runner FIRST (empty ignored baseline), then create
+        # the gitignored stray AFTER — simulates sync writing it.
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+        assert runner._baseline_ignored_paths == set(), (
+            "no ignored files exist yet — baseline must be empty"
+        )
+
+        # Sync writes a gitignored file outside the contract.
+        (tmp_path / "build").mkdir()
+        (tmp_path / "build" / "junk.txt").write_text("bad")
+
+        # Revert helpers can't see gitignored files — simulate them
+        # returning empty as Codex's repro describes.
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "gitignored out-of-scope file must hard-fail the module"
+        )
+        assert "build/junk.txt" in diagnostic
+        assert "Unrecovered" in diagnostic
+
+    def test_gitignored_baseline_file_is_not_falsely_flagged(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1: pre-existing gitignored files (snapshotted at runner
+        init) MUST NOT be flagged as the sync run's out-of-scope writes."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text("cache.bin\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "ignore cache"],
+            check=True, capture_output=True,
+        )
+
+        # Create the gitignored file BEFORE constructing the runner so it
+        # lands in the baseline ignored set.
+        (tmp_path / "cache.bin").write_text("user cache")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "cache.bin" in runner._baseline_ignored_paths, (
+            "pre-existing ignored file must be captured in baseline"
+        )
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is None, (
+            "pre-existing ignored file must not be flagged: "
+            f"got {diagnostic!r}"
+        )
+
+    def test_gitignored_companion_artifact_is_allowed(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1 integration: when the user has ``.pdd/`` in
+        ``.gitignore`` (this very project does — see commit a7ce5f0ee), the
+        fingerprint metadata file ``.pdd/meta/mod_python.json`` is gitignored
+        — but it's also in the default companion allowlist, so the existing
+        ``rglob`` + companion-match path in ``_enforce_scope_guard`` adds it
+        to ``allowed_files``. The new ignored-files scan MUST skip it.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+        (tmp_path / ".gitignore").write_text(".pdd/\n")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "ignore .pdd"],
+            check=True, capture_output=True,
+        )
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        # Sync writes a companion-allowed fingerprint file — also gitignored.
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+        (tmp_path / ".pdd" / "meta" / "mod_python.json").write_text("{}")
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is None, (
+            "gitignored companion artifact must remain auto-allowed: "
+            f"got {diagnostic!r}"
+        )
+
+    def test_ignored_scan_failure_returns_sentinel(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-20 M-1 fail-closed: when the ``git ls-files --ignored`` scan
+        itself fails (here: forced FileNotFoundError), the remaining-paths
+        helper MUST return the existing ``<git-status-failed>`` sentinel so
+        ``_enforce_scope_guard`` hard-fails rather than treating an
+        unobservable worktree as clean.
+
+        The status scan succeeds (returning an empty set); only the ignored
+        scan fails. The sentinel symmetry across both scans is what the
+        iter-19 review flagged as required.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        self._init_git_repo(tmp_path)
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        real_run = subprocess.run
+
+        def fake_run(cmd, *args, **kwargs):
+            # The status scan keeps working; the ignored scan blows up.
+            if (
+                isinstance(cmd, list)
+                and "ls-files" in cmd
+                and "--ignored" in cmd
+            ):
+                raise FileNotFoundError("git ls-files unavailable")
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(
+            mod.subprocess, "run", fake_run
+        )
+
+        result = runner._remaining_out_of_scope_paths(
+            tmp_path.resolve(), allowed_files=set()
+        )
+        assert result == ["<git-status-failed>"], (
+            "ignored-scan failure must surface the sentinel"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking

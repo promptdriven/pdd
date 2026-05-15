@@ -187,6 +187,42 @@ def _git_changed_paths(project_root: Path) -> set[str]:
     return {p for p in paths if p}
 
 
+def _git_ignored_paths(project_root: Path) -> set[str]:
+    """Return repo-relative POSIX paths of git-ignored files (Issue #1013 iter-20).
+
+    Uses ``git ls-files --others --ignored --exclude-standard`` to enumerate
+    every individual ignored file (no directory entries, no status prefix).
+    May be slow on repos with large ignored trees (``node_modules/``,
+    ``build/``, etc.) — callers MUST gate the call on
+    ``scope_guard_enabled AND allowed_write_paths is not None`` so non-contract
+    runs do not pay the cost.
+
+    Returns an empty set on any subprocess failure or non-zero return — the
+    baseline snapshot is best-effort. The post-revert re-scan in
+    ``_remaining_out_of_scope_paths`` handles ignored-scan failures with the
+    explicit ``<git-status-failed>`` sentinel instead.
+    """
+    try:
+        result = subprocess.run(
+            ["git", "ls-files", "--others", "--ignored", "--exclude-standard"],
+            cwd=project_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return set()
+    if result.returncode != 0:
+        return set()
+
+    paths: set[str] = set()
+    for line in result.stdout.splitlines():
+        rel = _normalize_repo_path(line.strip().strip('"'))
+        if rel:
+            paths.add(rel)
+    return paths
+
+
 # ---------------------------------------------------------------------------
 # Helper functions
 # ---------------------------------------------------------------------------
@@ -954,6 +990,24 @@ class AsyncSyncRunner:
         # and MUST be preserved by the scope guard.
         self._baseline_changed_paths: Set[str] = (
             _git_changed_paths(self.project_root)
+            if self.scope_guard_enabled and self.allowed_write_paths is not None
+            else set()
+        )
+
+        # Iter-20 M-1 (gitignored fail-open): also snapshot pre-existing
+        # gitignored files (e.g. user-side ``build/cache.bin`` under a
+        # repo-wide ``.gitignore: build/``). ``git status`` does not show
+        # ignored files by default, so without this baseline a sync that
+        # writes to a gitignored path outside the allowed write set would be
+        # invisible to the post-revert re-scan and the module would be
+        # marked successful with the contract violated on disk.
+        #
+        # Gated on ``scope_guard_enabled AND allowed_write_paths is not None``
+        # (same gate as ``_baseline_changed_paths``) so non-contract runs do
+        # not pay the ``git ls-files`` cost on repos with large ignored
+        # trees (``node_modules/``, ``build/``, etc.).
+        self._baseline_ignored_paths: Set[str] = (
+            _git_ignored_paths(self.project_root)
             if self.scope_guard_enabled and self.allowed_write_paths is not None
             else set()
         )
@@ -1925,14 +1979,24 @@ class AsyncSyncRunner:
         treat the empty list as "nothing was out of scope" and let the
         module succeed with the contract still violated on disk.
 
+        Iter-20 M-1 (gitignored fail-open): the standard ``git status`` scan
+        does NOT report gitignored files. A sync that writes outside the
+        contract into a gitignored path (e.g. ``build/junk.txt`` under a
+        repo-wide ``.gitignore: build/``) would be invisible. A SECOND scan
+        via ``git ls-files --others --ignored --exclude-standard`` enumerates
+        every individual ignored file; results not in ``allowed_files`` and
+        not in ``self._baseline_ignored_paths`` (pre-existing ignored files
+        the user owned BEFORE sync ran) are added to the ``remaining`` set.
+
         Returns:
             Sorted list of POSIX repo-relative paths still out of scope, OR
-            the sentinel ``["<git-status-failed>"]`` when ``git status``
-            itself cannot be executed (timeout / missing git / non-zero
-            return). The sentinel is consistent with the warning-log +
-            empty-list style used elsewhere in the scope guard, but still
-            forces ``_enforce_scope_guard`` to hard-fail rather than treat
-            the unobservable working tree as clean.
+            the sentinel ``["<git-status-failed>"]`` when EITHER the
+            ``git status`` scan OR the ``git ls-files --ignored`` scan
+            cannot be executed (timeout / missing git / non-zero return).
+            The sentinel is consistent with the warning-log + empty-list
+            style used elsewhere in the scope guard, but still forces
+            ``_enforce_scope_guard`` to hard-fail rather than treat the
+            unobservable working tree as clean.
         """
         try:
             result = subprocess.run(
@@ -1967,6 +2031,39 @@ class AsyncSyncRunner:
                 if absolute in allowed_files:
                     continue
                 remaining.add(rel)
+
+        # Iter-20 M-1: scan for gitignored files that the standard
+        # ``git status`` pass above cannot see. ``git ls-files
+        # --others --ignored --exclude-standard`` lists every individual
+        # ignored file (no directory rollup, no status prefix).
+        try:
+            ignored_result = subprocess.run(
+                ["git", "-C", str(repo_root), "ls-files",
+                 "--others", "--ignored", "--exclude-standard"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return ["<git-status-failed>"]
+        if ignored_result.returncode != 0:
+            return ["<git-status-failed>"]
+
+        baseline_ignored = getattr(self, "_baseline_ignored_paths", set())
+        for line in ignored_result.stdout.splitlines():
+            rel = _normalize_repo_path(line.strip().strip('"'))
+            if not rel:
+                continue
+            # Pre-existing ignored files (snapshot at runner init) are NOT
+            # the sync run's responsibility.
+            if rel in baseline_ignored:
+                continue
+            absolute = (repo_root / rel).resolve()
+            # Companion-allowlisted files (e.g. ``.pdd/meta/*.json`` when
+            # the user has ``.pdd/`` in ``.gitignore``) are in
+            # ``allowed_files`` via the rglob pass in ``_enforce_scope_guard``.
+            if absolute in allowed_files:
+                continue
+            remaining.add(rel)
+
         return sorted(remaining)
 
     def _enforce_scope_guard(
