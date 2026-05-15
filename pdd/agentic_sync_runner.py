@@ -1535,10 +1535,21 @@ class AsyncSyncRunner:
                 f"module(s): {resumed}[/green]"
             )
 
-        # Issue #1013 (F7): scope-guard status logging happens once in the
-        # sync-layer dispatch (``agentic_sync.run_agentic_sync``) — that's
-        # closer to the user and emits exactly one INFO/WARNING line. The
-        # runner intentionally does NOT log the same state again on entry.
+        # Issue #1013: scope-guard run-entry logging required by the prompt
+        # spec (``agentic_sync_runner_python.prompt`` items 22 permissive
+        # fallback / opt-out). Distinct from the sync-layer "contract loaded"
+        # INFO line in ``run_agentic_sync`` — that one reports *detection*;
+        # this one reports the runtime *enforcement state* at dispatch.
+        if not self.quiet:
+            if not self.scope_guard_enabled:
+                console.print(
+                    "[yellow dim]Scope guard disabled via --no-scope-guard[/yellow dim]"
+                )
+            elif self.allowed_write_paths is None:
+                console.print(
+                    "[dim]Scope guard: no contract on issue — running in "
+                    "permissive mode[/dim]"
+                )
 
         self._update_github_comment()
 
@@ -1913,8 +1924,12 @@ class AsyncSyncRunner:
             # ``agentic_common`` / ``agentic_common_worktree`` skip them.
             # ``self.companion_allowlist`` already includes DEFAULT_*
             # (unioned in __init__ per F4); no fallback needed here.
+            # F1 (Issue #1013 iter-3): only files UNDER ``module_cwd`` count
+            # as companion artifacts — never auto-allow a sibling module's
+            # ``.pdd/meta/*.json`` just because it lives in the same repo.
             allowlist = tuple(self.companion_allowlist)
-            for path in repo_root.rglob("*"):
+            cwd_path = Path(module_cwd).resolve()
+            for path in cwd_path.rglob("*"):
                 if not path.is_file():
                     continue
                 try:

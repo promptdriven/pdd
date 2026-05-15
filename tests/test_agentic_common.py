@@ -7082,14 +7082,24 @@ class TestParseIssueContract:
         )
         assert parse_issue_contract(body) is None
 
-    def test_fenced_block_accepts_text_json_or_bare_fence(self):
+    def test_fenced_block_accepts_only_text_or_json(self):
+        """Iter-3 F3: the spec at agentic_common_python.prompt:110 requires
+        ``text`` or ``json`` info strings; bare ``` (no language) is NOT
+        accepted as a split-contract fence."""
         from pdd.agentic_common import parse_issue_contract
 
-        for fence in ("```text", "```json", "```"):
+        for fence in ("```text", "```json"):
             body = f"## Allowed Write Set\n{fence}\npdd/foo.py\n```\n"
             c = parse_issue_contract(body)
             assert c is not None and c.allowed_paths == ("pdd/foo.py",), fence
             assert c.source == "fenced-block"
+
+    def test_fenced_block_rejects_bare_fence(self):
+        """Iter-3 F3: bare ``` fence (no language) must be rejected."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = "## Allowed Write Set\n```\npdd/foo.py\n```\n"
+        assert parse_issue_contract(body) is None
 
     def test_fenced_block_empty_body_returns_empty_contract(self):
         """F1: an empty fenced block is a degenerate but legal contract."""

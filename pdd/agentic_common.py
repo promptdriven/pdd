@@ -2342,13 +2342,13 @@ _HTML_COMMENT_CONTRACT_RE = re.compile(
     re.DOTALL,
 )
 
-# Matches a fenced code block (```text``` or ```json```, or bare ```) that
-# IMMEDIATELY follows the heading. Only whitespace/newlines may precede the
-# fence (anchored via ``\A`` once we slice the text after the heading); the
-# info string is restricted to empty/``text``/``json`` per spec. Captures the
-# inner body.
+# Matches a fenced code block (```text``` or ```json```) that IMMEDIATELY
+# follows the heading. Only whitespace/newlines may precede the fence
+# (anchored via ``\A`` once we slice the text after the heading); the info
+# string MUST be ``text`` or ``json`` per spec (Issue #1013, iter-3 F3 — bare
+# fences are rejected). Captures the inner body.
 _FENCED_BLOCK_RE = re.compile(
-    r"\A\s*```(?:text|json)?[ \t]*\n(?P<body>.*?)```",
+    r"\A\s*```(?:text|json)[ \t]*\n(?P<body>.*?)```",
     re.DOTALL,
 )
 
