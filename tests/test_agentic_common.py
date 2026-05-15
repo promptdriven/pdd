@@ -6986,3 +6986,116 @@ class TestIssue814BillingErrorsPermanent:
         )
         # 3. No backoff sleep — permanent errors must NOT delay the fallback
         sleep_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Issue #1013 — IssueContract / parse_issue_contract regression coverage (F9)
+# ---------------------------------------------------------------------------
+
+class TestParseIssueContract:
+    """Regression coverage for ``pdd.agentic_common.parse_issue_contract``.
+
+    Exercises the prompt-level requirements at
+    ``pdd/prompts/agentic_common_python.prompt:21`` (item 21 — issue contract
+    parsing) and the F1+F2 hardening done in Issue #1013 review iteration 2.
+    """
+
+    def test_html_comment_happy_path_returns_contract(self):
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["pdd/foo.py", "tests/test_foo.py"],'
+            ' "companion_allowlist": [".pdd/meta/*.json"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.companion_allowlist == (".pdd/meta/*.json",)
+        assert c.source == "html-comment"
+
+    def test_empty_allowed_paths_returns_reject_all_contract(self):
+        """F1: an explicit empty contract is a valid 'reject every change'
+        contract, NOT permissive fallback."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = '<!-- PDD_ISSUE_CONTRACT\n{"allowed_paths": []}\n-->'
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
+        assert c.source == "html-comment"
+
+    def test_malformed_json_returns_none(self):
+        from pdd.agentic_common import parse_issue_contract
+
+        body = "<!-- PDD_ISSUE_CONTRACT\n{not valid json}\n-->"
+        assert parse_issue_contract(body) is None
+
+    def test_body_marker_wins_over_comment_marker(self):
+        from pdd.agentic_common import parse_issue_contract
+
+        body = '<!-- PDD_ISSUE_CONTRACT\n{"allowed_paths": ["from_body.py"]}\n-->'
+        comment = (
+            '<!-- PDD_ISSUE_CONTRACT\n{"allowed_paths": ["from_comment.py"]}\n-->'
+        )
+        c = parse_issue_contract(body, [comment])
+        assert c is not None
+        assert c.allowed_paths == ("from_body.py",)
+
+    def test_path_traversal_entries_are_dropped_but_contract_kept(self):
+        """F1: syntactically invalid entries are dropped silently; the
+        contract itself remains valid even if filtering leaves it empty."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "<!-- PDD_ISSUE_CONTRACT\n"
+            '{"allowed_paths": ["../escape", "/absolute", "pdd/ok.py"]}\n'
+            "-->"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/ok.py",)
+
+    def test_fenced_block_only_text_or_json_languages_are_accepted(self):
+        """F2: the parser must reject arbitrary fence info strings such as
+        ``python`` or ``bash`` — only empty / ``text`` / ``json`` are
+        accepted."""
+        from pdd.agentic_common import parse_issue_contract
+
+        for lang in ("python", "bash", "yaml", "shell"):
+            body = f"## Allowed Write Set\n```{lang}\npdd/foo.py\n```\n"
+            assert parse_issue_contract(body) is None, (
+                f"fence language {lang!r} must be rejected"
+            )
+
+    def test_fenced_block_must_immediately_follow_heading(self):
+        """F2: a fence that appears later in the body (after intervening
+        prose) must NOT be picked up — only whitespace is allowed between
+        the heading and the fence."""
+        from pdd.agentic_common import parse_issue_contract
+
+        body = (
+            "## Allowed Write Set\n\n"
+            "Some discussion paragraph here.\n\n"
+            "```text\npdd/foo.py\n```\n"
+        )
+        assert parse_issue_contract(body) is None
+
+    def test_fenced_block_accepts_text_json_or_bare_fence(self):
+        from pdd.agentic_common import parse_issue_contract
+
+        for fence in ("```text", "```json", "```"):
+            body = f"## Allowed Write Set\n{fence}\npdd/foo.py\n```\n"
+            c = parse_issue_contract(body)
+            assert c is not None and c.allowed_paths == ("pdd/foo.py",), fence
+            assert c.source == "fenced-block"
+
+    def test_fenced_block_empty_body_returns_empty_contract(self):
+        """F1: an empty fenced block is a degenerate but legal contract."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = "## Allowed Write Set\n```text\n```\n"
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
