@@ -674,6 +674,17 @@ class ReviewLoopState:
     # invocation needlessly. Parallel to ``active_reviewer``. Kept at the
     # end of the field list so positional construction stays stable.
     active_fixer: Optional[str] = None
+    # Originally configured primary reviewer, captured once at loop
+    # start and never reassigned. ``active_reviewer`` rotates when a
+    # ``reviewer_fallback`` takes over; this field preserves the
+    # original so ``_maybe_run_fallback_fixer`` can enforce the
+    # documented rule that the fixer-fallback role must differ from
+    # the *originally configured* reviewer as well as the active one.
+    # Without this, ``--reviewer codex --reviewer-fallback gemini
+    # --fixer claude --fixer-fallback codex`` would silently run
+    # codex as the fixer after gemini took over reviewing, even
+    # though the docs say codex (the original reviewer) is excluded.
+    original_reviewer: Optional[str] = None
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -714,6 +725,7 @@ def run_checkup_review_loop(
     state = ReviewLoopState(
         reviewer_status=reviewer_status,
         active_reviewer=reviewer,
+        original_reviewer=reviewer,
     )
     deadline = time.monotonic() + (config.max_minutes * 60.0)
     worktree, setup_error = _setup_pr_worktree(
@@ -1694,10 +1706,23 @@ def _maybe_run_fallback_fixer(
         normalized_active = _normalize_reviewers([state.active_reviewer])
         if normalized_active:
             active_reviewer_norm = normalized_active[0]
+    # The reviewer the caller passed in is the *current* reviewer, which
+    # may have rotated after a ``reviewer_fallback`` took over. The docs
+    # (prompt + ``--fixer-fallback`` help) promise the originally
+    # configured reviewer is also excluded — otherwise
+    # ``--reviewer codex --reviewer-fallback gemini --fixer claude
+    # --fixer-fallback codex`` would silently run codex as fixer after
+    # gemini took over reviewing, contradicting documented behavior.
+    original_reviewer_norm: Optional[str] = None
+    if state.original_reviewer:
+        normalized_original = _normalize_reviewers([state.original_reviewer])
+        if normalized_original:
+            original_reviewer_norm = normalized_original[0]
     if (
         canonical_fallback == normalized_primary[0]
         or canonical_fallback == normalized_reviewer[0]
         or (active_reviewer_norm is not None and canonical_fallback == active_reviewer_norm)
+        or (original_reviewer_norm is not None and canonical_fallback == original_reviewer_norm)
     ):
         return None
 

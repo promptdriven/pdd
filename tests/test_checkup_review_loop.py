@@ -2705,6 +2705,72 @@ class TestCheckupReviewLoopRuntime:
             f"got {state.active_fixer!r}"
         )
 
+    def test_fixer_fallback_excludes_original_reviewer_after_takeover(self) -> None:
+        """When a reviewer-fallback has rotated the active reviewer (so
+        the ORIGINAL primary reviewer is no longer ``state.active_reviewer``),
+        the fixer-fallback must still refuse to promote the original
+        reviewer. Otherwise ``--reviewer codex --reviewer-fallback gemini
+        --fixer claude --fixer-fallback codex`` would silently run codex
+        as the fixer after gemini took over reviewing, contradicting the
+        documented "must differ from --reviewer" rule and re-using the
+        original reviewer's credential in a role the docs forbid."""
+        from pdd.checkup_review_loop import (
+            ReviewFinding,
+            ReviewLoopState,
+            _maybe_run_fallback_fixer,
+        )
+        import pdd.checkup_review_loop as mod
+
+        # Original reviewer = codex; gemini took over after codex failed,
+        # so state.active_reviewer = gemini but state.original_reviewer
+        # still = codex. fixer_fallback names codex.
+        state = ReviewLoopState()
+        state.original_reviewer = "codex"
+        state.active_reviewer = "gemini"
+
+        finding = ReviewFinding(
+            severity="medium",
+            reviewer="gemini",
+            area="test",
+            evidence="missing assertion",
+            finding="missing test",
+            required_fix="add a test",
+            location="tests/test_flow.py:12",
+        )
+        config = _config(fixer_fallback="codex")
+        ctx = _ctx(Path("/tmp"))
+
+        def _explode(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError(
+                "_run_fix must not run when fixer-fallback collides with "
+                "state.original_reviewer"
+            )
+
+        with patch.object(mod, "_run_fix", side_effect=_explode):
+            result = _maybe_run_fallback_fixer(
+                primary_fixer="claude",
+                reviewer="gemini",  # current/active reviewer
+                findings=[finding],
+                context=ctx,
+                worktree=Path("/tmp"),
+                round_number=2,
+                state=state,
+                config=config,
+                verbose=False,
+                quiet=True,
+                artifacts_dir=Path("/tmp"),
+                deadline=float("inf"),
+            )
+
+        assert result is None, (
+            f"fixer-fallback must skip role equal to original_reviewer "
+            f"even after reviewer rotation; got result={result!r}"
+        )
+        assert state.active_fixer is None, (
+            f"state.active_fixer must remain unset when fallback is skipped; "
+            f"got {state.active_fixer!r}"
+        )
+
 
 class TestPromptInjection:
     """Reviewer and fixer prompts must reflect the configured gate, not the
