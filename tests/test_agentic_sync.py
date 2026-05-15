@@ -991,6 +991,162 @@ class TestRunGlobalSync:
         assert model == "global-sync"
         mock_runner.assert_not_called()
 
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._architecture_sync_modules")
+    @patch("pdd.agentic_sync._analyze_global_sync_modules")
+    @patch("pdd.agentic_sync._build_scoped_global_dep_graph")
+    def test_dry_run_default_compacts_skipped_modules(
+        self,
+        mock_dep_graph,
+        mock_analyze,
+        mock_arch_modules,
+        mock_root,
+        tmp_path,
+        monkeypatch,
+    ):
+        from rich.console import Console as _RichConsole
+        import pdd.agentic_sync as agentic_sync_module
+
+        recorder = _RichConsole(record=True, width=200, force_terminal=False)
+        monkeypatch.setattr(agentic_sync_module, "console", recorder)
+
+        mock_root.return_value = tmp_path
+        modules = [_global_module("app", tmp_path)]
+        mock_arch_modules.return_value = (
+            modules,
+            [module.entry for module in modules],
+            tmp_path / "architecture.json",
+        )
+        mock_analyze.return_value = MagicMock(
+            modules_to_sync=[],
+            module_cwds={},
+            module_targets={},
+            estimated_cost=0.0,
+            module_operations={},
+            skipped_modules=[
+                "mod_a: python requires fix; outside Tier 1 prompt-staleness scope",
+                "mod_b: python requires fix; outside Tier 1 prompt-staleness scope",
+            ],
+            all_modules=["mod_a", "mod_b"],
+        )
+        mock_dep_graph.return_value = ({}, [])
+
+        success, _, _, _ = run_global_sync(dry_run=True)
+
+        assert success is True
+        output = recorder.export_text(clear=False)
+        assert "2 module(s) outside Tier 1" in output
+        assert "Warning: mod_a" not in output
+        assert "Warning: mod_b" not in output
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._architecture_sync_modules")
+    @patch("pdd.agentic_sync._analyze_global_sync_modules")
+    @patch("pdd.agentic_sync._build_scoped_global_dep_graph")
+    def test_dry_run_verbose_lists_each_skipped_module(
+        self,
+        mock_dep_graph,
+        mock_analyze,
+        mock_arch_modules,
+        mock_root,
+        tmp_path,
+        monkeypatch,
+    ):
+        from rich.console import Console as _RichConsole
+        import pdd.agentic_sync as agentic_sync_module
+
+        recorder = _RichConsole(record=True, width=200, force_terminal=False)
+        monkeypatch.setattr(agentic_sync_module, "console", recorder)
+
+        mock_root.return_value = tmp_path
+        modules = [_global_module("app", tmp_path)]
+        mock_arch_modules.return_value = (
+            modules,
+            [module.entry for module in modules],
+            tmp_path / "architecture.json",
+        )
+        mock_analyze.return_value = MagicMock(
+            modules_to_sync=[],
+            module_cwds={},
+            module_targets={},
+            estimated_cost=0.0,
+            module_operations={},
+            skipped_modules=[
+                "mod_a: python requires fix; outside Tier 1 prompt-staleness scope",
+                "mod_b: python requires fix; outside Tier 1 prompt-staleness scope",
+            ],
+            all_modules=["mod_a", "mod_b"],
+        )
+        mock_dep_graph.return_value = ({}, [])
+
+        success, _, _, _ = run_global_sync(dry_run=True, verbose=True)
+
+        assert success is True
+        output = recorder.export_text(clear=False)
+        assert "Warning: mod_a" in output
+        assert "Warning: mod_b" in output
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_zero_stale_renders_green_success_signal(
+        self, mock_detect_lang, mock_determine, tmp_path, monkeypatch
+    ):
+        from rich.console import Console as _RichConsole
+        import pdd.agentic_sync as agentic_sync_module
+
+        recorder = _RichConsole(record=True, width=200, force_terminal=True)
+        monkeypatch.setattr(agentic_sync_module, "console", recorder)
+
+        mock_detect_lang.return_value = {"python": tmp_path / "prompts/foo_python.prompt"}
+        decision = MagicMock()
+        decision.operation = "nothing"
+        decision.reason = "clean"
+        decision.estimated_cost = 0.0
+        mock_determine.return_value = decision
+
+        _analyze_global_sync_modules(
+            [_global_module("clean_mod", tmp_path)],
+            tmp_path,
+            quiet=False,
+        )
+
+        plain_output = recorder.export_text(clear=False)
+        assert "0 stale module(s)" in plain_output
+        # ANSI green is escape code "\x1b[32m"; rich emits this when force_terminal=True
+        ansi_output = recorder.export_text(clear=False, styles=True)
+        assert "\x1b[32m" in ansi_output or "\x1b[1;32m" in ansi_output
+
+    @patch("pdd.agentic_sync.sync_determine_operation")
+    @patch("pdd.agentic_sync._detect_languages_with_context")
+    def test_nonzero_stale_does_not_render_green(
+        self, mock_detect_lang, mock_determine, tmp_path, monkeypatch
+    ):
+        from rich.console import Console as _RichConsole
+        import pdd.agentic_sync as agentic_sync_module
+
+        recorder = _RichConsole(record=True, width=200, force_terminal=True)
+        monkeypatch.setattr(agentic_sync_module, "console", recorder)
+
+        mock_detect_lang.return_value = {"python": tmp_path / "prompts/foo_python.prompt"}
+        generate = MagicMock()
+        generate.operation = "generate"
+        generate.reason = "prompt changed"
+        generate.estimated_cost = 1.0
+        mock_determine.return_value = generate
+
+        _analyze_global_sync_modules(
+            [_global_module("stale_mod", tmp_path)],
+            tmp_path,
+            quiet=False,
+        )
+
+        plain_output = recorder.export_text(clear=False)
+        assert "1 stale module(s)" in plain_output
+        # The stale fragment itself should not be wrapped in green.
+        ansi_output = recorder.export_text(clear=False, styles=True)
+        assert "\x1b[32m" not in ansi_output
+        assert "\x1b[1;32m" not in ansi_output
+
 
 # ---------------------------------------------------------------------------
 # _load_architecture_json

@@ -725,9 +725,14 @@ def _analyze_global_sync_modules(
 
     if not quiet:
         skipped_count = len(modules) - len(modules_to_sync)
+        stale_count = len(modules_to_sync)
+        if stale_count == 0:
+            stale_fragment = f"[green]0 stale module(s)[/green]"
+        else:
+            stale_fragment = f"{stale_count} stale module(s)"
         console.print(
-            f"[bold]Global sync analysis:[/bold] {len(modules_to_sync)} stale "
-            f"module(s), {skipped_count} already synced or skipped."
+            f"[bold]Global sync analysis:[/bold] {stale_fragment}, "
+            f"{skipped_count} already synced or skipped."
         )
 
     return GlobalSyncAnalysis(
@@ -844,6 +849,7 @@ def _print_global_sync_plan(
     ordered_modules: List[str],
     warnings: List[str],
     budget: Optional[float] = None,
+    verbose: bool = False,
 ) -> None:
     """Render a concise global sync dry-run plan."""
     console.print("[bold]Global sync dry run:[/bold]")
@@ -870,8 +876,15 @@ def _print_global_sync_plan(
     for warning in warnings:
         console.print(f"[yellow]Warning: {warning}[/yellow]")
 
-    for skipped in analysis.skipped_modules:
-        console.print(f"[yellow]Warning: {skipped}[/yellow]")
+    if analysis.skipped_modules:
+        if verbose:
+            for skipped in analysis.skipped_modules:
+                console.print(f"[yellow]Warning: {skipped}[/yellow]")
+        else:
+            console.print(
+                f"  [dim]{len(analysis.skipped_modules)} module(s) outside Tier 1 "
+                f"prompt-staleness scope (run with --verbose for details).[/dim]"
+            )
 
 
 def run_global_sync(
@@ -930,7 +943,9 @@ def run_global_sync(
 
     if dry_run:
         if not quiet:
-            _print_global_sync_plan(analysis, ordered_modules, dep_warnings, budget)
+            _print_global_sync_plan(
+                analysis, ordered_modules, dep_warnings, budget, verbose=verbose
+            )
         return (
             True,
             f"Global sync dry run: {len(ordered_modules)} module(s) would sync.",
