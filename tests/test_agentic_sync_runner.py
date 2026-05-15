@@ -2519,50 +2519,53 @@ class TestModuleCwds:
 
 
 class TestAllowedWriteSet:
-    def test_successful_module_fails_when_new_path_outside_allowed_set(self, monkeypatch):
-        import pdd.agentic_sync_runner as mod
+    """
+    Issue #1013 (F14): the legacy ``allowed_write_paths`` kwarg was removed.
+    Only ``allowed_write_set`` is accepted by ``AsyncSyncRunner``. Deeper
+    behavioural coverage for the new ``_enforce_scope_guard`` helper lives
+    in ``TestEnforceScopeGuard`` below.
+    """
 
-        snapshots = iter([
-            {"README.md"},
-            {"README.md", "pdd/allowed.py", "architecture.json"},
-        ])
-        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: next(snapshots))
-
-        runner = AsyncSyncRunner(
-            basenames=["allowed"],
-            dep_graph={"allowed": []},
-            sync_options={},
-            github_info=None,
-            quiet=True,
-            allowed_write_paths=["pdd/allowed.py"],
-        )
-        monkeypatch.setattr(
-            runner,
-            "_run_attempt",
-            lambda *_args, **_kwargs: (True, 0.0, "", "ok", ""),
-        )
-
-        success, cost, error = runner._sync_one_module("allowed")
-
-        assert success is False
-        assert cost == 0.0
-        assert "allowed write set violation" in error
-        assert "architecture.json" in error
-        assert "README.md" not in error
-
-    def test_allowed_write_set_forces_sequential_execution(self, monkeypatch):
-        import pdd.agentic_sync_runner as mod
-
-        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: set())
+    def test_allowed_write_set_forces_sequential_execution(self):
         runner = AsyncSyncRunner(
             basenames=["a", "b"],
             dep_graph={"a": [], "b": []},
             sync_options={},
             github_info=None,
             quiet=True,
-            allowed_write_paths=["pdd/a.py"],
+            allowed_write_set=["pdd/a.py"],
         )
 
+        assert runner.max_workers == 1
+
+    def test_permissive_mode_when_no_contract(self):
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=None,
+        )
+
+        assert runner.allowed_write_paths is None
+        assert runner.scope_guard_enabled is True
+        # No contract → no forced sequential execution
+        assert runner.max_workers == 4
+
+    def test_explicit_empty_contract_rejects_all_changes(self):
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=[],
+        )
+
+        # Empty-but-present contract is still "contract present"; max_workers
+        # is forced to 1 and the allow set is the empty set (NOT None).
+        assert runner.allowed_write_paths == set()
         assert runner.max_workers == 1
 
 

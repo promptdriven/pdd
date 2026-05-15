@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv as _csv
 import datetime
+import fnmatch
 import json
 import os
 import re
@@ -18,13 +19,19 @@ import sys
 import tempfile
 import threading
 import time
+from collections import defaultdict
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, NamedTuple, Optional, Tuple
+from typing import Any, Dict, Iterable, List, NamedTuple, Optional, Set, Tuple
 
 from rich.console import Console
 
+from .agentic_common import (
+    DEFAULT_SYNC_COMPANION_ALLOWLIST,
+    _revert_out_of_scope_changes,
+)
+from .agentic_common_worktree import revert_out_of_scope_changes_with_dirs
 from .construct_paths import _is_known_language
 
 console = Console()
@@ -855,10 +862,10 @@ class AsyncSyncRunner:
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Any]] = None,
         initial_cost: float = 0.0,
-        allowed_write_paths: Optional[List[str]] = None,
-        allowed_write_set: Optional[List[str]] = None,
-        companion_allowlist: Optional[List[str]] = None,
+        allowed_write_set: Optional[Iterable[str]] = None,
+        companion_allowlist: Optional[Iterable[str]] = None,
         scope_guard_enabled: bool = True,
+        contract_source: Optional[str] = None,
     ):
         self.basenames: List[str] = list(basenames)
         self.dep_graph: Dict[str, List[str]] = {
@@ -872,24 +879,43 @@ class AsyncSyncRunner:
         self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.initial_cost = float(initial_cost or 0.0)
-        del companion_allowlist  # accepted for prompt/CLI compatibility
-        active_allowed_paths = (
-            allowed_write_paths
-            if allowed_write_paths is not None
-            else allowed_write_set
+
+        # Issue #1013 — split-contract scope guard (F5, F9, F14):
+        # Track contract presence separately from set truthiness. ``None``
+        # means "no contract → permissive fallback"; an explicit empty
+        # iterable means "contract present but empty → reject everything"
+        # (degenerate but legal). The single accepted kwarg name is
+        # ``allowed_write_set``; the legacy ``allowed_write_paths`` alias is
+        # gone per F14.
+        self.scope_guard_enabled: bool = bool(scope_guard_enabled)
+        self.contract_source: Optional[str] = contract_source
+        if scope_guard_enabled and allowed_write_set is not None:
+            self.allowed_write_paths: Optional[Set[str]] = {
+                _normalize_repo_path(path)
+                for path in allowed_write_set
+                if isinstance(path, str) and path.strip()
+            }
+        else:
+            self.allowed_write_paths = None
+        self.companion_allowlist: Tuple[str, ...] = tuple(
+            companion_allowlist if companion_allowlist is not None
+            else DEFAULT_SYNC_COMPANION_ALLOWLIST
         )
-        if not scope_guard_enabled:
-            active_allowed_paths = None
-        self.allowed_write_paths: set[str] = {
-            _normalize_repo_path(path) for path in (active_allowed_paths or []) if path
-        }
-        self._baseline_changed_paths: set[str] = (
-            _git_changed_paths(self.project_root) if self.allowed_write_paths else set()
-        )
+
+        # Per-`git toplevel` locks for scope-guard git operations (F12).
+        # Modules may share a repo root (shared-worktree non-durable sync) so
+        # the lock key MUST resolve to the actual git toplevel, not the raw
+        # module_cwd path — otherwise two modules in the same repo get
+        # separate locks and the race we're trying to prevent reappears.
+        self._scope_guard_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
+        self._scope_guard_locks_lock = threading.Lock()
 
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
-        if self.allowed_write_paths:
+        # When a contract narrows writes, serialise scope-guard enforcement
+        # across modules so the per-cwd lock isn't fighting parallel git
+        # status / git checkout calls.
+        if self.allowed_write_paths is not None:
             self.max_workers = 1
 
         self.module_states: Dict[str, ModuleState] = {
@@ -1483,6 +1509,27 @@ class AsyncSyncRunner:
                 f"module(s): {resumed}[/green]"
             )
 
+        # Issue #1013 — split-contract scope guard logging on run entry.
+        # WARN on opt-out, dim INFO on permissive fallback, dim INFO with
+        # source/count when a contract was parsed. Suppress all of these
+        # under ``quiet`` to honour the orchestrator's no-non-error contract.
+        if not self.quiet:
+            if not self.scope_guard_enabled:
+                console.print(
+                    "[yellow]Scope guard disabled via --no-scope-guard[/yellow]"
+                )
+            elif self.allowed_write_paths is None:
+                console.print(
+                    "[dim]Scope guard: no contract on issue — "
+                    "running in permissive mode[/dim]"
+                )
+            else:
+                source = self.contract_source or "<unknown>"
+                console.print(
+                    f"[dim]Scope guard: contract loaded from {source} "
+                    f"({len(self.allowed_write_paths)} allowed paths)[/dim]"
+                )
+
         self._update_github_comment()
 
         prev_sigint = signal.getsignal(signal.SIGINT)
@@ -1705,6 +1752,25 @@ class AsyncSyncRunner:
         last_stdout = ""
         last_stderr = ""
         repair_directive: Optional[str] = None
+        module_cwd = Path(self.module_cwds.get(basename, self.project_root))
+
+        def _apply_scope_guard(
+            success: bool, total_cost: float, error: str
+        ) -> Tuple[bool, float, str]:
+            """
+            Wrap the result of a per-module attempt with scope-guard
+            enforcement (Issue #1013, F6, F7, F8). Runs after every attempt —
+            success OR failure — before returning so out-of-scope artifacts
+            are reverted even when ``pdd sync`` itself failed.
+            """
+            diagnostic = self._enforce_scope_guard(basename, module_cwd)
+            if diagnostic is None:
+                return success, total_cost, error
+            scope_failure = (
+                "Scope guard hard-fail: out-of-scope artifacts detected\n"
+                + diagnostic
+            )
+            return False, total_cost, scope_failure
 
         for attempt in range(MAX_CONFORMANCE_ATTEMPTS):
             success, cost, error, stdout, stderr = self._run_attempt(
@@ -1718,19 +1784,12 @@ class AsyncSyncRunner:
             last_stderr = stderr
 
             if success:
-                violations = self._allowed_write_set_violations()
-                if violations:
-                    return (
-                        False,
-                        total_cost,
-                        self._format_allowed_write_set_error(violations),
-                    )
-                return True, total_cost, ""
+                return _apply_scope_guard(True, total_cost, "")
 
             conformance = _parse_conformance_failure(stdout, stderr)
             if conformance is None:
                 # Not a conformance failure: do not retry
-                return False, total_cost, error
+                return _apply_scope_guard(False, total_cost, error)
 
             new_directive, new_missing = conformance
             if last_missing is not None and new_missing == last_missing:
@@ -1749,32 +1808,142 @@ class AsyncSyncRunner:
                 )
                 break
 
-        # Hard-failure path: include structured conformance block
+        # Hard-failure path: include structured conformance block, then run
+        # the scope guard so a failing conformance loop still cleans up
+        # out-of-scope writes the LLM made on the way to the failure.
         hard_block = self._build_conformance_hard_failure(
             basename, last_error, last_stdout, last_stderr
         )
-        return False, total_cost, hard_block
+        return _apply_scope_guard(False, total_cost, hard_block)
 
-    def _allowed_write_set_violations(self) -> List[str]:
-        """Return newly changed paths outside the issue's allowed write set."""
-        if not self.allowed_write_paths:
-            return []
-        current = _git_changed_paths(self.project_root)
-        newly_changed = current - self._baseline_changed_paths
-        violations = [
-            path for path in newly_changed if path not in self.allowed_write_paths
-        ]
-        return sorted(violations)
+    # ------------------------------------------------------------------
+    # Issue #1013 — split-contract scope guard
+    # ------------------------------------------------------------------
 
-    def _format_allowed_write_set_error(self, violations: List[str]) -> str:
-        allowed = ", ".join(sorted(self.allowed_write_paths)) or "<none>"
-        blocked = ", ".join(violations)
-        return (
-            "Issue split-contract allowed write set violation. "
-            f"Out-of-scope changed path(s): {blocked}. "
-            f"Allowed path(s): {allowed}. "
-            "Revert or explicitly justify companion artifacts before rerunning pdd sync."
-        )
+    def _resolve_repo_root(self, module_cwd: Path) -> Path:
+        """
+        Return the git toplevel for *module_cwd*, falling back to *module_cwd*
+        when git is unavailable or the directory is not in a repo.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(module_cwd), "rev-parse", "--show-toplevel"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return module_cwd
+        if result.returncode != 0:
+            return module_cwd
+        toplevel = result.stdout.strip()
+        if not toplevel:
+            return module_cwd
+        return Path(toplevel)
+
+    def _scope_guard_lock(self, repo_root: Path) -> threading.Lock:
+        """Return a per-repo-root :class:`threading.Lock` (F12)."""
+        key = str(repo_root.resolve())
+        with self._scope_guard_locks_lock:
+            return self._scope_guard_locks[key]
+
+    def _matches_companion_allowlist(
+        self, rel_posix_path: str, allowlist: Iterable[str]
+    ) -> bool:
+        """Return True if *rel_posix_path* matches any companion glob."""
+        for pattern in allowlist:
+            if not pattern:
+                continue
+            if fnmatch.fnmatch(rel_posix_path, pattern):
+                return True
+        return False
+
+    def _enforce_scope_guard(
+        self, basename: str, module_cwd: Path
+    ) -> Optional[str]:
+        """
+        Issue #1013 split-contract enforcement after each per-module sync.
+
+        Returns:
+            ``None`` when the module is in scope (or enforcement is disabled);
+            a multi-line diagnostic string when out-of-scope artifacts were
+            detected and reverted/removed.
+
+        This is a no-op when ``self.scope_guard_enabled`` is False or
+        ``self.allowed_write_paths is None`` (no parseable contract).
+        """
+        if not self.scope_guard_enabled:
+            return None
+        if self.allowed_write_paths is None:
+            return None
+
+        repo_root = self._resolve_repo_root(Path(module_cwd))
+        lock = self._scope_guard_lock(repo_root)
+        with lock:
+            # Resolve contract paths to absolute paths under the repo root.
+            allowed_files: Set[Path] = set()
+            for rel in self.allowed_write_paths:
+                if not rel:
+                    continue
+                allowed_files.add((repo_root / rel).resolve())
+
+            # Auto-allow companion artifacts (e.g. ``.pdd/meta/*.json``) that
+            # currently exist or are about to be created under the repo
+            # root. We add them to the allowed-files set so the helpers in
+            # ``agentic_common`` / ``agentic_common_worktree`` skip them.
+            allowlist = tuple(self.companion_allowlist) or DEFAULT_SYNC_COMPANION_ALLOWLIST
+            for path in repo_root.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    rel_posix = path.resolve().relative_to(repo_root).as_posix()
+                except ValueError:
+                    continue
+                if self._matches_companion_allowlist(rel_posix, allowlist):
+                    allowed_files.add(path.resolve())
+
+            tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
+            untracked_reverted = revert_out_of_scope_changes_with_dirs(
+                repo_root, allowed_dirs=set(), allowed_files=allowed_files
+            )
+
+            # Combine while preserving order and uniqueness for the diagnostic.
+            seen: Set[str] = set()
+            offending: List[str] = []
+            for path in list(tracked_reverted) + list(untracked_reverted):
+                try:
+                    rel = Path(path).resolve().relative_to(repo_root).as_posix()
+                except ValueError:
+                    rel = str(path)
+                if rel in seen:
+                    continue
+                # Filter out anything that ended up in the allowed set —
+                # e.g. companion artifacts that the helpers do not revert
+                # but that we still surface as no-ops.
+                if (repo_root / rel).resolve() in allowed_files:
+                    continue
+                seen.add(rel)
+                offending.append(rel)
+
+            if not offending:
+                return None
+
+            source = self.contract_source or "<unknown>"
+            allowed_lines = "\n".join(
+                f"  - {p}" for p in sorted(self.allowed_write_paths)
+            ) or "  - <empty>"
+            companion_lines = "\n".join(
+                f"  - {p}" for p in allowlist
+            ) or "  - <empty>"
+            offending_lines = "\n".join(f"  - {p}" for p in offending)
+            diagnostic = (
+                f"Scope guard reverted {len(offending)} out-of-scope file(s) "
+                f"for module '{basename}' (contract source: {source}):\n"
+                f"{offending_lines}\n"
+                f"Allowed write set:\n{allowed_lines}\n"
+                f"Companion allowlist:\n{companion_lines}"
+            )
+            return diagnostic
 
     def _build_conformance_hard_failure(
         self,
