@@ -788,7 +788,6 @@ def run_checkup_review_loop(
                         quiet=quiet,
                         artifacts_dir=artifacts_dir,
                         pr_metadata=pr_metadata,
-                        deadline=deadline,
                     )
                     _record_review(state, fallback_review)
                     _mark_non_required_findings_advisory(state, config)
@@ -1476,7 +1475,6 @@ def _maybe_run_fallback_reviewer(
         artifacts_dir=artifacts_dir,
         mode="fallback",
         pr_metadata=pr_metadata,
-        deadline=deadline,
     )
     _record_review(state, fallback)
 
