@@ -1538,34 +1538,41 @@ def run_agentic_sync(
                 if isinstance(c_body, str) and c_body:
                     comment_bodies.append(c_body)
 
-    # Issue #1013 — split-contract scope guard (F3, F4, F11):
-    # Parse the structured contract from the issue body first, then comments.
-    # When ``scope_guard=False``, log a single WARNING and skip parsing so the
-    # runner falls back to permissive mode regardless of contract content.
-    issue_contract: Optional[IssueContract] = None
-    if scope_guard:
-        issue_contract = parse_issue_contract(body, comment_bodies)
-        if not quiet:
-            if issue_contract is not None:
-                console.print(
-                    f"[dim]Sync scope guard: contract loaded from "
-                    f"{issue_contract.source} "
-                    f"({len(issue_contract.allowed_paths)} allowed paths)[/dim]"
-                )
-            else:
-                console.print(
-                    "[dim]Sync scope guard: no contract on issue — "
-                    "running in permissive mode[/dim]"
-                )
-    else:
-        if not quiet:
+    # Issue #1013 — split-contract scope guard (F3, F4, F6, F11):
+    # Parse the structured contract from the issue body first, then comments,
+    # *regardless* of whether scope-guard enforcement is enabled — the
+    # ``--no-scope-guard`` opt-out should still record the parsed contract
+    # for diagnostics. The runner short-circuits enforcement when
+    # ``scope_guard_enabled=False`` (see AsyncSyncRunner._enforce_scope_guard).
+    issue_contract: Optional[IssueContract] = parse_issue_contract(
+        body, comment_bodies
+    )
+    if not quiet:
+        if not scope_guard:
+            # F7: this is the single user-facing log line for the
+            # ``--no-scope-guard`` opt-out. The runner no longer logs the
+            # same state on entry — kept here so it's closer to the user.
             console.print(
                 "[yellow]Sync scope guard: disabled via --no-scope-guard[/yellow]"
+            )
+        elif issue_contract is not None:
+            console.print(
+                f"[dim]Sync scope guard: contract loaded from "
+                f"{issue_contract.source} "
+                f"({len(issue_contract.allowed_paths)} allowed paths)[/dim]"
+            )
+        else:
+            console.print(
+                "[dim]Sync scope guard: no contract on issue — "
+                "running in permissive mode[/dim]"
             )
 
     # Resolve effective allow set / companion allowlist for the runner.
     # ``None`` (permissive) is preserved when no contract was parsed so the
     # runner can distinguish "no contract" from "explicit empty contract".
+    # The runner unions the companion allowlist with
+    # DEFAULT_SYNC_COMPANION_ALLOWLIST in its __init__ (F4); we still pre-union
+    # here so the durable runner's parent __init__ does the same dedup pass.
     if issue_contract is not None:
         allowed_write_paths: Optional[List[str]] = list(issue_contract.allowed_paths)
         effective_companion_allowlist: Tuple[str, ...] = tuple(

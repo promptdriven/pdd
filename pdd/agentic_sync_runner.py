@@ -889,16 +889,22 @@ class AsyncSyncRunner:
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.initial_cost = float(initial_cost or 0.0)
 
-        # Issue #1013 — split-contract scope guard (F5, F9, F14):
+        # Issue #1013 — split-contract scope guard (F5, F9, F14, F4, F6):
         # Track contract presence separately from set truthiness. ``None``
         # means "no contract → permissive fallback"; an explicit empty
         # iterable means "contract present but empty → reject everything"
         # (degenerate but legal). The single accepted kwarg name is
         # ``allowed_write_set``; the legacy ``allowed_write_paths`` alias is
         # gone per F14.
+        #
+        # F6: the parsed contract is recorded for diagnostics *regardless* of
+        # whether scope-guard enforcement is enabled. ``_enforce_scope_guard``
+        # short-circuits on ``scope_guard_enabled=False``, so storing the
+        # contract in opt-out mode is safe and matches the spec requirement
+        # that disabled runners still see the parsed contract.
         self.scope_guard_enabled: bool = bool(scope_guard_enabled)
         self.contract_source: Optional[str] = contract_source
-        if scope_guard_enabled and allowed_write_set is not None:
+        if allowed_write_set is not None:
             self.allowed_write_paths: Optional[Set[str]] = {
                 _normalize_repo_path(path)
                 for path in allowed_write_set
@@ -906,9 +912,18 @@ class AsyncSyncRunner:
             }
         else:
             self.allowed_write_paths = None
+        # F4: the effective companion allowlist is *always* the caller-provided
+        # patterns unioned with DEFAULT_SYNC_COMPANION_ALLOWLIST. Order is
+        # preserved (caller patterns first, defaults appended) and duplicates
+        # are removed deterministically. Passing an empty iterable still
+        # produces at least the default; passing ``None`` is identical to
+        # passing an empty iterable.
+        provided: Tuple[str, ...] = tuple(
+            p for p in (companion_allowlist or ())
+            if isinstance(p, str) and p
+        )
         self.companion_allowlist: Tuple[str, ...] = tuple(
-            companion_allowlist if companion_allowlist is not None
-            else DEFAULT_SYNC_COMPANION_ALLOWLIST
+            dict.fromkeys(provided + tuple(DEFAULT_SYNC_COMPANION_ALLOWLIST))
         )
 
         # Per-`git toplevel` locks for scope-guard git operations (F12).
@@ -921,10 +936,12 @@ class AsyncSyncRunner:
 
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
-        # When a contract narrows writes, serialise scope-guard enforcement
-        # across modules so the per-cwd lock isn't fighting parallel git
-        # status / git checkout calls.
-        if self.allowed_write_paths is not None:
+        # When a contract narrows writes AND scope-guard enforcement is
+        # active, serialise across modules so the per-cwd lock isn't fighting
+        # parallel git status / git checkout calls. With ``--no-scope-guard``
+        # the contract is recorded for diagnostics only — no enforcement runs
+        # — so parallelism is preserved (F6).
+        if self.scope_guard_enabled and self.allowed_write_paths is not None:
             self.max_workers = 1
 
         self.module_states: Dict[str, ModuleState] = {
@@ -1518,26 +1535,10 @@ class AsyncSyncRunner:
                 f"module(s): {resumed}[/green]"
             )
 
-        # Issue #1013 — split-contract scope guard logging on run entry.
-        # WARN on opt-out, dim INFO on permissive fallback, dim INFO with
-        # source/count when a contract was parsed. Suppress all of these
-        # under ``quiet`` to honour the orchestrator's no-non-error contract.
-        if not self.quiet:
-            if not self.scope_guard_enabled:
-                console.print(
-                    "[yellow]Scope guard disabled via --no-scope-guard[/yellow]"
-                )
-            elif self.allowed_write_paths is None:
-                console.print(
-                    "[dim]Scope guard: no contract on issue — "
-                    "running in permissive mode[/dim]"
-                )
-            else:
-                source = self.contract_source or "<unknown>"
-                console.print(
-                    f"[dim]Scope guard: contract loaded from {source} "
-                    f"({len(self.allowed_write_paths)} allowed paths)[/dim]"
-                )
+        # Issue #1013 (F7): scope-guard status logging happens once in the
+        # sync-layer dispatch (``agentic_sync.run_agentic_sync``) — that's
+        # closer to the user and emits exactly one INFO/WARNING line. The
+        # runner intentionally does NOT log the same state again on entry.
 
         self._update_github_comment()
 
@@ -1910,7 +1911,9 @@ class AsyncSyncRunner:
             # currently exist or are about to be created under the repo
             # root. We add them to the allowed-files set so the helpers in
             # ``agentic_common`` / ``agentic_common_worktree`` skip them.
-            allowlist = tuple(self.companion_allowlist) or DEFAULT_SYNC_COMPANION_ALLOWLIST
+            # ``self.companion_allowlist`` already includes DEFAULT_*
+            # (unioned in __init__ per F4); no fallback needed here.
+            allowlist = tuple(self.companion_allowlist)
             for path in repo_root.rglob("*"):
                 if not path.is_file():
                     continue
