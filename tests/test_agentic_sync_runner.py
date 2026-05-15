@@ -2517,6 +2517,38 @@ class TestModuleCwds:
         popen_kwargs = mock_popen.call_args[1]
         assert popen_kwargs["cwd"] == str(runner.project_root)
 
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.0)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_module_targets_map_display_key_to_sync_basename(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Scoped global-sync keys should execute the plain basename in the scoped cwd."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        custom_cwd = Path("/project/examples/prompts_linter")
+        runner = AsyncSyncRunner(
+            basenames=["examples/prompts_linter:report"],
+            dep_graph={"examples/prompts_linter:report": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            module_cwds={"examples/prompts_linter:report": custom_cwd},
+            module_targets={"examples/prompts_linter:report": "report"},
+        )
+
+        runner._sync_one_module("examples/prompts_linter:report")
+
+        cmd = mock_popen.call_args[0][0]
+        popen_kwargs = mock_popen.call_args[1]
+        assert cmd[-1] == "report"
+        assert "examples/prompts_linter:report" not in cmd
+        assert popen_kwargs["cwd"] == str(custom_cwd)
+
 
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking
