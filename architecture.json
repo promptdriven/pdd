@@ -7950,6 +7950,8 @@
       "user_story_tests_python.prompt",
       "agentic_common_python.prompt",
       "auto_include_python.prompt",
+      "agentic_langtest_python.prompt",
+      "architecture_sync_python.prompt",
       "metadata_sync_python.prompt"
     ],
     "priority": 80,
@@ -7981,7 +7983,7 @@
           },
           {
             "name": "commit_and_push",
-            "signature": "(healed_modules: List[str], skip_ci: bool, checkpoint: bool)",
+            "signature": "(healed_modules: List[str], skip_ci: bool, checkpoint: bool, finalized_modules: Optional[List[Tuple[str, str]]] = None)",
             "returns": "bool"
           }
         ]

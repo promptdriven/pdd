@@ -162,6 +162,19 @@ class TestDetectDrift:
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 0
 
+    def test_pr_touched_metadata_modules_are_not_left_in_drift(self):
+        """Regression guard for PR metadata churn on long-running modules."""
+        prompt_drifts, example_drifts = detect_drift(
+            modules=[
+                "metadata_sync",
+                "agentic_change_orchestrator",
+                "ci_drift_heal",
+            ]
+        )
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+
     def test_module_filter(self):
         """Only modules in the filter list are checked."""
         d_update = MagicMock(operation="update", reason="changed")
@@ -175,6 +188,30 @@ class TestDetectDrift:
 
         assert len(prompt_drifts) == 1
         assert len(example_drifts) == 0
+
+    def test_module_filter_detects_code_without_prompt(self):
+        """A requested module with code but no prompt still becomes update drift."""
+        code_path = MagicMock()
+        code_path.exists.return_value = True
+        code_path.__str__ = lambda self: "pdd/newmod.py"
+        prompt_path = MagicMock()
+        prompt_path.exists.return_value = False
+        prompt_path.__str__ = lambda self: "pdd/prompts/newmod_python.prompt"
+        fake_paths = {"code": code_path, "prompt": prompt_path}
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=[]), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=fake_paths), \
+             patch("pdd.sync_determine_operation.sync_determine_operation") as mock_sync:
+            prompt_drifts, example_drifts = detect_drift(modules=["newmod"])
+
+        assert example_drifts == []
+        assert len(prompt_drifts) == 1
+        drift = prompt_drifts[0]
+        assert drift.basename == "newmod"
+        assert drift.operation == "update"
+        assert drift.prompt_path is None
+        assert drift.code_path == "pdd/newmod.py"
+        mock_sync.assert_not_called()
 
     def test_infer_identity_error_skips_module(self):
         """Modules that fail identity inference are skipped gracefully."""
@@ -1059,6 +1096,8 @@ class TestHealModule:
         # state is inconsistent — don't let the failed module piggy-back on
         # other modules' commits.
         assert result is False
+        assert drift.metadata_finalization_failed is True
+        assert drift.metadata_finalization_error == "prompt_path unresolvable post-update"
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
         assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "update", "/repo/auth.py"]]
 
@@ -1332,7 +1371,7 @@ class TestMain:
             result = main()
         assert result == 1
 
-    def test_successful_heal_and_commit(self):
+    def test_successful_heal_and_commit(self, capsys):
         """Successful heal + commit returns 0."""
         drifts = ([DriftInfo("auth", "python", "update", "changed")], [])
 
@@ -1346,7 +1385,12 @@ class TestMain:
             result = main()
 
         assert result == 0
-        mock_commit.assert_called_once_with(["auth"], False, checkpoint=True)
+        out = capsys.readouterr().out
+        assert "Drift summary" in out
+        assert "Auto-heal summary: healed=1 failed=0 skipped=0" in out
+        mock_commit.assert_called_once_with(
+            ["auth"], False, checkpoint=True, finalized_modules=[]
+        )
 
     def test_heal_failure_returns_one(self):
         """Failed heal returns 1."""
@@ -1424,7 +1468,9 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
+        mock_commit.assert_called_once_with(
+            ["auth"], True, checkpoint=False, finalized_modules=[]
+        )
 
     def test_no_healed_modules_skips_commit(self):
         """If all modules fail healing, commit phase is skipped."""
@@ -1464,8 +1510,8 @@ class TestMain:
         mock_commit.assert_not_called()
         assert result == 1
 
-    def test_push_partial_failure_can_commit_without_checkpoint(self):
-        """Push-to-main mode remains advisory but never creates a PR checkpoint."""
+    def test_push_partial_failure_skips_commit_but_returns_zero(self):
+        """Push-to-main failures stay advisory but do not stage failed-module artifacts."""
         drifts = (
             [
                 DriftInfo("auth", "python", "update", "changed"),
@@ -1483,7 +1529,7 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             result = main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
+        mock_commit.assert_not_called()
         assert result == 0
 
     def test_pr_skipped_module_after_success_skips_commit_checkpoint(self):
@@ -1549,7 +1595,9 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             result = main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
+        mock_commit.assert_called_once_with(
+            ["auth"], True, checkpoint=False, finalized_modules=[]
+        )
         assert result == 0
 
     def test_push_update_followup_skip_after_success_commits_without_checkpoint(self):
@@ -1571,7 +1619,9 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             result = main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(["auth"], True, checkpoint=False)
+        mock_commit.assert_called_once_with(
+            ["auth"], True, checkpoint=False, finalized_modules=[]
+        )
         assert result == 0
 
     def test_prompt_revert_failure_blocks_commit_even_after_other_success(self):
@@ -2405,8 +2455,23 @@ class TestRunMetadataSyncSafe:
             stages={s: StageStatus(status="ok") for s in
                     ("prompt", "tags", "architecture", "run_report", "fingerprint")},
         )
-        with patch("pdd.metadata_sync.run_metadata_sync", return_value=good):
+        fingerprint = MagicMock(
+            prompt_hash="prompt",
+            code_hash="code",
+            example_hash=None,
+            test_files=None,
+        )
+        paths = {"prompt": prompt, "code": tmp_path / "foo.py"}
+        with patch("pdd.metadata_sync.run_metadata_sync", return_value=good), \
+             patch("pdd.operation_log.infer_module_identity",
+                   return_value=("foo", "python")), \
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=paths), \
+             patch("pdd.sync_determine_operation.read_fingerprint",
+                   return_value=fingerprint), \
+             patch("pdd.operation_log.save_fingerprint") as mock_save:
             assert _run_metadata_sync_safe(str(prompt), None) is True
+        mock_save.assert_called_once()
+        assert mock_save.call_args.kwargs["paths"] == paths
 
 
 class TestHealModuleInvokesMetadataSync:
@@ -2457,6 +2522,7 @@ class TestHealModuleInvokesMetadataSync:
              patch("pdd.ci_drift_heal._restore_metadata_state_for") as mock_restore:
             result = heal_module(drift, env)
         assert result is False
+        assert drift.metadata_finalization_failed is True
         assert mock_revert.called, "prompt was not reverted on metadata_sync failure"
         # The pre-sync snapshot MUST be taken before run_metadata_sync runs
         # so the per-module rollback has bytes to restore from.
@@ -2612,3 +2678,387 @@ class TestHealModuleInvokesMetadataSync:
         assert arch.read_bytes() == b'{"modules":[{"name":"commands/foo","state":"old"}]}'
         assert fingerprint.read_bytes() == b"old fingerprint"
         assert run_report.read_bytes() == b"old run report"
+
+
+# --------------------------------------------------------------------------- #
+# Issue #1006: metadata finalization must surface at the workflow boundary    #
+# --------------------------------------------------------------------------- #
+
+
+class TestMetadataFinalizationBoundary:
+    """Workflow-boundary regression tests for Issue #1006.
+
+    Two acceptance criteria are checked here:
+      1. A successful auto-heal commit must include the updated fingerprint
+         file in the staged set (`commit_and_push` rejects the commit if the
+         expected `.pdd/meta/<safe>_<lang>.json` is missing).
+      2. Metadata-finalization failures must exit non-zero in EVERY mode
+         (PR and `--skip-ci`/push-to-main), not be treated as advisory.
+    """
+
+    def _drift(self, basename="auth", language="python"):
+        return DriftInfo(
+            basename, language, "update", "changed",
+            code_path=f"/repo/{basename}.py",
+            prompt_path=f"/repo/prompts/{basename}_{language}.prompt",
+        )
+
+    def test_metadata_failure_returns_nonzero_in_pr_mode(self):
+        """PR mode (skip_ci=False) exits non-zero on metadata finalization failure."""
+        drift = self._drift("auth")
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = "metadata sync returned false"
+        drifts = ([drift], [])
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", return_value=False), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=False)
+
+        assert result == 1
+        mock_commit.assert_not_called()
+
+    def test_metadata_failure_returns_nonzero_in_push_to_main_mode(self):
+        """skip_ci=True (push-to-main/preflight) MUST also exit non-zero
+        on metadata finalization failure (Issue #1006). The earlier behavior
+        treated this as advisory and returned 0 after committing partial state.
+        """
+        drift = self._drift("auth")
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = "metadata sync returned false"
+        drifts = ([drift], [])
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", return_value=False), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=True)
+
+        assert result == 1
+        # Critically: must NOT commit any partial state from earlier modules.
+        mock_commit.assert_not_called()
+
+    def test_metadata_failure_blocks_commit_even_after_other_module_succeeded(self):
+        """A successful module ahead of a metadata failure must NOT be
+        committed in push-to-main mode either."""
+        drifts = (
+            [self._drift("auth"), self._drift("api")],
+            [],
+        )
+
+        def heal_side_effect(drift, env):
+            if drift.basename == "auth":
+                drift.metadata_finalized = True
+                return True
+            drift.metadata_finalization_failed = True
+            drift.metadata_finalization_error = "metadata sync returned false"
+            return False
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=drifts), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=heal_side_effect), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=True)
+
+        assert result == 1
+        mock_commit.assert_not_called()
+
+    def test_unresolvable_prompt_after_update_returns_nonzero_in_skip_ci_mode(self):
+        """Successful pdd update followed by missing prompt resolution is a
+        metadata-finalization hard failure in preflight/push-to-main mode."""
+        drift = self._drift("auth")
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = "prompt_path unresolvable post-update"
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+             patch("pdd.ci_drift_heal.heal_module", return_value=False), \
+             patch("pdd.ci_drift_heal.commit_and_push") as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            result = main(skip_ci=True)
+
+        assert result == 1
+        mock_commit.assert_not_called()
+
+    def test_main_passes_finalized_modules_to_commit(self):
+        """heal_module that sets `metadata_finalized` makes main forward the
+        (basename, language) tuple to commit_and_push for staging verification."""
+        drift = self._drift("auth")
+
+        def heal_side_effect(d, env):
+            d.metadata_finalized = True
+            return True
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+             patch("pdd.ci_drift_heal.heal_module", side_effect=heal_side_effect), \
+             patch("pdd.ci_drift_heal.commit_and_push", return_value=True) as mock_commit, \
+             patch("pdd.ci_drift_heal.tempfile.mkstemp", return_value=(5, "/tmp/fake.csv")), \
+             patch("pdd.ci_drift_heal.os.close"), \
+             patch("pdd.ci_drift_heal.os.unlink"), \
+             patch("pdd.ci_drift_heal.Path.write_text"):
+            assert main(skip_ci=True) == 0
+
+        mock_commit.assert_called_once_with(
+            ["auth"], True, checkpoint=False,
+            finalized_modules=[("auth", "python")],
+        )
+
+    def test_commit_and_push_aborts_when_fingerprint_not_staged(self):
+        """commit_and_push must refuse to commit if a finalized module's
+        expected `.pdd/meta/<safe>_<lang>.json` did not land in the staged
+        set (e.g. save_fingerprint silently dropped the write)."""
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 1  # changes exist
+            elif cmd == ["git", "diff", "--cached", "--name-only"]:
+                # Only the prompt is staged — fingerprint went missing.
+                r.returncode = 0
+                r.stdout = "prompts/auth_python.prompt\n"
+            elif cmd[0:2] == ["git", "commit"]:
+                raise AssertionError("commit must not run when staging verification fails")
+            elif cmd == ["git", "push"]:
+                raise AssertionError("push must not run when staging verification fails")
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["auth"], skip_ci=False, checkpoint=False,
+                finalized_modules=[("auth", "python")],
+            )
+
+        assert ok is False
+
+    def test_commit_and_push_aborts_when_finalized_module_has_empty_index(self):
+        """An empty staged index is not success when metadata was finalized."""
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 0  # no staged changes
+            elif cmd[0:2] == ["git", "commit"]:
+                raise AssertionError("commit must not run when metadata is missing")
+            elif cmd == ["git", "push"]:
+                raise AssertionError("push must not run when metadata is missing")
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["auth"], skip_ci=False, checkpoint=False,
+                finalized_modules=[("auth", "python")],
+            )
+
+        assert ok is False
+
+    def test_commit_and_push_succeeds_when_fingerprint_staged(self):
+        """commit_and_push proceeds when the finalized module's fingerprint
+        is present in the staged set."""
+
+        commit_called = {"value": False}
+        push_called = {"value": False}
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 1
+            elif cmd == ["git", "diff", "--cached", "--name-only"]:
+                r.returncode = 0
+                r.stdout = (
+                    "prompts/auth_python.prompt\n"
+                    ".pdd/meta/auth_python.json\n"
+                )
+            elif cmd[0:2] == ["git", "commit"]:
+                commit_called["value"] = True
+                r.returncode = 0
+            elif cmd == ["git", "push"]:
+                push_called["value"] = True
+                r.returncode = 0
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["auth"], skip_ci=False, checkpoint=False,
+                finalized_modules=[("auth", "python")],
+            )
+
+        assert ok is True
+        assert commit_called["value"]
+        assert push_called["value"]
+
+    def test_commit_and_push_uses_safe_basename_for_subdir_modules(self):
+        """For subdirectory basenames like 'commands/foo', the expected
+        fingerprint path uses the flattened safe basename."""
+
+        def mock_run(cmd, **kwargs):
+            r = MagicMock()
+            r.stdout = ""
+            r.stderr = ""
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                r.returncode = 1
+            elif cmd == ["git", "diff", "--cached", "--name-only"]:
+                r.returncode = 0
+                # Note the flattened path with underscore, not slash.
+                r.stdout = ".pdd/meta/commands_foo_python.json\n"
+            else:
+                r.returncode = 0
+            return r
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+            ok = commit_and_push(
+                ["commands/foo"], skip_ci=True, checkpoint=False,
+                finalized_modules=[("commands/foo", "python")],
+            )
+
+        assert ok is True
+
+    def test_end_to_end_skip_ci_metadata_failure_exits_nonzero(self, tmp_path, monkeypatch):
+        """Real main() exits non-zero when metadata finalization fails in
+        push-to-main mode and leaves no commit behind."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        TestMain._init_git_repo(repo)
+
+        prompt_path = repo / "pdd" / "prompts" / "auth_python.prompt"
+        code_path = repo / "pdd" / "auth.py"
+        prompt_path.parent.mkdir(parents=True)
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+
+        initial_prompt = "% Goal\ninitial prompt\n"
+        prompt_path.write_text(initial_prompt, encoding="utf-8")
+        code_path.write_text("def auth():\n    return True\n", encoding="utf-8")
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=repo,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        monkeypatch.chdir(repo)
+        drift = DriftInfo(
+            "auth", "python", "update", "changed",
+            code_path=str(code_path),
+            prompt_path=str(prompt_path),
+        )
+
+        def run_pdd_side_effect(cmd, env, label):
+            if cmd[:5] == ["pdd", "--force", "--strength", "0.5", "update"]:
+                prompt_path.write_text("% Goal\nupdated prompt\n", encoding="utf-8")
+                return True
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+             patch("pdd.ci_drift_heal._run_pdd_command", side_effect=run_pdd_side_effect), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=False):
+            result = main(skip_ci=True)
+
+        # MUST exit 1 in push-to-main mode on metadata-finalization failure.
+        assert result == 1
+
+        # Repo must be clean (rollback restored prompt) and no new commit.
+        status = subprocess.run(
+            ["git", "status", "--short"],
+            cwd=repo, check=True, capture_output=True, text=True,
+        )
+        assert status.stdout.strip() == ""
+        head = subprocess.run(
+            ["git", "log", "-1", "--pretty=%s"],
+            cwd=repo, check=True, capture_output=True, text=True,
+        )
+        assert head.stdout.strip() == "initial"
+
+    def test_end_to_end_successful_heal_stages_fingerprint(self, tmp_path, monkeypatch):
+        """End-to-end main(): a successful heal in push-to-main mode commits
+        with the fingerprint file in the staged set; staging verification
+        passes and the fingerprint lands in the resulting commit."""
+        repo = tmp_path / "repo"
+        repo.mkdir()
+        TestMain._init_git_repo(repo)
+
+        prompt_path = repo / "pdd" / "prompts" / "auth_python.prompt"
+        code_path = repo / "pdd" / "auth.py"
+        prompt_path.parent.mkdir(parents=True)
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+
+        prompt_path.write_text("% Goal\ninitial prompt\n", encoding="utf-8")
+        code_path.write_text("def auth():\n    return True\n", encoding="utf-8")
+
+        subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=repo, check=True, capture_output=True, text=True,
+        )
+
+        monkeypatch.chdir(repo)
+        drift = DriftInfo(
+            "auth", "python", "update", "changed",
+            code_path=str(code_path),
+            prompt_path=str(prompt_path),
+        )
+
+        meta_dir = repo / ".pdd" / "meta"
+
+        def run_pdd_side_effect(cmd, env, label):
+            if cmd[:5] == ["pdd", "--force", "--strength", "0.5", "update"]:
+                prompt_path.write_text("% Goal\nupdated prompt\n", encoding="utf-8")
+                return True
+            if cmd[:5] == ["pdd", "--force", "--strength", "0.5", "example"]:
+                return True
+            raise AssertionError(f"Unexpected command: {cmd}")
+
+        def fake_meta_sync(_p, _c):
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            (meta_dir / "auth_python.json").write_text(
+                '{"timestamp": "now", "command": "metadata_sync"}',
+                encoding="utf-8",
+            )
+            return True
+
+        # Suppress `git push` (no remote configured); leave all other git
+        # commands untouched so the staging verification runs against a
+        # real index.
+        original_run = subprocess.run
+
+        def patched_run(cmd, *args, **kwargs):
+            if isinstance(cmd, list) and cmd == ["git", "push"]:
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return original_run(cmd, *args, **kwargs)
+
+        with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+             patch("pdd.ci_drift_heal._run_pdd_command", side_effect=run_pdd_side_effect), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", side_effect=fake_meta_sync), \
+             patch("pdd.ci_drift_heal.subprocess.run", side_effect=patched_run):
+            result = main(skip_ci=True)
+
+        assert result == 0
+
+        log = subprocess.run(
+            ["git", "log", "-1", "--name-only", "--pretty="],
+            cwd=repo, check=True, capture_output=True, text=True,
+        )
+        assert ".pdd/meta/auth_python.json" in log.stdout
