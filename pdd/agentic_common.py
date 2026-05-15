@@ -2247,7 +2247,13 @@ def _revert_out_of_scope_changes(
         List of paths that were reverted.
     """
     cwd_str = str(cwd.resolve())
-    if not any(str(p).startswith(cwd_str) for p in allowed_paths):
+    # Iter-8 B5a (empty contract reject-all): when ``allowed_paths`` is
+    # non-empty, skip when none of the entries fall under *cwd* — that is
+    # the historical "scope guard for a different module" optimization.
+    # When ``allowed_paths`` is EMPTY, however, the caller is asking for a
+    # reject-all sweep (Issue #1013 degenerate-empty contract). Don't
+    # short-circuit; proceed with revert.
+    if allowed_paths and not any(str(p).startswith(cwd_str) for p in allowed_paths):
         return []
     try:
         result = subprocess.run(

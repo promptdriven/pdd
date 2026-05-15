@@ -4823,6 +4823,36 @@ class TestRevertOutOfScopeChanges:
             f"In-scope rename must remain staged; got: {status!r}"
         )
 
+    def test_empty_contract_reverts_rename_fully(self, tmp_path):
+        """Iter-8 B5a (empty-contract early-exit) + B5b: a reject-all
+        empty contract (``allowed_paths=set()``) used to short-circuit
+        the helper. After the fix, the helper proceeds with revert; the
+        rename is fully undone.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        proj.mkdir()
+        (proj / "pdd").mkdir()
+        (proj / "pdd" / "old.py").write_text("contents\n")
+        _init_test_git_repo(proj)
+
+        _subprocess.run(["git", "-C", str(proj), "mv",
+                         "pdd/old.py", "pdd/new.py"],
+                        check=True, capture_output=True)
+
+        # Empty contract: nothing is allowed → revert everything.
+        _revert_out_of_scope_changes(proj, set())
+
+        status = _subprocess.run(
+            ["git", "-C", str(proj), "status", "--porcelain"],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        assert status.strip() == "", (
+            f"Empty contract must revert all changes including renames; "
+            f"got: {status!r}"
+        )
+
     def test_reverts_deleted_files(self, tmp_path):
         """Deleted files outside allowed set must be restored."""
         from pdd.agentic_common import _revert_out_of_scope_changes
