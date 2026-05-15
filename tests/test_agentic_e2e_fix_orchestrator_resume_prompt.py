@@ -418,3 +418,72 @@ class TestArchitectureMetadataSanityCheck:
             "<pdd-interface> push_with_retry signature must declare "
             "force_with_lease_on_non_fast_forward to match architecture.json"
         )
+
+    def test_prompt_interface_mirrors_architecture_json(self, orchestrator_prompt_raw):
+        """Every function declared in the prompt's ``<pdd-interface>`` MUST
+        round-trip-match the corresponding entry in ``architecture.json`` on
+        ``name``, ``signature``, ``returns``, and ``sideEffects`` (when
+        architecture.json declares them).
+
+        This is the strong sync check codex flagged in round 2: if either side
+        drifts -- a new ``sideEffects`` entry is added to architecture.json,
+        a signature is updated, or the prompt's interface is edited without
+        the architecture entry being updated -- this test fails. The prompt
+        may declare a subset of architecture's functions, but every prompt
+        function must exactly mirror its architecture counterpart.
+        """
+        # Parse the <pdd-interface> JSON block out of the raw template.
+        m = re.search(
+            r'<pdd-interface>\s*(\{.*?\})\s*</pdd-interface>',
+            orchestrator_prompt_raw,
+            re.DOTALL,
+        )
+        assert m, "<pdd-interface> block not found in prompt"
+        prompt_interface = json.loads(m.group(1))
+        prompt_functions = prompt_interface.get("module", {}).get("functions", [])
+        assert prompt_functions, "<pdd-interface> must declare at least one function"
+
+        arch_entry = _get_orchestrator_architecture_entry()
+        arch_functions = (
+            arch_entry.get("interface", {}).get("module", {}).get("functions", [])
+        )
+        assert arch_functions, (
+            "architecture.json orchestrator entry must declare at least one function"
+        )
+        arch_by_name = {f["name"]: f for f in arch_functions}
+
+        # Every function declared in the prompt must mirror its architecture entry.
+        for prompt_fn in prompt_functions:
+            name = prompt_fn["name"]
+            assert name in arch_by_name, (
+                f"Prompt declares function {name!r} but architecture.json has no "
+                f"matching entry. Either remove it from the prompt or add it to "
+                f"architecture.json."
+            )
+            arch_fn = arch_by_name[name]
+
+            # name / signature / returns must match exactly.
+            assert prompt_fn["signature"] == arch_fn["signature"], (
+                f"Function {name!r} signature drift between prompt and "
+                f"architecture.json:\n  prompt:       {prompt_fn['signature']!r}\n"
+                f"  architecture: {arch_fn['signature']!r}"
+            )
+            assert prompt_fn["returns"] == arch_fn["returns"], (
+                f"Function {name!r} returns drift between prompt and "
+                f"architecture.json:\n  prompt:       {prompt_fn['returns']!r}\n"
+                f"  architecture: {arch_fn['returns']!r}"
+            )
+
+            # sideEffects: if architecture.json declares them, the prompt MUST
+            # declare the same list (order-preserving equality).
+            if "sideEffects" in arch_fn:
+                assert "sideEffects" in prompt_fn, (
+                    f"architecture.json declares sideEffects for {name!r} but "
+                    f"the prompt's <pdd-interface> omits them. Add the "
+                    f"sideEffects array verbatim to the prompt interface."
+                )
+                assert prompt_fn["sideEffects"] == arch_fn["sideEffects"], (
+                    f"Function {name!r} sideEffects drift between prompt and "
+                    f"architecture.json:\n  prompt:       {prompt_fn['sideEffects']!r}\n"
+                    f"  architecture: {arch_fn['sideEffects']!r}"
+                )
