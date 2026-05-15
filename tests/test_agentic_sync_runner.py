@@ -2740,6 +2740,45 @@ class TestEnforceScopeGuard:
         out = capsys.readouterr().out
         assert "--no-scope-guard" in out
 
+    def test_pre_existing_untracked_files_are_preserved(self, tmp_path):
+        """Iter-6 B1 (data-loss bug): a user's pre-existing untracked file
+        (``scratch.txt``) must NOT be removed by the scope guard. Uses a
+        real ``git init`` repo because the bug only reproduces when the
+        revert helpers actually touch the filesystem.
+        """
+        subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email",
+                        "t@t.invalid"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name",
+                        "T"], check=True, capture_output=True)
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "README.md"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"],
+                       check=True, capture_output=True)
+
+        scratch = tmp_path / "scratch.txt"
+        scratch.write_text("user work-in-progress — do not delete")
+        assert scratch.exists()
+
+        from unittest.mock import patch
+        with patch("pdd.agentic_sync_runner.Path.cwd", return_value=tmp_path):
+            runner = self._make_runner(
+                allowed_write_set=["pdd/foo.py"],
+                companion_allowlist=[".pdd/meta/*.json"],
+            )
+        runner.project_root = tmp_path
+
+        assert "scratch.txt" in runner._baseline_changed_paths
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert scratch.exists(), (
+            "scope guard incorrectly deleted user's pre-existing scratch.txt"
+        )
+        assert diagnostic is None or "scratch.txt" not in diagnostic
+
     def test_deleted_companion_in_git_status_is_preserved(
         self, tmp_path, monkeypatch
     ):

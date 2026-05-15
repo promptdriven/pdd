@@ -934,6 +934,16 @@ class AsyncSyncRunner:
         self._scope_guard_locks: Dict[str, threading.Lock] = defaultdict(threading.Lock)
         self._scope_guard_locks_lock = threading.Lock()
 
+        # Iter-6 B1 (data-loss bug): snapshot the working-tree changed/untracked
+        # set BEFORE any module sync runs. Pre-existing untracked files
+        # (e.g. user's ``scratch.txt``) are not the sync run's responsibility
+        # and MUST be preserved by the scope guard.
+        self._baseline_changed_paths: Set[str] = (
+            _git_changed_paths(self.project_root)
+            if self.scope_guard_enabled and self.allowed_write_paths is not None
+            else set()
+        )
+
         self.total_budget = self.sync_options.get("total_budget")
         self.max_workers = 1 if self.total_budget is not None else MAX_WORKERS
         # When a contract narrows writes AND scope-guard enforcement is
@@ -1956,6 +1966,13 @@ class AsyncSyncRunner:
                     # Outside the module's cwd — scoped out by F1 iter-3.
                     continue
                 allowed_files.add(absolute)
+
+            # Iter-6 B1 (data-loss bug): pre-existing untracked files
+            # captured at runner __init__ are NEVER out-of-scope. Without
+            # this pass, a user's ``scratch.txt`` or unrelated WIP under
+            # the repo root would be removed by the revert helper.
+            for rel_posix in self._baseline_changed_paths:
+                allowed_files.add((repo_root / rel_posix).resolve())
 
             tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
             untracked_reverted = revert_out_of_scope_changes_with_dirs(
