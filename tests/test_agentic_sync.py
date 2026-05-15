@@ -3287,6 +3287,220 @@ class TestOrchestratorScopeGuardIntegration:
         mock_runner_cls.assert_called_once()
         mock_runner_cls.return_value.run.assert_called_once()
 
+    # ---------------------------------------------------------------------
+    # Iter-38 M-1: fail-closed baseline acquisition at orchestrator init.
+    # When ``_git_changed_paths`` / ``_git_ignored_paths`` return ``None``
+    # (transient git lock contention, missing binary, OSError) the
+    # orchestrator MUST abort BEFORE any pre-dispatch LLM call or shell
+    # command. An empty baseline produced by a silent scan failure would
+    # later let the pre-dispatch scope guard revert pre-existing user WIP.
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_aborts_when_baseline_changed_scan_fails(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Init-time ``_git_changed_paths`` returns ``None`` → orchestrator
+        fail-closes before any LLM call or runner construction."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+        # Patch the helpers on the agentic_sync module (where they're
+        # imported by name) — the orchestrator looks them up here.
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", lambda _root: None)
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", lambda _root: set())
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is False
+        assert "fail-closed" in msg
+        assert "baseline" in msg
+        # Downstream LLM / runner construction MUST NOT have run.
+        mock_agentic_task.assert_not_called()
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_aborts_when_baseline_ignored_scan_fails(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_runner_cls,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Init-time ``_git_ignored_paths`` returns ``None`` → orchestrator
+        fail-closes before any LLM call or runner construction."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", lambda _root: set())
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", lambda _root: None)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is False
+        assert "fail-closed" in msg
+        mock_agentic_task.assert_not_called()
+        mock_runner_cls.assert_not_called()
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_proceeds_when_baseline_scans_succeed(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Regression: both baseline scans succeed (empty set is a valid
+        success result) → orchestrator proceeds normally."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_WITH_BULLET_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+        # Successful scans returning empty sets (clean worktree).
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", lambda _root: set())
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", lambda _root: set())
+
+        mock_agentic_task.return_value = (
+            True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_filter_synced.return_value = ["foo"]
+        mock_runner_cls.return_value.run.return_value = (True, "ok", 0.0)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        assert "fail-closed" not in msg
+        mock_runner_cls.assert_called_once()
+
+    @patch("pdd.agentic_sync._filter_already_synced")
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="t {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_orchestrator_does_not_fail_closed_in_permissive_mode(
+        self,
+        _mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        _mock_load_prompt,
+        mock_runner_cls,
+        mock_dry_run,
+        mock_filter_synced,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Permissive mode (no contract on issue) → baseline scan is never
+        invoked, so a hypothetical ``None`` return from the helpers does
+        NOT trigger the fail-closed abort. Run proceeds normally."""
+        _init_git_repo(tmp_path)
+        monkeypatch.setattr("pdd.agentic_sync._find_project_root", lambda *_: tmp_path)
+        monkeypatch.setattr(
+            "pdd.agentic_sync._detect_modules_from_branch_diff", lambda *_: []
+        )
+        mock_gh_cmd.return_value = (
+            True, self._issue_payload(self._ISSUE_BODY_NO_CONTRACT)
+        )
+        mock_load_arch.return_value = (None, tmp_path / "architecture.json")
+
+        called = {"changed": 0, "ignored": 0}
+
+        def fake_changed(_root):
+            called["changed"] += 1
+            return None  # Would fail-close if the gate let us reach here.
+
+        def fake_ignored(_root):
+            called["ignored"] += 1
+            return None
+
+        monkeypatch.setattr("pdd.agentic_sync._git_changed_paths", fake_changed)
+        monkeypatch.setattr("pdd.agentic_sync._git_ignored_paths", fake_ignored)
+
+        mock_agentic_task.return_value = (
+            True, 'MODULES_TO_SYNC: ["foo"]\nDEPS_VALID: true', 0.01, "anthropic"
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+        mock_filter_synced.return_value = ["foo"]
+        mock_runner_cls.return_value.run.return_value = (True, "ok", 0.0)
+
+        success, msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        # Init-time helpers are gated on (scope_guard AND issue_contract is
+        # not None). In permissive mode they MUST NOT be called for the
+        # baseline acquisition, so the fail-closed abort cannot trigger.
+        assert called["changed"] == 0, (
+            "permissive mode must not invoke the init-time changed scan"
+        )
+        assert called["ignored"] == 0, (
+            "permissive mode must not invoke the init-time ignored scan"
+        )
+        assert success is True
+        assert "fail-closed" not in msg
+        mock_runner_cls.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # _resolve_module_cwd

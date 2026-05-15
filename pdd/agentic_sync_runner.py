@@ -158,8 +158,26 @@ def _normalize_repo_path(path: str) -> str:
     return cleaned
 
 
-def _git_changed_paths(project_root: Path) -> set[str]:
-    """Return changed paths from git status, including untracked files."""
+def _git_changed_paths(project_root: Path) -> Optional[set[str]]:
+    """Return changed paths from git status, or ``None`` on scan failure.
+
+    Iter-38 M-1 (fail-closed baseline acquisition): previously returned an
+    empty set on any subprocess failure or non-zero return, indistinguishable
+    from "scan succeeded but worktree was clean." That ambiguity let a
+    transient git failure at runner/orchestrator init time produce an empty
+    baseline that the scope guard later treats as "user had nothing dirty,"
+    so any pre-existing user file is falsely flagged as out-of-scope and
+    reverted/deleted.
+
+    A successful scan that finds no changes returns an empty set; only
+    failures (OSError, ``subprocess.SubprocessError``, non-zero return code)
+    return ``None``. Init-time callers MUST treat ``None`` as a fail-closed
+    abort signal (see :class:`AsyncSyncRunner.__init__` and
+    :func:`pdd.agentic_sync.run_agentic_sync`). Enforcement-time callers
+    that already have a separate ``<git-status-failed>`` policy (see
+    :meth:`_remaining_out_of_scope_paths`) treat ``None`` as the empty set
+    via ``or set()``.
+    """
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain", "--untracked-files=all"],
@@ -169,9 +187,9 @@ def _git_changed_paths(project_root: Path) -> set[str]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return set()
+        return None
     if result.returncode != 0:
-        return set()
+        return None
 
     paths: set[str] = set()
     for line in result.stdout.splitlines():
@@ -189,7 +207,7 @@ def _git_changed_paths(project_root: Path) -> set[str]:
     return {p for p in paths if p}
 
 
-def _git_ignored_paths(project_root: Path) -> set[str]:
+def _git_ignored_paths(project_root: Path) -> Optional[set[str]]:
     """Return repo-relative POSIX paths of git-ignored files (Issue #1013 iter-20).
 
     Uses ``git ls-files --others --ignored --exclude-standard`` to enumerate
@@ -199,10 +217,19 @@ def _git_ignored_paths(project_root: Path) -> set[str]:
     ``scope_guard_enabled AND allowed_write_paths is not None`` so non-contract
     runs do not pay the cost.
 
-    Returns an empty set on any subprocess failure or non-zero return — the
-    baseline snapshot is best-effort. The post-revert re-scan in
-    ``_remaining_out_of_scope_paths`` handles ignored-scan failures with the
-    explicit ``<git-status-failed>`` sentinel instead.
+    Iter-38 M-1 (fail-closed baseline acquisition): returns ``None`` on any
+    subprocess failure or non-zero return, NOT an empty set. The init-time
+    callers that snapshot the baseline (see :class:`AsyncSyncRunner.__init__`
+    and :func:`pdd.agentic_sync.run_agentic_sync`) MUST treat ``None`` as a
+    fail-closed abort signal — otherwise a transient git failure at init
+    silently produces an empty baseline that the scope guard later treats as
+    "no pre-existing files," so any pre-existing user WIP is falsely flagged
+    as out-of-scope and reverted/deleted.
+
+    Enforcement-time callers (post-revert re-scan in
+    :meth:`_remaining_out_of_scope_paths`) handle ignored-scan failures with
+    the separate ``<git-status-failed>`` sentinel; those sites treat ``None``
+    as the empty set via ``or set()``.
     """
     try:
         result = subprocess.run(
@@ -213,9 +240,9 @@ def _git_ignored_paths(project_root: Path) -> set[str]:
             check=False,
         )
     except (OSError, subprocess.SubprocessError):
-        return set()
+        return None
     if result.returncode != 0:
-        return set()
+        return None
 
     paths: set[str] = set()
     for line in result.stdout.splitlines():
@@ -1050,15 +1077,7 @@ class AsyncSyncRunner:
         # gate (``scope_guard_enabled AND allowed_write_paths is not None``)
         # is off, so the dict.items() loops in the enforcement path are
         # safe no-ops.
-        if self.scope_guard_enabled and self.allowed_write_paths is not None:
-            _baseline_paths = _git_changed_paths(self.project_root)
-            self._baseline_changed_paths: Dict[str, Optional[str]] = {
-                rel: _hash_file(self.project_root, rel)
-                for rel in _baseline_paths
-            }
-        else:
-            self._baseline_changed_paths = {}
-
+        #
         # Iter-20 M-1 (gitignored fail-open): also snapshot pre-existing
         # gitignored files (e.g. user-side ``build/cache.bin`` under a
         # repo-wide ``.gitignore: build/``). ``git status`` does not show
@@ -1067,22 +1086,36 @@ class AsyncSyncRunner:
         # invisible to the post-revert re-scan and the module would be
         # marked successful with the contract violated on disk.
         #
-        # Gated on ``scope_guard_enabled AND allowed_write_paths is not None``
-        # (same gate as ``_baseline_changed_paths``) so non-contract runs do
-        # not pay the ``git ls-files`` cost on repos with large ignored
-        # trees (``node_modules/``, ``build/``, etc.).
+        # Iter-24 M-1: same dict-with-SHA shape as ``_baseline_changed_paths``.
         #
-        # Iter-24 M-1: same dict-with-SHA shape as ``_baseline_changed_paths``
-        # — pre-existing ignored files are skipped from the gitignored
-        # re-scan ONLY when their content is unchanged. A clobbered ignored
-        # baseline path surfaces via the re-scan.
+        # Iter-38 M-1 (fail-closed baseline acquisition): the helpers now
+        # return ``None`` on scan failure (transient git lock contention,
+        # missing binary, OSError) instead of an empty set. Without this
+        # discrimination an init-time scan failure would silently produce
+        # an empty baseline that the scope guard later treats as "no
+        # pre-existing files," so any pre-existing user WIP is falsely
+        # flagged as out-of-scope and reverted/deleted. When EITHER scan
+        # returns ``None`` we record ``_baseline_acquisition_failed = True``
+        # and :meth:`run` aborts before any write-capable work. The flag
+        # is internal — public signatures are unchanged.
         if self.scope_guard_enabled and self.allowed_write_paths is not None:
-            _baseline_ignored = _git_ignored_paths(self.project_root)
-            self._baseline_ignored_paths: Dict[str, Optional[str]] = {
-                rel: _hash_file(self.project_root, rel)
-                for rel in _baseline_ignored
-            }
+            _raw_changed = _git_changed_paths(self.project_root)
+            _raw_ignored = _git_ignored_paths(self.project_root)
+            if _raw_changed is None or _raw_ignored is None:
+                self._baseline_acquisition_failed: bool = True
+                self._baseline_changed_paths: Dict[str, Optional[str]] = {}
+                self._baseline_ignored_paths: Dict[str, Optional[str]] = {}
+            else:
+                self._baseline_acquisition_failed = False
+                self._baseline_changed_paths = _hash_baseline_paths(
+                    self.project_root, _raw_changed
+                )
+                self._baseline_ignored_paths = _hash_baseline_paths(
+                    self.project_root, _raw_ignored
+                )
         else:
+            self._baseline_acquisition_failed = False
+            self._baseline_changed_paths = {}
             self._baseline_ignored_paths = {}
 
         self.total_budget = self.sync_options.get("total_budget")
@@ -1684,6 +1717,26 @@ class AsyncSyncRunner:
         # here, which produced a duplicate line for every sync. Removed so
         # the operator sees one authoritative status line.
 
+        # Iter-38 M-1 (fail-closed baseline acquisition): the __init__
+        # baseline-scan helpers (``_git_changed_paths`` / ``_git_ignored_paths``)
+        # now return ``None`` on transient git failure (lock contention,
+        # missing binary, OSError) rather than an empty set. An empty
+        # baseline indistinguishable from "scan succeeded, worktree clean"
+        # would later cause the scope guard to flag pre-existing user WIP
+        # as out-of-scope and revert/delete it. When the init recorded a
+        # failed acquisition, abort BEFORE any write-capable work runs.
+        if getattr(self, "_baseline_acquisition_failed", False):
+            return (
+                False,
+                (
+                    "Scope guard fail-closed: could not snapshot working-tree "
+                    "baseline at runner init (git scan failed). Aborting "
+                    "before any write-capable work to prevent false-positive "
+                    "reverts of pre-existing user files."
+                ),
+                self.initial_cost,
+            )
+
         if not self.basenames:
             return True, "No modules to sync", self.initial_cost
 
@@ -2257,7 +2310,14 @@ class AsyncSyncRunner:
             # scope to ``cwd_path`` FIRST, then match the module-relative form
             # against the companion pattern (same semantics as the rglob loop
             # above).
-            for rel_posix in _git_changed_paths(repo_root):
+            #
+            # Iter-38 M-1: ``_git_changed_paths`` now returns ``None`` on
+            # scan failure (was empty set). Enforcement-time scan failures
+            # are already handled by the ``<git-status-failed>`` sentinel in
+            # :meth:`_remaining_out_of_scope_paths`; here we just treat
+            # ``None`` as the empty set so the iteration is a no-op rather
+            # than crashing.
+            for rel_posix in (_git_changed_paths(repo_root) or set()):
                 absolute = (repo_root / rel_posix).resolve()
                 # Iter-36 B-1/B-2: tracked deletion of a PDD-internal
                 # artifact (e.g. ``.pdd/agentic_sync_state.json`` between

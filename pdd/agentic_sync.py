@@ -1844,7 +1844,12 @@ def _enforce_orchestrator_scope(
     # Iter-36 B-1/B-2: same internal-allowlist parallel pass — a tracked
     # deletion of ``.pdd/agentic_sync_state.json`` (e.g. between sync
     # invocations) must NOT be resurrected by the revert helper.
-    for rel_posix in _git_changed_paths(repo_root):
+    #
+    # Iter-38 M-1: ``_git_changed_paths`` now returns ``None`` on scan
+    # failure (was empty set). Enforcement-time scan failures are already
+    # handled separately downstream; here we treat ``None`` as the empty
+    # set so iteration is a no-op rather than crashing.
+    for rel_posix in (_git_changed_paths(repo_root) or set()):
         absolute = (repo_root / rel_posix).resolve()
         if _matches_companion(rel_posix, allowlist):
             allowed_files.add(absolute)
@@ -2349,11 +2354,33 @@ def run_agentic_sync(
     # only branches to worktrees inside :class:`DurableSyncRunner.run`,
     # which runs after this guard is no longer relevant.
     if scope_guard and issue_contract is not None:
+        # Iter-38 M-1 (fail-closed baseline acquisition): the helpers now
+        # return ``None`` on transient git failure (lock contention, missing
+        # binary, OSError) instead of an empty set. Without this
+        # discrimination an init-time scan failure here would silently
+        # produce an empty baseline that the orchestrator scope guard
+        # later treats as "no pre-existing files," so any pre-existing
+        # user WIP could be reverted/deleted by the pre-dispatch check.
+        # When EITHER scan fails we abort BEFORE any LLM call or shell
+        # command runs in this orchestrator. The runner has its own
+        # symmetric guard in :meth:`AsyncSyncRunner.run`.
+        _raw_orch_changed = _git_changed_paths(project_root)
+        _raw_orch_ignored = _git_ignored_paths(project_root)
+        if _raw_orch_changed is None or _raw_orch_ignored is None:
+            msg = (
+                "Scope guard fail-closed: could not snapshot working-tree "
+                "baseline at orchestrator init (git scan failed). Aborting "
+                "before any pre-dispatch LLM/shell work to prevent "
+                "false-positive reverts of pre-existing user files."
+            )
+            if use_github_state:
+                _post_error_comment(owner, repo, issue_number, msg)
+            return False, msg, 0.0, ""
         _orch_baseline_changed: Dict[str, Optional[str]] = _hash_baseline_paths(
-            project_root, _git_changed_paths(project_root)
+            project_root, _raw_orch_changed
         )
         _orch_baseline_ignored: Dict[str, Optional[str]] = _hash_baseline_paths(
-            project_root, _git_ignored_paths(project_root)
+            project_root, _raw_orch_ignored
         )
     else:
         _orch_baseline_changed = {}

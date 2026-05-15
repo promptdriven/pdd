@@ -2667,6 +2667,170 @@ class TestAllowedWriteSet:
         assert "out.py" not in runner._baseline_changed_paths
 
 
+class TestBaselineFailClosed:
+    """Issue #1013 iter-38 M-1: when the init-time baseline scan fails
+    (transient git lock contention, missing binary, OSError), the runner
+    MUST record ``_baseline_acquisition_failed=True`` and abort
+    :meth:`run` before any write-capable work runs. An empty baseline
+    indistinguishable from "scan succeeded, worktree clean" would cause
+    the scope guard to later flag pre-existing user WIP as out-of-scope
+    and revert/delete it.
+    """
+
+    def test_async_runner_aborts_when_baseline_changed_scan_fails(
+        self, monkeypatch
+    ):
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: None)
+        monkeypatch.setattr(mod, "_git_ignored_paths", lambda _root: set())
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is True
+        assert runner._baseline_changed_paths == {}
+        assert runner._baseline_ignored_paths == {}
+
+        success, msg, cost = runner.run()
+        assert success is False
+        assert "fail-closed" in msg
+        assert "baseline" in msg
+        assert cost == 0.0
+
+    def test_async_runner_aborts_when_baseline_ignored_scan_fails(
+        self, monkeypatch
+    ):
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: set())
+        monkeypatch.setattr(mod, "_git_ignored_paths", lambda _root: None)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is True
+        success, msg, _cost = runner.run()
+        assert success is False
+        assert "fail-closed" in msg
+
+    def test_async_runner_aborts_when_baseline_scan_raises_oserror(
+        self, monkeypatch
+    ):
+        """Verify the actual subprocess exception path: ``_git_changed_paths``
+        catches ``OSError`` and returns ``None``, which must propagate to
+        the fail-closed flag."""
+        from pdd import agentic_sync_runner as mod
+
+        def boom(*_args, **_kwargs):
+            raise OSError("git binary missing")
+
+        monkeypatch.setattr(mod.subprocess, "run", boom)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is True
+        success, msg, _cost = runner.run()
+        assert success is False
+        assert "fail-closed" in msg
+
+    def test_async_runner_no_flag_when_baseline_scan_fails_in_permissive_mode(
+        self, monkeypatch
+    ):
+        """When ``allowed_write_set`` is ``None`` (permissive), the helpers
+        are never called and no failure can be recorded — the run proceeds."""
+        from pdd import agentic_sync_runner as mod
+
+        called = {"changed": 0, "ignored": 0}
+
+        def fake_changed(_root):
+            called["changed"] += 1
+            return None
+
+        def fake_ignored(_root):
+            called["ignored"] += 1
+            return None
+
+        monkeypatch.setattr(mod, "_git_changed_paths", fake_changed)
+        monkeypatch.setattr(mod, "_git_ignored_paths", fake_ignored)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=None,
+        )
+
+        # Gate is off → helpers MUST NOT be called and the flag MUST be False.
+        assert called["changed"] == 0
+        assert called["ignored"] == 0
+        assert runner._baseline_acquisition_failed is False
+
+    def test_async_runner_no_flag_when_scope_guard_disabled(self, monkeypatch):
+        """``scope_guard_enabled=False`` skips the baseline scan entirely —
+        even an OSError from ``subprocess.run`` cannot trigger fail-closed."""
+        from pdd import agentic_sync_runner as mod
+
+        def boom(*_args, **_kwargs):
+            raise OSError("would explode if reached")
+
+        monkeypatch.setattr(mod.subprocess, "run", boom)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+            scope_guard_enabled=False,
+        )
+
+        assert runner._baseline_acquisition_failed is False
+
+    def test_async_runner_no_flag_when_scan_succeeds(self, monkeypatch):
+        """Regression: a successful scan returning an EMPTY set (clean
+        worktree) must NOT trigger fail-closed — only ``None`` does."""
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_git_changed_paths", lambda _root: set())
+        monkeypatch.setattr(mod, "_git_ignored_paths", lambda _root: set())
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+        )
+
+        assert runner._baseline_acquisition_failed is False
+        assert runner._baseline_changed_paths == {}
+        assert runner._baseline_ignored_paths == {}
+
+
 class TestEnforceScopeGuard:
     """Issue #1013 (F9): direct behavioural coverage for ``_enforce_scope_guard``
     and ``_matches_companion_allowlist``. The constructor-state checks above
