@@ -500,10 +500,10 @@ def build_conformance_hard_failure_from_error(
     return "\n".join(block_lines)
 
 
-def _parse_public_surface_failure(
+def _parse_public_surface_failure_fields(
     stdout: str, stderr: str
-) -> Optional[Tuple[str, Tuple[str, ...]]]:
-    """Detect a public-surface regression in subprocess output."""
+) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+    """Detect a public-surface regression and keep removals/signatures separate."""
     combined = (stdout or "") + "\n" + (stderr or "")
     if _PUBLIC_SURFACE_PREFIX not in combined:
         return None
@@ -549,9 +549,25 @@ def _parse_public_surface_failure(
             lines.append(f"- {sym}")
     lines.append(
         "Preserve backward-compatible public helpers unless the prompt lists "
-        "the intended removals with BREAKING-CHANGE: remove <symbol>."
+        "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
+        "or BREAKING-CHANGE: change signature <symbol> markers."
     )
-    return "\n".join(lines), tuple(sorted(set(removed) | {f"sig:{sym}" for sym in changed}))
+    return "\n".join(lines), removed, changed
+
+
+def _parse_public_surface_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """Detect a public-surface regression in subprocess output."""
+    parsed = _parse_public_surface_failure_fields(stdout, stderr)
+    if parsed is None:
+        return None
+    directive, removed, changed = parsed
+    signature = tuple(
+        [f"removed:{symbol}" for symbol in removed]
+        + [f"signature_changed:{symbol}" for symbol in changed]
+    )
+    return directive, signature
 
 
 def _parse_test_churn_failure(
@@ -1939,8 +1955,9 @@ class AsyncSyncRunner:
         stderr: str,
     ) -> str:
         """Build the structured public-surface hard-failure error string."""
-        parsed = _parse_public_surface_failure(stdout, stderr)
+        parsed = _parse_public_surface_failure_fields(stdout, stderr)
         removed = parsed[1] if parsed else tuple()
+        changed = parsed[2] if parsed else tuple()
         combined = (stdout or "") + "\n" + (stderr or "")
 
         prompt_field = "<unknown>"
@@ -1986,6 +2003,8 @@ class AsyncSyncRunner:
                 f"prompt: {prompt_field}",
                 f"output: {_extract_field('Output')}",
                 "removed: " + (", ".join(removed) if removed else "<none>"),
+                "signature_changed: "
+                + (", ".join(changed) if changed else "<none>"),
                 f"pre surface size: {_extract_field('Pre surface size')}",
                 f"post surface size: {_extract_field('Post surface size')}",
                 "",

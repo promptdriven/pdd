@@ -1185,9 +1185,9 @@ class TestSyncOneModule:
             "Pre surface size: 12. Post surface size: 10."
         )
 
-        directive, removed = _parse_public_surface_failure("", stderr)
+        directive, signature = _parse_public_surface_failure("", stderr)
 
-        assert removed == ("calculate_sha256", "git")
+        assert signature == ("removed:calculate_sha256", "removed:git")
         assert "- calculate_sha256" in directive
         assert "BREAKING-CHANGE:" in directive
 
@@ -1203,8 +1203,33 @@ class TestSyncOneModule:
 
         directive, signature = _parse_public_surface_failure("", stderr)
 
-        assert signature == ("sig:calculate",)
+        assert signature == ("signature_changed:calculate",)
         assert "Restore compatible signatures" in directive
+
+    def test_public_surface_hard_failure_separates_signature_changes(self):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: <none>\n"
+            "signature_changed: calculate\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 1\n"
+            "post_surface_size: 1\n"
+        )
+
+        block = runner._build_public_surface_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "removed: <none>" in block
+        assert "signature_changed: calculate" in block
+        assert "removed: sig:calculate" not in block
 
     def test_parse_test_churn_failure(self):
         stderr = (

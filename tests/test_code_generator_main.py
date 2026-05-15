@@ -5281,6 +5281,169 @@ class TestSyncCompatibilityGates:
         assert excinfo.value.changed_signatures == ["calculate"]
         assert "signature_changed: calculate" in str(excinfo.value)
 
+    def test_public_surface_regression_allows_scoped_signature_change(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "def calculate(value, *, strict=False) -> str:\n    return str(value)\n",
+            "def calculate(value) -> str:\n    return str(value)\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: change signature calculate.",
+        )
+
+    def test_public_surface_regression_requires_scoped_signature_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                "def calculate(value, *, strict=False) -> str:\n    return str(value)\n",
+                "def calculate(value) -> str:\n    return str(value)\n",
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "BREAKING-CHANGE: change signature other_function.",
+            )
+
+        assert excinfo.value.changed_signatures == ["calculate"]
+
+    def test_public_surface_regression_catches_removed_constructor(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    def __init__(self, value: int) -> None:\n"
+            "        self.value = value\n"
+            "    def public_method(self) -> int:\n"
+            "        return self.value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    def public_method(self) -> int:\n"
+            "        return 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert excinfo.value.removed_symbols == []
+        assert "MyClass" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_catches_staticmethod_signature_change(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def compute(value: int, factor: int) -> int:\n"
+            "        return value * factor\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def compute(value: int) -> int:\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.compute" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_catches_async_sync_flip(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "async def foo() -> int:\n    return 0\n"
+        after = "def foo() -> int:\n    return 0\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert excinfo.value.removed_symbols == []
+        assert "foo" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_catches_async_sync_flip_on_method(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    async def compute(self, value: int) -> int:\n"
+            "        return value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    def compute(self, value: int) -> int:\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.compute" in excinfo.value.changed_signatures
+
+    def test_public_surface_regression_allows_unchanged_staticmethod(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def compute(value: int, factor: int) -> int:\n"
+            "        return value * factor\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
     def test_public_surface_gate_has_dedicated_skip_flag(self, monkeypatch):
         from pdd.code_generator_main import _verify_public_surface_regression
 

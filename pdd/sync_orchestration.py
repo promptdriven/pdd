@@ -2245,17 +2245,22 @@ def sync_orchestration(
                                             if isinstance(_conform_exc, PublicSurfaceRegressionError):
                                                 new_kind = "public_surface"
                                                 new_signature = tuple(
-                                                    sorted(
-                                                        set(_conform_exc.removed_symbols)
-                                                        | {
-                                                            f"sig:{symbol}"
-                                                            for symbol in getattr(
-                                                                _conform_exc,
-                                                                "changed_signatures",
-                                                                [],
+                                                    [
+                                                        f"removed:{symbol}"
+                                                        for symbol in sorted(set(_conform_exc.removed_symbols))
+                                                    ]
+                                                    + [
+                                                        f"signature_changed:{symbol}"
+                                                        for symbol in sorted(
+                                                            set(
+                                                                getattr(
+                                                                    _conform_exc,
+                                                                    "changed_signatures",
+                                                                    [],
+                                                                )
                                                             )
-                                                        }
-                                                    )
+                                                        )
+                                                    ]
                                                 )
                                             elif isinstance(_conform_exc, TestChurnError):
                                                 new_kind = "test_churn"

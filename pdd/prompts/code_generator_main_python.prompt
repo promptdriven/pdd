@@ -56,13 +56,14 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
     - Implement helper `_snapshot_public_surface(code_text: str, language: str) -> Set[str]` (stdlib-only). For Python, parse with `ast` and yield top-level `FunctionDef`/`AsyncFunctionDef`/`ClassDef` names plus `Class.method` dotted names for direct-child methods of each top-level class. Skip dunder methods (`__init__`, `__repr__`, etc.) and names beginning with a single `_` (private). For non-Python languages, return `set()` (gate is Python-only for now — surface this clearly so future languages can opt in).
     - Implement helper `_diff_public_surface(pre: Set[str], post: Set[str]) -> List[str]`: return the sorted list of symbols present in `pre` but absent from `post` (the "removed" set). Renames register as removals plus additions.
     - Implement helper `_prompt_breaking_change_removed_symbols(prompt_content: str) -> Set[str]`: parse only `BREAKING-CHANGE:` lines that explicitly say `remove`, `delete`, `drop`, or `rename`, and return the named public symbols from that line. A bare `BREAKING-CHANGE:` marker MUST NOT disable the gate globally.
+    - Implement helper `_prompt_breaking_change_signature_symbols(prompt_content: str) -> Set[str]`: parse only `BREAKING-CHANGE:` lines that explicitly say `change signature` (or equivalent `change api` / `change contract`) and return the named public symbols from that line.
     - When an unlisted removal is non-empty OR a public callable signature changed AND a pre-existing code file was loaded, raise a new typed exception `PublicSurfaceRegressionError(click.UsageError)` colocated with `ArchitectureConformanceError`, carrying: `prompt_name: str`, `output_path: str`, `removed_symbols: List[str]`, `changed_signatures: List[str]`, `pre_surface_size: int`, `post_surface_size: int`, `total_cost: float`, `model_name: str`, and a `repair_directive: str` of the form:
         ```
         Public-surface regression detected for {prompt_name}.
         The following previously-exported public symbols are missing from the regenerated code:
         - <symbol>
         ...
-        Restore these exact symbols (same names, compatible signatures) OR, if the removal is intentional, add a scoped line such as `BREAKING-CHANGE: remove <symbol>` to the prompt body. Signature changes are never exempted by a removal marker.
+        Restore these exact symbols (same names, compatible signatures) OR, if the change is intentional, add a scoped line such as `BREAKING-CHANGE: remove <symbol>` or `BREAKING-CHANGE: change signature <symbol>` to the prompt body.
         Do not modify the prompt to delete unrelated content. Do not remove other existing valid exports.
         ```
       The exception's string message MUST start with `Public surface regression for {prompt_name}:` and list `removed:`, `signature_changed:`, `output:`, `pre_surface_size:`, `post_surface_size:` on their own lines so the `agentic_sync_runner` parser can route it.

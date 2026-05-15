@@ -285,6 +285,39 @@ def _prompt_breaking_change_removed_symbols(prompt_content: Optional[str]) -> Se
     return allowed
 
 
+def _prompt_breaking_change_signature_symbols(prompt_content: Optional[str]) -> Set[str]:
+    """Return public symbols explicitly listed for signature changes."""
+    if not prompt_content:
+        return set()
+    allowed: Set[str] = set()
+    symbol_re = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)?")
+    ignored = {
+        "BREAKING",
+        "CHANGE",
+        "change",
+        "changes",
+        "changed",
+        "signature",
+        "signatures",
+        "api",
+        "contract",
+        "for",
+    }
+    for line in prompt_content.splitlines():
+        if "BREAKING-CHANGE:" not in line:
+            continue
+        directive = line.split("BREAKING-CHANGE:", 1)[1]
+        if not re.search(r"\b(change|changes|changed)\b", directive, re.IGNORECASE):
+            continue
+        if not re.search(r"\b(signature|signatures|api|contract)\b", directive, re.IGNORECASE):
+            continue
+        for match in symbol_re.findall(directive):
+            if match in ignored or match.lower() in ignored:
+                continue
+            allowed.add(match.strip("`'\"."))
+    return allowed
+
+
 def _prompt_allows_test_churn(prompt_content: Optional[str]) -> bool:
     """Return True only for explicit test rewrite/churn breaking-change directives."""
     if not prompt_content:
@@ -313,10 +346,22 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         return False
     path = pathlib.Path(str(output_path))
     name = path.name
+    lower_name = name.lower()
+    js_like_test_suffixes = (
+        ".test.ts",
+        ".test.tsx",
+        ".test.js",
+        ".test.jsx",
+        ".spec.ts",
+        ".spec.tsx",
+        ".spec.js",
+        ".spec.jsx",
+    )
     return (
         name.startswith("test_")
         or name.endswith("_test.py")
-        or any(part == "tests" for part in path.parts)
+        or lower_name.endswith(js_like_test_suffixes)
+        or any(part in {"tests", "__tests__"} for part in path.parts)
     )
 
 
@@ -396,7 +441,8 @@ def _format_python_signature(node: ast.AST, *, skip_first: bool = False) -> str:
     returns = ""
     if node.returns is not None:
         returns = f" -> {ast.unparse(node.returns)}"
-    return f"({', '.join(parts)}){returns}"
+    prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
+    return f"{prefix}({', '.join(parts)}){returns}"
 
 
 def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
@@ -415,10 +461,18 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
         elif isinstance(node, ast.ClassDef) and not node.name.startswith("_"):
             for child in node.body:
                 if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                    is_staticmethod = any(
+                        (isinstance(d, ast.Name) and d.id == "staticmethod")
+                        or (isinstance(d, ast.Attribute) and d.attr == "staticmethod")
+                        for d in getattr(child, "decorator_list", [])
+                    )
+                    skip_first = not is_staticmethod
                     if child.name == "__init__":
-                        signatures[node.name] = _format_python_signature(child, skip_first=True)
+                        signatures[node.name] = _format_python_signature(child, skip_first=skip_first)
                     elif not child.name.startswith("_"):
-                        signatures[f"{node.name}.{child.name}"] = _format_python_signature(child, skip_first=True)
+                        signatures[f"{node.name}.{child.name}"] = _format_python_signature(
+                            child, skip_first=skip_first
+                        )
     return signatures
 
 
@@ -462,11 +516,24 @@ def _verify_public_surface_regression(
     ]
     before_signatures = _snapshot_public_signatures(existing_code, language or "python")
     after_signatures = _snapshot_public_signatures(generated_code, language or "python")
-    changed_signatures = sorted(
+    allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
+    changed_set = {
         symbol
         for symbol, signature in before_signatures.items()
-        if symbol in after_signatures and after_signatures[symbol] != signature
-    )
+        if (
+            symbol in after_signatures
+            and after_signatures[symbol] != signature
+            and symbol not in allowed_signature_changes
+        )
+    }
+    for symbol in before_signatures:
+        if symbol in after_signatures or symbol in changed_set:
+            continue
+        if "." in symbol:
+            continue
+        if symbol in after and symbol not in allowed_signature_changes:
+            changed_set.add(symbol)
+    changed_signatures = sorted(changed_set)
     if removed or changed_signatures:
         raise PublicSurfaceRegressionError(
             prompt_name=prompt_name,
