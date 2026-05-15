@@ -78,7 +78,7 @@ class ReviewLoopConfig:
     reviewer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
-    max_cost: float = 10.0
+    max_cost: float = 50.0
     max_minutes: float = 90.0
     require_all_reviewers_clean: bool = True
     continue_on_reviewer_limit: bool = False

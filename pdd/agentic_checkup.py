@@ -322,7 +322,7 @@ def run_agentic_checkup(
     fixer: Optional[str] = None,
     reviewer_fallback: Optional[str] = None,
     max_review_rounds: int = 5,
-    max_review_cost: float = 10.0,
+    max_review_cost: float = 50.0,
     max_review_minutes: float = 90.0,
     require_all_reviewers_clean: bool = True,
     continue_on_reviewer_limit: bool = False,
