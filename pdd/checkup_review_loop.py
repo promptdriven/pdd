@@ -3458,22 +3458,36 @@ def _commit_and_push_if_changed(
     if not changed:
         return True, "No changes to push."
 
-    for cmd in (
-        ["git", "add", "-A"],
-        [
-            "git",
-            "-c",
-            "user.name=PDD Bot",
-            "-c",
-            "user.email=pdd-bot@users.noreply.github.com",
-            "commit",
-            "-m",
-            message,
-        ],
-    ):
+    stage_cmds: List[List[str]] = [["git", "add", "-u"]]
+    untracked = [
+        path
+        for path in _git_untracked_files(worktree)
+        if not _is_untracked_pdd_meta_artifact(path)
+    ]
+    if untracked:
+        stage_cmds.append(["git", "add", "--", *untracked])
+
+    for cmd in stage_cmds:
         result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
         if result.returncode != 0:
             return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
+
+    if not _git_has_staged_changes(worktree):
+        return True, "No eligible changes to push."
+
+    commit_cmd = [
+        "git",
+        "-c",
+        "user.name=PDD Bot",
+        "-c",
+        "user.email=pdd-bot@users.noreply.github.com",
+        "commit",
+        "-m",
+        message,
+    ]
+    result = subprocess.run(commit_cmd, cwd=worktree, capture_output=True, text=True)
+    if result.returncode != 0:
+        return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
 
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
@@ -3686,6 +3700,37 @@ def _git_changed_files(worktree: Path) -> List[str]:
         if len(line) > 3:
             files.append(line[3:].strip())
     return files
+
+
+def _git_untracked_files(worktree: Path) -> List[str]:
+    result = subprocess.run(
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return []
+    files: List[str] = []
+    for entry in result.stdout.split("\0"):
+        if entry.startswith("?? "):
+            files.append(entry[3:])
+    return files
+
+
+def _git_has_staged_changes(worktree: Path) -> bool:
+    result = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    return result.returncode == 1
+
+
+def _is_untracked_pdd_meta_artifact(path: str) -> bool:
+    rel = path.replace(os.sep, "/")
+    return rel.startswith(".pdd/meta/") and rel.endswith(".json")
 
 
 def _artifacts_dir(cwd: Path, issue_number: int, pr_number: int) -> Path:
