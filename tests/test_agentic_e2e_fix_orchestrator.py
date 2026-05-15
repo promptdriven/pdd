@@ -6492,3 +6492,288 @@ class TestPostStep9ResumeAction:
                 console=console,
             )
         assert result == "ADVANCE_CYCLE"
+
+
+# ============================================================================
+# Issue #1001: post-Step-9 resume routing — orchestrator-level integration
+# ============================================================================
+
+
+class TestPostStep9ResumeRoutesToCleanupNotStep1:
+    """Orchestrator-level integration tests for post-Step-9 resume routing
+    (Issue #1001).
+
+    The unit tests in :class:`TestPostStep9ResumeAction` cover the helper in
+    isolation. These tests prove the helper is actually wired into
+    :func:`run_agentic_e2e_fix_orchestrator`: a saved state with
+    ``last_completed_step=9`` and a cached Step 9 success token must NOT
+    re-run Steps 1-9 on resume, while a cached ``CONTINUE_CYCLE`` MUST
+    advance the cycle and re-run Steps 1-9.
+
+    The discriminator: under the old unconditional ``current_cycle += 1;
+    last_completed_step = 0; step_outputs = {}`` block, the success test
+    fails because Steps 1-9 are re-invoked. Under the post-fix branching,
+    the success test passes (the inner loop skips every step and falls
+    through to the post-success path).
+    """
+
+    @pytest.fixture
+    def mock_deps(self, tmp_path):
+        """Heavyweight mock surface mirroring TestIssue467BlindResume.mock_deps.
+
+        Mocks every external interaction:
+          - ``run_agentic_task``: the per-step LLM invocation site. A
+            tracker built on top of this records which step labels are
+            invoked, which is the discriminator signal.
+          - ``load_workflow_state``: returns a synthesized resume state
+            pre-populated with ``last_completed_step=9``.
+          - ``save_workflow_state`` / ``clear_workflow_state``: no-op.
+          - ``load_prompt_template``: returns a benign template that
+            tolerates ``str.replace`` substitution.
+          - ``_get_file_hashes`` / ``_commit_and_push``: keep the
+            post-success path side-effect-free against a real filesystem.
+          - ``post_final_comment``: keep the failure path side-effect-free
+            (the CONTINUE_CYCLE test ends in ``MAX_CYCLES_REACHED``).
+          - ``_check_e2e_environment``: forces Step 2 to run rather than
+            short-circuit via ``E2E_SKIP``.
+          - ``classify_step_output``: returns ``None`` so the resolver
+            falls back to token detection in Step 9 output.
+        """
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state") as mock_load, \
+             patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save, \
+             patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_template, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console, \
+             patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+             patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
+             patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post, \
+             patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")) as mock_e2e, \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify:
+            mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
+            mock_load.return_value = (None, None)
+            mock_save.return_value = None
+            mock_template.return_value = "Prompt for {issue_number}"
+            mock_hashes.return_value = {}
+            mock_commit.return_value = (True, "No changes")
+            mock_post.return_value = None
+
+            yield {
+                "run": mock_run,
+                "load": mock_load,
+                "save": mock_save,
+                "clear": mock_clear,
+                "template": mock_template,
+                "console": mock_console,
+                "hashes": mock_hashes,
+                "commit": mock_commit,
+                "post": mock_post,
+                "e2e": mock_e2e,
+                "classify": mock_classify,
+            }
+
+    @staticmethod
+    def _executed_step_numbers(executed_labels):
+        """Extract numeric step IDs from labels like 'cycle1_step3'.
+
+        Robust against substring traps where 'step1' would match 'step11'
+        or 'step10'. Returns the set of integer step numbers seen.
+        """
+        out = set()
+        for label in executed_labels:
+            m = re.search(r"_step(\d+)\b", label)
+            if m:
+                out.add(int(m.group(1)))
+        return out
+
+    def test_resume_with_step9_all_tests_pass_skips_steps_1_through_9(
+        self, mock_deps, tmp_path
+    ):
+        """A resumed state with ``last_completed_step=9`` and a cached
+        ``ALL_TESTS_PASS`` Step 9 output MUST NOT re-run Steps 1-9.
+
+        Under the post-fix routing this drives the orchestrator straight
+        into the post-success path (``_commit_and_push`` + Step 11
+        cleanup + Step 10 CI). Steps 1-9 are skipped because
+        ``last_completed_step=9`` and ``success`` is set to True via the
+        deferred ``SUCCESS_FALL_THROUGH`` action before the outer loop.
+
+        This is the discriminator test. With the old unconditional
+        ``current_cycle += 1; last_completed_step = 0; step_outputs = {}``
+        block, ``last_completed_step`` is reset to 0 and the inner loop
+        runs Steps 1-9 from scratch — the assertion below would fail.
+
+        ``skip_cleanup=True`` and ``skip_ci=True`` are set to keep the
+        post-success path short: the orchestrator returns from the
+        ``skip_ci`` branch without calling Step 11 or Step 10.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — verification succeeded",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1001",
+            issue_content="E2E failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1001,
+            issue_author="user",
+            issue_title="Resume from Step 9",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=3,
+            resume=True,
+            use_github_state=False,
+            skip_cleanup=True,
+            skip_ci=True,
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+
+        # Discriminator: NONE of Steps 1-9 may have been invoked.
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Issue #1001: Resume with cached ALL_TESTS_PASS at Step 9 must "
+            f"NOT re-invoke Steps 1-9, but these step numbers were executed: "
+            f"{sorted(executed_steps)} (labels: {executed_labels}). Under the "
+            f"old unconditional advance, Steps 1-9 would all be re-run."
+        )
+
+        # The post-success path is reached: orchestrator returns True from
+        # the skip_ci branch, _commit_and_push is invoked.
+        assert success is True, (
+            f"Expected post-Step-9 success fall-through to return True; "
+            f"got success={success}, final_message={final_message!r}."
+        )
+        assert mock_deps["commit"].called, (
+            "Issue #1001: post-success path must invoke _commit_and_push "
+            "to record any deferred edits when resuming from a Step 9 "
+            "success token."
+        )
+
+    def test_resume_with_step9_continue_cycle_advances_and_reruns_steps_1_through_9(
+        self, mock_deps, tmp_path
+    ):
+        """A resumed state with ``last_completed_step=9`` and a cached
+        ``CONTINUE_CYCLE`` Step 9 output MUST advance the cycle and re-run
+        Steps 1-9.
+
+        This is the positive case for the ``ADVANCE_CYCLE`` branch of
+        ``_post_step9_resume_action``: with ``current_cycle=0`` and
+        ``max_cycles=3``, budget remains, so the resume routing advances
+        ``current_cycle`` to 1, clears ``last_completed_step`` and
+        ``step_outputs``, and the inner loop runs Steps 1-9 from scratch.
+
+        Step 9 is stubbed to emit ``MAX_CYCLES_REACHED`` so the new cycle
+        terminates cleanly without further loop iterations. We assert
+        Step 1 (in particular) is rerun — that's the observable signal
+        that the cycle advanced.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 0,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "CONTINUE_CYCLE — more work needed",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            # Terminate the new cycle cleanly at Step 9 so the test does
+            # not exhaust the cycle budget.
+            if "step9" in label:
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1001",
+            issue_content="E2E failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1001,
+            issue_author="user",
+            issue_title="Resume CONTINUE_CYCLE",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=3,
+            resume=True,
+            use_github_state=False,
+            skip_cleanup=True,
+            skip_ci=True,
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+
+        # Positive case: ADVANCE_CYCLE must rerun Steps 1-9. We assert on
+        # Step 1 as the load-bearing signal (cycle advanced; inner loop
+        # restarted from the beginning).
+        assert 1 in executed_steps, (
+            f"Issue #1001: Resume with cached CONTINUE_CYCLE at Step 9 must "
+            f"advance the cycle and rerun Step 1, but executed step numbers "
+            f"were: {sorted(executed_steps)} (labels: {executed_labels})."
+        )
+
+        # The new cycle is cycle 1 (current_cycle advanced from 0 to 1).
+        # Verify via the cycle label prefix.
+        assert any(label.startswith("cycle1_") for label in executed_labels), (
+            f"Issue #1001: After ADVANCE_CYCLE, new cycle must be cycle 1 "
+            f"(current_cycle advanced from 0 → 1); labels were: "
+            f"{executed_labels}."
+        )
+
+        # Final outcome: MAX_CYCLES_REACHED at Step 9 of the new cycle
+        # terminates the workflow without success.
+        assert success is False, (
+            f"Expected MAX_CYCLES_REACHED in new cycle to return False; "
+            f"got success={success}, final_message={final_message!r}."
+        )
