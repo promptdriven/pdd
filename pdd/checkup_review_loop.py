@@ -3978,9 +3978,17 @@ def _render_final_report(
         )
         for fix in state.fixes:
             changed = ", ".join(fix.changed_files) if fix.changed_files else "none"
+            # Failed fixer summaries contain raw subprocess output (e.g.
+            # ``[CRITICAL]`` log lines, ``issue_aligned: false`` JSON
+            # fragments, ``max-cost-reached: true``) that the cloud
+            # verdict adapter scans without fence/section awareness.
+            # Without this defang, a verified fallback fix could be
+            # downgraded by trip-wires that lived only in the failed
+            # primary's audit row.
+            safe_summary = _defang_adapter_trip_wires(fix.summary)
             lines.append(
                 f"- {fix.fixer}: {'success' if fix.success else 'failed'}; "
-                f"verification={verification}; changed_files={changed}; {fix.summary}"
+                f"verification={verification}; changed_files={changed}; {safe_summary}"
             )
     else:
         lines.append("- none")

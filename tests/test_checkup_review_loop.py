@@ -1847,6 +1847,57 @@ class TestCheckupReviewLoopRuntime:
             f"reset at {first_reset_idx}, clean at {first_clean_idx}"
         )
 
+    def test_fixer_fallback_defangs_failed_primary_summary_in_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Failed-primary subprocess output can contain cloud verdict
+        adapter trip-wires (``[CRITICAL]``, ``issue_aligned: false``,
+        ``max-cost-reached: true``). When the fallback succeeds and
+        the run reports verified, those trip-wires must not survive
+        into the rendered fixer audit row, or they would falsely
+        downgrade the adapter's verdict for an otherwise-clean fix."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        primary_output = (
+            "[CRITICAL] subprocess error; "
+            "issue_aligned: false; max-cost-reached: true; "
+            'api_error_status:429 "You\'ve hit your limit · resets May 18, 11pm (UTC)"'
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, primary_output, 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Verdict-adapter trip-wires from the failed primary's raw
+        # output must not appear verbatim anywhere in the report.
+        assert "[CRITICAL]" not in report, (
+            "verbatim [CRITICAL] from failed primary leaked through; "
+            "cloud verdict adapter would downgrade an otherwise-clean fallback"
+        )
+        assert "issue_aligned: false" not in report.lower()
+        assert "max-cost-reached: true" not in report.lower()
+
     def test_fixer_fallback_failure_is_recorded_in_state_fixes(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
