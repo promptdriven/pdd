@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.237-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.238-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -362,7 +362,7 @@ For proper model identifiers to use in your custom configuration, refer to the [
 
 ## Version
 
-Current version: 0.0.237
+Current version: 0.0.238
 
 To check your installed version, run:
 ```
@@ -2453,7 +2453,7 @@ Options:
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 - `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
-- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt PDD tags, `architecture.json` entries, run reports, and fingerprint state are reconciled in one step. Works in single-file, regeneration, and repo modes. Without this flag, behavior is unchanged and metadata layers must be reconciled with separate commands. **Scope note:** the `tags` stage currently *preserves* existing PDD tags and only *seeds* tags from the matching `architecture.json` entry when a prompt has none — LLM-first **refresh** of stale-but-present tags is tracked at issue [#870](https://github.com/promptdriven/pdd/issues/870) and is not invoked by this orchestrator. When a prompt has zero PDD tags AND no architecture entry, the `tags` stage reports `skipped` (never `ok`) so operators see honest status. On any stage `failed`, `pdd update --sync-metadata` exits non-zero so CI auto-heal does not treat a half-finalized update as healed.
+- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt PDD tags, `architecture.json` entries, run reports, and fingerprint state are reconciled in one step. Works in single-file, regeneration, and repo modes. **Fingerprint note:** default single-file/regeneration `pdd update <code>` already finalizes the per-target fingerprint (`.pdd/meta/<basename>_<language>.json`) on success, and logs a skip reason when finalization is intentionally bypassed; `--sync-metadata` does not gate that behavior. Without this flag, the broader prompt-tag/architecture/run-report orchestrator is not run and those layers must be reconciled with separate commands. **Scope note:** the `tags` stage currently *preserves* existing PDD tags and only *seeds* tags from the matching `architecture.json` entry when a prompt has none — LLM-first **refresh** of stale-but-present tags is tracked at issue [#870](https://github.com/promptdriven/pdd/issues/870) and is not invoked by this orchestrator. When a prompt has zero PDD tags AND no architecture entry, the `tags` stage reports `skipped` (never `ok`) so operators see honest status. On any stage `failed`, `pdd update --sync-metadata` exits non-zero so CI auto-heal does not treat a half-finalized update as healed.
 
 Example (Metadata Sync):
 ```bash
@@ -3601,6 +3601,11 @@ For detailed command examples for each workflow, see the respective command docu
 **Triggers**:
 - `pull_request_target` (opened / synchronize / reopened / ready_for_review): heals only modules changed by the PR and pushes a `chore: auto-heal …` commit back to the PR branch.
 - `issue_comment` with a `/heal` command on a PR by an authorized collaborator: same as above, on demand.
+
+Generated internal PRs authored by `prompt-driven-github[bot]` are trusted as
+the autonomous pdd-issue App identity for the `pull_request_target` heal path.
+Other PR authors and all `/heal` comment requesters must pass the `pdd_cloud`
+collaborator check before Cloud Build is dispatched.
 
 There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
 

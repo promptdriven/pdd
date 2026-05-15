@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0, *, allowed_write_set: Optional[Iterable[str]] = None, companion_allowlist: Optional[Iterable[str]] = None, scope_guard_enabled: bool = True, contract_source: Optional[str] = None)", "returns": "AsyncSyncRunner"},
+      {"name": "AsyncSyncRunner", "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, *, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, module_targets: Optional[Dict[str, str]] = None, initial_cost: float = 0.0, allowed_write_set: Optional[Iterable[str]] = None, companion_allowlist: Optional[Iterable[str]] = None, scope_guard_enabled: bool = True, contract_source: Optional[str] = None)", "returns": "AsyncSyncRunner"},
       {"name": "AsyncSyncRunner.run", "signature": "() -> Tuple[bool, str, float]", "returns": "Tuple[bool, str, float]"},
       {"name": "build_dep_graph_from_architecture", "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"},
       {"name": "build_dep_graph_from_architecture_data", "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult", "returns": "DepGraphFromArchitectureResult"}
@@ -27,13 +27,14 @@ Write the `pdd/agentic_sync_runner.py` module.
 Parallel sync engine that runs `pdd sync` for multiple modules concurrently using a ThreadPoolExecutor, respecting dependency ordering. Posts live progress updates to a GitHub issue comment. Supports state persistence for resumability across runs, phase tracking, and graceful interrupt handling.
 
 % Requirements
-1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, verbose, issue_url, module_cwds, initial_cost=0.0, *, allowed_write_set=None, companion_allowlist=None, scope_guard_enabled=True, contract_source=None)`
+1. Class: `AsyncSyncRunner(basenames, dep_graph, sync_options, github_info, quiet, *, verbose, issue_url, module_cwds, module_targets, initial_cost=0.0, allowed_write_set=None, companion_allowlist=None, scope_guard_enabled=True, contract_source=None)`
    - `basenames: List[str]` — modules to sync
    - `dep_graph: Dict[str, List[str]]` — basename -> [dependency basenames]
    - `sync_options: Dict` — budget, total_budget, target_coverage, skip_verify, skip_tests, agentic, no_steer, max_attempts, one_session, local, timeout_adder
    - `github_info: Optional[Dict]` — owner, repo, issue_number, cwd (None to disable comments)
    - `issue_url: Optional[str]` — GitHub issue URL for state persistence (None disables resumability)
    - `module_cwds: Optional[Dict[str, Path]]` — per-module working directories (defaults to project_root)
+   - `module_targets: Optional[Dict[str, str]]` — optional display-key -> actual sync basename map. This allows callers such as global sync to schedule scoped keys like `examples/prompts_linter:report` while executing `pdd sync report` in that module's cwd.
    - `initial_cost: float` — pre-runner cost (LLM module identification and dry-run fallback) to include in total cost display and return value (default 0.0)
    - `allowed_write_set: Optional[Iterable[str]]` — repo-relative path strings from the issue split contract that this sync run is permitted to modify. `None` means "no contract was parseable from the issue → run in permissive mode (no enforcement)". An explicit empty iterable means "contract present but empty → reject every change as out-of-scope" (a degenerate but legal contract). Resolved against each module's `cwd`/repo root inside the runner.
    - `companion_allowlist: Optional[Iterable[str]]` — additional glob patterns (e.g. `".pdd/meta/*.json"`) describing companion artifacts that MAY be modified outside the primary `allowed_write_set`. Defaults to `DEFAULT_SYNC_COMPANION_ALLOWLIST` from `agentic_common` (currently `(".pdd/meta/*.json",)`) when `None`. Issue contracts MAY widen the companion allowlist by passing a superset.
@@ -60,7 +61,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 15. Phase tracking: parse `PDD_PHASE: <phase>` markers from subprocess stdout; update `ModuleState.current_phase` and `completed_phases`
 16. Skip phases (prefixed `skip:`) are not added to completed_phases
 17. Rate-limit GitHub comment updates for phase changes to once per 15 seconds
-18. Per-module working directories: use `module_cwds[basename]` if present, else `project_root`
+18. Per-module working directories: use `module_cwds[basename]` if present, else `project_root`. When building the child command, append `module_targets.get(basename, basename)` as the actual `pdd sync` target so display keys can differ from executable basenames.
 19. Subprocess env: include `PYTHONUNBUFFERED=1` for real-time output
 20. Forward "Successfully submitted example" messages from child stdout to parent console
 21. Heartbeat logging: during long-running syncs, print progress updates every 60s. Prefer parsed `PDD_PHASE` state — `f" — phase: {current_phase} ({len(completed_phases)} done)"` — so operators see real progress through the generate/test/fix phases instead of a stale `Preprocessing complete` line. Fall back to the last non-box-drawing stdout line only when no phase has been reported yet.

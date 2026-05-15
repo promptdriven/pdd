@@ -41,7 +41,11 @@ from .architecture_include_validation import (
     validate_prompt_contract_context,
 )
 from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
-from .architecture_registry import extract_modules, find_project_root as _find_project_root
+from .architecture_registry import (
+    extract_modules,
+    find_architecture_for_project,
+    find_project_root as _find_project_root,
+)
 from .construct_paths import (
     _detect_context_from_basename,
     _extract_prefix_from_prompts_dir,
@@ -426,10 +430,21 @@ class GlobalSyncAnalysis(NamedTuple):
 
     modules_to_sync: List[str]
     module_cwds: Dict[str, Path]
+    module_targets: Dict[str, str]
     estimated_cost: float
     module_operations: Dict[str, List[str]]
     skipped_modules: List[str]
     all_modules: List[str]
+
+
+class GlobalSyncModule(NamedTuple):
+    """Scoped global-sync module identity."""
+
+    key: str
+    basename: str
+    cwd: Path
+    architecture_path: Path
+    entry: Dict[str, Any]
 
 
 def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[str]:
@@ -444,6 +459,58 @@ def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[s
             basenames.append(basename)
             seen.add(basename)
     return basenames
+
+
+def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModule], List[Dict[str, Any]], Path]:
+    """Return architecture modules with cwd scope preserved."""
+    arch_files = find_architecture_for_project(project_root)
+    if not arch_files:
+        return [], [], project_root / "architecture.json"
+
+    raw_modules: List[Tuple[str, Path, Path, Dict[str, Any]]] = []
+    architecture: List[Dict[str, Any]] = []
+    seen: set[Tuple[Path, str]] = set()
+
+    for arch_path in arch_files:
+        try:
+            data = json.loads(arch_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            continue
+
+        arch_dir = arch_path.parent
+        for entry in extract_modules(data):
+            basename = _basename_from_architecture_filename(entry.get("filename", ""))
+            if not basename:
+                continue
+            dedupe_key = (arch_path.resolve(), basename)
+            if dedupe_key in seen:
+                continue
+            seen.add(dedupe_key)
+            architecture.append(entry)
+            # Consult _resolve_module_cwd so a nested .pddrc whose context owns
+            # this basename wins over the arch file's own directory. The
+            # resolver scans subdirectories of arch_dir for .pddrc files and
+            # falls back to arch_dir when no nested config claims the basename.
+            cwd = _resolve_module_cwd(basename, arch_dir)
+            raw_modules.append((basename, cwd, arch_path, entry))
+
+    counts: Dict[str, int] = {}
+    for basename, _, _, _ in raw_modules:
+        counts[basename] = counts.get(basename, 0) + 1
+
+    modules: List[GlobalSyncModule] = []
+    for basename, cwd, arch_path, entry in raw_modules:
+        if counts[basename] > 1:
+            try:
+                rel_scope = arch_path.parent.resolve().relative_to(project_root.resolve()).as_posix()
+            except (OSError, ValueError):
+                rel_scope = arch_path.parent.as_posix()
+            key = f"{rel_scope or '.'}:{basename}"
+        else:
+            key = basename
+        modules.append(GlobalSyncModule(key, basename, cwd, arch_path, entry))
+
+    return modules, architecture, arch_files[0]
 
 
 def _prompt_contract_errors_for_module(
@@ -583,7 +650,7 @@ def _resolve_module_sync_context(
 
 
 def _analyze_global_sync_modules(
-    modules: List[str],
+    modules: List[GlobalSyncModule],
     project_root: Path,
     *,
     quiet: bool = False,
@@ -595,29 +662,33 @@ def _analyze_global_sync_modules(
     """Tier 1 global sync analysis: fingerprint-scan all architecture modules."""
     modules_to_sync: List[str] = []
     module_cwds: Dict[str, Path] = {}
+    module_targets: Dict[str, str] = {}
     module_operations: Dict[str, List[str]] = {}
     skipped_modules: List[str] = []
     estimated_cost = 0.0
     effective_budget = budget if budget is not None else 10.0
     effective_coverage = target_coverage if target_coverage is not None else 90.0
 
-    for basename in modules:
-        cwd = _resolve_module_cwd(basename, project_root)
-        module_cwds[basename] = cwd
+    for module in modules:
+        key = module.key
+        basename = module.basename
+        cwd = module.cwd
+        module_cwds[key] = cwd
+        module_targets[key] = basename
 
         try:
             context_name, prompts_dir, lang_to_path = _resolve_module_sync_context(
                 basename, cwd
             )
         except Exception as exc:
-            modules_to_sync.append(basename)
-            module_operations[basename] = [
+            modules_to_sync.append(key)
+            module_operations[key] = [
                 f"analysis-error: {exc}; queued for sync as safe fallback"
             ]
             continue
 
         if not lang_to_path:
-            skipped_modules.append(f"{basename}: no syncable prompt file found")
+            skipped_modules.append(f"{key}: no syncable prompt file found")
             continue
 
         operations: List[str] = []
@@ -649,13 +720,13 @@ def _analyze_global_sync_modules(
                 estimated_cost += float(decision.estimated_cost or 0.0)
             elif decision.operation not in _GLOBAL_SYNC_NOOP_OPERATIONS:
                 skipped_modules.append(
-                    f"{basename}: {language} requires {decision.operation}; "
+                    f"{key}: {language} requires {decision.operation}; "
                     "outside Tier 1 prompt-staleness scope"
                 )
 
         if needs_sync:
-            modules_to_sync.append(basename)
-            module_operations[basename] = operations
+            modules_to_sync.append(key)
+            module_operations[key] = operations
 
     if not quiet:
         skipped_count = len(modules) - len(modules_to_sync)
@@ -667,10 +738,11 @@ def _analyze_global_sync_modules(
     return GlobalSyncAnalysis(
         modules_to_sync=modules_to_sync,
         module_cwds=module_cwds,
+        module_targets=module_targets,
         estimated_cost=estimated_cost,
         module_operations=module_operations,
         skipped_modules=skipped_modules,
-        all_modules=modules,
+        all_modules=[module.key for module in modules],
     )
 
 
@@ -686,6 +758,90 @@ def _dependency_ordered_modules(
     ordered = [m for m in sorted_modules if m in module_set]
     ordered.extend(m for m in modules if m not in ordered)
     return ordered
+
+
+def _build_scoped_global_dep_graph(
+    modules: List[GlobalSyncModule],
+    target_keys: List[str],
+    project_root: Path,
+) -> Tuple[Dict[str, List[str]], List[str]]:
+    """Build a dependency graph for scoped global-sync module keys.
+
+    Dep resolution proceeds in two passes:
+
+    1. Same-architecture scope: prefer a module declared in the same
+       architecture.json as the depending module.
+    2. Cross-architecture fallback: if no same-arch match exists, look across
+       all loaded modules by basename. An unambiguous match (exactly one
+       module across all archs with that basename) is accepted to preserve
+       the prior combined-architecture behaviour. Ambiguous cross-arch
+       basenames (multiple matches) emit a warning and drop the edge.
+    """
+    target_set = set(target_keys)
+    module_by_key = {module.key: module for module in modules}
+    key_by_scope_basename = {
+        (module.architecture_path.resolve(), module.basename): module.key
+        for module in modules
+    }
+    # Global basename index used for unambiguous cross-arch fallback.
+    keys_by_basename: Dict[str, List[str]] = {}
+    for module in modules:
+        keys_by_basename.setdefault(module.basename, []).append(module.key)
+    graph: Dict[str, List[str]] = {key: [] for key in target_keys}
+    warnings: List[str] = []
+
+    for key in target_keys:
+        module = module_by_key.get(key)
+        if module is None:
+            continue
+        deps = module.entry.get("dependencies", [])
+        if not isinstance(deps, list):
+            continue
+        for dep in deps:
+            dep_basename = _basename_from_architecture_filename(str(dep))
+            if not dep_basename:
+                continue
+            dep_key = key_by_scope_basename.get(
+                (module.architecture_path.resolve(), dep_basename)
+            )
+            if dep_key is None:
+                # Same-architecture lookup missed. Fall back to a global
+                # basename lookup so cross-arch edges (preserved by the old
+                # combined-architecture builder) still resolve when the
+                # basename is unambiguous across the loaded modules.
+                candidate_keys = keys_by_basename.get(dep_basename, [])
+                if len(candidate_keys) == 1:
+                    dep_key = candidate_keys[0]
+                elif len(candidate_keys) > 1:
+                    warnings.append(
+                        f"combined architecture data under {project_root}: "
+                        f"module '{key}' declares ambiguous cross-arch "
+                        f"dependency '{dep}' (basename '{dep_basename}' "
+                        f"matches multiple modules: "
+                        f"{', '.join(sorted(candidate_keys))}); "
+                        "edge omitted from schedule"
+                    )
+                    continue
+                else:
+                    warnings.append(
+                        f"combined architecture data under {project_root}: "
+                        f"module '{key}' declares unresolved dependency "
+                        f"'{dep}'; no module with that filename in the same "
+                        "architecture scope; edge omitted from schedule"
+                    )
+                    continue
+            if dep_key == key:
+                continue
+            if dep_key in target_set:
+                graph[key].append(dep_key)
+            else:
+                warnings.append(
+                    f"combined architecture data under {project_root}: module "
+                    f"'{key}' depends on '{dep_key}' (via '{dep}'), which is not "
+                    "in the sync target set; edge omitted from schedule"
+                )
+
+    return graph, warnings
 
 
 def _print_global_sync_plan(
@@ -749,8 +905,8 @@ def run_global_sync(
     # does not raise ``TypeError`` when dispatched into global mode.
     _ = scope_guard
     project_root = _find_project_root(Path.cwd())
-    architecture, arch_path = _load_architecture_json(project_root)
-    if architecture is None:
+    all_modules, architecture, arch_path = _architecture_sync_modules(project_root)
+    if not architecture:
         return (
             False,
             f"No architecture.json found under {project_root}.",
@@ -758,7 +914,6 @@ def run_global_sync(
             "global-sync",
         )
 
-    all_modules = _architecture_module_basenames(architecture)
     if not all_modules:
         return (
             False,
@@ -777,18 +932,18 @@ def run_global_sync(
         target_coverage=target_coverage,
     )
 
-    dep_result = build_dep_graph_from_architecture_data(
-        architecture,
+    dep_graph, dep_warnings = _build_scoped_global_dep_graph(
+        all_modules,
         analysis.modules_to_sync,
-        source_name=f"combined architecture data under {project_root}",
+        project_root,
     )
     ordered_modules = _dependency_ordered_modules(
-        analysis.modules_to_sync, dep_result.graph
+        analysis.modules_to_sync, dep_graph
     )
 
     if dry_run:
         if not quiet:
-            _print_global_sync_plan(analysis, ordered_modules, dep_result.warnings, budget)
+            _print_global_sync_plan(analysis, ordered_modules, dep_warnings, budget)
         return (
             True,
             f"Global sync dry run: {len(ordered_modules)} module(s) would sync.",
@@ -814,13 +969,13 @@ def run_global_sync(
             "global-sync",
         )
 
-    for warning in dep_result.warnings:
+    for warning in dep_warnings:
         if not quiet:
             console.print(f"[yellow]Warning: {warning}[/yellow]")
 
     runner = AsyncSyncRunner(
         basenames=ordered_modules,
-        dep_graph=dep_result.graph,
+        dep_graph=dep_graph,
         sync_options={
             "total_budget": budget,
             "skip_verify": skip_verify,
@@ -838,6 +993,7 @@ def run_global_sync(
         verbose=verbose,
         issue_url=None,
         module_cwds=analysis.module_cwds,
+        module_targets=analysis.module_targets,
         initial_cost=0.0,
     )
     success, message, cost = runner.run()
@@ -959,6 +1115,13 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
        they match everything and should not claim ownership of unrelated modules.
     2. Fall back to project_root (which may have its own root .pddrc).
     """
+    root_has_prompt = False
+    try:
+        _, _, root_lang_to_path = _resolve_module_sync_context(basename, project_root)
+        root_has_prompt = bool(root_lang_to_path)
+    except Exception:
+        root_has_prompt = False
+
     # 1. Scan subdirectories for .pddrc files (max depth 2)
     best_match: Optional[Path] = None
     best_depth = -1
@@ -975,10 +1138,11 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
                     if _is_catchall_match(basename, config):
                         continue
                     candidate_dir = pddrc_path.parent
-                    if _is_broad_basename_glob_match(basename, config, detected) and not (
-                        _prompt_exists_for_context(candidate_dir, config, detected, basename)
-                    ):
-                        continue
+                    if _is_broad_basename_glob_match(basename, config, detected):
+                        if root_has_prompt:
+                            continue
+                        if not _prompt_exists_for_context(candidate_dir, config, detected, basename):
+                            continue
                     candidate_depth = len(candidate_dir.relative_to(project_root).parts)
                     if candidate_depth > best_depth:
                         best_match = candidate_dir

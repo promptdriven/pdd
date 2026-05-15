@@ -872,6 +872,7 @@ class AsyncSyncRunner:
         verbose: bool = False,
         issue_url: Optional[str] = None,
         module_cwds: Optional[Dict[str, Any]] = None,
+        module_targets: Optional[Dict[str, str]] = None,
         initial_cost: float = 0.0,
         allowed_write_set: Optional[Iterable[str]] = None,
         companion_allowlist: Optional[Iterable[str]] = None,
@@ -889,6 +890,7 @@ class AsyncSyncRunner:
         self.issue_url = issue_url
         self.project_root: Path = Path.cwd()
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
+        self.module_targets: Dict[str, str] = dict(module_targets or {})
         self.initial_cost = float(initial_cost or 0.0)
 
         # Issue #1013 — split-contract scope guard (F5, F9, F14, F4, F6):
@@ -1754,7 +1756,7 @@ class AsyncSyncRunner:
         elif self.sync_options.get("budget") is not None:
             cmd.extend(["--budget", str(self.sync_options["budget"])])
 
-        cmd.append(basename)
+        cmd.append(self.module_targets.get(basename, basename))
         return cmd
 
     def _build_env(

@@ -4,18 +4,70 @@
 
 - **#1013 sync**: enforce split-contract allowed write sets. When the linked GitHub issue declares an allowed write set (HTML comment `<!-- PDD_ISSUE_CONTRACT ...json... -->` or a fenced "Allowed Write Set" / "Split Contract" block), `pdd sync` now reverts tracked changes and removes untracked new files that fall outside the contract after each per-module subprocess, hard-fails the module on out-of-scope artifacts, and surfaces the contract source plus offending paths in checkup/review-loop reports. Companion artifacts under `.pdd/meta/*.json` are auto-allowed; additional companions can be opted in via the contract's `companion_allowlist` field. Use `--no-scope-guard` to opt out for a single run. Issues without a contract marker remain in permissive mode (no enforcement).
 
-## v0.0.237 (2026-05-13)
+## v0.0.238 (2026-05-14)
+
+### Feat
+
+- enforce metadata finalization in CI auto-heal/preflight drift-heal (#1006)
 
 ### Fix
 
-- **tests**: re-import pdd.core.* after sys.modules pop to keep parent attrs in sync
-- handle PRD sync agent tuple output
-- **#964**: orchestrator owns visible step comments (start with pdd bug)
-- **checkup**: split codex finding prefix blocks
-- **checkup**: harden PR-head rebase recovery
-- **checkup**: avoid force-pushing advanced PR heads
-- **checkup**: harden review loop automation
-- **ci**: restrict pytest CI to Google Vertex gemini rows (no opus) (#984)
+- pdd sync bug fixes
+- address codex review-loop findings
+- address codex review-loop findings round 6
+- address codex review-loop findings
+- address codex review-loop findings round 5
+- address codex review-loop findings round 4
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- **update_main**: finalize fingerprint in default single-file mode
+- align update_main prompt contract
+- restore metadata sync state
+- **metadata_sync**: preserve user-facing command on fingerprint finalize
+- hard fail preflight metadata errors
+- harden metadata finalization validation
+- fail finalized empty-index commits
+- skip commits on advisory partial failures
+- restore ci drift heal summaries
+- preserve full metadata fingerprint state
+- hard fail unresolved post-update prompts
+- restore promptless module drift detection
+- enforce metadata finalization in auto-heal
+- **ci**: avoid red auto-heal job for generated PRs
+
+## v0.0.237 (2026-05-13)
+
+### CI
+
+- **release**: split releases into `make bump` on feature branches and `make release` tag pushes from `main`, add detached-HEAD/local/remote tag validation, and publish real PyPI artifacts from tag-push GitHub Actions OIDC while retaining manual TestPyPI publishing.
+- **cloud-batch**: restrict real-LLM pytest model selection to Google Vertex Gemini rows so CI does not select slow or unreliable Opus rows (#984).
+
+### Fix
+
+- **bug #964**: move visible step comments into the bug orchestrator. Step prompts now emit `<step_report>` blocks, the orchestrator posts sanitized/truncated GitHub comments with trusted credentials, backfills missed comments on resume, posts fallback comments for failed steps, and persists Step 11 E2E skips without duplicate visible comments.
+- **agentic**: pass Codex/OpenAI provider prompts through stdin with `codex exec --json -`, so Codex receives the prompt body instead of the prompt file path.
+- **agentic-change**: preserve `.pddrc` context loading in minimal runtime/test environments when language extension lookup is unavailable.
+- **checkup**: avoid force-pushing over advanced PR heads; fetch the exact PR branch, rebase the fixer commit, retry a normal push, and abort before verification if fetch/rebase fails.
+- **checkup**: harden review-loop automation by committing/pushing completed fixer changes before stopping on post-fix budget caps, broadening reviewer sweeps, and parsing Codex `Finding:` / `Findings:` priority blocks cleanly.
+- **update**: handle PRD-sync agent tuple output, aggregate PRD-sync cost, and report agent failures without modifying the PRD.
+- **tests**: re-import `pdd.core.*` modules after `sys.modules` cleanup so parent-package attributes stay in sync with reloaded modules.
+
+### Docs
+
+- Add the specification-drift whitepaper with a publication-safe evidence bundle and link it from the README.
+- Update README bug-workflow documentation for the current 12-step flow, including API research, prompt classification, orchestrator-owned comments, and deterministic E2E skip behavior.
+
+### Build
+
+- Bump package metadata, README/PyPI version references, and shell completions from 0.0.236 to 0.0.237.
+- Remove the vestigial `pdd/setup.py` module and its generated prompt/example/metadata artifacts now that `pyproject.toml` is the packaging source of truth.
+
+### Test
+
+- Add regression coverage for orchestrator-owned bug step comments, secret redaction/truncation, resume/backfill idempotency, E2E skip state, checkup PR-head rebase recovery, Codex finding parsing, PRD-sync tuple handling, Codex stdin prompts, and import-cleanup behavior.
+- Ignore generated `*_fixed.py` artifacts during pytest collection.
 
 ## v0.0.236 (2026-05-12)
 
