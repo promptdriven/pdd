@@ -217,7 +217,7 @@ class TestCheckupReviewLoopRuntime:
         assert not any("review-claude" in label for _, label in calls)
         assert not any("fresh-final" in label for _, label in calls)
 
-    def test_cost_cap_after_review_stops_before_fixer_or_push(
+    def test_cost_does_not_stop_before_fixer_or_push(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         from pdd.checkup_review_loop import run_checkup_review_loop
@@ -235,15 +235,15 @@ class TestCheckupReviewLoopRuntime:
         }
 
         def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
-            calls.append(kwargs["label"])
+            label = kwargs["label"]
+            calls.append(label)
+            if "fix-" in label:
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
             return True, _json("findings", [finding]), 1.0, role
 
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
-        monkeypatch.setattr(
-            mod,
-            "_commit_and_push_if_changed",
-            lambda *a, **k: pytest.fail("must not push after review cost cap"),
-        )
 
         success, report, cost, _model = run_checkup_review_loop(
             context=_ctx(tmp_path),
@@ -254,14 +254,17 @@ class TestCheckupReviewLoopRuntime:
         )
 
         assert success is True
-        assert cost == 1.0
-        assert calls == ["checkup-review-loop-review-codex-round1"]
-        assert "max-cost-reached: true" in report
-        assert "issue_aligned: unknown" in report
-        assert "Review loop stopped on a configured safety limit" not in report
-        assert "The PR does not test the new workflow." in report
+        assert round(cost, 2) == 1.3
+        assert calls == [
+            "checkup-review-loop-review-codex-round1",
+            "checkup-review-loop-fix-claude-for-codex-round1",
+            "checkup-review-loop-verify-codex-round1",
+        ]
+        assert "max-cost-reached: false" in report
+        assert "issue_aligned: true" in report
+        assert "The PR does not test the new workflow." not in report
 
-    def test_cost_cap_after_fixer_pushes_then_stops_before_verifier(
+    def test_cost_does_not_stop_after_fixer_push_before_verifier(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         from pdd.checkup_review_loop import run_checkup_review_loop
@@ -283,6 +286,8 @@ class TestCheckupReviewLoopRuntime:
             calls.append(label)
             if "fix-" in label:
                 return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
             return True, _json("findings", [finding]), 0.1, role
 
         pushes: List[str] = []
@@ -303,16 +308,17 @@ class TestCheckupReviewLoopRuntime:
         )
 
         assert success is True
-        assert round(cost, 2) == 1.1
+        assert round(cost, 2) == 1.2
         assert calls == [
             "checkup-review-loop-review-codex-round1",
             "checkup-review-loop-fix-claude-for-codex-round1",
+            "checkup-review-loop-verify-codex-round1",
         ]
         assert pushes == ["pushed"]
-        assert "max-cost-reached: true" in report
-        assert "issue_aligned: unknown" in report
-        assert "The API accepts invalid input." in report
-        assert "verification=unverified" in report
+        assert "max-cost-reached: false" in report
+        assert "issue_aligned: true" in report
+        assert "The API accepts invalid input." not in report
+        assert "verification=verified" in report
 
     def test_codex_findings_are_given_to_claude_then_verified_by_codex(
         self, monkeypatch: Any, tmp_path: Path

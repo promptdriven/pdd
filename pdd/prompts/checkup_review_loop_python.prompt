@@ -104,12 +104,10 @@ Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.
 17b. The fixer prompt MUST ask the fixer to address every valid, in-scope finding when practical, while prioritizing the configured blocking severities because those determine whether the loop continues. It must explain that "focused fixes" means avoiding unrelated refactors and broad churn, not leaving real issues unfixed. If the fixer leaves any valid finding unfixed, it must return `partially_fixed` or `blocked` with a concrete rationale.
 18. The verifier pass is also the next full review pass: it must verify prior fixes and then re-review the whole PR. If it returns actionable findings, those findings become the next round's fixer input. Do not run an extra reviewer at the start of the next round unless there is no pending verifier finding set. This models the manual Codex-review / Claude-fix / Codex-review workflow and avoids two independent reviewers arguing.
 19. A reviewer that hits a provider/rate/quota/context-window limit, times out, or returns unparsable output produces `status` in `{"failed", "degraded", "missing"}` (use `_failure_status` to classify based on output keywords and `continue_on_reviewer_limit`). With the default `continue_on_reviewer_limit=False`, provider/rate/quota/context-window/timeout failures are `failed`; with the flag enabled they are `degraded`. Such statuses are NOT clean even if `clean_reviewer_states` is widened — preserve safety. Do not classify normal finding prose as degraded merely because it contains the word "context"; require context-window/length/limit wording.
-20. Budget caps:
+20. Loop bounds:
     - `max_rounds` (int, ≥ 1)
-    - `max_cost` (float USD, > 0)
     - `max_minutes` (float wall clock, > 0)
-    Crossing any cap stops the loop, sets the relevant `*_reached` flag on state, and renders a final report whose reviewer-status reflects the unfinished round.
-20a. If a cap is crossed during a successful fixer call, the loop MUST still commit and push the completed fixer changes before stopping. Push/commit is local git/GitHub plumbing, not another LLM spend. Stop before verifier/fresh-review when the cap is reached after push, so the final report correctly marks the fix as unverified but does not strand completed changes only in the local worktree.
+    Cost is reported but MUST NOT stop the normal implement/review loop. The loop continues until the reviewer reports merge-ready/no actionable findings, `max_rounds` is reached, a hard reviewer/fixer/push failure occurs, or the wall-clock duration is reached. `max_cost` is a deprecated compatibility field and does not set `max_cost_reached`.
 
 % Persisted artifacts
 21. Artifacts live under `<git_root>/.pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/`. The directory is created before the first reviewer runs.

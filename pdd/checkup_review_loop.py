@@ -582,7 +582,9 @@ class ReviewLoopConfig:
     reviewer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
-    max_cost: float = 10.0
+    # Deprecated compatibility field. Cost is reported but does not stop the
+    # implement/review loop; max_rounds and max_minutes bound normal execution.
+    max_cost: float = 0.0
     max_minutes: float = 90.0
     # Kept for CLI/API compatibility. The loop has one authoritative reviewer,
     # so this is no longer used as a ship gate.
@@ -2998,11 +3000,11 @@ def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
 
 
 def _budget_exhausted(
-    config: ReviewLoopConfig,
-    state: ReviewLoopState,
+    _config: ReviewLoopConfig,
+    _state: ReviewLoopState,
     deadline: float,
 ) -> bool:
-    return state.total_cost >= config.max_cost or time.monotonic() >= deadline
+    return time.monotonic() >= deadline
 
 
 def _mark_budget_exhausted(
@@ -3010,9 +3012,6 @@ def _mark_budget_exhausted(
     state: ReviewLoopState,
     deadline: float,
 ) -> None:
-    if state.total_cost >= config.max_cost:
-        state.max_cost_reached = True
-        state.stop_reason = f"Max review cost reached: ${config.max_cost:.2f}."
     if time.monotonic() >= deadline:
         state.max_duration_reached = True
         state.stop_reason = f"Max review duration reached: {config.max_minutes:g} minutes."

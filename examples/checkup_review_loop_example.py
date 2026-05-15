@@ -49,7 +49,6 @@ def main() -> None:
     config = ReviewLoopConfig(
         reviewers=parse_reviewers("codex,claude"),
         max_rounds=1,
-        max_cost=1.0,
         max_minutes=5.0,
     )
 
