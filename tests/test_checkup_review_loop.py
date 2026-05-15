@@ -1428,6 +1428,122 @@ class TestCheckupReviewLoopRuntime:
             "| codex | degraded (optional, superseded by gemini) |" in report
         ), report
 
+    def test_reviewer_fallback_skips_parse_repair_past_deadline(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The direct ``reviewer_fallback`` path must propagate ``deadline``
+        into ``_run_review`` so a fallback that returns a parseable-but-failed
+        payload after the wall-clock deadline does NOT trigger an extra
+        parse-repair LLM call.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        clock = [1000.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        monkeypatch.setattr(mod.time, "monotonic", fake_monotonic)
+
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                # Primary failure forces the reviewer_fallback path.
+                clock[0] += 1.0
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            if role == "gemini":
+                # Fallback returns parseable JSON with status=failed and
+                # no findings, which without the deadline guard would let
+                # ``_should_attempt_parse_repair`` fire. Advance the clock
+                # past the deadline so the budget guard must skip the
+                # extra parse-repair LLM call.
+                clock[0] += 600.0
+                return True, _json("failed"), 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                reviewer_fallback="gemini",
+                max_minutes=1.0,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The fallback reviewer must have been called…
+        assert any(role == "gemini" for role, _ in calls), calls
+        # …but parse-repair must NOT fire after the deadline has passed.
+        assert not any(
+            "parse-repair" in label for _, label in calls
+        ), calls
+
+    def test_fallback_reviewer_on_failure_skips_parse_repair_past_deadline(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The ``fallback_reviewer_on_failure`` path (fixer-as-fallback) must
+        also propagate ``deadline`` so an exhausted wall-clock budget skips
+        the parse-repair LLM call.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        clock = [1000.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        monkeypatch.setattr(mod.time, "monotonic", fake_monotonic)
+
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                clock[0] += 1.0
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            if role == "claude" and "fallback" in kwargs["label"]:
+                # Fallback fixer-as-reviewer returns parseable-but-failed
+                # JSON. Without the deadline guard, parse-repair would
+                # fire here — and the fake clock has already advanced
+                # past the deadline.
+                clock[0] += 600.0
+                return True, _json("failed"), 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                fallback_reviewer_on_failure=True,
+                max_minutes=1.0,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The fallback fixer-as-reviewer must have been invoked…
+        assert any(
+            "fallback-claude" in label for _, label in calls
+        ), calls
+        # …but parse-repair must NOT fire after the deadline has passed.
+        assert not any(
+            "parse-repair" in label for _, label in calls
+        ), calls
+
     def test_no_reviewer_fallback_preserves_legacy_behavior(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
