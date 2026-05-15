@@ -25,6 +25,8 @@ from pdd.agentic_sync_runner import (
     _BOX_CHARS_RE,
     _format_duration,
     _parse_conformance_failure,
+    _parse_public_surface_failure,
+    _parse_test_churn_failure,
     _parse_cost_from_csv,
     build_dep_graph_from_architecture,
     build_dep_graph_from_architecture_data,
@@ -1174,6 +1176,32 @@ class TestSyncOneModule:
         assert "update_main.sync_metadata" in missing
         assert "Required missing exports" in directive
         assert "On `update_main`" in directive
+
+    def test_parse_public_surface_failure(self):
+        stderr = (
+            "Public surface regression for update_main_Python.prompt: "
+            "removed public symbols: calculate_sha256, git. "
+            "Output: pdd/update_main.py. "
+            "Pre surface size: 12. Post surface size: 10."
+        )
+
+        directive, removed = _parse_public_surface_failure("", stderr)
+
+        assert removed == ("calculate_sha256", "git")
+        assert "- calculate_sha256" in directive
+        assert "BREAKING-CHANGE:" in directive
+
+    def test_parse_test_churn_failure(self):
+        stderr = (
+            "Test churn threshold exceeded for test_update_main_Python.prompt: "
+            "churn ratio 0.82 exceeds threshold 0.40. "
+            "Output: tests/test_update_main.py. Pre lines: 100. Post lines: 95."
+        )
+
+        directive, signature = _parse_test_churn_failure("", stderr)
+
+        assert signature == ("ratio=0.82", "pre_lines=100")
+        assert "Reduce churn below threshold 0.40" in directive
 
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(

@@ -5065,6 +5065,102 @@ class TestArchitectureConformanceErrorTypedException:
 
 
 # ---------------------------------------------------------------------------
+# Tests for public surface and test churn gates (Issue #1012)
+# ---------------------------------------------------------------------------
+class TestSyncCompatibilityGates:
+    def test_public_surface_regression_catches_removed_import_and_helper(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "import git\n"
+            "def read_fingerprint():\n"
+            "    return 'old'\n"
+            "def calculate_sha256(value):\n"
+            "    return value\n"
+        )
+        after = (
+            "def read_fingerprint():\n"
+            "    return 'new'\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "update_main_Python.prompt",
+                "pdd/update_main.py",
+                "python",
+                "Update internals only.",
+            )
+
+        assert excinfo.value.removed_symbols == ["calculate_sha256", "git"]
+        assert "Public surface regression for update_main_Python.prompt:" in str(excinfo.value)
+        assert "- calculate_sha256" in excinfo.value.repair_directive
+
+    def test_public_surface_regression_allows_explicit_breaking_change(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "def old_helper():\n    pass\n",
+            "def new_helper():\n    pass\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: remove old_helper.",
+        )
+
+    def test_public_surface_regression_exempts_first_time_generation(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        _verify_public_surface_regression(
+            "",
+            "def new_helper():\n    pass\n",
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_test_churn_gate_raises_above_threshold(self, monkeypatch):
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        before = "\n".join(
+            [
+                "def test_a(): pass",
+                "def test_b(): pass",
+                "def test_c(): pass",
+                "def test_d(): pass",
+                "def test_e(): pass",
+            ]
+        )
+        after = "\n".join(
+            [
+                "def test_new_a(): pass",
+                "def test_new_b(): pass",
+                "def test_new_c(): pass",
+                "def test_new_d(): pass",
+                "def test_new_e(): pass",
+            ]
+        )
+
+        with pytest.raises(TestChurnError) as excinfo:
+            _verify_test_churn(
+                before,
+                after,
+                "update_main_test_Python.prompt",
+                "tests/test_update_main.py",
+                "",
+            )
+
+        assert excinfo.value.churn_ratio > excinfo.value.threshold
+        assert "Test churn threshold exceeded for update_main_test_Python.prompt:" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
 # Tests for <pdd-interface> signature conformance (Issue #928)
 # ---------------------------------------------------------------------------
 class TestPddInterfaceSignatureConformance:

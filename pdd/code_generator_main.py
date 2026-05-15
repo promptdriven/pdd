@@ -1,4 +1,5 @@
 import ast
+import difflib
 import glob
 import logging
 import os
@@ -112,6 +113,99 @@ class ArchitectureConformanceError(click.UsageError):
         return "\n".join(lines)
 
 
+class PublicSurfaceRegressionError(click.UsageError):
+    """Raised when generation removes public symbols from an existing module."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        removed_symbols: List[str],
+        pre_surface_size: int,
+        post_surface_size: int,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+        repair_directive: Optional[str] = None,
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.removed_symbols = list(removed_symbols)
+        self.pre_surface_size = int(pre_surface_size)
+        self.post_surface_size = int(post_surface_size)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        self._repair_directive_override = repair_directive
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Public surface regression for {prompt_name}: removed public symbols: "
+            f"{', '.join(self.removed_symbols)}. Output: {output_display}. "
+            f"Pre surface size: {self.pre_surface_size}. "
+            f"Post surface size: {self.post_surface_size}."
+        )
+
+    @property
+    def repair_directive(self) -> str:
+        if self._repair_directive_override:
+            return self._repair_directive_override
+        lines = [
+            "Public surface regression repair required.",
+            "Restore these public symbols from the existing module:",
+        ]
+        for sym in self.removed_symbols:
+            lines.append(f"- {sym}")
+        lines.append(
+            "Preserve backward-compatible public helpers unless the prompt "
+            "explicitly contains BREAKING-CHANGE:."
+        )
+        return "\n".join(lines)
+
+
+class TestChurnError(click.UsageError):
+    """Raised when generation rewrites too much of an existing test file."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        churn_ratio: float,
+        threshold: float,
+        pre_line_count: int,
+        post_line_count: int,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+        repair_directive: Optional[str] = None,
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.churn_ratio = float(churn_ratio)
+        self.threshold = float(threshold)
+        self.pre_line_count = int(pre_line_count)
+        self.post_line_count = int(post_line_count)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        self._repair_directive_override = repair_directive
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Test churn threshold exceeded for {prompt_name}: churn ratio "
+            f"{self.churn_ratio:.2f} exceeds threshold {self.threshold:.2f}. "
+            f"Output: {output_display}. Pre lines: {self.pre_line_count}. "
+            f"Post lines: {self.post_line_count}."
+        )
+
+    @property
+    def repair_directive(self) -> str:
+        if self._repair_directive_override:
+            return self._repair_directive_override
+        return (
+            "Test churn repair required.\n"
+            f"- Keep the existing broad test coverage in "
+            f"{self.output_path or '<unknown>'}.\n"
+            f"- Reduce unrelated rewrites below the configured churn threshold "
+            f"({self.threshold:.2f}); current churn is {self.churn_ratio:.2f}.\n"
+            "- Add or update only tests needed for the prompt change."
+        )
+
+
 # --- Helper Functions ---
 def _parse_llm_bool(value: str) -> bool:
     """Parse LLM boolean value from string."""
@@ -129,6 +223,158 @@ def _env_flag_enabled(name: str) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
+    """Return True when the prompt explicitly opts into breaking changes."""
+    return bool(prompt_content and "BREAKING-CHANGE:" in prompt_content)
+
+
+def _is_python_generation(language: Optional[str], output_path: Optional[str]) -> bool:
+    detected = (language or "").lower()
+    return detected in {"python", "py"} or bool(
+        output_path and str(output_path).lower().endswith(".py")
+    )
+
+
+def _is_test_output_path(output_path: Optional[str]) -> bool:
+    if not output_path:
+        return False
+    path = pathlib.Path(str(output_path))
+    name = path.name
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or any(part == "tests" for part in path.parts)
+    )
+
+
+def _collect_python_public_surface(source: str) -> List[str]:
+    """Collect public top-level names plus direct public class methods/imports."""
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return []
+
+    names: set[str] = set()
+
+    def add(name: str) -> None:
+        if name and not name.startswith("_"):
+            names.add(name)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            add(node.name)
+            if not node.name.startswith("_"):
+                for child in node.body:
+                    if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                        if not child.name.startswith("_"):
+                            names.add(f"{node.name}.{child.name}")
+                    elif isinstance(child, ast.ClassDef) and not child.name.startswith("_"):
+                        names.add(f"{node.name}.{child.name}")
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    add(target.id)
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            add(node.target.id)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                public_name = alias.asname or alias.name.split(".", 1)[0]
+                add(public_name)
+
+    return sorted(names)
+
+
+def _verify_public_surface_regression(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    language: Optional[str],
+    prompt_content: Optional[str],
+) -> None:
+    """Fail when a mature Python module generation removes public symbols."""
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or _prompt_allows_breaking_change(prompt_content)
+        or _is_test_output_path(output_path)
+        or not _is_python_generation(language, output_path)
+    ):
+        return
+
+    before = _collect_python_public_surface(existing_code)
+    after = _collect_python_public_surface(generated_code)
+    if not before:
+        return
+    removed = sorted(set(before) - set(after))
+    if removed:
+        raise PublicSurfaceRegressionError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            removed_symbols=removed,
+            pre_surface_size=len(before),
+            post_surface_size=len(after),
+        )
+
+
+def _get_test_churn_threshold() -> float:
+    raw = os.environ.get("PDD_TEST_CHURN_THRESHOLD", "0.40")
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.40
+    if value < 0:
+        return 0.0
+    return value
+
+
+def _calculate_test_churn_ratio(before: str, after: str) -> float:
+    before_lines = (before or "").splitlines()
+    after_lines = (after or "").splitlines()
+    diff = difflib.unified_diff(before_lines, after_lines, lineterm="")
+    added = 0
+    removed = 0
+    for line in diff:
+        if line.startswith(("+++", "---", "@@")):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    return min(max(added, removed) / max(len(before_lines), 1), 1.0)
+
+
+def _verify_test_churn(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    prompt_content: Optional[str],
+) -> None:
+    """Fail when rewriting an existing test file exceeds the churn threshold."""
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or not _is_test_output_path(output_path)
+        or _prompt_allows_breaking_change(prompt_content)
+    ):
+        return
+
+    threshold = _get_test_churn_threshold()
+    ratio = _calculate_test_churn_ratio(existing_code, generated_code)
+    if ratio > threshold:
+        raise TestChurnError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            churn_ratio=ratio,
+            threshold=threshold,
+            pre_line_count=len(existing_code.splitlines()),
+            post_line_count=len(generated_code.splitlines()),
+        )
 
 def _should_wire_generated_exports(output_path: str) -> bool:
     """Return True when generated Python exports should be wired to __init__.py.
@@ -2165,6 +2411,33 @@ def code_generator_main(
                 except Exception as conform_err:
                     if verbose and not quiet:
                         console.print(f"[yellow]Warning: Architecture conformance check failed: {conform_err}[/yellow]")
+
+            if (
+                not _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+                and generated_code_content
+                and existing_code_content is not None
+            ):
+                try:
+                    prompt_name = pathlib.Path(prompt_file).name
+                    _verify_public_surface_regression(
+                        existing_code=existing_code_content,
+                        generated_code=generated_code_content,
+                        prompt_name=prompt_name,
+                        output_path=output_path,
+                        language=language,
+                        prompt_content=prompt_content,
+                    )
+                    _verify_test_churn(
+                        existing_code=existing_code_content,
+                        generated_code=generated_code_content,
+                        prompt_name=prompt_name,
+                        output_path=output_path,
+                        prompt_content=prompt_content,
+                    )
+                except (PublicSurfaceRegressionError, TestChurnError) as compat_err:
+                    compat_err.total_cost = float(total_cost or 0.0)
+                    compat_err.model_name = model_name or "unknown"
+                    raise
 
             if output_path:
                 p_output = pathlib.Path(output_path)

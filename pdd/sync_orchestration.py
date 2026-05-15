@@ -2208,15 +2208,22 @@ def sync_orchestration(
                                 # sees the missing-export instruction. Mirrors the loop in
                                 # sync_main.py / agentic_sync_runner.py for parity across all
                                 # `pdd sync` entry points.
-                                from .code_generator_main import ArchitectureConformanceError
+                                from .code_generator_main import (
+                                    ArchitectureConformanceError,
+                                    PublicSurfaceRegressionError,
+                                    TestChurnError,
+                                )
                                 from .agentic_sync_runner import (
                                     MAX_CONFORMANCE_ATTEMPTS,
                                     build_conformance_hard_failure_from_error,
+                                    build_public_surface_hard_failure_from_error,
+                                    build_test_churn_hard_failure_from_error,
                                 )
                                 _prev_repair = os.environ.get("PDD_REPAIR_DIRECTIVE")
                                 try:
-                                    last_conform_exc: Optional[ArchitectureConformanceError] = None
-                                    last_conform_missing: Optional[tuple] = None
+                                    last_conform_exc: Optional[Any] = None
+                                    last_conform_signature: Optional[tuple] = None
+                                    last_conform_kind: Optional[str] = None
                                     conformance_failed_cost = 0.0
                                     conformance_failed_model = ""
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
@@ -2225,20 +2232,43 @@ def sync_orchestration(
                                             result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True)
                                             last_conform_exc = None
                                             break
-                                        except ArchitectureConformanceError as _conform_exc:
+                                        except (
+                                            ArchitectureConformanceError,
+                                            PublicSurfaceRegressionError,
+                                            TestChurnError,
+                                        ) as _conform_exc:
                                             attempt_cost = float(getattr(_conform_exc, "total_cost", 0.0) or 0.0)
                                             conformance_failed_cost += attempt_cost
                                             _conform_exc.total_cost = conformance_failed_cost
                                             exc_model = getattr(_conform_exc, "model_name", "") or ""
                                             if exc_model and exc_model != "unknown":
                                                 conformance_failed_model = exc_model
-                                            new_missing = tuple(sorted(set(_conform_exc.missing_symbols)))
-                                            if last_conform_missing is not None and new_missing == last_conform_missing:
+                                            if isinstance(_conform_exc, PublicSurfaceRegressionError):
+                                                new_kind = "public_surface"
+                                                new_signature = tuple(sorted(set(_conform_exc.removed_symbols)))
+                                            elif isinstance(_conform_exc, TestChurnError):
+                                                new_kind = "test_churn"
+                                                new_signature = (
+                                                    f"{_conform_exc.churn_ratio:.2f}",
+                                                    str(_conform_exc.pre_line_count),
+                                                )
+                                            else:
+                                                new_kind = "architecture"
+                                                new_signature = tuple(sorted(set(_conform_exc.missing_symbols)))
+                                            if (
+                                                last_conform_signature is not None
+                                                and new_signature == last_conform_signature
+                                                and new_kind == last_conform_kind
+                                            ):
                                                 last_conform_exc = _conform_exc
                                                 break
-                                            last_conform_missing = new_missing
+                                            last_conform_signature = new_signature
+                                            last_conform_kind = new_kind
                                             last_conform_exc = _conform_exc
-                                            if _conform_attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                            if (
+                                                _conform_attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS
+                                                or isinstance(_conform_exc, TestChurnError)
+                                            ):
                                                 break
                                             if conformance_failed_cost >= max(budget - current_cost_ref[0], 0.0):
                                                 break
@@ -2251,9 +2281,18 @@ def sync_orchestration(
                                         # converts the exception into an errors.append
                                         # entry, but the structured block has already
                                         # been written to stderr for the user.
-                                        hard_block = build_conformance_hard_failure_from_error(
-                                            last_conform_exc, basename
-                                        )
+                                        if isinstance(last_conform_exc, PublicSurfaceRegressionError):
+                                            hard_block = build_public_surface_hard_failure_from_error(
+                                                last_conform_exc, basename
+                                            )
+                                        elif isinstance(last_conform_exc, TestChurnError):
+                                            hard_block = build_test_churn_hard_failure_from_error(
+                                                last_conform_exc, basename
+                                            )
+                                        else:
+                                            hard_block = build_conformance_hard_failure_from_error(
+                                                last_conform_exc, basename
+                                            )
                                         print(hard_block, file=sys.stderr)
                                         raise last_conform_exc
                                     if conformance_failed_cost and isinstance(result, tuple) and len(result) >= 4:

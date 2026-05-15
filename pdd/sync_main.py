@@ -945,10 +945,14 @@ def sync_main(
                         from .code_generator_main import (
                             code_generator_main,
                             ArchitectureConformanceError,
+                            PublicSurfaceRegressionError,
+                            TestChurnError,
                         )
                         from .agentic_sync_runner import (
                             MAX_CONFORMANCE_ATTEMPTS,
                             build_conformance_hard_failure_from_error,
+                            build_public_surface_hard_failure_from_error,
+                            build_test_churn_hard_failure_from_error,
                         )
 
                         if not quiet:
@@ -964,8 +968,9 @@ def sync_main(
                         import os as _os
                         _prev_repair = _os.environ.get("PDD_REPAIR_DIRECTIVE")
                         try:
-                            last_exc: Optional[ArchitectureConformanceError] = None
-                            last_missing: Optional[Tuple[str, ...]] = None
+                            last_exc: Optional[Any] = None
+                            last_signature: Optional[Tuple[str, ...]] = None
+                            last_kind: Optional[str] = None
                             for _attempt in range(MAX_CONFORMANCE_ATTEMPTS):
                                 try:
                                     gen_result = code_generator_main(
@@ -981,7 +986,11 @@ def sync_main(
                                     )
                                     last_exc = None
                                     break
-                                except ArchitectureConformanceError as exc:
+                                except (
+                                    ArchitectureConformanceError,
+                                    PublicSurfaceRegressionError,
+                                    TestChurnError,
+                                ) as exc:
                                     attempt_cost = float(
                                         getattr(exc, "total_cost", 0.0) or 0.0
                                     )
@@ -990,19 +999,37 @@ def sync_main(
                                     exc_model = getattr(exc, "model_name", "") or ""
                                     if exc_model and exc_model != "unknown":
                                         pre_model = exc_model
-                                    new_missing = tuple(
-                                        sorted(set(exc.missing_symbols))
-                                    )
+                                    if isinstance(exc, PublicSurfaceRegressionError):
+                                        new_kind = "public_surface"
+                                        new_signature = tuple(
+                                            sorted(set(exc.removed_symbols))
+                                        )
+                                    elif isinstance(exc, TestChurnError):
+                                        new_kind = "test_churn"
+                                        new_signature = (
+                                            f"{exc.churn_ratio:.2f}",
+                                            str(exc.pre_line_count),
+                                        )
+                                    else:
+                                        new_kind = "architecture"
+                                        new_signature = tuple(
+                                            sorted(set(exc.missing_symbols))
+                                        )
                                     if (
-                                        last_missing is not None
-                                        and new_missing == last_missing
+                                        last_signature is not None
+                                        and new_signature == last_signature
+                                        and new_kind == last_kind
                                     ):
                                         # Stuck on identical symbol set — abort.
                                         last_exc = exc
                                         break
-                                    last_missing = new_missing
+                                    last_signature = new_signature
+                                    last_kind = new_kind
                                     last_exc = exc
-                                    if _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                    if (
+                                        _attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS
+                                        or isinstance(exc, TestChurnError)
+                                    ):
                                         break
                                     if (
                                         remaining_budget is not None
@@ -1013,7 +1040,7 @@ def sync_main(
                                         rprint(
                                             "[yellow]Architecture conformance failed; "
                                             f"retrying generation with repair directive "
-                                            f"(missing: {', '.join(new_missing) or '<none>'}).[/yellow]"
+                                            f"(signature: {', '.join(new_signature) or '<none>'}).[/yellow]"
                                         )
                                     _os.environ["PDD_REPAIR_DIRECTIVE"] = exc.repair_directive
                             if last_exc is not None:
@@ -1022,9 +1049,18 @@ def sync_main(
                                 # same diagnostic the agentic runner emits)
                                 # before re-raising the original click.UsageError.
                                 import sys as _sys
-                                hard_block = build_conformance_hard_failure_from_error(
-                                    last_exc, basename
-                                )
+                                if isinstance(last_exc, PublicSurfaceRegressionError):
+                                    hard_block = build_public_surface_hard_failure_from_error(
+                                        last_exc, basename
+                                    )
+                                elif isinstance(last_exc, TestChurnError):
+                                    hard_block = build_test_churn_hard_failure_from_error(
+                                        last_exc, basename
+                                    )
+                                else:
+                                    hard_block = build_conformance_hard_failure_from_error(
+                                        last_exc, basename
+                                    )
                                 print(hard_block, file=_sys.stderr)
                                 raise last_exc
                         finally:
