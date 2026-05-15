@@ -1536,11 +1536,11 @@ def _extract_allowed_write_paths(issue_text: str) -> List[str]:
 
     This helper used to do its own loose markdown scan for allowed-write
     paths. It now delegates to the structured contract parser in
-    :mod:`pdd.agentic_common` so the public contract API (HTML-comment JSON
-    and fenced-block formats) is the single source of truth. The wrapper is
-    kept for one release so any external caller that imported the private
-    name does not crash at import time; it returns an empty list whenever
-    :func:`parse_issue_contract` cannot find a valid contract.
+    :mod:`pdd.agentic_common` so the public contract API (HTML-comment JSON,
+    fenced-block, and bullet-list formats) is the single source of truth.
+    The wrapper is kept for one release so any external caller that imported
+    the private name does not crash at import time; it returns an empty list
+    whenever :func:`parse_issue_contract` cannot find a valid contract.
     """
     contract = parse_issue_contract(issue_text)
     return list(contract.allowed_paths) if contract is not None else []
@@ -1891,6 +1891,22 @@ def run_agentic_sync(
         console.print(f"[green]Modules to sync: {modules_to_sync}[/green]")
 
     # 10. Apply dependency corrections if needed
+    #
+    # Iter-26: scope-guard the LLM dependency-correction step. This runs
+    # at the ORCHESTRATOR level — before the runner exists — so the per-
+    # module scope guard cannot catch it. If the issue contract does not
+    # include ``architecture.json`` in its allowed write set, skip the
+    # correction so the contract is not silently violated. Pre-existing
+    # behavior is preserved when no contract was parsed (issue_contract
+    # is None → permissive mode) or when ``architecture.json`` IS in the
+    # contract (legitimate architecture-touching PRs). ``--no-scope-guard``
+    # (``scope_guard is False``) is treated as an explicit opt-out and
+    # also bypasses the gate.
+    arch_in_scope = (
+        issue_contract is None
+        or scope_guard is False
+        or "architecture.json" in tuple(issue_contract.allowed_paths or ())
+    )
     if not deps_valid and deps_corrections and architecture is not None:
         if dry_run:
             if not quiet:
@@ -1898,9 +1914,18 @@ def run_agentic_sync(
                     "[yellow]Dry run: dependency corrections were suggested; "
                     "architecture.json was not modified.[/yellow]"
                 )
+        elif not arch_in_scope:
+            if not quiet:
+                console.print(
+                    "[yellow]Sync scope guard: skipping LLM dependency "
+                    "corrections — architecture.json is outside the issue "
+                    "split-contract allowed write set. Add architecture.json "
+                    "to the contract or rerun with --no-scope-guard to apply "
+                    "corrections.[/yellow]"
+                )
         elif not quiet:
             console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
-        if not dry_run:
+        if not dry_run and arch_in_scope:
             architecture = _apply_architecture_corrections(arch_path, architecture, deps_corrections, quiet)
 
     # 11. Build dependency graph

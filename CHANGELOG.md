@@ -2,7 +2,7 @@
 
 ### Fix
 
-- **#1013 sync**: enforce split-contract allowed write sets. When the linked GitHub issue declares an allowed write set (HTML comment `<!-- PDD_ISSUE_CONTRACT ...json... -->` or a fenced "Allowed Write Set" / "Split Contract" block), `pdd sync` now reverts tracked changes and removes untracked new files that fall outside the contract after each per-module subprocess, hard-fails the module on out-of-scope artifacts, and surfaces the contract source plus offending paths in checkup/review-loop reports. Companion artifacts under `.pdd/meta/*.json` are auto-allowed; additional companions can be opted in via the contract's `companion_allowlist` field. Use `--no-scope-guard` to opt out for a single run. Issues without a contract marker remain in permissive mode (no enforcement).
+- **#1013 sync**: enforce split-contract allowed write sets. When the linked GitHub issue declares an allowed write set (HTML comment `<!-- PDD_ISSUE_CONTRACT ...json... -->`, a fenced "Allowed Write Set" / "Split Contract" block, or a `## Split Contract` heading with an `**Allowed write set:**` label followed by a bullet list), `pdd sync` now reverts tracked changes and removes untracked new files that fall outside the contract after each per-module subprocess, hard-fails the module on out-of-scope artifacts, and surfaces the contract source plus offending paths in checkup/review-loop reports. Companion artifacts under `.pdd/meta/*.json` are auto-allowed; additional companions can be opted in via the contract's `companion_allowlist` field. Use `--no-scope-guard` to opt out for a single run. Issues without a contract marker remain in permissive mode (no enforcement).
 
 ## v0.0.238 (2026-05-14)
 
