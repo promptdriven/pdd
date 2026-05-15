@@ -336,7 +336,9 @@ def test_allowed_write_set_rejects_out_of_scope_checkpoint_paths(tmp_path: Path)
     runner = _runner(repo, allowed_write_set=["src/app.py"])
 
     assert runner._out_of_scope_staged_paths(
-        ["src/app.py", "architecture.json", ".pdd/meta/foo_python.json"]
+        ["src/app.py", "architecture.json", ".pdd/meta/foo_python.json"],
+        "foo",
+        repo,
     ) == ["architecture.json"]
 
 
@@ -349,7 +351,9 @@ def test_allowed_write_set_none_means_permissive_for_durable_runner(tmp_path: Pa
     runner = _runner(repo, allowed_write_set=None)
 
     assert runner._out_of_scope_staged_paths(
-        ["src/app.py", "architecture.json", "anything/else.txt"]
+        ["src/app.py", "architecture.json", "anything/else.txt"],
+        "foo",
+        repo,
     ) == []
 
 
@@ -362,7 +366,9 @@ def test_allowed_write_set_empty_rejects_everything_for_durable_runner(tmp_path:
     runner = _runner(repo, allowed_write_set=[])
 
     result = runner._out_of_scope_staged_paths(
-        ["src/app.py", ".pdd/meta/foo_python.json"]
+        ["src/app.py", ".pdd/meta/foo_python.json"],
+        "foo",
+        repo,
     )
     assert result == ["src/app.py"]
 
@@ -383,7 +389,9 @@ def test_wildcard_only_companion_pattern_is_ignored_by_durable_runner(
 
     # ``**/*`` is wildcard-only, so it must NOT auto-allow ``unrelated/file.py``.
     assert runner._out_of_scope_staged_paths(
-        ["unrelated/file.py"]
+        ["unrelated/file.py"],
+        "foo",
+        repo,
     ) == ["unrelated/file.py"]
 
 
@@ -408,11 +416,125 @@ def test_durable_nested_meta_path_is_not_in_companion_allowlist(
     # The nested path is shaped like a fingerprint-meta artifact but
     # sits under ``subdir/`` — the iter-14 M-2 bug shape.
     result = runner._out_of_scope_staged_paths(
-        ["subdir/.pdd/meta/bar.json"]
+        ["subdir/.pdd/meta/bar.json"],
+        "foo",
+        repo,
     )
     assert result == ["subdir/.pdd/meta/bar.json"], (
         "nested .pdd/meta path must NOT be auto-allowed by the "
         "default top-level companion pattern (iter-14 M-2)"
+    )
+
+
+def test_multi_module_durable_companion_matched_module_relative(
+    tmp_path: Path,
+):
+    """Iter-16 M-1: in a multi-module repo where ``module_cwd`` is a
+    SUBDIRECTORY of the worktree (``worktree/pkg``), staged paths
+    surface relative to the worktree git root (``pkg/.pdd/meta/foo.json``).
+    The companion pattern ``.pdd/meta/*.json`` is module-relative, so the
+    durable scope check MUST strip the module_cwd prefix before matching;
+    otherwise legitimate fingerprint metadata is rejected and the
+    checkpoint commit fails. Mirrors the async-side iter-14 M-1 part-2
+    fix.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        basenames=["pkg_mod"],
+        module_cwds={"pkg_mod": repo / "pkg"},
+        allowed_write_set=["pkg/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    # Staged path is repo-relative (``pkg/.pdd/meta/foo.json``) but the
+    # companion pattern describes module-relative metadata. With the
+    # iter-16 fix the prefix is stripped and the anchored matcher sees
+    # ``.pdd/meta/foo.json`` — a clean match.
+    result = runner._out_of_scope_staged_paths(
+        ["pkg/.pdd/meta/foo.json"],
+        "pkg_mod",
+        repo,
+    )
+    assert result == [], (
+        "multi-module durable runner must strip module_cwd prefix before "
+        "companion-pattern matching (iter-16 M-1)"
+    )
+
+
+def test_durable_sibling_module_metadata_rejected(tmp_path: Path):
+    """Iter-16 M-1 (sibling-module regression for F1 iter-3): when
+    ``module_cwd = worktree/pkg``, a sibling module's metadata path like
+    ``pkg_other/.pdd/meta/foo.json`` sits OUTSIDE the active module's
+    cwd. The companion allowlist must NOT auto-allow it; only files
+    UNDER the module's own cwd qualify as companion artifacts.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        basenames=["pkg_mod"],
+        module_cwds={"pkg_mod": repo / "pkg"},
+        allowed_write_set=["pkg/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    result = runner._out_of_scope_staged_paths(
+        ["pkg_other/.pdd/meta/foo.json"],
+        "pkg_mod",
+        repo,
+    )
+    assert result == ["pkg_other/.pdd/meta/foo.json"], (
+        "sibling-module metadata must NOT be auto-allowed by the "
+        "companion allowlist (F1 iter-3 sibling rule, iter-16 M-1)"
+    )
+
+
+def test_single_module_durable_companion_still_matches(tmp_path: Path):
+    """Iter-16 M-1 (single-module regression): when ``module_cwd ==
+    module_worktree`` (no submodule prefix), top-level
+    ``.pdd/meta/foo.json`` must still match the default companion
+    pattern. The iter-16 prefix-stripping must be a no-op in this case.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        allowed_write_set=["src/app.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    result = runner._out_of_scope_staged_paths(
+        [".pdd/meta/foo.json"],
+        "foo",
+        repo,
+    )
+    assert result == [], (
+        "single-module durable runner must still auto-allow top-level "
+        ".pdd/meta artifacts (iter-16 M-1 single-module regression)"
+    )
+
+
+def test_single_module_durable_nested_meta_not_allowed(tmp_path: Path):
+    """Iter-14 M-2 (regression): single-module durable runner with
+    ``module_cwd == module_worktree`` must still reject a NESTED
+    ``subdir/.pdd/meta/foo.json`` — the anchored matcher refuses
+    suffix-style matches, and iter-16's prefix-stripping must not
+    weaken that.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    runner = _runner(
+        repo,
+        allowed_write_set=["src/app.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    result = runner._out_of_scope_staged_paths(
+        ["subdir/.pdd/meta/foo.json"],
+        "foo",
+        repo,
+    )
+    assert result == ["subdir/.pdd/meta/foo.json"], (
+        "nested .pdd/meta path must remain out-of-scope under single-"
+        "module mode (iter-14 M-2 regression preserved by iter-16)"
     )
 
 

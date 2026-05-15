@@ -388,7 +388,9 @@ class DurableSyncRunner(AsyncSyncRunner):
             # or a single-path status (A/M/D/T), every column past the
             # status code is a path that should be scope-checked.
             changed_paths.extend(p.strip() for p in parts[1:] if p.strip())
-        out_of_scope = self._out_of_scope_staged_paths(changed_paths)
+        out_of_scope = self._out_of_scope_staged_paths(
+            changed_paths, basename, module_worktree
+        )
         if out_of_scope:
             return (
                 False,
@@ -408,7 +410,12 @@ class DurableSyncRunner(AsyncSyncRunner):
         empty = not changed_paths
         return True, "", empty
 
-    def _out_of_scope_staged_paths(self, paths: List[str]) -> List[str]:
+    def _out_of_scope_staged_paths(
+        self,
+        paths: List[str],
+        basename: str,
+        module_worktree: Path,
+    ) -> List[str]:
         """
         Return staged paths that violate the issue split-contract.
 
@@ -418,16 +425,44 @@ class DurableSyncRunner(AsyncSyncRunner):
         both contract paths AND companion-allowlist matches (e.g.
         ``.pdd/meta/*.json``) so fingerprint metadata can still be
         checkpointed alongside the primary write set.
+
+        Issue #1013 iter-16 M-1: in a multi-module repo where
+        ``module_cwd`` is a SUBDIRECTORY of the worktree (e.g.
+        ``worktree/pkg``), staged paths surface relative to the worktree
+        git root (e.g. ``pkg/.pdd/meta/foo.json``). Companion-allowlist
+        patterns describe MODULE-RELATIVE artifacts (e.g.
+        ``.pdd/meta/*.json``), so the staged path must be stripped of the
+        module cwd prefix before the anchored matcher runs. Mirrors the
+        async runner's iter-14 M-1 part-2 fix. Paths that sit OUTSIDE the
+        module's cwd (sibling-module artifacts) never auto-allow — see
+        F1 iter-3.
         """
         # Permissive mode: scope_guard disabled or no contract parsed.
         if not self.scope_guard_enabled or self.allowed_write_paths is None:
             return []
         allowlist = tuple(self.companion_allowlist)
+        # Resolve the module's cwd relative to its worktree once. For a
+        # single-module sync where ``module_cwd == module_worktree``, this
+        # is ``"."`` (or ``""`` if the helper ever returned the worktree
+        # path itself) and we treat it as "no prefix to strip".
+        module_cwd = self._module_cwd_for_worktree(basename, module_worktree)
+        try:
+            module_cwd_rel = module_cwd.resolve().relative_to(
+                module_worktree.resolve()
+            ).as_posix()
+        except ValueError:
+            module_cwd_rel = ""
+        if module_cwd_rel in ("", "."):
+            module_cwd_rel = ""
+
         offending: Set[str] = set()
         for raw in paths:
             normalized = raw.replace(os.sep, "/").strip()
             if normalized.startswith("./"):
                 normalized = normalized[2:]
+            # Allowed-write-set match is REPO-RELATIVE by contract (the
+            # split contract is declared with repo-rooted paths) and stays
+            # unchanged.
             if normalized in self.allowed_write_paths:
                 continue
             # F3 (Issue #1013): companion glob matching uses anchored,
@@ -437,6 +472,20 @@ class DurableSyncRunner(AsyncSyncRunner):
             # ``PurePosixPath.match`` (suffix-based, falsely matched
             # ``subdir/.pdd/meta/foo.json``) with the centralized
             # anchored matcher in ``agentic_common``.
+            #
+            # Iter-16 M-1: for multi-module sync, strip the module_cwd
+            # prefix before matching so the module-relative pattern works
+            # against the repo-relative staged path. Paths outside the
+            # module's cwd are sibling artifacts and never auto-allow.
+            if module_cwd_rel:
+                prefix = module_cwd_rel + "/"
+                if not normalized.startswith(prefix):
+                    offending.add(normalized)
+                    continue
+                candidate_rel = normalized[len(prefix):]
+            else:
+                candidate_rel = normalized
+
             matched = False
             for pattern in allowlist:
                 if not pattern:
@@ -447,7 +496,7 @@ class DurableSyncRunner(AsyncSyncRunner):
                 # auto-allow repo-wide writes.
                 if not _is_valid_companion_pattern(pattern):
                     continue
-                if _matches_companion_pattern_anchored(normalized, pattern):
+                if _matches_companion_pattern_anchored(candidate_rel, pattern):
                     matched = True
                     break
             if matched:
