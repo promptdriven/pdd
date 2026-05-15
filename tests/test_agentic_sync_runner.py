@@ -3094,6 +3094,162 @@ class TestEnforceScopeGuard:
             f"got: {captured_allowed['files']}"
         )
 
+    # ---------------------------------------------------------------------
+    # Iter-34 M-3: baseline-deletion blind spot
+    # ---------------------------------------------------------------------
+
+    def test_baseline_deletion_of_untracked_file_is_flagged(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-34 M-3 (baseline-deletion blind spot, codex iter-33): a
+        user's pre-existing UNTRACKED dirty file that gets deleted during
+        sync MUST hard-fail the module. Untracked baselines have no git
+        record, so ``git status`` leaves no trail after deletion — the
+        iter-24 logic dropped the baseline entry on ``current_hash is
+        None`` and silently lost the WIP."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing UNTRACKED WIP outside the contract.
+        userwip = tmp_path / "userwip.py"
+        userwip.write_text("wip")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "userwip.py" in runner._baseline_changed_paths, (
+            "iter-34: untracked WIP must be captured in baseline"
+        )
+        assert runner._baseline_changed_paths["userwip.py"] is not None, (
+            "iter-34: baseline SHA must be captured for readable WIP"
+        )
+
+        # Simulate sync deleting the file (e.g. refactor removed it).
+        userwip.unlink()
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-34: deletion of untracked baseline WIP must hard-fail "
+            "the module — silent data loss otherwise"
+        )
+        assert "userwip.py" in diagnostic, (
+            f"iter-34: deleted baseline path must appear in diagnostic, "
+            f"got: {diagnostic!r}"
+        )
+
+    def test_baseline_deletion_of_ignored_file_is_flagged(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-34 M-3 (symmetric): a pre-existing gitignored baseline
+        file that gets deleted during sync MUST hard-fail the module.
+        ``git ls-files --ignored`` only lists files that currently exist,
+        so a deletion is invisible to the ignored-rescan loop — a
+        dedicated baseline iteration is required."""
+        from pdd import agentic_sync_runner as mod
+
+        subprocess.run(
+            ["git", "init", "-b", "main", str(tmp_path)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.email", "t@t.invalid"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "config", "user.name", "T"],
+            check=True, capture_output=True,
+        )
+        (tmp_path / ".gitignore").write_text("cache.bin\n")
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "add", ".gitignore", "README.md"],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(tmp_path), "commit", "-m", "init"],
+            check=True, capture_output=True,
+        )
+
+        # Pre-existing gitignored file BEFORE the runner is constructed.
+        cache = tmp_path / "cache.bin"
+        cache.write_text("user cache")
+
+        monkeypatch.chdir(tmp_path)
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.project_root = tmp_path.resolve()
+
+        assert "cache.bin" in runner._baseline_ignored_paths, (
+            "iter-34: pre-existing ignored file must be captured in baseline"
+        )
+        assert runner._baseline_ignored_paths["cache.bin"] is not None, (
+            "iter-34: baseline SHA must be captured for readable ignored file"
+        )
+
+        # Simulate sync deleting the gitignored cache.
+        cache.unlink()
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes", lambda _root, _allowed: []
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "iter-34: deletion of ignored baseline file must hard-fail "
+            "the module — git ls-files --ignored leaves no trail"
+        )
+        assert "cache.bin" in diagnostic, (
+            f"iter-34: deleted ignored baseline must appear in diagnostic, "
+            f"got: {diagnostic!r}"
+        )
+
     def test_wildcard_only_companion_pattern_does_not_auto_allow(
         self, tmp_path, monkeypatch
     ):
@@ -3255,6 +3411,11 @@ class TestEnforceScopeGuard:
             allowed_write_set=["pdd/foo.py"],
             companion_allowlist=[".pdd/meta/*.json"],
         )
+        # Iter-34 M-3: clear the baseline snapshot taken from the real
+        # working tree so this test isolates the rglob/_git_changed_paths
+        # companion-allowlist behavior under inspection.
+        runner._baseline_changed_paths = {}
+        runner._baseline_ignored_paths = {}
         monkeypatch.setattr(
             runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
         )
@@ -3347,6 +3508,13 @@ class TestEnforceScopeGuard:
             allowed_write_set=["pdd/foo.py"],
             companion_allowlist=[".pdd/meta/*.json"],
         )
+        # Iter-34 M-3: ``_make_runner`` snapshots the baseline from the
+        # current working directory (the real ``pdd`` repo when the test
+        # didn't chdir). Reset the snapshot to ``{}`` so the post-fix
+        # baseline-deletion scan does not flag pre-existing dirty paths
+        # from the developer's working tree as silently deleted.
+        runner._baseline_changed_paths = {}
+        runner._baseline_ignored_paths = {}
         monkeypatch.setattr(
             runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
         )

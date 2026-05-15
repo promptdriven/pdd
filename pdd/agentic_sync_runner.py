@@ -2253,12 +2253,29 @@ class AsyncSyncRunner:
             # ``repo_root`` — in the non-durable async case those resolve
             # to the same path; the durable runner clears the baseline
             # entirely (iter-22) so this loop is a no-op there.
+            #
+            # Iter-34 M-3 (baseline-deletion blind spot, codex iter-33):
+            # ``current_hash is None`` means the baseline file is GONE
+            # from disk. For TRACKED baseline paths, ``git status`` will
+            # surface this as ``D `` and ``_remaining_out_of_scope_paths``
+            # picks it up; but for UNTRACKED baseline paths (the user's
+            # local WIP captured at init) git has no record — the
+            # deletion is invisible to every subsequent scan and the
+            # module would succeed with the WIP silently lost. Collect
+            # the deletions here and union them into the diagnostic's
+            # ``remaining`` set below.
+            baseline_deleted: Set[str] = set()
             for rel_posix, baseline_hash in self._baseline_changed_paths.items():
                 current_hash = _hash_file(repo_root, rel_posix)
                 if current_hash is None:
-                    # File was deleted (or unreadable) at check time —
-                    # don't auto-allow a ghost. The revert helpers handle
-                    # restore semantics; we just refuse to whitelist.
+                    # Iter-34 M-3: baseline file is GONE. Surface it as
+                    # unrecovered regardless of whether it was tracked
+                    # or untracked at init — we can't distinguish the
+                    # two from the baseline snapshot, and even the
+                    # tracked-deletion case warrants a hard-fail (the
+                    # user didn't expect their pre-existing file to be
+                    # removed by sync).
+                    baseline_deleted.add(rel_posix)
                     continue
                 if baseline_hash is None:
                     # Couldn't hash at init (the file was unreadable
@@ -2273,6 +2290,22 @@ class AsyncSyncRunner:
                 # else: sync (or some other writer) clobbered the file.
                 # Do NOT add to allowed_files — let the contract check
                 # flag it as out-of-scope.
+
+            # Iter-34 M-3: symmetric pass for ignored baseline paths.
+            # ``_remaining_out_of_scope_paths`` only sees files that
+            # ``git ls-files --ignored`` currently lists, so a deleted
+            # gitignored baseline file (e.g. user-side ``cache.bin``
+            # erased by sync) leaves no trail in either scan. Iterate
+            # the ignored baseline directly to catch the deletion.
+            for rel_posix, baseline_hash in self._baseline_ignored_paths.items():
+                current_hash = _hash_file(repo_root, rel_posix)
+                if current_hash is None:
+                    baseline_deleted.add(rel_posix)
+                # Present-but-changed ignored baselines are already
+                # surfaced by ``_remaining_out_of_scope_paths``'s
+                # ignored loop (the hash comparison there falls through
+                # to ``remaining.add`` on divergence). Don't duplicate
+                # that work here.
 
             tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
             untracked_reverted = revert_out_of_scope_changes_with_dirs(
@@ -2310,8 +2343,16 @@ class AsyncSyncRunner:
             # re-scan does not double-list. In practice when helpers succeed
             # the path is gone from ``git status``; when helpers fail with
             # ``reverted.clear()`` ``offending`` is empty. Defensive filter.
+            #
+            # Iter-34 M-3: union with ``baseline_deleted`` so a sync-side
+            # deletion of a pre-existing untracked/ignored baseline path
+            # hard-fails the module. For tracked baselines ``git status``
+            # already surfaces the deletion as ``D ``, so the union just
+            # dedups via set semantics.
             offending_set = set(offending)
-            remaining = [p for p in remaining_raw if p not in offending_set]
+            remaining = sorted(
+                (set(remaining_raw) | baseline_deleted) - offending_set
+            )
 
             if not offending and not remaining:
                 return None
