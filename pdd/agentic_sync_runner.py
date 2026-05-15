@@ -1941,6 +1941,22 @@ class AsyncSyncRunner:
                 if self._matches_companion_allowlist(rel_posix, allowlist):
                     allowed_files.add(path.resolve())
 
+            # Iter-4 F1: rglob only sees files that still exist on disk. Sync
+            # legitimately DELETES companion artifacts (e.g. ``.pdd/meta/foo_python.json``
+            # when a module is renamed/removed); those deletions appear in
+            # ``git status`` as tracked ``D ``. Without this pass the revert
+            # helper would resurrect the deleted companion and hard-fail.
+            for rel_posix in _git_changed_paths(repo_root):
+                if not self._matches_companion_allowlist(rel_posix, allowlist):
+                    continue
+                absolute = (repo_root / rel_posix).resolve()
+                try:
+                    absolute.relative_to(cwd_path)
+                except ValueError:
+                    # Outside the module's cwd — scoped out by F1 iter-3.
+                    continue
+                allowed_files.add(absolute)
+
             tracked_reverted = _revert_out_of_scope_changes(repo_root, allowed_files)
             untracked_reverted = revert_out_of_scope_changes_with_dirs(
                 repo_root, allowed_dirs=set(), allowed_files=allowed_files

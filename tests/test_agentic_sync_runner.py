@@ -2740,6 +2740,49 @@ class TestEnforceScopeGuard:
         out = capsys.readouterr().out
         assert "--no-scope-guard" in out
 
+    def test_deleted_companion_in_git_status_is_preserved(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-4 F1: when sync legitimately deletes ``.pdd/meta/foo.json``,
+        the file no longer exists on disk so ``rglob`` misses it. The
+        deletion appears in ``git status`` as tracked ``D ``; the runner
+        MUST still treat it as auto-allowed so the revert helper does not
+        resurrect it and hard-fail the module."""
+        from pdd import agentic_sync_runner as mod
+
+        # No file is created on disk — simulates the post-delete state.
+        deleted_rel = ".pdd/meta/old_module_python.json"
+
+        monkeypatch.setattr(
+            mod, "_git_changed_paths", lambda _root: {deleted_rel}
+        )
+        captured = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured["allowed"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("old_module", tmp_path)
+        assert diagnostic is None, (
+            "Deleted companion artifact should be auto-allowed, not flagged"
+        )
+        assert (tmp_path / deleted_rel).resolve() in captured["allowed"]
+
 
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking
