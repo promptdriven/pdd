@@ -389,8 +389,14 @@ def revert_out_of_scope_changes_with_dirs(
     reverted: List[Path] = []
 
     try:
+        # ``--untracked-files=all`` (a.k.a. ``-uall``) forces git to list every
+        # individual untracked file even when ``status.showUntrackedFiles`` is
+        # ``normal`` or when bare ``-u`` would be interpreted as "default mode"
+        # by older git releases. Without this, an untracked directory would be
+        # reported as a single ``?? path/`` entry and the os.remove below would
+        # leave the contained files behind. (Issue #1013, F5.)
         result = subprocess.run(
-            ["git", "status", "--porcelain", "-u"],
+            ["git", "status", "--porcelain", "--untracked-files=all"],
             cwd=str(cwd),
             capture_output=True,
             text=True,
@@ -448,9 +454,27 @@ def revert_out_of_scope_changes_with_dirs(
         rel_path = Path(filepath_str)
 
         if is_untracked:
+            # Defensive: even with ``--untracked-files=all`` above, exotic git
+            # configs / submodule edge cases could conceivably hand us a path
+            # ending in ``/`` (an untracked directory). Detect and use
+            # ``shutil.rmtree`` so contained files don't get left behind.
+            # (Issue #1013, F5.)
+            target = cwd / filepath_str
             try:
-                os.remove(str(cwd / filepath_str))
-                logger.info("Removed untracked out-of-scope file: %s", filepath_str)
+                if filepath_str.endswith("/") or (
+                    target.exists() and target.is_dir() and not target.is_symlink()
+                ):
+                    shutil.rmtree(str(target))
+                    logger.info(
+                        "Removed untracked out-of-scope directory: %s",
+                        filepath_str,
+                    )
+                else:
+                    os.remove(str(target))
+                    logger.info(
+                        "Removed untracked out-of-scope file: %s",
+                        filepath_str,
+                    )
                 reverted.append(rel_path)
             except OSError as exc:
                 logger.warning("Failed to remove %s: %s", filepath_str, exc)
