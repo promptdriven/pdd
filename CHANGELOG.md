@@ -1,3 +1,36 @@
+## v0.0.238 (2026-05-14)
+
+### Feat
+
+- enforce metadata finalization in CI auto-heal/preflight drift-heal (#1006)
+
+### Fix
+
+- pdd sync bug fixes
+- address codex review-loop findings
+- address codex review-loop findings round 6
+- address codex review-loop findings
+- address codex review-loop findings round 5
+- address codex review-loop findings round 4
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- **update_main**: finalize fingerprint in default single-file mode
+- align update_main prompt contract
+- restore metadata sync state
+- **metadata_sync**: preserve user-facing command on fingerprint finalize
+- hard fail preflight metadata errors
+- harden metadata finalization validation
+- fail finalized empty-index commits
+- skip commits on advisory partial failures
+- restore ci drift heal summaries
+- preserve full metadata fingerprint state
+- hard fail unresolved post-update prompts
+- restore promptless module drift detection
+- enforce metadata finalization in auto-heal
+- **ci**: avoid red auto-heal job for generated PRs
+
 ## v0.0.237 (2026-05-13)
 
 ### CI
