@@ -162,6 +162,19 @@ class TestDetectDrift:
         assert len(prompt_drifts) == 0
         assert len(example_drifts) == 0
 
+    def test_pr_touched_metadata_modules_are_not_left_in_drift(self):
+        """Regression guard for PR metadata churn on long-running modules."""
+        prompt_drifts, example_drifts = detect_drift(
+            modules=[
+                "metadata_sync",
+                "agentic_change_orchestrator",
+                "ci_drift_heal",
+            ]
+        )
+
+        assert prompt_drifts == []
+        assert example_drifts == []
+
     def test_module_filter(self):
         """Only modules in the filter list are checked."""
         d_update = MagicMock(operation="update", reason="changed")
