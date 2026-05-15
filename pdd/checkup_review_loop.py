@@ -785,11 +785,19 @@ def run_checkup_review_loop(
                     [config.reviewer_fallback] if config.reviewer_fallback else []
                 )
                 fallback = fallback_candidates[0] if fallback_candidates else None
+                # ``state.active_fixer`` may already point at a role
+                # promoted earlier by the fixer-fallback path. Reusing that
+                # same role here as the reviewer-fallback would collapse
+                # reviewer/fixer role independence — the loop would have
+                # the fixer review its own changes — so exclude it from the
+                # reviewer-fallback candidate set the same way ``fixer``
+                # itself is excluded.
                 if (
                     not fallback_used
                     and fallback
                     and fallback != fixer
                     and fallback != reviewer
+                    and (state.active_fixer is None or fallback != state.active_fixer)
                 ):
                     fallback_used = True
                     fallback_review = _run_review(
@@ -1669,9 +1677,20 @@ def _maybe_run_fallback_fixer(
     # about. The operator-facing messages also reference the canonical
     # form to keep what we *say* aligned with what we *do*.
     canonical_fallback = normalized_fallback[0]
+    # ``state.active_reviewer`` may already point at a role promoted by an
+    # earlier reviewer-fallback. If the fixer-fallback names that same
+    # role, running it here would have the active reviewer fix its own
+    # findings — collapsing the reviewer/fixer independence that the
+    # original-reviewer check is meant to preserve.
+    active_reviewer_norm: Optional[str] = None
+    if state.active_reviewer:
+        normalized_active = _normalize_reviewers([state.active_reviewer])
+        if normalized_active:
+            active_reviewer_norm = normalized_active[0]
     if (
         canonical_fallback == normalized_primary[0]
         or canonical_fallback == normalized_reviewer[0]
+        or (active_reviewer_norm is not None and canonical_fallback == active_reviewer_norm)
     ):
         return None
 

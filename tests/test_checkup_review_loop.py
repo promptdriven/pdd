@@ -2408,6 +2408,193 @@ class TestCheckupReviewLoopRuntime:
         # so operators know the fallback was gated, not silently skipped.
         assert "max-cost-reached: true" in report
 
+    def test_reviewer_fallback_excludes_active_fixer(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The reviewer-fallback explicit-path conditional must exclude
+        ``state.active_fixer`` (already promoted by an earlier fixer-fallback
+        success) on top of the original ``fixer`` and ``reviewer`` exclusions.
+        Otherwise a config that names the same role for both
+        ``--fixer-fallback`` and ``--reviewer-fallback`` could end up with
+        the fixer-fallback role reviewing its own fixes — collapsing the
+        reviewer/fixer independence the loop exists to preserve.
+
+        This is a defense-in-depth guard: today's main-loop control flow
+        keeps ``pending_findings`` populated after the first round so the
+        review-path conditional is hard to reach a second time, but the
+        invariant — fallback != active_fixer — must hold for the
+        conditional regardless of which path the loop arrives through.
+        We assert by pre-seeding ``state.active_fixer`` BEFORE the
+        round-1 review fails, then checking the explicit-fallback path
+        refuses to promote that same role into the reviewer slot.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        # State-capture seam: also use it to side-set ``state.active_fixer``
+        # the moment the primary reviewer's failure is recorded, which is
+        # the spot the explicit-fallback path runs against. This simulates
+        # "fixer-fallback already promoted gemini in a logically prior
+        # step" without forcing the main loop through an unreachable
+        # pending-findings interleaving.
+        captured_state: List[Any] = []
+        real_record_review = mod._record_review
+
+        def record_then_seed(state_arg: Any, review_arg: Any) -> Any:
+            result = real_record_review(state_arg, review_arg)
+            if state_arg.active_fixer is None:
+                state_arg.active_fixer = "gemini"
+            return result
+
+        monkeypatch.setattr(mod, "_record_review", record_then_seed)
+
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            # Round 1 review: primary reviewer codex auth-fails so the
+            # explicit reviewer-fallback conditional is exercised.
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            # Any gemini review-mode call is exactly the regression we are
+            # guarding against — returning clean keeps the loop from
+            # diverging, but the assertion below fails loud if gemini ever
+            # gets called as a reviewer.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                fixer_fallback="gemini",
+                reviewer_fallback="gemini",
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+
+        # Pre-seeded active_fixer must still be gemini — nothing in the
+        # loop should have cleared it.
+        assert state.active_fixer == "gemini", (
+            f"test seam should have set state.active_fixer to gemini; "
+            f"got {state.active_fixer!r}"
+        )
+
+        # Load-bearing assertion: gemini must NOT have been promoted to the
+        # active reviewer. The explicit reviewer-fallback path must refuse
+        # to use a role that is already the active fixer.
+        assert state.active_reviewer != "gemini", (
+            f"reviewer-fallback must exclude state.active_fixer; "
+            f"state.active_reviewer={state.active_reviewer!r}"
+        )
+
+        # gemini must never have been invoked as a reviewer. The label
+        # prefix ``checkup-review-loop-review-`` is the marker for
+        # review-mode invocations; ``-review-`` also appears in the
+        # loop-wide prefix so we anchor on the canonical start.
+        gemini_review_calls = [
+            label for role, label in calls
+            if role == "gemini"
+            and label.startswith("checkup-review-loop-review-")
+        ]
+        assert not gemini_review_calls, (
+            f"reviewer-fallback must skip role already active as fixer; "
+            f"got gemini review calls={gemini_review_calls!r}"
+        )
+
+    def test_fixer_fallback_excludes_active_reviewer(self) -> None:
+        """``_maybe_run_fallback_fixer`` already refuses to promote the
+        ORIGINAL primary reviewer to author fixes (that would collapse the
+        review loop's role independence). The same guard must extend to
+        ``state.active_reviewer`` — once a reviewer-fallback has promoted a
+        different role into the reviewer slot, the fixer-fallback must not
+        name that promoted role either."""
+        from pdd.checkup_review_loop import (
+            FixResult,
+            ReviewFinding,
+            ReviewLoopState,
+            _maybe_run_fallback_fixer,
+        )
+        import pdd.checkup_review_loop as mod
+
+        # Original config: primary reviewer = codex, primary fixer = claude,
+        # fixer_fallback = gemini. Reviewer-fallback already ran in a prior
+        # round and promoted gemini into the reviewer slot — so a later
+        # fixer-fallback that also names gemini must be skipped, otherwise
+        # gemini would simultaneously review and fix.
+        state = ReviewLoopState()
+        state.active_reviewer = "gemini"
+
+        finding = ReviewFinding(
+            severity="medium",
+            reviewer="gemini",
+            area="test",
+            evidence="missing assertion",
+            finding="missing test",
+            required_fix="add a test",
+            location="tests/test_flow.py:12",
+        )
+        primary_fix = FixResult(
+            fixer="claude",
+            success=False,
+            summary="primary failed",
+        )
+        config = _config(fixer_fallback="gemini")
+        ctx = _ctx(Path("/tmp"))
+
+        # If the guard fires, ``_run_fix`` must NOT be called. Patch it to
+        # explode so an accidental promotion would surface as a test failure
+        # instead of a silent regression.
+        def _explode(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError(
+                "_run_fix must not run when fixer-fallback collides with "
+                "state.active_reviewer"
+            )
+
+        with patch.object(mod, "_run_fix", side_effect=_explode):
+            result = _maybe_run_fallback_fixer(
+                primary_fixer="claude",
+                primary_fix=primary_fix,
+                reviewer="codex",
+                findings=[finding],
+                context=ctx,
+                worktree=Path("/tmp"),
+                round_number=1,
+                state=state,
+                config=config,
+                verbose=False,
+                quiet=True,
+                artifacts_dir=Path("/tmp"),
+                deadline=float("inf"),
+            )
+
+        assert result is None, (
+            f"fixer-fallback must skip role already active as reviewer; "
+            f"got result={result!r}"
+        )
+        # state.active_fixer must stay unset — no promotion happened.
+        assert state.active_fixer is None, (
+            f"state.active_fixer must remain unset when fallback is skipped; "
+            f"got {state.active_fixer!r}"
+        )
+
 
 class TestPromptInjection:
     """Reviewer and fixer prompts must reflect the configured gate, not the
