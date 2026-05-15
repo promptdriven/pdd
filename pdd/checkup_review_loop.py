@@ -580,11 +580,6 @@ class ReviewLoopConfig:
     reviewer: Optional[str] = None
     fixer: Optional[str] = None
     reviewer_fallback: Optional[str] = None
-    # Optional secondary fixer role to try once when the primary fixer
-    # cannot address the reviewer's findings (e.g. subscription-tier
-    # credential exhausted). Must differ from the primary fixer and from
-    # the reviewer to preserve reviewer/fixer role independence.
-    fixer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
     max_cost: float = 10.0
@@ -615,6 +610,13 @@ class ReviewLoopConfig:
     # keep working unchanged. Off by default to preserve existing CI
     # expectations.
     fallback_reviewer_on_failure: bool = False
+    # APPENDED — optional secondary fixer role to try once when the primary
+    # fixer cannot address the reviewer's findings (e.g. subscription-tier
+    # credential exhausted). Must differ from the primary fixer and from
+    # the reviewer to preserve reviewer/fixer role independence. MUST stay
+    # at the end of the field list so positional callers keep working
+    # unchanged.
+    fixer_fallback: Optional[str] = None
 
 
 @dataclass
