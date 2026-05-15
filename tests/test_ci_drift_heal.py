@@ -1228,7 +1228,13 @@ class TestCommitAndPush:
         """Commit message includes module names."""
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=self._mock_run_success) as mock_run, \
              patch("pdd.ci_drift_heal.Path.exists", return_value=True):
-            commit_and_push(["auth", "api"], skip_ci=False)
+            commit_and_push(
+                [
+                    DriftInfo(basename="auth", language="python", operation="update", reason=""),
+                    DriftInfo(basename="api", language="python", operation="update", reason=""),
+                ],
+                skip_ci=False,
+            )
 
         # Find the commit call
         commit_calls = [c for c in mock_run.call_args_list if c[0][0][0:2] == ["git", "commit"]]
@@ -1242,7 +1248,10 @@ class TestCommitAndPush:
         """Successful PR checkpoints get an explicit commit body marker."""
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=self._mock_run_success) as mock_run, \
              patch("pdd.ci_drift_heal.Path.exists", return_value=True):
-            commit_and_push(["auth"], checkpoint=True)
+            commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")],
+                checkpoint=True,
+            )
 
         commit_calls = [c for c in mock_run.call_args_list if c[0][0][0:2] == ["git", "commit"]]
         assert len(commit_calls) == 1
@@ -1253,7 +1262,10 @@ class TestCommitAndPush:
         """skip_ci=True prepends [skip ci] to commit message."""
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=self._mock_run_success) as mock_run, \
              patch("pdd.ci_drift_heal.Path.exists", return_value=True):
-            commit_and_push(["auth"], skip_ci=True)
+            commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")],
+                skip_ci=True,
+            )
 
         commit_calls = [c for c in mock_run.call_args_list if c[0][0][0:2] == ["git", "commit"]]
         msg = commit_calls[0][0][0][3]
@@ -1270,7 +1282,9 @@ class TestCommitAndPush:
 
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run), \
              patch("pdd.ci_drift_heal.Path.exists", return_value=True):
-            result = commit_and_push(["auth"])
+            result = commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")]
+            )
 
         assert result is True
 
@@ -1294,7 +1308,9 @@ class TestCommitAndPush:
 
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run), \
              patch("pdd.ci_drift_heal.Path.exists", return_value=True):
-            result = commit_and_push(["auth"])
+            result = commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")]
+            )
 
         assert result is False
 
@@ -1316,18 +1332,23 @@ class TestCommitAndPush:
 
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run), \
              patch("pdd.ci_drift_heal.Path.exists", return_value=True):
-            result = commit_and_push(["auth"])
+            result = commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")]
+            )
 
         assert result is False
 
     def test_stages_all_changes(self):
-        """Uses git add -A to stage all changes (healing may create new files)."""
+        """Stages tracked heal changes without blanket-adding the worktree."""
         with patch("pdd.ci_drift_heal.subprocess.run", side_effect=self._mock_run_success) as mock_run:
-            commit_and_push(["auth"])
+            commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")]
+            )
 
         add_calls = [c for c in mock_run.call_args_list if len(c[0][0]) >= 3 and c[0][0][0:2] == ["git", "add"]]
-        assert len(add_calls) == 1
-        assert add_calls[0][0][0] == ["git", "add", "-A"]
+        assert add_calls
+        assert ["git", "add", "-A"] not in [c[0][0] for c in add_calls]
+        assert ["git", "add", "-u"] in [c[0][0] for c in add_calls]
 
 
 # ---------------------------------------------------------------------------
@@ -1352,6 +1373,23 @@ class TestMain:
             capture_output=True,
             text=True,
         )
+
+    def _assert_commit_call(
+        self,
+        mock_commit,
+        basenames,
+        skip_ci,
+        checkpoint,
+        finalized_modules=None,
+    ):
+        mock_commit.assert_called_once()
+        modules, actual_skip_ci = mock_commit.call_args.args
+        assert [module.basename for module in modules] == basenames
+        assert actual_skip_ci is skip_ci
+        expected_kwargs = {"checkpoint": checkpoint}
+        if finalized_modules is not None:
+            expected_kwargs["finalized_modules"] = finalized_modules
+        assert mock_commit.call_args.kwargs == expected_kwargs
 
     def test_no_drift_returns_zero(self):
         """When no drift detected, returns 0."""
@@ -1388,8 +1426,8 @@ class TestMain:
         out = capsys.readouterr().out
         assert "Drift summary" in out
         assert "Auto-heal summary: healed=1 failed=0 skipped=0" in out
-        mock_commit.assert_called_once_with(
-            ["auth"], False, checkpoint=True, finalized_modules=[]
+        self._assert_commit_call(
+            mock_commit, ["auth"], False, True, finalized_modules=[]
         )
 
     def test_heal_failure_returns_one(self):
@@ -1468,8 +1506,8 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(
-            ["auth"], True, checkpoint=False, finalized_modules=[]
+        self._assert_commit_call(
+            mock_commit, ["auth"], True, False, finalized_modules=[]
         )
 
     def test_no_healed_modules_skips_commit(self):
@@ -1595,8 +1633,8 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             result = main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(
-            ["auth"], True, checkpoint=False, finalized_modules=[]
+        self._assert_commit_call(
+            mock_commit, ["auth"], True, False, finalized_modules=[]
         )
         assert result == 0
 
@@ -1619,8 +1657,8 @@ class TestMain:
              patch("pdd.ci_drift_heal.Path.write_text"):
             result = main(skip_ci=True)
 
-        mock_commit.assert_called_once_with(
-            ["auth"], True, checkpoint=False, finalized_modules=[]
+        self._assert_commit_call(
+            mock_commit, ["auth"], True, False, finalized_modules=[]
         )
         assert result == 0
 
@@ -2808,10 +2846,14 @@ class TestMetadataFinalizationBoundary:
              patch("pdd.ci_drift_heal.Path.write_text"):
             assert main(skip_ci=True) == 0
 
-        mock_commit.assert_called_once_with(
-            ["auth"], True, checkpoint=False,
-            finalized_modules=[("auth", "python")],
-        )
+        mock_commit.assert_called_once()
+        modules_arg, skip_ci_arg = mock_commit.call_args.args
+        assert [m.basename for m in modules_arg] == ["auth"]
+        assert skip_ci_arg is True
+        assert mock_commit.call_args.kwargs == {
+            "checkpoint": False,
+            "finalized_modules": [("auth", "python")],
+        }
 
     def test_commit_and_push_aborts_when_fingerprint_not_staged(self):
         """commit_and_push must refuse to commit if a finalized module's
@@ -3062,3 +3104,99 @@ class TestMetadataFinalizationBoundary:
             cwd=repo, check=True, capture_output=True, text=True,
         )
         assert ".pdd/meta/auth_python.json" in log.stdout
+
+
+# ---------------------------------------------------------------------------
+# Issue #1021 regression: auto-heal must not stage arbitrary untracked
+# .pdd/meta/*.json artifacts. The legacy ``test_stages_all_changes`` test
+# above codifies the buggy ``git add -A`` behavior; the tests below assert
+# the corrected behavior of ``commit_and_push`` (the fix to this file).
+# ---------------------------------------------------------------------------
+
+class TestIssue1021CommitAndPushNoBlanketAdd:
+    """Regression tests for issue #1021 — auto-heal commit must not use
+    ``git add -A`` because that sweeps in untracked metadata artifacts
+    for unrelated modules. The fix replaces ``-A`` with a narrower set
+    of pathspecs (``-u`` for tracked updates plus per-module metadata).
+    """
+
+    def _mock_run_success(self, cmd, **kwargs):
+        r = MagicMock()
+        r.returncode = 1 if cmd == ["git", "diff", "--cached", "--quiet"] else 0
+        r.stdout = ""
+        r.stderr = ""
+        return r
+
+    def test_commit_and_push_does_not_use_git_add_dash_A(self):
+        """Auto-heal commit must NOT issue ``git add -A``.
+
+        ``git add -A`` stages every untracked file in the worktree,
+        which is what causes the metadata-leak bug in PR #1009. After
+        the fix the call site must use a narrower form (e.g.
+        ``git add -u`` plus explicit per-module pathspecs).
+
+        This test fails on the buggy code (which calls ``["git", "add", "-A"]``)
+        and passes once the wholesale ``-A`` invocation is removed.
+        """
+        with patch(
+            "pdd.ci_drift_heal.subprocess.run",
+            side_effect=self._mock_run_success,
+        ) as mock_run, patch("pdd.ci_drift_heal.Path.exists", return_value=True):
+            commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")]
+            )
+
+        add_calls = [
+            c
+            for c in mock_run.call_args_list
+            if len(c[0]) >= 1
+            and isinstance(c[0][0], list)
+            and c[0][0][0:2] == ["git", "add"]
+        ]
+        assert add_calls, (
+            "commit_and_push must still stage changes via at least one "
+            "'git add' invocation; got no add calls at all."
+        )
+
+        blanket_adds = [c for c in add_calls if "-A" in c[0][0]]
+        assert not blanket_adds, (
+            "commit_and_push must NOT call 'git add -A' — that's the "
+            "exact behavior that caused issue #1021 (unrelated "
+            f".pdd/meta/*.json artifacts swept into the commit). "
+            f"Got blanket add calls: {[c[0][0] for c in blanket_adds]}"
+        )
+
+    def test_commit_and_push_stages_tracked_updates(self):
+        """After the fix, auto-heal must still stage updates to
+        already-tracked files. The simplest narrow form is
+        ``git add -u`` (covers tracked modifications and deletions).
+
+        This asserts the positive side of the fix: at least one add
+        invocation uses ``-u`` (or supplies explicit pathspecs that
+        are not the wholesale ``-A``). Without this guard, a fix that
+        simply drops the ``-A`` add call would leave nothing staged
+        and silently turn auto-heal into a no-op.
+        """
+        with patch(
+            "pdd.ci_drift_heal.subprocess.run",
+            side_effect=self._mock_run_success,
+        ) as mock_run, patch("pdd.ci_drift_heal.Path.exists", return_value=True):
+            commit_and_push(
+                [DriftInfo(basename="auth", language="python", operation="update", reason="")]
+            )
+
+        add_calls = [
+            c
+            for c in mock_run.call_args_list
+            if len(c[0]) >= 1
+            and isinstance(c[0][0], list)
+            and c[0][0][0:2] == ["git", "add"]
+        ]
+        # At least one add call must exist and none of them may be ``-A``.
+        assert add_calls, "expected at least one 'git add' invocation"
+        non_blanket = [c for c in add_calls if "-A" not in c[0][0]]
+        assert non_blanket, (
+            "After the fix at least one non-'-A' 'git add' invocation "
+            "must remain so that tracked metadata/source updates are "
+            f"still committed. Got: {[c[0][0] for c in add_calls]}"
+        )
