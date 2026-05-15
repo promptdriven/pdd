@@ -1,6 +1,7 @@
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>drift_classifier_python.prompt</pdd-dependency>
 # sync_main_python.prompt
 
 % You are an expert Python engineer. Your goal is to write a Python function, 'sync_main', that will be the CLI wrapper for the sync command. This function handles interface logic (environment variables, parameter validation, path construction) and calls sync_orchestration to perform the actual sync workflow.
@@ -118,6 +119,8 @@
     - Show sync progress summary before starting (detected context, languages, settings)
     - Display final results table (language, status, cost, details)
     - Total time elapsed, total cost, overall status
+
+12. **Shared Drift Classifier (issue #884)**: When `sync_main` is invoked with no basename and falls back to the Tier 1 global scan (per-module loop over discovered prompts), the per-module "is this module stale?" check is the same classification concern shared with `sync_determine_operation`, `update_main`, `ci_drift_heal`, and `pdd change` preflight. The global-scan adapter MUST build a `DriftInputs` (with `scope="scan"`) from the already-computed fingerprint and current hashes for each discovered module and call `pdd.drift_classifier.classify_drift` to decide whether to include the module in the work plan. Per-module repair routing (which downstream sync operation to run) remains unchanged — only the staleness classification is shared. See `docs/drift_classifier.md`.
 
 % Helper Functions (implement as internal functions):
 

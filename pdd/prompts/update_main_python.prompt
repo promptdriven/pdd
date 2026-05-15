@@ -1,6 +1,8 @@
 <include>context/python_preamble.prompt</include>
 <include>context/ctx_obj_params.prompt</include>
 
+<pdd-dependency>drift_classifier_python.prompt</pdd-dependency>
+
 <pdd-reason>CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.</pdd-reason>
 
 <pdd-interface>
@@ -75,6 +77,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
     - If `infer_module_identity(prompt_path)` returns `(None, None)`, do not finalize metadata and print `[info][metadata] Skipping fingerprint finalization: unable to infer module identity for <prompt_path>[/info]` unless `quiet`.
     - If `save_fingerprint` raises, keep the successful return tuple and print `[warning][metadata] Fingerprint save failed: <exc>[/warning]` unless `quiet`.
     - Existing stale `_run.json` cleanup behavior must remain unchanged.
+16. **Shared Drift Classifier (issue #884)**: For repo mode's per-pair change-detection step (code-hash / include-dep / git checks), build a `DriftInputs` (with `scope="update"`, populating `git_change_set` when `use_git=True`) and call `pdd.drift_classifier.classify_drift` to decide whether a given (prompt, code) pair is stale. The existing per-pair repair plan (legacy vs. agentic update routing) remains unchanged — only the classification step is shared. See `docs/drift_classifier.md`.
 
 % Modes
 1. **True update**: `input_prompt_file` + `modified_code_file` + (use_git OR `input_code_file`).
