@@ -367,6 +367,34 @@ def test_allowed_write_set_empty_rejects_everything_for_durable_runner(tmp_path:
     assert result == ["src/app.py"]
 
 
+def test_staged_rename_source_side_is_scope_checked(tmp_path: Path):
+    """Iter-6 B3 (rename detection bug): ``git diff --cached --name-only``
+    for a staged ``git mv old new`` emits ONLY ``new``. A contract that
+    allows ``new`` but not ``old`` would pass validation while the rename
+    silently DELETES the out-of-scope ``old``.
+
+    After the fix the durable runner uses ``--name-status -M`` so both
+    sides of the rename surface and the out-of-scope deletion is rejected.
+    """
+    repo = _init_repo_with_remote(tmp_path)
+    (repo / "src").mkdir(exist_ok=True)
+    (repo / "src" / "old.py").write_text("contents\n", encoding="utf-8")
+    _git(repo, "add", "src/old.py")
+    _git(repo, "commit", "-m", "add src/old.py")
+    _git(repo, "mv", "src/old.py", "src/new.py")
+
+    runner = _runner(repo, allowed_write_set=["src/new.py"])
+    success, message, _empty = runner._stage_module_changes("foo", repo)
+
+    assert not success, (
+        "Durable sync must reject a checkpoint that deletes src/old.py "
+        "even when the contract permits src/new.py."
+    )
+    assert "src/old.py" in message, (
+        f"Diagnostic must call out the out-of-scope source path; got: {message!r}"
+    )
+
+
 def test_push_failure_preserves_local_checkpoint_and_next_run_pushes_it(tmp_path: Path):
     repo = _init_repo_with_remote(tmp_path)
     first = _runner(repo, runner_cls=PushFailingMetadataRunner)

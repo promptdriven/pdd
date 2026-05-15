@@ -361,14 +361,29 @@ class DurableSyncRunner(AsyncSyncRunner):
 
         self._force_add_module_metadata(basename, module_worktree)
 
+        # Iter-6 B3 (rename detection bug): ``--name-only`` for a staged
+        # rename ``git mv old new`` emits ONLY ``new``. A contract that
+        # allows ``new`` but not ``old`` would pass validation while the
+        # rename silently deletes the out-of-scope ``old``. Use
+        # ``--name-status -M`` so rename lines surface as
+        # ``R<score>\told\tnew`` and BOTH paths count for scope checking.
         names = self._git(
-            ["diff", "--cached", "--name-only", "--diff-filter=ACMRTD"],
+            ["diff", "--cached", "--name-status", "-M", "--diff-filter=ACMRTD"],
             cwd=module_worktree,
         )
         if names.returncode != 0:
             return False, f"Failed to inspect staged changes: {_combined_output(names)}", False
 
-        changed_paths = [line.strip() for line in names.stdout.splitlines() if line.strip()]
+        changed_paths: List[str] = []
+        for raw in names.stdout.splitlines():
+            line = raw.rstrip("\n")
+            if not line.strip():
+                continue
+            parts = line.split("\t")
+            # Whether the entry is a rename/copy (R/C with similarity score)
+            # or a single-path status (A/M/D/T), every column past the
+            # status code is a path that should be scope-checked.
+            changed_paths.extend(p.strip() for p in parts[1:] if p.strip())
         out_of_scope = self._out_of_scope_staged_paths(changed_paths)
         if out_of_scope:
             return (
