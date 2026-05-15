@@ -2569,6 +2569,103 @@ class TestAllowedWriteSet:
         assert runner.max_workers == 1
 
 
+class TestEnforceScopeGuard:
+    """Issue #1013 (F9): direct behavioural coverage for ``_enforce_scope_guard``
+    and ``_matches_companion_allowlist``. The constructor-state checks above
+    establish baseline; these tests exercise the methods themselves.
+    """
+
+    def _make_runner(self, **kwargs):
+        defaults = {
+            "basenames": ["mod"],
+            "dep_graph": {"mod": []},
+            "sync_options": {},
+            "github_info": None,
+            "quiet": True,
+        }
+        defaults.update(kwargs)
+        return AsyncSyncRunner(**defaults)
+
+    def test_returns_none_when_permissive_mode(self, tmp_path):
+        runner = self._make_runner(allowed_write_set=None)
+        assert runner._enforce_scope_guard("mod", tmp_path) is None
+
+    def test_returns_none_when_scope_guard_disabled(self, tmp_path):
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            scope_guard_enabled=False,
+        )
+        assert runner._enforce_scope_guard("mod", tmp_path) is None
+
+    def test_companion_allowlist_strict_pathlib_match(self):
+        """F3: ``.pdd/meta/*.json`` must NOT match nested directories."""
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        # Top-level companion match → allowed
+        assert runner._matches_companion_allowlist(
+            ".pdd/meta/foo_python.json", runner.companion_allowlist
+        ) is True
+        # Nested under companion dir → rejected (pathlib semantics)
+        assert runner._matches_companion_allowlist(
+            ".pdd/meta/nested/foo_python.json", runner.companion_allowlist
+        ) is False
+        # Unrelated path → rejected
+        assert runner._matches_companion_allowlist(
+            "pdd/unrelated.py", runner.companion_allowlist
+        ) is False
+
+    def test_companion_allowlist_unions_default(self):
+        """F4: caller-supplied allowlist is always unioned with the default."""
+        from pdd.agentic_common import DEFAULT_SYNC_COMPANION_ALLOWLIST
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=["docs/*.md"],
+        )
+        # Both caller pattern AND default appear in effective allowlist
+        assert "docs/*.md" in runner.companion_allowlist
+        for default in DEFAULT_SYNC_COMPANION_ALLOWLIST:
+            assert default in runner.companion_allowlist
+
+    def test_diagnostic_format_has_scope_guard_reverted_prefix(
+        self, tmp_path, monkeypatch
+    ):
+        """Verify the spec-required diagnostic prefix is emitted."""
+        # Stub the revert helpers so the test does not require a real git repo:
+        # _enforce_scope_guard composes the diagnostic from their return values.
+        from pdd import agentic_sync_runner as mod
+
+        offending = tmp_path / "out_of_scope.txt"
+        offending.write_text("oops")
+        monkeypatch.setattr(
+            mod,
+            "_revert_out_of_scope_changes",
+            lambda _root, _allowed: [offending],
+        )
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        runner.contract_source = "html-comment"
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+        assert diagnostic is not None
+        assert diagnostic.startswith(
+            "Scope guard reverted 1 out-of-scope file(s) for module 'mod' "
+            "(contract source: html-comment):"
+        )
+        assert "Allowed write set:" in diagnostic
+        assert "Companion allowlist:" in diagnostic
+
+
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking
 # ---------------------------------------------------------------------------

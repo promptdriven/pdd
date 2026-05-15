@@ -685,6 +685,48 @@ def test_sync_architecture_calls_handle_error_on_exception(mock_sync_prompts, mo
 
 
 @patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+def test_sync_no_scope_guard_flag_propagates_to_run_agentic_sync(
+    mock_agentic_sync,
+    mock_auto_update,
+    runner,
+):
+    """Issue #1013 (F9, F10): ``pdd sync <URL> --no-scope-guard`` must
+    propagate ``scope_guard=False`` to ``run_agentic_sync``."""
+    mock_agentic_sync.return_value = (True, "ok", 0.0, "model")
+
+    result = runner.invoke(
+        cli.cli,
+        ["sync", "https://github.com/owner/repo/issues/42", "--no-scope-guard"],
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_agentic_sync.assert_called_once()
+    assert mock_agentic_sync.call_args.kwargs["scope_guard"] is False
+
+
+@patch('pdd.core.cli.auto_update')
+@patch('pdd.commands.maintenance.run_agentic_sync')
+def test_sync_without_no_scope_guard_defaults_to_enforcement(
+    mock_agentic_sync,
+    mock_auto_update,
+    runner,
+):
+    """Issue #1013 (F10): the default for ``--no-scope-guard`` is False, so
+    ``scope_guard=True`` should flow through when the flag is omitted."""
+    mock_agentic_sync.return_value = (True, "ok", 0.0, "model")
+
+    result = runner.invoke(
+        cli.cli,
+        ["sync", "https://github.com/owner/repo/issues/42"],
+    )
+
+    assert result.exit_code == 0, result.output
+    mock_agentic_sync.assert_called_once()
+    assert mock_agentic_sync.call_args.kwargs["scope_guard"] is True
+
+
+@patch('pdd.core.cli.auto_update')
 def test_sync_architecture_uses_nearest_cwd_project(mock_auto_update, runner, tmp_path, monkeypatch):
     """CLI should target the nearest ancestor project, not always the repo root."""
     repo_root = tmp_path / "repo"
