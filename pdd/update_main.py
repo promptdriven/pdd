@@ -1003,6 +1003,26 @@ def _find_prd_file(project_root: Path) -> Optional[Path]:
     return None
 
 
+def _is_output_redirected(written_prompt_path: Path, source_prompt_path: Path) -> bool:
+    """Return True when ``--output`` redirected the write away from the canonical source prompt.
+
+    Single-file true-update paths accept ``--output <other_prompt>`` so the
+    user can preview an update without overwriting the canonical source. In
+    that case the written prompt does not represent the module's canonical
+    state, so neither the metadata sync orchestrator nor the default
+    fingerprint finalizer must record a fingerprint against it (#1007 stale
+    state class — a redirected fingerprint can let later sync detection treat
+    a still-stale canonical prompt as in sync).
+    """
+    try:
+        written_resolved = Path(written_prompt_path).resolve()
+        source_resolved = Path(source_prompt_path).resolve()
+    except OSError:
+        written_resolved = Path(written_prompt_path)
+        source_resolved = Path(source_prompt_path)
+    return written_resolved != source_resolved
+
+
 def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
     """Run metadata sync for a single (prompt, code) pair.
 
@@ -1028,6 +1048,95 @@ def _run_single_file_metadata_sync(prompt_path: Path, code_path: Path) -> bool:
                 rprint(f"[error][metadata-sync] {stage_name}: {stage.reason}[/error]")
         return False
     return True
+
+
+def _finalize_single_file_fingerprint(
+    prompt_path: Path,
+    code_path: Path,
+    sync_metadata: bool,
+    dry_run: bool,
+    quiet: bool,
+    cost: float,
+    model: str,
+    source_prompt_path: Optional[Path] = None,
+) -> None:
+    """Default fingerprint finalization for single-file/regeneration update modes.
+
+    Writes a current `(prompt, code)` fingerprint via the existing
+    `pdd.operation_log` helpers so a successful `pdd update <code>` is not
+    re-detected as changed on the next run (issue #1007 / PR #1009
+    Requirement 15). Skips with an `[info]` log line — unless `quiet` — for
+    the intentional skip cases (sync_metadata orchestrator owns the stage,
+    dry-run mode, `--output` redirected the write away from the canonical
+    source prompt, or `infer_module_identity` cannot derive
+    basename/language). All failures are best-effort: a `save_fingerprint`
+    exception surfaces as a `[warning]` line but never breaks the caller's
+    success tuple.
+
+    ``source_prompt_path`` is the canonical input prompt for the module. When
+    callers pass a redirected output path via ``--output``, the written file
+    no longer represents the module's canonical prompt, so finalizing a
+    fingerprint against it would let later sync detection treat unrelated
+    canonical prompts as in sync (issue #1007 stale-state class). Skip in
+    that case.
+    """
+    if sync_metadata:
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                "orchestrator owns fingerprint stage[/info]"
+            )
+        return
+    if dry_run:
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: dry-run mode[/info]"
+            )
+        return
+    if source_prompt_path is not None and _is_output_redirected(
+        Path(prompt_path), Path(source_prompt_path)
+    ):
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                "output redirected[/info]"
+            )
+        return
+
+    from .operation_log import (
+        clear_run_report,
+        infer_module_identity,
+        save_fingerprint,
+    )
+    basename, language = infer_module_identity(prompt_path)
+    if not (basename and language):
+        if not quiet:
+            rprint(
+                "[info][metadata] Skipping fingerprint finalization: "
+                f"unable to infer module identity for {prompt_path}[/info]"
+            )
+        return
+
+    try:
+        clear_run_report(basename, language)
+    except Exception as exc:
+        if not quiet:
+            rprint(
+                f"[warning][metadata] Run report clear failed: {exc}[/warning]"
+            )
+
+    try:
+        save_fingerprint(
+            basename,
+            language,
+            operation="update",
+            paths={"prompt": Path(prompt_path), "code": Path(code_path)},
+            cost=cost,
+            model=model,
+        )
+    except Exception as exc:
+        if not quiet:
+            rprint(f"[warning][metadata] Fingerprint save failed: {exc}[/warning]")
 
 
 def update_main(
@@ -1500,6 +1609,16 @@ def update_main(
                             # (#871 acceptance criterion).
                             raise click.exceptions.Exit(1)
 
+                    _finalize_single_file_fingerprint(
+                        Path(prompt_path),
+                        Path(modified_code_file),
+                        sync_metadata=sync_metadata,
+                        dry_run=dry_run,
+                        quiet=quiet,
+                        cost=agentic_cost,
+                        model=provider,
+                    )
+
                     return generated_prompt, agentic_cost, provider
 
                 # Agentic failed - fall through to legacy
@@ -1572,6 +1691,16 @@ def update_main(
                 if not _run_single_file_metadata_sync(Path(prompt_path), Path(modified_code_file)):
                     raise click.exceptions.Exit(1)
 
+            _finalize_single_file_fingerprint(
+                Path(prompt_path),
+                Path(modified_code_file),
+                sync_metadata=sync_metadata,
+                dry_run=dry_run,
+                quiet=quiet,
+                cost=total_cost,
+                model=model_name,
+            )
+
             return modified_prompt, total_cost, model_name
 
         # Case 2: True Update Mode.
@@ -1615,8 +1744,28 @@ def update_main(
                         rprint(f"[bold]Updated prompt saved to:[/bold] {final_output_path}")
 
                     if sync_metadata:
-                        if not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
+                        if _is_output_redirected(
+                            Path(agentic_prompt_file),
+                            Path(actual_input_prompt_file),
+                        ):
+                            if not quiet:
+                                rprint(
+                                    "[info][metadata] Skipping metadata sync orchestrator: "
+                                    "output redirected[/info]"
+                                )
+                        elif not _run_single_file_metadata_sync(Path(agentic_prompt_file), Path(modified_code_file)):
                             raise click.exceptions.Exit(1)
+
+                    _finalize_single_file_fingerprint(
+                        Path(agentic_prompt_file),
+                        Path(modified_code_file),
+                        sync_metadata=sync_metadata,
+                        dry_run=dry_run,
+                        quiet=quiet,
+                        cost=agentic_cost,
+                        model=provider,
+                        source_prompt_path=Path(actual_input_prompt_file),
+                    )
 
                     return updated_prompt, agentic_cost, provider
 
@@ -1722,8 +1871,28 @@ def update_main(
                 rprint(f"[bold]Updated prompt saved to:[/bold] {output_file_paths['output']}")
 
             if sync_metadata:
-                if not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
+                if _is_output_redirected(
+                    Path(output_file_paths["output"]),
+                    Path(actual_input_prompt_file),
+                ):
+                    if not quiet:
+                        rprint(
+                            "[info][metadata] Skipping metadata sync orchestrator: "
+                            "output redirected[/info]"
+                        )
+                elif not _run_single_file_metadata_sync(Path(output_file_paths["output"]), Path(modified_code_file)):
                     raise click.exceptions.Exit(1)
+
+            _finalize_single_file_fingerprint(
+                Path(output_file_paths["output"]),
+                Path(modified_code_file),
+                sync_metadata=sync_metadata,
+                dry_run=dry_run,
+                quiet=quiet,
+                cost=total_cost,
+                model=model_name,
+                source_prompt_path=Path(actual_input_prompt_file),
+            )
 
             return modified_prompt, total_cost, model_name
 

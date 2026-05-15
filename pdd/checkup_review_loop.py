@@ -10,11 +10,13 @@ Worktree / cwd ownership
 The loop creates ONE PR worktree at startup via ``_setup_pr_worktree`` and
 all reviewer, fixer, and verifier invocations run with that worktree as their
 ``cwd``. The user's primary checkout is never touched.
-The worktree is not re-fetched mid-loop: a verifier always sees the exact
+The worktree is not recreated mid-loop. A verifier always sees the exact
 post-fix checkout the fixer wrote, and only after a successful push back to
-the PR head ref. A failed push aborts the loop without running the
-verifier — preventing the loop from declaring a finding "fixed" against a
-local commit that never reached the PR.
+the PR head ref. If the PR head advanced remotely during the fixer turn, the
+loop fetches that updated head and tries a plain rebase before one push retry.
+A failed push or rebase aborts the loop without running the verifier —
+preventing the loop from declaring a finding "fixed" against a local commit
+that never reached the PR.
 
 GitHub state
 ------------
@@ -902,10 +904,6 @@ def run_checkup_review_loop(
             state.stop_reason = (
                 f"Fixer {fixer} could not address {reviewer}'s findings."
             )
-            break
-
-        if _budget_exhausted(config, state, deadline):
-            _mark_budget_exhausted(config, state, deadline)
             break
 
         pushed, push_message = _commit_and_push_if_changed(
@@ -2106,6 +2104,13 @@ does not open more holes; fully address it until nothing actionable remains or
 the review loop reaches its round limit."
 
 Use this manual PR-review standard:
+- Complete these independent sweeps before returning: issue-contract and
+  user-workflow behavior; state/resume/idempotency and side-effect ordering;
+  security, redaction, auth, logging, and fallback paths; prompt/example/
+  architecture/generated-metadata source-of-truth drift; and
+  caller/test/CLI compatibility. Report separately actionable findings from
+  different sweeps. Do not stop after finding only prompt/source-of-truth
+  drift.
 - Review the PR as a user-workflow reviewer first. Trace how a real CLI/API
   user would experience the changed behavior, including edge cases, stale
   flags, failure paths, retries, caching, auth, billing/cost, and generated
@@ -2547,10 +2552,12 @@ def _extract_bracket_findings(
     findings: List[ReviewFinding] = []
     priority_pattern = re.compile(
         r"^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
-        r"(?:Finding\s*:\s*)?\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
+        r"(?:(?:Finding|Findings)\s*:\s*)?"
+        r"\[?(P[0-3])\]?\s*:?\s*(?P<title>[^\n]+?)(?:\*\*)?\s*$\n?"
         r"(?P<body>.*?)(?=^\s*(?:[-*]\s*)?(?:\d+[.)]\s*)?(?:\*\*)?"
+        r"(?:(?:Finding|Findings)\s*:\s*)?"
         r"(?:\[?P[0-3]\]?|blocking|blocker|critical|high|medium|low|nit|info)"
-        r"\s*:|^\s*\d+[.)]\s+|"
+        r"\s*:?\s*[^\n]+?(?:\*\*)?\s*$|^\s*\d+[.)]\s+|"
         + REVIEW_TRAILING_SECTION_LOOKAHEAD
         + r"|\Z)",
         re.IGNORECASE | re.MULTILINE | re.DOTALL,
@@ -3168,8 +3175,10 @@ def _commit_and_push_if_changed(
     """Commit any worktree changes with the bot identity and push to the PR head ref.
 
     The actual push delegates to ``push_with_retry`` so that auth retries via
-    ``PDD_GH_TOKEN_FILE`` and non-fast-forward fallback to ``--force-with-lease``
-    behave identically to the e2e fix orchestrator's push contract.
+    ``PDD_GH_TOKEN_FILE`` stay shared with the e2e fix orchestrator. The review
+    loop disables that helper's force-with-lease fallback because PR head refs
+    can be shared with humans and other automation; remote advancement is
+    handled by fetch/rebase/retry below.
     """
     changed = _git_changed_files(worktree)
     if not changed:
@@ -3206,10 +3215,187 @@ def _commit_and_push_if_changed(
         remote=clone_url,
         refspec=f"HEAD:{head_ref}",
         set_upstream=False,
+        force_with_lease_on_non_fast_forward=False,
     )
     if success:
         return True, "Pushed fixes to PR branch."
+    if _is_remote_advanced_push_error(error):
+        rebased, rebase_message = _rebase_onto_updated_pr_head(
+            worktree,
+            clone_url=clone_url,
+            head_ref=head_ref,
+            repo_owner=head_owner,
+            repo_name=head_repo,
+        )
+        if not rebased:
+            return False, rebase_message
+        success, error = push_with_retry(
+            worktree,
+            repo_owner=head_owner,
+            repo_name=head_repo,
+            remote=clone_url,
+            refspec=f"HEAD:{head_ref}",
+            set_upstream=False,
+            force_with_lease_on_non_fast_forward=False,
+        )
+        if success:
+            return True, "Pushed fixes to PR branch after rebasing onto updated PR head."
     return False, f"Failed to push fixes to PR branch: {error.strip()}"
+
+
+def _is_remote_advanced_push_error(error: str) -> bool:
+    text = (error or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "(fetch first)",
+            "fetch first",
+            "non-fast-forward",
+            "remote contains work that you do not have locally",
+            "updates were rejected because the remote contains work",
+            "tip of your current branch is behind",
+        )
+    )
+
+
+def _rebase_onto_updated_pr_head(
+    worktree: Path,
+    *,
+    clone_url: str,
+    head_ref: str,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """Fetch the updated PR head and replay the local fix commit on top.
+
+    Review-loop fixes can race with auto-heal or a maintainer push to the same
+    PR branch. Force-pushing over those commits would discard remote work, so
+    recover by rebasing before retrying the push. Fetch the exact branch ref so
+    tags with the same name cannot populate FETCH_HEAD. Rebase only the fixer
+    commit range (HEAD~1..HEAD) onto FETCH_HEAD so a force-pushed PR head cannot
+    resurrect commits the remote branch intentionally dropped. Use a plain
+    rebase: if the fixer commit conflicts with remote changes, abort and let
+    the next run review/fix from the updated PR head instead of choosing a side
+    silently.
+    """
+    fetched, fetch_message = _fetch_pr_head_for_rebase(
+        worktree,
+        clone_url=clone_url,
+        head_ref=head_ref,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+    )
+    if not fetched:
+        return False, (
+            "Failed to refresh PR branch before retrying push: "
+            f"{fetch_message}"
+        )
+
+    rebase = subprocess.run(
+        ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if rebase.returncode == 0:
+        return True, "Rebased fixes onto updated PR head."
+
+    subprocess.run(
+        ["git", "rebase", "--abort"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    return False, (
+        "Failed to rebase fixes onto updated PR branch before retrying push: "
+        f"{rebase.stderr.strip() or rebase.stdout.strip()}"
+    )
+
+
+def _fetch_pr_head_for_rebase(
+    worktree: Path,
+    *,
+    clone_url: str,
+    head_ref: str,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """Fetch the exact PR head branch into FETCH_HEAD, with token auth fallback."""
+    head_refspec = f"refs/heads/{head_ref}"
+    raw_fetch = subprocess.run(
+        ["git", "fetch", "--no-tags", clone_url, head_refspec],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if raw_fetch.returncode == 0:
+        return True, ""
+    error = raw_fetch.stderr.strip() or raw_fetch.stdout.strip()
+    if not _is_git_auth_error(error):
+        return False, error
+
+    token = _github_token_from_env()
+    if not token:
+        return False, error
+
+    token_url = _github_tokenized_url(repo_owner, repo_name, token)
+    token_fetch = subprocess.run(
+        ["git", "fetch", "--no-tags", token_url, head_refspec],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if token_fetch.returncode == 0:
+        return True, ""
+    token_error = token_fetch.stderr.strip() or token_fetch.stdout.strip()
+    return False, _redact_secret(token_error, token)
+
+
+def _is_git_auth_error(error: str) -> bool:
+    text = error or ""
+    return any(
+        marker in text
+        for marker in (
+            "Authentication failed",
+            "HTTP 401",
+            "could not read Username",
+            "HTTP Basic: Access denied",
+        )
+    )
+
+
+def _github_token_from_env() -> str:
+    token_file_path = os.environ.get("PDD_GH_TOKEN_FILE")
+    if token_file_path:
+        token_path = Path(token_file_path)
+        if token_path.exists():
+            token = token_path.read_text(encoding="utf-8").strip()
+            if token:
+                return token
+    return (
+        os.environ.get("GH_TOKEN")
+        or os.environ.get("GITHUB_TOKEN")
+        or os.environ.get("PDD_GITHUB_TOKEN")
+        or ""
+    ).strip()
+
+
+def _github_tokenized_url(repo_owner: str, repo_name: str, token: str) -> str:
+    from urllib.parse import quote
+
+    return (
+        f"https://x-access-token:{quote(token, safe='')}@github.com/"
+        f"{repo_owner}/{repo_name}.git"
+    )
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    if not secret:
+        return text
+    from urllib.parse import quote
+
+    redacted = (text or "").replace(secret, "[REDACTED]")
+    return redacted.replace(quote(secret, safe=""), "[REDACTED]")
 
 
 def _git_changed_files(worktree: Path) -> List[str]:

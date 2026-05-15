@@ -1013,6 +1013,15 @@ def _preflight_drift_heal(
                 if not quiet:
                     console.print(f"   [green]✓[/green] healed {drift.basename}")
             else:
+                combined_output = f"{result.stdout or ''}\n{result.stderr or ''}"
+                if (
+                    "metadata finalization failed" in combined_output
+                    or "metadata staging verification failed" in combined_output
+                    or "[metadata-sync]" in combined_output
+                ):
+                    raise RuntimeError(
+                        f"preflight metadata finalization failed for {drift.basename}"
+                    )
                 failed.append(drift.basename)
                 if not quiet:
                     tail = result.stderr.strip().splitlines()[-1:] or ["(no stderr)"]
@@ -1026,6 +1035,8 @@ def _preflight_drift_heal(
                 console.print(
                     f"   [red]✗[/red] heal timed out for {drift.basename}"
                 )
+        except RuntimeError:
+            raise
         except Exception as exc:
             failed.append(drift.basename)
             if not quiet:

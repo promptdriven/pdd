@@ -1046,6 +1046,7 @@ def push_with_retry(
     remote: str = "origin",
     refspec: str = "HEAD",
     set_upstream: bool = True,
+    force_with_lease_on_non_fast_forward: bool = True,
 ) -> Tuple[bool, str]:
     """Push to a git remote with shared non-fast-forward and token-refresh retries.
 
@@ -1055,8 +1056,10 @@ def push_with_retry(
 
     Behaviour:
     - First attempt: ``git push [-u] <remote> <refspec>``.
-    - Non-fast-forward: retry with ``--force-with-lease`` (safe — only
-      overwrites the remote if it still matches what we last fetched).
+    - Non-fast-forward: by default, retry with ``--force-with-lease`` (safe —
+      only overwrites the remote if it still matches what we last fetched).
+      Callers that push to a shared PR head can disable this and handle the
+      rejection by fetching/rebasing instead.
     - Auth failure (``Authentication failed``, ``HTTP 401``,
       ``could not read Username``, ``HTTP Basic: Access denied``): read a
       token from a non-empty ``PDD_GH_TOKEN_FILE`` or fall back to
@@ -1086,6 +1089,8 @@ def push_with_retry(
     is_non_fast_forward = any(marker in stderr for marker in non_ff_markers)
 
     if is_non_fast_forward:
+        if not force_with_lease_on_non_fast_forward:
+            return False, stderr
         console.print(
             "[yellow]WARNING: Push rejected (non-fast-forward). "
             "Retrying with --force-with-lease...[/yellow]"

@@ -58,7 +58,8 @@ help:
 	@echo "  make publish                 - Build & upload current version to PyPI"
 	@echo "  make publish-public          - Copy artifacts to public repo only"
 	@echo "  make check-deps              - Check pyproject.toml and requirements.txt are in sync"
-	@echo "  make release                 - Bump version, tag, and push (GitHub Actions publishes to PyPI via OIDC after gltanaka approval)"
+	@echo "  make bump                    - Bump version with commitizen on the current feature branch (commit only, no tag, no push)"
+	@echo "  make release                 - On main: tag HEAD with v\$$VERSION and push (Actions publishes to PyPI via OIDC after gltanaka approval)"
 	@echo "  make staging                 - Copy files to staging"
 	@echo "  make production              - Copy files from staging to pdd"
 	@echo "  make update-extension        - Update VS Code extension"
@@ -107,7 +108,7 @@ TEST_OUTPUTS := $(patsubst $(PDD_DIR)/%.py,$(TESTS_DIR)/test_%.py,$(PY_OUTPUTS))
 # All Example files in context directory (recursive)
 EXAMPLE_FILES := $(shell find $(CONTEXT_DIR) -name "*_example.py" 2>/dev/null)
 
-.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend release check-release-remote check-release-branch check-release-clean
+.PHONY: all clean test requirements production coverage staging regression regression-public sync-regression all-regression cloud-regression install build upload-pypi analysis fix crash update update-extension generate run-examples verify detect change lint publish publish-public public-ensure public-update public-import public-diff sync-public ensure-dev-deps cloud-test cloud-test-quick cloud-test-build cloud-test-push cloud-test-setup test-frontend bump release check-release-remote check-release-branch check-release-clean
 
 all: $(PY_OUTPUTS) $(MAKEFILE_OUTPUT) $(CSV_OUTPUTS) $(EXAMPLE_OUTPUTS) $(TEST_OUTPUTS)
 
@@ -667,7 +668,8 @@ check-release-remote:
 	echo "Release remote verified: $$PUSH_URL"
 
 check-release-branch:
-	@BRANCH=$$(git branch --show-current); \
+	@set -e; \
+	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
 	if [ "$$BRANCH" != "main" ]; then \
 		echo "Error: release must run from branch main, not '$$BRANCH'."; \
 		exit 1; \
@@ -690,24 +692,68 @@ check-release-clean:
 		exit 1; \
 	fi
 
+bump: check-release-clean
+	@echo "Bumping version with commitizen (commit only — no tag, no push)"
+	@set -e; \
+	BRANCH=$$(git symbolic-ref --quiet --short HEAD || echo ""); \
+	if [ -z "$$BRANCH" ]; then \
+		echo "Error: detached HEAD detected. 'make bump' requires a feature branch."; \
+		echo "Create a branch (e.g. 'git switch -c feat/your-work') and rerun."; \
+		exit 1; \
+	fi; \
+	if [ "$$BRANCH" = "main" ]; then \
+		echo "Error: do not run 'make bump' on main."; \
+		echo "Create a feature branch first; commit the bump there; merge via PR."; \
+		exit 1; \
+	fi; \
+	OLD_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
+	python -m commitizen bump --increment PATCH --yes --check-consistency --files-only; \
+	NEW_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
+	if [ "$$OLD_VERSION" = "$$NEW_VERSION" ]; then \
+		echo "Error: commitizen did not change the version (current: $$OLD_VERSION)."; \
+		exit 1; \
+	fi; \
+	git add -A; \
+	git commit -m "bump: version $$OLD_VERSION → $$NEW_VERSION"; \
+	echo ""; \
+	echo "Bumped $$OLD_VERSION → $$NEW_VERSION on branch '$$BRANCH'."; \
+	echo "Next: push '$$BRANCH', merge the PR, then run 'make release' on main."
+
 release: check-deps check-suspicious-files check-release-remote check-release-branch check-release-clean
 	@echo "Preparing release"
 	@set -e; \
 	CURRENT_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
 	CURRENT_TAG="v$$CURRENT_VERSION"; \
-	if git tag --points-at HEAD | grep -qx "$$CURRENT_TAG"; then \
-		echo "HEAD already at $$CURRENT_TAG."; \
-		echo "Pushing tag to origin to trigger GitHub Actions publish workflow."; \
-		git push origin "$$CURRENT_TAG"; \
+	HEAD_SHA=$$(git rev-parse HEAD); \
+	if git rev-parse --verify --quiet "refs/tags/$$CURRENT_TAG" >/dev/null; then \
+		LOCAL_TAG_COMMIT=$$(git rev-parse "$$CURRENT_TAG^{commit}"); \
+		if [ "$$LOCAL_TAG_COMMIT" != "$$HEAD_SHA" ]; then \
+			echo "Error: tag $$CURRENT_TAG already exists locally but points at commit $$LOCAL_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
+			echo "Either delete the stale local tag or move HEAD to the right commit."; \
+			exit 1; \
+		fi; \
+		echo "Tag $$CURRENT_TAG already exists locally at HEAD; reusing."; \
 	else \
-		echo "Bumping version with commitizen"; \
-		python -m commitizen bump --increment PATCH --yes --check-consistency; \
-		echo "Pushing release commit and tags to origin"; \
-		git push origin main --tags; \
+		echo "Tagging HEAD as $$CURRENT_TAG"; \
+		git tag -a "$$CURRENT_TAG" -m "Release $$CURRENT_TAG"; \
 	fi; \
-	NEW_VERSION=$$(sed -n '1,120s/^version[[:space:]]*=[[:space:]]*"\([0-9.]*\)"/\1/p' pyproject.toml | head -n1); \
+	REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$CURRENT_TAG^{}" "refs/tags/$$CURRENT_TAG" | awk '/\^\{\}$$/ {peeled=$$1} END {if (peeled) print peeled}'); \
+	if [ -z "$$REMOTE_TAG_COMMIT" ]; then \
+		REMOTE_TAG_COMMIT=$$(git ls-remote origin "refs/tags/$$CURRENT_TAG" | awk 'NR==1 {print $$1}'); \
+	fi; \
+	if [ -n "$$REMOTE_TAG_COMMIT" ]; then \
+		if [ "$$REMOTE_TAG_COMMIT" != "$$HEAD_SHA" ]; then \
+			echo "Error: tag $$CURRENT_TAG already exists on origin but points at commit $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
+			echo "PyPI version $$CURRENT_VERSION may already be published; bump the version on a feature branch with 'make bump' first."; \
+			exit 1; \
+		fi; \
+		echo "Tag $$CURRENT_TAG already on origin at HEAD; nothing to push."; \
+	else \
+		echo "Pushing tag $$CURRENT_TAG to origin (triggers Actions publish workflow)"; \
+		git push origin "$$CURRENT_TAG"; \
+	fi; \
 	echo ""; \
-	echo "Tag v$$NEW_VERSION pushed. GitHub Actions will publish to PyPI after gltanaka approval."; \
+	echo "Tag $$CURRENT_TAG is on origin. GitHub Actions will publish to PyPI after gltanaka approval."; \
 	echo "  Watch:    gh run watch --workflow release.yml"; \
 	echo "  Fallback: make publish  (uploads locally via twine)"
 	@# Post-release cleanup check (Issue #186)

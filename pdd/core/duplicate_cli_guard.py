@@ -131,6 +131,11 @@ def _allow_duplicate(ctx: click.Context) -> bool:
     return False
 
 
+def _is_dry_run(argv_tail: List[str]) -> bool:
+    """Return True when the invocation is explicitly read-only."""
+    return "--dry-run" in argv_tail
+
+
 def _signature_key(project_root: Path, argv_tail: List[str]) -> str:
     """Stable key identifying a distinct invocation (argv + project root, not content)."""
     raw = (str(project_root.resolve()) + "\n" + json.dumps(argv_tail)).encode()
@@ -288,6 +293,8 @@ def check_duplicate_before_subcommand(ctx: click.Context) -> None:
     argv_tail = normalized_argv()
     if not argv_tail:
         return
+    if _is_dry_run(argv_tail):
+        return
 
     project_root = find_project_root()
     prev = _lookup_matching_record(project_root, argv_tail)
@@ -364,6 +371,8 @@ def record_after_guarded_command(ctx: click.Context, success: bool = True) -> No
 
     argv_tail = normalized_argv()
     if not argv_tail:
+        return
+    if _is_dry_run(argv_tail):
         return
 
     save_last_run(find_project_root(), argv_tail, sub)

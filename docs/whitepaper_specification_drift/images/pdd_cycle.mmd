@@ -1,0 +1,12 @@
+flowchart TD
+    A["Prompt\n(102 lines)"] -->|"pdd sync"| B["Generated Code\n(364 lines)"]
+    B --> C["Tests find bug"]
+    C --> D{"Prompt wrong\nor generation?"}
+    D -->|"Prompt"| E["Fix prompt"]
+    D -->|"Generation"| F["Add test\n(permanent)"]
+    E --> G["Regenerate"]
+    F --> G
+    G --> B
+
+    style A fill:#f0f7ff,stroke:#0366d6,stroke-width:2px
+    style F fill:#d4edda,stroke:#155724,stroke-width:2px

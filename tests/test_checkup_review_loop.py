@@ -261,7 +261,7 @@ class TestCheckupReviewLoopRuntime:
         assert "Review loop stopped on a configured safety limit" not in report
         assert "The PR does not test the new workflow." in report
 
-    def test_cost_cap_after_fixer_stops_before_commit_and_push(
+    def test_cost_cap_after_fixer_pushes_then_stops_before_verifier(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
         from pdd.checkup_review_loop import run_checkup_review_loop
@@ -285,11 +285,13 @@ class TestCheckupReviewLoopRuntime:
                 return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
             return True, _json("findings", [finding]), 0.1, role
 
+        pushes: List[str] = []
+
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
         monkeypatch.setattr(
             mod,
             "_commit_and_push_if_changed",
-            lambda *a, **k: pytest.fail("must not push after fixer cost cap"),
+            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
         )
 
         success, report, cost, _model = run_checkup_review_loop(
@@ -306,6 +308,7 @@ class TestCheckupReviewLoopRuntime:
             "checkup-review-loop-review-codex-round1",
             "checkup-review-loop-fix-claude-for-codex-round1",
         ]
+        assert pushes == ["pushed"]
         assert "max-cost-reached: true" in report
         assert "issue_aligned: unknown" in report
         assert "The API accepts invalid input." in report
@@ -2038,7 +2041,7 @@ Local tests passed.
         assert result.findings[0].location == "pdd/generate_model_catalog.py:873"
         assert "does not fetch scores" in result.findings[0].finding
 
-    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+    def test_codex_finding_prefix_priority_without_section_is_parsed(self) -> None:
         """Codex exec can emit `Finding: [P2] ...` instead of JSON."""
         from pdd.checkup_review_loop import _parse_review_output
 
@@ -2102,6 +2105,52 @@ Checks: targeted tests passed.
         assert result.findings[0].finding == "PR is not merge-ready against current `main`."
         assert result.findings[1].finding == "Project Gallery link points to a non-existent route."
         assert all("trailing whitespace" not in finding.evidence for finding in result.findings)
+
+    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+        """Codex can prefix priority headings with 'Finding:'."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """**Findings**
+
+Finding: [P2] Fallback comments still bypass sanitization.
+Trigger: `post_step_comment(..., body=None)` receives failure output containing a token assignment.
+Evidence: [pdd/agentic_common.py:3410](/tmp/w/pdd/agentic_common.py:3410) builds fallback from raw output.
+
+Checks:
+`git diff --check` passed.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        finding = result.findings[0]
+        assert finding.severity == "medium"
+        assert finding.finding == "Fallback comments still bypass sanitization."
+        assert finding.location == "pdd/agentic_common.py:3410"
+        assert "token assignment" in finding.evidence
+        assert "git diff --check" not in finding.evidence
+
+    def test_multiple_finding_prefix_priority_blocks_stay_separate(self) -> None:
+        """`Finding: [P*]` headings without priority colons split cleanly."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """Finding: [P1] First issue
+Evidence: [pdd/a.py:10](/tmp/w/pdd/a.py:10) detail.
+
+Finding: [P2] Second issue
+Evidence: [pdd/b.py:20](/tmp/w/pdd/b.py:20) detail.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 2
+        assert result.findings[0].severity == "critical"
+        assert result.findings[0].finding == "First issue"
+        assert result.findings[0].location == "pdd/a.py:10"
+        assert "Second issue" not in result.findings[0].evidence
+        assert result.findings[1].severity == "medium"
+        assert result.findings[1].finding == "Second issue"
+        assert result.findings[1].location == "pdd/b.py:20"
 
     def test_bold_priority_colon_bullets_keep_embedded_location(self) -> None:
         """Codex can emit '- **P1:** sentence with inline file links."""
@@ -2337,6 +2386,311 @@ class TestPushWithRetryClonedRemote:
         assert any("x-access-token:" in c[2] for c in retry_cmds)
         # No `git remote set-url` was issued for the URL remote.
         assert not any(c[:3] == ["git", "remote", "set-url"] for c in cmds)
+
+
+class TestCommitAndPushIfChanged:
+    def test_fetch_first_rebases_and_retries_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes: List[Tuple[str, str, bool]] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            pushes.append((
+                kwargs["remote"],
+                kwargs["refspec"],
+                kwargs["force_with_lease_on_non_fast_forward"],
+            ))
+            if len(pushes) == 1:
+                return (
+                    False,
+                    " ! [rejected] HEAD -> feature (fetch first)\n"
+                    "hint: Updates were rejected because the remote contains "
+                    "work that you do not have locally.",
+                )
+            return True, ""
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        assert pushes == [
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+        ]
+        assert [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ] in runs
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+
+    def test_non_fast_forward_rebases_instead_of_force_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes: List[Tuple[str, str, bool]] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            pushes.append((
+                kwargs["remote"],
+                kwargs["refspec"],
+                kwargs["force_with_lease_on_non_fast_forward"],
+            ))
+            if len(pushes) == 1:
+                return (
+                    False,
+                    " ! [rejected] HEAD -> feature (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your "
+                    "current branch is behind.",
+                )
+            return True, ""
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        assert pushes == [
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+        ]
+        assert [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ] in runs
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+
+    def test_fetch_first_rebase_failure_aborts_before_second_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            return False, " ! [rejected] HEAD -> feature (fetch first)"
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd[:2] == ["git", "rebase"] and "--abort" not in cmd:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is False
+        assert pushes == 1
+        assert "Failed to rebase fixes" in message
+        assert ["git", "rebase", "--abort"] in runs
+
+    def test_fetch_auth_retries_with_tokenized_exact_branch_ref(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        token_file = tmp_path / "token"
+        token_file.write_text("ghs_secret", encoding="utf-8")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            return (pushes > 1, " ! [rejected] HEAD -> feature (fetch first)")
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd[:3] == ["git", "fetch", "--no-tags"]:
+                if "x-access-token" not in cmd[3]:
+                    return type(
+                        "R",
+                        (),
+                        {
+                            "returncode": 1,
+                            "stdout": "",
+                            "stderr": "fatal: could not read Username",
+                        },
+                    )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        fetches = [cmd for cmd in runs if cmd[:3] == ["git", "fetch", "--no-tags"]]
+        assert fetches[0] == [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ]
+        assert "x-access-token" in fetches[1][3]
+        assert fetches[1][4] == "refs/heads/feature"
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+
+    def test_fetch_auth_failure_redacts_token_in_error(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        token_file = tmp_path / "token"
+        token_file.write_text("ghs_secret", encoding="utf-8")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd[:3] == ["git", "fetch", "--no-tags"] and "x-access-token" not in cmd[3]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 1,
+                        "stdout": "",
+                        "stderr": "fatal: could not read Username",
+                    },
+                )()
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "fatal: https://x-access-token:ghs_secret@github.com/o/r.git failed",
+                },
+            )()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._fetch_pr_head_for_rebase(
+            tmp_path,
+            clone_url="https://github.com/o/r.git",
+            head_ref="feature",
+            repo_owner="o",
+            repo_name="r",
+        )
+
+        assert success is False
+        assert "ghs_secret" not in message
+        assert "[REDACTED]" in message
+
+    def test_push_with_retry_can_leave_non_fast_forward_to_caller(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        calls: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            calls.append(list(cmd))
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": " ! [rejected] HEAD -> feature (non-fast-forward)",
+                },
+            )()
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run):
+            success, err = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                remote="https://github.com/o/r.git",
+                refspec="HEAD:feature",
+                set_upstream=False,
+                force_with_lease_on_non_fast_forward=False,
+            )
+
+        assert success is False
+        assert "non-fast-forward" in err
+        assert not any("--force-with-lease" in cmd for cmd in calls)
 
 
 class TestStaticAnalysisCandidateFindingsIntegration:

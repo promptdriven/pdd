@@ -841,8 +841,13 @@ class TestE2EFixMetadataContracts:
             if function.get("name") == "push_with_retry"
         )
         assert "set_upstream: bool = True" in push_with_retry["signature"]
+        assert (
+            "force_with_lease_on_non_fast_forward: bool = True"
+            in push_with_retry["signature"]
+        )
 
         side_effects = " ".join(push_with_retry.get("sideEffects", []))
+        assert "force_with_lease_on_non_fast_forward" in side_effects
         for token_name in (
             "PDD_GH_TOKEN_FILE",
             "GH_TOKEN",

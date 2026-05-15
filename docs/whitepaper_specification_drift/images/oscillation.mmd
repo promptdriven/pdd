@@ -1,0 +1,13 @@
+flowchart TD
+    subgraph Peak["Peak Multi-Provider Integration Oscillation"]
+        A["15:00 feat: add provider support"] --> B["15:21 fix: auto-select provider"]
+        B --> C["15:23 fix: create config directory"]
+        C --> D["15:27 fix: pre-create config files"]
+        D --> E["15:30 fix: seed config"]
+        E --> F["15:44 revert: remove seeding"]
+        F --> G["15:45 fix: use env vars instead"]
+        G --> H["16:01 fix: skip incompatible credentials"]
+
+        style F fill:#ffcccc,stroke:#cc0000
+        style A fill:#cce5ff,stroke:#0066cc
+    end

@@ -43,6 +43,7 @@ SOURCE_PATHS=(
     ci
     scripts
     utils
+    .github
     .sync-config.yml
     architecture.json
     README.md

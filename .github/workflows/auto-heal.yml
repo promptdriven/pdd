@@ -122,9 +122,17 @@ jobs:
             fork=true
           fi
 
+          trusted_app_requester=false
+          if [ "$EVENT_NAME" = "pull_request_target" ] &&
+             [ "$fork" = "false" ] &&
+             [ "$requester" = "prompt-driven-github[bot]" ]; then
+            trusted_app_requester=true
+          fi
+
           {
             echo "skip=false"
             echo "fork=$fork"
+            echo "trusted_app_requester=$trusted_app_requester"
             echo "pr_number=$pr_number"
             echo "pr_head_sha=$pr_head_sha"
             echo "pr_head_repo=$pr_head_repo"
@@ -188,11 +196,21 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.app_token.outputs.token }}
           REQUESTER: ${{ steps.pf.outputs.requester }}
+          TRUSTED_APP_REQUESTER: ${{ steps.pf.outputs.trusted_app_requester }}
         run: |
           set -euo pipefail
           if [ -z "$REQUESTER" ]; then
             echo "::error::requester unresolved; refusing to authorize"
             exit 1
+          fi
+          # Generated internal PRs are authored by prompt-driven-github[bot],
+          # a GitHub App identity that cannot be a repository collaborator.
+          # Pre-flight only marks this exact requester as trusted on
+          # non-fork pull_request_target events. Human /heal comments still
+          # go through the pdd_cloud collaborator check below.
+          if [ "$TRUSTED_APP_REQUESTER" = "true" ]; then
+            echo "authorized: $REQUESTER is the trusted generated-PR App identity"
+            exit 0
           fi
           # 204 = is a collaborator. 404 = not a collaborator.
           # Anything else = fail loud (don't silently confuse denial with

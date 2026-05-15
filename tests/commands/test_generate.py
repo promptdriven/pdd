@@ -125,6 +125,14 @@ finally:
     # mocking window (e.g. pdd.core.dump imported via pdd.commands.report).
     # These bound MagicMock attributes from the mocked pdd.core.errors and must
     # be re-imported fresh with the real module.
+    #
+    # Popping from sys.modules alone leaves a stale reference on the `pdd.core`
+    # parent package: a subsequent `from pdd.core import X` returns the OLD
+    # object via parent-attribute lookup, while `from pdd.core.X import Y`
+    # triggers a reimport and yields a NEW class. Tests that bind both names
+    # end up with a split module identity and patches miss the freshly imported
+    # class. Re-importing immediately keeps sys.modules and the parent attribute
+    # consistent.
     _core_side_effects = [
         n for n in sys.modules
         if n.startswith("pdd.core.") and n not in _import_mocks
@@ -132,6 +140,8 @@ finally:
     ]
     for _name in _core_side_effects:
         sys.modules.pop(_name, None)
+    for _name in _core_side_effects:
+        importlib.import_module(_name)
 
     # Importing pdd.commands.generate can pull in sync orchestration while
     # pdd.operation_log and pdd.core.errors are mocked above. If that side
