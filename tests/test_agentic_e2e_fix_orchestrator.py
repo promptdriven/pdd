@@ -7868,6 +7868,91 @@ class TestNotABugSuppressedOnResume:
             f"the dev_unit_states guard. Called labels: {called_labels}"
         )
 
+    def test_resume_demotes_cached_step3_not_a_bug_via_direct_edits(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """End-to-end: resume with cached NOT_A_BUG + direct edits reruns Step 3.
+
+        Acceptance test for issue #1034 (first acceptance criterion):
+        the orchestrator must resume into the real wiring path —
+        restored ``initial_file_hashes``, ``_detect_meaningful_changes``,
+        the ``_reevaluate_step3_not_a_bug_on_resume`` demotion to
+        ``FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits``, the
+        ``validate_cached_state`` rewind, and a fresh Step 3 run — without
+        exiting as "Issue determined to be not a bug." This complements the
+        helper-level direct-edits test and the dev_unit_states end-to-end test
+        by covering the direct-edit cached-resume path through the full
+        orchestrator entry point.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        # Simulate a resumed state with cached NOT_A_BUG, NO FIXED dev units,
+        # and a non-empty initial_file_hashes snapshot. Direct edits are what
+        # must trigger the demotion — exercised via _detect_meaningful_changes.
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                # On rerun, Step 3 must execute — return CODE_BUG so the
+                # workflow continues past the NOT_A_BUG early-exit branch.
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 must have been re-executed via the direct-edit guard demotion.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume when cached NOT_A_BUG is demoted by "
+            "the direct-edit guard (_detect_meaningful_changes over the "
+            f"restored initial_file_hashes). Called labels: {called_labels}"
+        )
+
+        # And the workflow must NOT have exited as "Issue determined to be not
+        # a bug." — that is the regression the resume guard prevents.
+        # Return tuple shape: (success, final_message, total_cost, model_used, changed_files)
+        assert result is not None
+        final_message = result[1] if isinstance(result, tuple) and len(result) >= 2 else ""
+        assert final_message != "Issue determined to be not a bug.", (
+            "Resume guard failure: workflow exited with the stale cached "
+            f"NOT_A_BUG short-circuit. final_message={final_message!r}"
+        )
+
     def test_bug_step_outputs_not_a_bug_resuppressed_by_dev_units(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args, tmp_path
     ):
