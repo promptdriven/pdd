@@ -969,7 +969,6 @@ def run_checkup_review_loop(
             )
             fallback_fix = _maybe_run_fallback_fixer(
                 primary_fixer=fixer,
-                primary_fix=fix,
                 reviewer=reviewer,
                 findings=fix_findings,
                 context=context,
@@ -1604,7 +1603,6 @@ def _maybe_run_fallback_reviewer(
 def _maybe_run_fallback_fixer(
     *,
     primary_fixer: str,
-    primary_fix: FixResult,
     reviewer: str,
     findings: Sequence[ReviewFinding],
     context: ReviewLoopContext,

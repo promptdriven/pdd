@@ -2551,11 +2551,6 @@ class TestCheckupReviewLoopRuntime:
             required_fix="add a test",
             location="tests/test_flow.py:12",
         )
-        primary_fix = FixResult(
-            fixer="claude",
-            success=False,
-            summary="primary failed",
-        )
         config = _config(fixer_fallback="gemini")
         ctx = _ctx(Path("/tmp"))
 
@@ -2571,7 +2566,6 @@ class TestCheckupReviewLoopRuntime:
         with patch.object(mod, "_run_fix", side_effect=_explode):
             result = _maybe_run_fallback_fixer(
                 primary_fixer="claude",
-                primary_fix=primary_fix,
                 reviewer="codex",
                 findings=[finding],
                 context=ctx,

@@ -7532,6 +7532,7 @@
           "reviewer",
           "fixer",
           "reviewer_fallback",
+          "fixer_fallback",
           "review_only",
           "max_rounds",
           "max_cost",
