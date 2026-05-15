@@ -2665,6 +2665,81 @@ class TestEnforceScopeGuard:
         assert "Allowed write set:" in diagnostic
         assert "Companion allowlist:" in diagnostic
 
+    def test_companion_glob_scoped_to_module_cwd_not_sibling(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-3 F1: a sibling module's companion artifact (under a different
+        ``module_cwd``) must NOT be auto-allowed. The rglob must scope to
+        the current module's cwd only.
+        """
+        from pdd import agentic_sync_runner as mod
+
+        # Build a fake repo with two module dirs; place ``.pdd/meta/foo.json``
+        # under EACH so the companion glob would match both if scanned at
+        # repo level.
+        repo = tmp_path
+        module_a = repo / "mod_a"
+        module_b = repo / "mod_b"
+        for m in (module_a, module_b):
+            (m / ".pdd" / "meta").mkdir(parents=True)
+            (m / ".pdd" / "meta" / "x.json").write_text("{}")
+
+        captured_allowed = {}
+
+        def fake_revert(repo_root, allowed_files):
+            captured_allowed["files"] = set(allowed_files)
+            return []
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes", fake_revert)
+        monkeypatch.setattr(
+            mod,
+            "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        # Skip git toplevel resolution; pretend repo root == tmp_path.
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: repo.resolve()
+        )
+
+        runner._enforce_scope_guard("mod_a", module_a)
+
+        files = captured_allowed["files"]
+        assert (module_a / ".pdd" / "meta" / "x.json").resolve() in files
+        # Sibling module's companion artifact must NOT be auto-allowed.
+        assert (module_b / ".pdd" / "meta" / "x.json").resolve() not in files
+
+    def test_run_entry_logs_permissive_mode(self, capsys):
+        """Iter-3 F2: runner emits dim INFO on run() entry when no contract."""
+        runner = self._make_runner(
+            allowed_write_set=None,
+            quiet=False,
+        )
+        # Make run() return immediately by emptying the basenames list AFTER
+        # construction; the dispatch loop short-circuits and we only want the
+        # entry log.
+        runner.basenames = []
+        runner.run()
+        out = capsys.readouterr().out
+        assert "permissive mode" in out
+
+    def test_run_entry_logs_opt_out_warning(self, capsys):
+        """Iter-3 F2: runner emits dim WARNING on run() entry when scope guard
+        is disabled via --no-scope-guard."""
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            scope_guard_enabled=False,
+            quiet=False,
+        )
+        runner.basenames = []
+        runner.run()
+        out = capsys.readouterr().out
+        assert "--no-scope-guard" in out
+
 
 # ---------------------------------------------------------------------------
 # Issue #745: initial_cost (LLM module analysis cost) tracking

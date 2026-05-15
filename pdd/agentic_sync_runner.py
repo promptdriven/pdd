@@ -1525,21 +1525,13 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     def run(self) -> Tuple[bool, str, float]:
         """Run all syncs respecting dependencies."""
-        if not self.basenames:
-            return True, "No modules to sync", self.initial_cost
-
-        if self._resumed_modules and not self.quiet:
-            resumed = sorted(self._resumed_modules)
-            console.print(
-                f"[green]Resuming: skipping {len(resumed)} already-succeeded "
-                f"module(s): {resumed}[/green]"
-            )
-
         # Issue #1013: scope-guard run-entry logging required by the prompt
         # spec (``agentic_sync_runner_python.prompt`` items 22 permissive
         # fallback / opt-out). Distinct from the sync-layer "contract loaded"
         # INFO line in ``run_agentic_sync`` — that one reports *detection*;
-        # this one reports the runtime *enforcement state* at dispatch.
+        # this one reports the runtime *enforcement state* at dispatch. Log
+        # before the empty-basenames short-circuit so the state is visible
+        # even when there are no modules to sync.
         if not self.quiet:
             if not self.scope_guard_enabled:
                 console.print(
@@ -1550,6 +1542,16 @@ class AsyncSyncRunner:
                     "[dim]Scope guard: no contract on issue — running in "
                     "permissive mode[/dim]"
                 )
+
+        if not self.basenames:
+            return True, "No modules to sync", self.initial_cost
+
+        if self._resumed_modules and not self.quiet:
+            resumed = sorted(self._resumed_modules)
+            console.print(
+                f"[green]Resuming: skipping {len(resumed)} already-succeeded "
+                f"module(s): {resumed}[/green]"
+            )
 
         self._update_github_comment()
 
