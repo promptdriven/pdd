@@ -155,6 +155,12 @@ class ReviewLoopState:
     # every subsequent round drives the fix step with this role instead of the
     # exhausted primary. Parallel to ``active_reviewer``.
     active_fixer: Optional[str] = None
+    # Originally configured primary reviewer captured at loop init and never
+    # reassigned. ``active_reviewer`` rotates after a reviewer-fallback takeover;
+    # this field preserves the original so the fixer-fallback exclusion check
+    # can enforce the documented "must differ from --reviewer" rule even after
+    # the active reviewer has rotated.
+    original_reviewer: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
