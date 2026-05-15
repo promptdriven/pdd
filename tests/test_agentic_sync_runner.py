@@ -2815,12 +2815,192 @@ class TestEnforceScopeGuard:
         monkeypatch.setattr(
             runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
         )
+        # The iter-9 M-1 post-revert re-scan calls ``git status``; this test
+        # uses a tmp_path without a real ``git init`` and only cares about
+        # the rglob/_git_changed_paths companion-allowlist behavior, so stub
+        # the re-scan to return [] (matching the helpers' mocked behavior).
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: [],
+        )
 
         diagnostic = runner._enforce_scope_guard("old_module", tmp_path)
         assert diagnostic is None, (
             "Deleted companion artifact should be auto-allowed, not flagged"
         )
         assert (tmp_path / deleted_rel).resolve() in captured["allowed"]
+
+    # ------------------------------------------------------------------
+    # Iter-9 M-1: fail-closed boundary — re-scan after revert helpers
+    # ------------------------------------------------------------------
+    def _init_repo(self, tmp_path):
+        """Create a minimal git repo so re-scan ``git status`` succeeds."""
+        subprocess.run(["git", "init", "-b", "main", str(tmp_path)], check=True,
+                       capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.email",
+                        "t@t.invalid"], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "config", "user.name",
+                        "T"], check=True, capture_output=True)
+        (tmp_path / "README.md").write_text("initial")
+        subprocess.run(["git", "-C", str(tmp_path), "add", "README.md"],
+                       check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(tmp_path), "commit", "-m", "init"],
+                       check=True, capture_output=True)
+
+    def test_fail_open_regression_unrecovered_path_hard_fails(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-9 M-1: when both revert helpers return ``[]`` (simulating
+        helper failure) AND an out-of-scope file remains on disk, the scope
+        guard MUST hard-fail by returning a diagnostic that surfaces the
+        unrecovered path under ``Unrecovered``."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_repo(tmp_path)
+        # Out-of-scope untracked file the revert helper "failed" to remove.
+        stray = tmp_path / "stray.txt"
+        stray.write_text("contract violation")
+
+        # Simulate both helpers fail-open (returning []).
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "Fail-open regression: helpers returned [] but stray.txt still "
+            "violates the contract; guard must hard-fail."
+        )
+        assert "Unrecovered" in diagnostic
+        assert "stray.txt" in diagnostic
+
+    def test_clean_working_tree_returns_none(self, tmp_path, monkeypatch):
+        """No out-of-scope files on disk AND both helpers return [] →
+        guard MUST return ``None`` (the in-scope path)."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_repo(tmp_path)
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        assert runner._enforce_scope_guard("mod", tmp_path) is None
+
+    def test_mixed_success_reverted_and_unrecovered_both_surface(
+        self, tmp_path, monkeypatch
+    ):
+        """Helpers report some reverted paths AND additional out-of-scope
+        paths remain. Diagnostic MUST contain both 'reverted' and
+        'Unrecovered' sections. Companion-allowlisted files (e.g.
+        ``.pdd/meta/<basename>.json`` under ``module_cwd``) must NOT appear
+        under Unrecovered — they are auto-allowed."""
+        from pdd import agentic_sync_runner as mod
+
+        self._init_repo(tmp_path)
+
+        # Companion-allowlisted file under module_cwd: must be auto-allowed.
+        meta_dir = tmp_path / ".pdd" / "meta"
+        meta_dir.mkdir(parents=True)
+        companion = meta_dir / "mod_python.json"
+        companion.write_text("{}")
+        # Out-of-scope untracked file the helpers "failed" to remove.
+        stray = tmp_path / "stray.txt"
+        stray.write_text("contract violation")
+
+        reverted_path = tmp_path / "pdd" / "reverted_already.py"
+
+        monkeypatch.setattr(
+            mod, "_revert_out_of_scope_changes",
+            lambda _root, _allowed: [reverted_path],
+        )
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None
+        # Reverted-side: existing diagnostic prefix surfaces the revert count.
+        assert "Scope guard reverted 1 out-of-scope file(s)" in diagnostic
+        assert "pdd/reverted_already.py" in diagnostic
+        # Unrecovered-side: the stray file shows up under the new section.
+        assert "Unrecovered" in diagnostic
+        assert "stray.txt" in diagnostic
+        # Companion artifact must NOT be flagged.
+        assert ".pdd/meta/mod_python.json" not in diagnostic
+
+    def test_git_status_failed_sentinel_surfaces_in_diagnostic(
+        self, tmp_path, monkeypatch
+    ):
+        """When the post-revert ``git status`` itself fails (timeout, missing
+        binary, non-zero return), ``_remaining_out_of_scope_paths`` returns
+        the sentinel ``['<git-status-failed>']`` and the diagnostic MUST
+        clearly indicate the failure under ``Unrecovered`` so operators do
+        not silently trust an unobservable working tree."""
+        from pdd import agentic_sync_runner as mod
+
+        monkeypatch.setattr(mod, "_revert_out_of_scope_changes",
+                            lambda _root, _allowed: [])
+        monkeypatch.setattr(
+            mod, "revert_out_of_scope_changes_with_dirs",
+            lambda _root, allowed_dirs, allowed_files: [],
+        )
+
+        runner = self._make_runner(
+            allowed_write_set=["pdd/foo.py"],
+            companion_allowlist=[".pdd/meta/*.json"],
+        )
+        monkeypatch.setattr(
+            runner, "_resolve_repo_root", lambda _cwd: tmp_path.resolve()
+        )
+        # Force the re-scan to report the sentinel directly.
+        monkeypatch.setattr(
+            runner, "_remaining_out_of_scope_paths",
+            lambda _root, _allowed: ["<git-status-failed>"],
+        )
+
+        diagnostic = runner._enforce_scope_guard("mod", tmp_path)
+
+        assert diagnostic is not None, (
+            "Sentinel ['<git-status-failed>'] must hard-fail the module."
+        )
+        assert "Unrecovered" in diagnostic
+        # Allow the sentinel wording to evolve — just check the failure
+        # indicator is present.
+        assert "git-status-failed" in diagnostic
 
 
 # ---------------------------------------------------------------------------

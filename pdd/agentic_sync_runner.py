@@ -1901,6 +1901,65 @@ class AsyncSyncRunner:
                 continue
         return False
 
+    def _remaining_out_of_scope_paths(
+        self, repo_root: Path, allowed_files: Set[Path]
+    ) -> List[str]:
+        """
+        Iter-9 M-1 (fail-closed boundary): re-scan the worktree after the
+        revert helpers have run and return any repo-relative paths still NOT
+        in *allowed_files*.
+
+        This guards against silent fail-open when either revert helper
+        cannot inspect / revert / remove an out-of-scope path (git timeout,
+        permission error, restore failure). Those helpers log a warning and
+        return ``[]``; without this re-scan ``_enforce_scope_guard`` would
+        treat the empty list as "nothing was out of scope" and let the
+        module succeed with the contract still violated on disk.
+
+        Returns:
+            Sorted list of POSIX repo-relative paths still out of scope, OR
+            the sentinel ``["<git-status-failed>"]`` when ``git status``
+            itself cannot be executed (timeout / missing git / non-zero
+            return). The sentinel is consistent with the warning-log +
+            empty-list style used elsewhere in the scope guard, but still
+            forces ``_enforce_scope_guard`` to hard-fail rather than treat
+            the unobservable working tree as clean.
+        """
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(repo_root), "status",
+                 "--porcelain", "--untracked-files=all"],
+                capture_output=True, text=True, timeout=30,
+            )
+        except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+            return ["<git-status-failed>"]
+        if result.returncode != 0:
+            return ["<git-status-failed>"]
+
+        remaining: Set[str] = set()
+        for line in result.stdout.splitlines():
+            if len(line) < 4:
+                continue
+            payload = line[3:].strip()
+            if not payload:
+                continue
+            # Renames: ``R  old -> new``. Both sides count.
+            if " -> " in payload:
+                old_raw, new_raw = payload.split(" -> ", 1)
+                entry_paths = [old_raw.strip().strip('"'),
+                               new_raw.strip().strip('"')]
+            else:
+                entry_paths = [payload.strip('"')]
+            for rel in entry_paths:
+                rel = _normalize_repo_path(rel)
+                if not rel:
+                    continue
+                absolute = (repo_root / rel).resolve()
+                if absolute in allowed_files:
+                    continue
+                remaining.add(rel)
+        return sorted(remaining)
+
     def _enforce_scope_guard(
         self, basename: str, module_cwd: Path
     ) -> Optional[str]:
@@ -1997,7 +2056,23 @@ class AsyncSyncRunner:
                 seen.add(rel)
                 offending.append(rel)
 
-            if not offending:
+            # Iter-9 M-1 (fail-closed boundary): re-scan the worktree after
+            # the revert helpers have run. Either helper can fail silently
+            # (git timeout, permission error, restore failure) and return
+            # ``[]``. Without this re-scan we would conclude "nothing was
+            # out of scope" and let the module succeed with the contract
+            # still violated on disk.
+            remaining_raw = self._remaining_out_of_scope_paths(
+                repo_root, allowed_files
+            )
+            # Filter out paths already surfaced as ``offending`` so the
+            # re-scan does not double-list. In practice when helpers succeed
+            # the path is gone from ``git status``; when helpers fail with
+            # ``reverted.clear()`` ``offending`` is empty. Defensive filter.
+            offending_set = set(offending)
+            remaining = [p for p in remaining_raw if p not in offending_set]
+
+            if not offending and not remaining:
                 return None
 
             source = self.contract_source or "<unknown>"
@@ -2007,14 +2082,36 @@ class AsyncSyncRunner:
             companion_lines = "\n".join(
                 f"  - {p}" for p in allowlist
             ) or "  - <empty>"
-            offending_lines = "\n".join(f"  - {p}" for p in offending)
-            diagnostic = (
-                f"Scope guard reverted {len(offending)} out-of-scope file(s) "
-                f"for module '{basename}' (contract source: {source}):\n"
-                f"{offending_lines}\n"
-                f"Allowed write set:\n{allowed_lines}\n"
-                f"Companion allowlist:\n{companion_lines}"
-            )
+
+            # Header line shape depends on whether anything was actually
+            # reverted. When ``offending`` is empty but ``remaining`` is
+            # non-empty, emitting "reverted 0 out-of-scope file(s)" plus an
+            # empty bullet list reads incorrectly; use a distinct header.
+            if offending:
+                offending_lines = "\n".join(f"  - {p}" for p in offending)
+                header = (
+                    f"Scope guard reverted {len(offending)} out-of-scope "
+                    f"file(s) for module '{basename}' "
+                    f"(contract source: {source}):\n"
+                    f"{offending_lines}"
+                )
+            else:
+                header = (
+                    f"Scope guard detected out-of-scope artifacts for "
+                    f"module '{basename}' (contract source: {source}) "
+                    f"but the revert helpers reported no successful reverts."
+                )
+
+            parts = [header]
+            if remaining:
+                unrecovered_lines = "\n".join(f"  - {p}" for p in remaining)
+                parts.append(
+                    "Unrecovered (revert failed, manual cleanup required):\n"
+                    f"{unrecovered_lines}"
+                )
+            parts.append(f"Allowed write set:\n{allowed_lines}")
+            parts.append(f"Companion allowlist:\n{companion_lines}")
+            diagnostic = "\n".join(parts)
             # F8 (Issue #1013): print the diagnostic to stderr immediately
             # after reverting. ``maintenance.py`` separately echoes the
             # assembled module-failure error at the end of the run — two
