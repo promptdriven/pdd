@@ -20,6 +20,11 @@ Look at where .pddrc files are located and which subdirectory contains the relev
 Output the full shell command on a single line, prefixed with `SYNC_CMD:`.
 The command MUST use `cd <dir> && pdd --force sync {basename} --dry-run --agentic --no-steer`.
 
+The command MUST include `--dry-run`. This invocation is a probe to validate
+the working directory only — it must never perform a real sync. If `--dry-run`
+is omitted, the orchestrator will inject it automatically before executing,
+but you should always emit it explicitly so the intent is unambiguous.
+
 SYNC_CMD: cd <relative-path-from-project-root> && pdd --force sync {basename} --dry-run --agentic --no-steer
 
 Examples:

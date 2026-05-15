@@ -1191,6 +1191,33 @@ def _run_single_dry_run(
         return False, str(e)
 
 
+# Matches a ``pdd sync`` invocation as two whitespace-separated tokens (NOT
+# ``pdd sync-architecture`` or ``pdd synchronize``). The lookahead requires
+# whitespace or end-of-string after ``sync`` — ``\b`` between ``c`` and ``-``
+# would otherwise match ``sync-*`` subcommands. Used to inject ``--dry-run``
+# into LLM-suggested sync commands before they are executed.
+_PDD_SYNC_INVOCATION_RE = re.compile(r"(\bpdd\s+sync)(?=\s|$)")
+
+
+def _inject_dry_run_flag(cmd: str) -> str:
+    """Inject ``--dry-run`` into every ``pdd sync`` invocation in *cmd*.
+
+    Iter-28 B-1: the LLM-suggested command is supposed to be a dry-run probe
+    to validate cwd, but the LLM could omit ``--dry-run`` and cause a real
+    sync write before the scope-guarded runner exists. This injection is the
+    authoritative safety mechanism — the prompt template also instructs the
+    LLM to include it, but we cannot rely on prompt compliance alone.
+
+    Only matches ``pdd sync`` as two whitespace-separated tokens; subcommands
+    like ``pdd sync-architecture`` are intentionally left untouched (and
+    rejected downstream by the paranoia check in
+    :func:`_llm_fix_dry_run_failure`).
+    """
+    if "--dry-run" in cmd:
+        return cmd
+    return _PDD_SYNC_INVOCATION_RE.sub(r"\1 --dry-run", cmd)
+
+
 def _llm_fix_dry_run_failure(
     basename: str,
     project_root: Path,
@@ -1273,10 +1300,30 @@ def _llm_fix_dry_run_failure(
     if "pdd" not in suggested_cmd or "sync" not in suggested_cmd:
         return False, None, llm_cost, f"LLM suggested unexpected command: {suggested_cmd}"
 
+    # B-1 (iter-28): force ``--dry-run`` onto the LLM-suggested command. The
+    # probe is supposed to validate cwd only — never perform a real sync. If
+    # the LLM omits ``--dry-run`` we inject it; if injection cannot land
+    # (e.g. ``pdd sync-architecture`` which intentionally is not matched by
+    # :data:`_PDD_SYNC_INVOCATION_RE`) the paranoia check below refuses to
+    # execute. The scope-guarded runner does not yet exist at this point, so
+    # there is no fallback enforcement.
+    safe_cmd = _inject_dry_run_flag(suggested_cmd)
+    if "--dry-run" not in safe_cmd:
+        return (
+            False,
+            None,
+            llm_cost,
+            (
+                "LLM suggested command does not contain a ``pdd sync`` invocation "
+                "where ``--dry-run`` could be injected; refusing to execute: "
+                f"{suggested_cmd}"
+            ),
+        )
+
     # Append a pwd marker after the command so we can extract the effective cwd.
     # This avoids fragile regex parsing of cd segments from the command string.
     pwd_marker = "__PDD_EFFECTIVE_CWD__"
-    augmented_cmd = f"{suggested_cmd} && echo {pwd_marker} && pwd"
+    augmented_cmd = f"{safe_cmd} && echo {pwd_marker} && pwd"
 
     # Run the suggested command directly via shell from project root.
     # This handles relative cd paths, chained cd's, etc. naturally.
@@ -1544,6 +1591,42 @@ def _extract_allowed_write_paths(issue_text: str) -> List[str]:
     """
     contract = parse_issue_contract(issue_text)
     return list(contract.allowed_paths) if contract is not None else []
+
+
+def _arch_path_in_scope(
+    arch_path: Path,
+    project_root: Path,
+    issue_contract: Optional[IssueContract],
+    scope_guard: bool,
+) -> bool:
+    """Return True if *arch_path* is in the issue contract's allowed write set.
+
+    Iter-28 B-2: the iter-26 gate compared the literal string
+    ``"architecture.json"`` against the contract. That bypassed the guard when
+    the project uses a nested architecture (e.g. ``frontend/architecture.json``)
+    — the literal check would either falsely allow a write the contract
+    forbids, or falsely block a write the contract permits. The check now
+    resolves the ACTUAL ``arch_path`` to a repo-relative POSIX path and
+    compares that against the contract.
+
+    The gate is bypassed (returns True) when:
+    - no contract was parsed (``issue_contract`` is None → permissive mode), or
+    - ``--no-scope-guard`` was passed (``scope_guard`` is False).
+
+    Returns False when ``arch_path`` resolves outside ``project_root`` — that
+    is treated as out-of-scope by definition (the contract is repo-relative,
+    so a path outside the repo cannot be allowed by it).
+    """
+    if issue_contract is None or scope_guard is False:
+        return True
+    try:
+        arch_rel = (
+            arch_path.resolve().relative_to(project_root.resolve()).as_posix()
+        )
+    except ValueError:
+        # arch_path resolves outside project_root — by definition not in scope.
+        return False
+    return arch_rel in tuple(issue_contract.allowed_paths or ())
 
 
 def _apply_architecture_corrections(
@@ -1895,17 +1978,23 @@ def run_agentic_sync(
     # Iter-26: scope-guard the LLM dependency-correction step. This runs
     # at the ORCHESTRATOR level — before the runner exists — so the per-
     # module scope guard cannot catch it. If the issue contract does not
-    # include ``architecture.json`` in its allowed write set, skip the
-    # correction so the contract is not silently violated. Pre-existing
-    # behavior is preserved when no contract was parsed (issue_contract
-    # is None → permissive mode) or when ``architecture.json`` IS in the
-    # contract (legitimate architecture-touching PRs). ``--no-scope-guard``
-    # (``scope_guard is False``) is treated as an explicit opt-out and
-    # also bypasses the gate.
-    arch_in_scope = (
-        issue_contract is None
-        or scope_guard is False
-        or "architecture.json" in tuple(issue_contract.allowed_paths or ())
+    # include the ACTUAL ``arch_path`` (as a repo-relative POSIX path) in
+    # its allowed write set, skip the correction so the contract is not
+    # silently violated. Pre-existing behavior is preserved when no contract
+    # was parsed (``issue_contract`` is None → permissive mode) or when the
+    # arch path IS in the contract (legitimate architecture-touching PRs).
+    # ``--no-scope-guard`` (``scope_guard is False``) is treated as an
+    # explicit opt-out and also bypasses the gate.
+    #
+    # Iter-28 B-2: use the resolved ``arch_path`` rather than the literal
+    # string ``"architecture.json"``. A nested arch path such as
+    # ``frontend/architecture.json`` would otherwise either bypass the gate
+    # (when the contract allows ``architecture.json`` literally but the
+    # actual file is nested) or be incorrectly skipped (when the contract
+    # allows the nested path explicitly). The actual file being written is
+    # the source of truth, delegated to :func:`_arch_path_in_scope`.
+    arch_in_scope = _arch_path_in_scope(
+        arch_path, project_root, issue_contract, scope_guard
     )
     if not deps_valid and deps_corrections and architecture is not None:
         if dry_run:

@@ -18,6 +18,7 @@ pytestmark = pytest.mark.timeout(450)
 from pdd.agentic_sync import (
     _apply_architecture_corrections,
     _analyze_global_sync_modules,
+    _arch_path_in_scope,
     _architecture_module_basenames,
     _architecture_sync_modules,
     _augment_architecture_from_pr_branch,
@@ -26,6 +27,7 @@ from pdd.agentic_sync import (
     _detect_modules_from_branch_diff,
     _filter_already_synced,
     _find_project_root,
+    _inject_dry_run_flag,
     _is_catchall_match,
     _is_github_issue_url,
     _is_runtime_llm_template,
@@ -40,6 +42,7 @@ from pdd.agentic_sync import (
     run_agentic_sync,
     run_global_sync,
 )
+from pdd.agentic_common import IssueContract
 from pdd.agentic_sync_runner import (
     DepGraphFromArchitectureResult,
     build_dep_graph_from_architecture,
@@ -1517,6 +1520,20 @@ _CONTRACT_BODY_ARCH_IN_SCOPE = (
     "- `architecture.json`\n"
 )
 
+# Iter-28 B-2: contract allows a NESTED architecture path. Used by the
+# nested-arch B-2 tests to assert the gate compares the real ``arch_path``
+# (resolved repo-relative) rather than the literal string ``architecture.json``.
+_CONTRACT_BODY_NESTED_ARCH_IN_SCOPE = (
+    "Fix foo.\n"
+    "\n"
+    "## Split Contract\n"
+    "\n"
+    "**Allowed write set:**\n"
+    "\n"
+    "- `pdd/foo.py`\n"
+    "- `frontend/architecture.json`\n"
+)
+
 
 class TestDependencyCorrectionsScopeGuard:
     """Verify the orchestrator-level scope gate on
@@ -1595,6 +1612,7 @@ class TestDependencyCorrectionsScopeGuard:
         assert "Sync scope guard: skipping LLM dependency corrections" in flat
         assert "architecture.json is outside" in flat
 
+    @patch("pdd.agentic_sync._find_project_root")
     @patch("pdd.agentic_sync._apply_architecture_corrections")
     @patch("pdd.agentic_sync.AsyncSyncRunner")
     @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
@@ -1622,9 +1640,11 @@ class TestDependencyCorrectionsScopeGuard:
         mock_filter_synced,
         mock_runner_cls,
         mock_apply_corrections,
+        mock_find_root,
         tmp_path,
     ):
         """Contract includes architecture.json → corrections must run."""
+        mock_find_root.return_value = tmp_path
         arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
         mock_apply_corrections.return_value = arch_data
 
@@ -1909,6 +1929,356 @@ class TestDependencyCorrectionsScopeGuard:
             text=True,
         )
         assert "architecture.json" not in status.stdout
+
+    # ------------------------------------------------------------------
+    # Iter-28 B-2: nested arch_path bypass
+    # ------------------------------------------------------------------
+
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_skipped_for_nested_arch_outside_contract(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        tmp_path,
+    ):
+        """Contract allows the literal string ``architecture.json`` but the
+        REAL arch path is ``frontend/architecture.json``. Iter-28 B-2: the
+        gate must compare the resolved arch path, not the bare string, so
+        the nested arch write is rejected."""
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        # Contract allows root architecture.json only — NOT the nested path.
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_IN_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        # arch_path resolves nested: frontend/architecture.json under
+        # tmp_path. The literal-string gate would have matched the contract's
+        # ``architecture.json`` entry and let the write through; the
+        # resolved-path gate must NOT.
+        nested_arch = tmp_path / "frontend" / "architecture.json"
+        (tmp_path / "frontend").mkdir()
+        mock_load_arch.return_value = (arch_data, nested_arch)
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_not_called()
+
+    @patch("pdd.agentic_sync._find_project_root")
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_applied_for_nested_arch_in_contract(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        mock_find_root,
+        tmp_path,
+    ):
+        """Contract explicitly allows ``frontend/architecture.json`` and the
+        arch path matches → gate must permit the write."""
+        mock_find_root.return_value = tmp_path
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        mock_apply_corrections.return_value = arch_data
+
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_NESTED_ARCH_IN_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        nested_arch = tmp_path / "frontend" / "architecture.json"
+        (tmp_path / "frontend").mkdir()
+        mock_load_arch.return_value = (arch_data, nested_arch)
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_called_once()
+
+    @patch("pdd.agentic_sync._apply_architecture_corrections")
+    @patch("pdd.agentic_sync.AsyncSyncRunner")
+    @patch("pdd.agentic_sync._filter_already_synced", return_value=["foo"])
+    @patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+    @patch("pdd.agentic_sync._run_dry_run_validation")
+    @patch(
+        "pdd.agentic_sync.build_dep_graph_from_architecture_data",
+        return_value=DepGraphFromArchitectureResult({"foo": []}, []),
+    )
+    @patch("pdd.agentic_sync.load_prompt_template", return_value="template {issue_content} {architecture_json}")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync._load_architecture_json")
+    @patch("pdd.agentic_sync._run_gh_command")
+    @patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+    def test_dependency_corrections_skipped_for_arch_outside_project_root(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_load_arch,
+        mock_agentic_task,
+        mock_load_prompt,
+        mock_build_graph,
+        mock_dry_run,
+        mock_branch_diff,
+        mock_filter_synced,
+        mock_runner_cls,
+        mock_apply_corrections,
+        tmp_path,
+    ):
+        """``arch_path`` resolves outside ``project_root`` → never in scope.
+
+        Defense-in-depth: even if some upstream bug threads an arch path
+        outside the repo root into the orchestrator, ``_arch_path_in_scope``
+        catches the ``ValueError`` from ``relative_to`` and returns False so
+        the write is refused.
+        """
+        arch_data = [{"filename": "foo_python.prompt", "dependencies": []}]
+        issue_data = {
+            "title": "Fix foo",
+            "body": _CONTRACT_BODY_ARCH_IN_SCOPE,
+            "comments_url": "",
+        }
+        mock_gh_cmd.return_value = (True, json.dumps(issue_data))
+        # Force an arch path that resolves OUTSIDE project_root.
+        outside_arch = (tmp_path.parent / "outside_root" / "architecture.json").resolve()
+        outside_arch.parent.mkdir(parents=True, exist_ok=True)
+        mock_load_arch.return_value = (arch_data, outside_arch)
+        mock_agentic_task.return_value = (
+            True,
+            (
+                'MODULES_TO_SYNC: ["foo"]\n'
+                "DEPS_VALID: false\n"
+                'DEPS_CORRECTIONS: [{"filename": "foo_python.prompt", "dependencies": []}]'
+            ),
+            0.05,
+            "anthropic",
+        )
+        mock_dry_run.return_value = (True, {"foo": tmp_path}, [], 0.0)
+
+        mock_runner = MagicMock()
+        mock_runner.run.return_value = (True, "All 1 modules synced successfully", 0.10)
+        mock_runner_cls.return_value = mock_runner
+
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/owner/repo/issues/1", quiet=True
+        )
+
+        assert success is True
+        mock_apply_corrections.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _arch_path_in_scope (iter-28 B-2 helper, unit-level)
+# ---------------------------------------------------------------------------
+
+
+class TestArchPathInScope:
+    """Unit-level coverage of the resolved-path scope check used by the
+    iter-26 orchestrator gate, post-iter-28 B-2."""
+
+    @staticmethod
+    def _contract(*allowed: str) -> IssueContract:
+        return IssueContract(
+            allowed_paths=tuple(allowed),
+            companion_allowlist=(),
+            source="test",
+        )
+
+    def test_no_contract_permissive(self, tmp_path):
+        """No contract → always in scope (pre-iter-26 behavior preserved)."""
+        assert _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=None,
+            scope_guard=True,
+        )
+
+    def test_scope_guard_disabled_bypasses_check(self, tmp_path):
+        """``--no-scope-guard`` → always in scope, contract ignored."""
+        contract = self._contract("pdd/foo.py")  # arch NOT in contract
+        assert _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=False,
+        )
+
+    def test_literal_arch_in_contract_match(self, tmp_path):
+        """Root arch + contract allows ``architecture.json`` → in scope."""
+        contract = self._contract("pdd/foo.py", "architecture.json")
+        assert _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_nested_arch_with_literal_contract_rejected(self, tmp_path):
+        """Nested arch + contract only allows literal ``architecture.json``
+        → out of scope (the iter-28 B-2 fix)."""
+        contract = self._contract("pdd/foo.py", "architecture.json")
+        assert not _arch_path_in_scope(
+            tmp_path / "frontend" / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_nested_arch_with_nested_contract_match(self, tmp_path):
+        """Nested arch + contract names the same nested path → in scope."""
+        contract = self._contract("pdd/foo.py", "frontend/architecture.json")
+        assert _arch_path_in_scope(
+            tmp_path / "frontend" / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_arch_outside_project_root_rejected(self, tmp_path):
+        """``arch_path`` outside the repo → out of scope (ValueError → False)."""
+        contract = self._contract("architecture.json")
+        outside = (tmp_path.parent / "outside_root" / "architecture.json").resolve()
+        outside.parent.mkdir(parents=True, exist_ok=True)
+        assert not _arch_path_in_scope(
+            outside,
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+    def test_empty_contract_allowed_paths_rejected(self, tmp_path):
+        """Empty ``allowed_paths`` tuple → no path is in scope."""
+        contract = self._contract()  # ``allowed_paths=()``
+        assert not _arch_path_in_scope(
+            tmp_path / "architecture.json",
+            tmp_path,
+            issue_contract=contract,
+            scope_guard=True,
+        )
+
+
+# ---------------------------------------------------------------------------
+# _inject_dry_run_flag (iter-28 B-1 helper, unit-level)
+# ---------------------------------------------------------------------------
+
+
+class TestInjectDryRunFlag:
+    """Unit-level coverage of the ``--dry-run`` injector used by the
+    LLM dry-run fallback executor."""
+
+    def test_injects_after_sync_token(self):
+        assert _inject_dry_run_flag("pdd sync foo") == "pdd sync --dry-run foo"
+
+    def test_idempotent_when_dry_run_already_present(self):
+        assert (
+            _inject_dry_run_flag("pdd sync foo --dry-run")
+            == "pdd sync foo --dry-run"
+        )
+
+    def test_injects_into_cd_chained_command(self):
+        assert (
+            _inject_dry_run_flag("cd subdir && pdd sync foo")
+            == "cd subdir && pdd sync --dry-run foo"
+        )
+
+    def test_does_not_match_sync_architecture(self):
+        # ``pdd sync-architecture`` is a different subcommand; the regex
+        # lookahead refuses to match so injection leaves the command alone.
+        assert (
+            _inject_dry_run_flag("pdd sync-architecture")
+            == "pdd sync-architecture"
+        )
+
+    def test_does_not_match_synchronize(self):
+        assert _inject_dry_run_flag("pdd synchronize") == "pdd synchronize"
+
+    def test_injects_at_end_of_command(self):
+        # ``pdd sync`` with no trailing arg → injection still lands.
+        assert _inject_dry_run_flag("pdd sync") == "pdd sync --dry-run"
+
+    def test_injects_before_ampersand_chain(self):
+        assert (
+            _inject_dry_run_flag("pdd sync && echo done")
+            == "pdd sync --dry-run && echo done"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -2476,6 +2846,188 @@ class TestRunDryRunValidation:
         assert len(errors) == 1
         assert "changed: prompt contract preflight failed" in errors[0]
         assert "includes no existing module source context" in errors[0]
+
+
+# ---------------------------------------------------------------------------
+# _llm_fix_dry_run_failure --dry-run injection (iter-28 B-1)
+# ---------------------------------------------------------------------------
+
+
+class TestLlmFixDryRunInjection:
+    """Verify that LLM-suggested sync commands always get ``--dry-run``.
+
+    Iter-28 B-1: the orchestrator-level dry-run LLM fallback executes the
+    LLM's suggested command via shell. If the LLM forgets ``--dry-run`` the
+    command would perform a real sync write before the scope-guarded runner
+    exists. The orchestrator must inject ``--dry-run`` (and refuse to execute
+    if injection cannot land) to keep the probe non-destructive.
+    """
+
+    @staticmethod
+    def _llm_response(cmd: str) -> str:
+        return f"SYNC_CMD: {cmd}\n"
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_injects_dry_run_flag(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """LLM omits ``--dry-run`` → orchestrator injects it before exec."""
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("pdd sync foo"),
+            0.01,
+            "anthropic",
+        )
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout=f"__PDD_EFFECTIVE_CWD__\n{tmp_path}\n",
+            stderr="",
+        )
+
+        ok, cwd, cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is True
+        assert cwd == tmp_path.resolve()
+        assert err == ""
+        # Captured subprocess command must contain the injected flag in the
+        # correct token position (right after ``sync``).
+        executed_cmd = mock_subprocess.call_args[0][0]
+        assert "pdd sync --dry-run foo" in executed_cmd
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_preserves_existing_dry_run_flag(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """LLM already includes ``--dry-run`` → command unchanged."""
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("pdd sync foo --dry-run"),
+            0.01,
+            "anthropic",
+        )
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout=f"__PDD_EFFECTIVE_CWD__\n{tmp_path}\n",
+            stderr="",
+        )
+
+        ok, _cwd, _cost, _err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is True
+        executed_cmd = mock_subprocess.call_args[0][0]
+        # Only one ``--dry-run`` appears in the executed command (the LLM's
+        # own copy was preserved verbatim, no second copy was injected).
+        assert executed_cmd.count("--dry-run") == 1
+        assert "pdd sync foo --dry-run" in executed_cmd
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_handles_cd_chained_command(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """LLM emits ``cd subdir && pdd sync foo`` → injection still lands."""
+        subdir = tmp_path / "subdir"
+        subdir.mkdir()
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("cd subdir && pdd sync foo"),
+            0.01,
+            "anthropic",
+        )
+        mock_subprocess.return_value = MagicMock(
+            returncode=0,
+            stdout=f"__PDD_EFFECTIVE_CWD__\n{subdir}\n",
+            stderr="",
+        )
+
+        ok, _cwd, _cost, _err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        assert ok is True
+        executed_cmd = mock_subprocess.call_args[0][0]
+        assert "cd subdir && pdd sync --dry-run foo" in executed_cmd
+
+    @patch("pdd.agentic_sync.subprocess.run")
+    @patch("pdd.agentic_sync.run_agentic_task")
+    @patch("pdd.agentic_sync.load_prompt_template")
+    def test_llm_fix_dry_run_does_not_inject_into_sync_architecture(
+        self,
+        mock_load_prompt,
+        mock_agentic_task,
+        mock_subprocess,
+        tmp_path,
+    ):
+        """``pdd sync-architecture`` is a different subcommand — must not match.
+
+        The regex (``\\bpdd\\s+sync`` with whitespace/end-of-string lookahead)
+        deliberately rejects ``pdd sync-architecture`` so the injection cannot
+        produce ``pdd sync --dry-run-architecture``. The downstream paranoia
+        check then refuses to execute the un-injected command, since the
+        scope-guarded runner does not exist at this point.
+        """
+        mock_load_prompt.return_value = (
+            "{basename} {dry_run_error} {project_tree} {pddrc_locations} {attempted_cwd}"
+        )
+        mock_agentic_task.return_value = (
+            True,
+            self._llm_response("pdd sync-architecture"),
+            0.01,
+            "anthropic",
+        )
+
+        ok, cwd, _cost, err = _llm_fix_dry_run_failure(
+            basename="foo",
+            project_root=tmp_path,
+            dry_run_error="prompt not found",
+            quiet=True,
+        )
+
+        # Paranoia check must reject the command outright.
+        assert ok is False
+        assert cwd is None
+        assert "--dry-run" in err
+        # And subprocess.run must NEVER be invoked for a non-injectable cmd.
+        mock_subprocess.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
