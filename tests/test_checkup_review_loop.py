@@ -2026,6 +2026,215 @@ class TestCheckupReviewLoopRuntime:
             f"reviewer must not be promoted to fixer fallback; got {codex_fix_calls!r}"
         )
 
+    def test_fixer_fallback_is_one_shot_across_rounds(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Once the fallback fixer has taken over (succeeded in a prior
+        round) it MUST drive every subsequent fix call instead of the
+        exhausted primary. The fallback contract is one-shot: re-invoking
+        the original primary in round N+1 just to burn another fallback
+        invocation defeats the purpose, because credential-limit reset
+        windows are hours-to-days. Track this via ``state.active_fixer``
+        (parallel to ``state.active_reviewer``).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        # Capture state via _finalize hook so we can assert active_fixer.
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        # Force the loop to do two fix rounds: round 1's verify still
+        # reports findings (so the loop continues into round 2). In
+        # round 2 it should NOT call the primary again — the fallback
+        # has taken over.
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex-round1" in label and "verify" not in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                # Primary fixer dead-stops on credential exhaustion.
+                return False, "primary credential-limit dead-stop", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                # Fallback succeeds — should now drive round 2 too.
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            if "verify-codex-round1" in label:
+                # Verify pass still has findings → loop continues.
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round2":
+                # Round 2 must use the fallback fixer (active_fixer).
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            if "verify-codex-round2" in label:
+                return True, _json("clean"), 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        labels = [label for _, label in calls]
+
+        # Round 1 must exercise both the primary (failing) and the
+        # fallback fixer (succeeding) — that's how the takeover gets
+        # established in the first place.
+        assert "checkup-review-loop-fix-claude-for-codex-round1" in labels, (
+            f"round 1 primary fixer call missing; calls={labels!r}"
+        )
+        assert "checkup-review-loop-fix-gemini-for-codex-round1" in labels, (
+            f"round 1 fallback fixer call missing; calls={labels!r}"
+        )
+
+        # The one-shot contract: round 2 MUST NOT re-invoke the primary
+        # claude fixer. The exhausted credential has not reset (and the
+        # loop has no way to know that anyway), so retrying it would
+        # just consume another fallback invocation needlessly.
+        assert "checkup-review-loop-fix-claude-for-codex-round2" not in labels, (
+            f"primary fixer was re-invoked in round 2 despite fallback "
+            f"takeover; calls={labels!r}"
+        )
+
+        # Round 2 must use the fallback as the active fixer.
+        assert "checkup-review-loop-fix-gemini-for-codex-round2" in labels, (
+            f"active fixer (gemini) did not drive round 2; calls={labels!r}"
+        )
+
+        # The fallback helper must run exactly ONCE across the whole
+        # loop — round 2's gemini call comes from the main-loop
+        # ``active_fixer`` override, not a second helper invocation.
+        gemini_fix_calls = [
+            label for label in labels
+            if label.startswith("checkup-review-loop-fix-gemini-")
+        ]
+        assert len(gemini_fix_calls) == 2, (
+            f"expected exactly one round-1 fallback + one round-2 takeover "
+            f"call; got gemini fix calls={gemini_fix_calls!r}"
+        )
+
+        # The state must record the takeover so audit + later reasoning
+        # can see who the active fixer is.
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+        assert state.active_fixer == "gemini", (
+            f"state.active_fixer should be promoted to fallback role; "
+            f"got {state.active_fixer!r}"
+        )
+
+    def test_fixer_fallback_reset_uses_pre_fix_sha(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``git reset --hard HEAD`` is insufficient when the failed
+        primary fixer creates a commit before returning failure: HEAD has
+        already advanced past the safe pre-fix state, so the reset
+        becomes a no-op and the failed primary's commit survives. The
+        loop MUST capture the pre-fix SHA via ``git rev-parse HEAD``
+        BEFORE the primary runs and reset back to that SHA instead.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "primary failed after committing", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        # Replace subprocess.run with a stub that records every command
+        # and synthesizes the rev-parse output. We use a stub (not a
+        # wrapper around the real subprocess.run) because tmp_path isn't
+        # a real git repo — the real rev-parse would error and force the
+        # safety fallback path. We want to verify the happy-path
+        # behavior: rev-parse succeeds, returns a SHA, reset targets
+        # that SHA.
+        PRE_FIX_SHA = "0123456789abcdef0123456789abcdef01234567"
+        subprocess_calls: List[List[str]] = []
+
+        class _StubCompleted:
+            def __init__(self, stdout: str = "", returncode: int = 0) -> None:
+                self.stdout = stdout
+                self.stderr = ""
+                self.returncode = returncode
+
+        def stub_run(cmd: Any, *args: Any, **kwargs: Any):
+            if isinstance(cmd, list):
+                subprocess_calls.append(list(cmd))
+                if len(cmd) >= 4 and cmd[0] == "git" and cmd[3] == "rev-parse":
+                    return _StubCompleted(stdout=f"{PRE_FIX_SHA}\n")
+            return _StubCompleted()
+
+        monkeypatch.setattr(mod.subprocess, "run", stub_run)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The reset must target the captured pre-fix SHA, not the literal
+        # string "HEAD". With the bug present, the failed primary's
+        # commit would survive the reset and leak into the fallback's
+        # push.
+        reset_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 5 and c[0] == "git" and c[1] == "-C"
+            and c[3:5] == ["reset", "--hard"]
+        ]
+        assert reset_calls, (
+            f"expected a git reset --hard call before the fallback; "
+            f"calls={subprocess_calls!r}"
+        )
+        # The reset target is the 6th argument (index 5).
+        reset_target = reset_calls[0][5]
+        assert reset_target == PRE_FIX_SHA, (
+            f"reset must target the captured pre-fix SHA {PRE_FIX_SHA!r}, "
+            f"not {reset_target!r}; with bare 'HEAD' a failed-primary "
+            f"commit would survive the reset"
+        )
+
+        # A rev-parse HEAD call must precede the reset so the SHA was
+        # actually captured (and not pulled from somewhere stale).
+        rev_parse_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 4 and c[0] == "git" and c[3] == "rev-parse"
+        ]
+        assert rev_parse_calls, (
+            f"expected a git rev-parse HEAD before reset; "
+            f"calls={subprocess_calls!r}"
+        )
+        first_rev_parse_idx = subprocess_calls.index(rev_parse_calls[0])
+        first_reset_idx = subprocess_calls.index(reset_calls[0])
+        assert first_rev_parse_idx < first_reset_idx, (
+            f"rev-parse must precede reset; rev-parse at {first_rev_parse_idx}, "
+            f"reset at {first_reset_idx}"
+        )
+
     def test_fixer_fallback_budget_exhausted(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

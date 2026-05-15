@@ -647,6 +647,15 @@ class ReviewLoopState:
     last_model: str = "unknown"
     reviewer_status: Dict[str, str] = field(default_factory=dict)
     active_reviewer: Optional[str] = None
+    # Set lazily once ``fixer_fallback`` runs and succeeds. Once set, all
+    # subsequent rounds drive ``_run_fix`` with this role instead of the
+    # original primary, and ``_maybe_run_fallback_fixer`` early-returns.
+    # The one-shot fallback contract documented on ``ReviewLoopConfig``
+    # promises the fallback runs exactly once: re-invoking the exhausted
+    # primary in later rounds (credential-limit resets are hours-to-days)
+    # would just burn another fallback invocation needlessly. Parallel to
+    # ``active_reviewer`` on the reviewer side.
+    active_fixer: Optional[str] = None
     findings_by_key: Dict[str, ReviewFinding] = field(default_factory=dict)
     raw_outputs: List[Tuple[str, str]] = field(default_factory=list)
     fixes: List[FixResult] = field(default_factory=list)
@@ -891,8 +900,27 @@ def run_checkup_review_loop(
                 break
 
         state.reviewer_status[reviewer] = "findings"
+        # Capture the worktree HEAD BEFORE the primary fixer runs so the
+        # fallback path can reset back to it. ``git reset --hard HEAD``
+        # is insufficient when the failed primary already created a
+        # commit: HEAD has already advanced and the commit survives the
+        # reset, so the fallback's eventual push would carry the failed
+        # primary's work into the PR.
+        pre_fix_sha = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        # Once ``fixer_fallback`` has succeeded in a prior round it
+        # takes over as the active fixer for the rest of the loop. The
+        # original primary is almost certainly still exhausted
+        # (credential-limit reset windows are hours-to-days) so re-running
+        # it just to consume another fallback invocation defeats the
+        # one-shot fallback contract.
+        active_fixer = state.active_fixer or fixer
         fix = _run_fix(
-            fixer=fixer,
+            fixer=active_fixer,
             reviewer=reviewer,
             findings=fix_findings,
             context=context,
@@ -909,14 +937,18 @@ def run_checkup_review_loop(
 
         if not fix.success:
             # Reset the worktree before invoking the fallback fixer. The
-            # primary may have written partial edits before dead-stopping
-            # (e.g. on credential exhaustion); without this reset those
-            # untrusted edits would be picked up by ``_commit_and_push_if_changed``
-            # alongside the fallback's edits, leaking failed primary work
-            # into the PR (codex iter-04 P1).
+            # primary may have written partial edits (or even committed)
+            # before dead-stopping (e.g. on credential exhaustion);
+            # without this reset those untrusted edits would be picked
+            # up by ``_commit_and_push_if_changed`` alongside the
+            # fallback's edits, leaking failed primary work into the PR.
+            # Reset to the pre-fix SHA — not bare ``HEAD`` — so we undo
+            # commits the failed primary may have created (HEAD has
+            # advanced past them).
             _capture = None if verbose else subprocess.DEVNULL
+            reset_target = pre_fix_sha or "HEAD"
             subprocess.run(
-                ["git", "-C", str(worktree), "reset", "--hard", "HEAD"],
+                ["git", "-C", str(worktree), "reset", "--hard", reset_target],
                 check=False,
                 stdout=_capture,
                 stderr=_capture,
@@ -947,8 +979,12 @@ def run_checkup_review_loop(
                 # already wrote one (e.g. budget exhausted before fallback
                 # could run) — the operator-facing detail wins.
                 if not state.stop_reason:
+                    # Name the role that actually ran: ``active_fixer``
+                    # is the fallback once it has taken over from a prior
+                    # round, so a later-round failure should attribute
+                    # to it instead of the long-exhausted original.
                     state.stop_reason = (
-                        f"Fixer {fixer} could not address {reviewer}'s findings"
+                        f"Fixer {active_fixer} could not address {reviewer}'s findings"
                         + (
                             f" (fallback fixer {config.fixer_fallback} also failed)."
                             if fallback_fix is not None
@@ -1593,6 +1629,15 @@ def _maybe_run_fallback_fixer(
     fallback_role = config.fixer_fallback
     if not fallback_role:
         return None
+    # One-shot fallback contract. Once a prior round's fallback succeeded
+    # it became the active fixer for the rest of the loop (see the call
+    # site in ``run_checkup_review_loop``). The "primary" passed here in
+    # later rounds is already the fallback role, so re-running the
+    # fallback would either no-op against itself or burn a second
+    # invocation against an exhausted credential — both break the
+    # documented one-shot semantics.
+    if state.active_fixer is not None:
+        return None
     # Alias-aware equality. ``--fixer claude --fixer-fallback anthropic``
     # is the same OAuth credential — promoting ``anthropic`` after
     # ``claude`` hit a subscription-tier limit is a no-op retry that
@@ -1630,7 +1675,7 @@ def _maybe_run_fallback_fixer(
             f"{reviewer}'s findings; running fallback fixer "
             f"{fallback_role}.[/yellow]"
         )
-    return _run_fix(
+    fallback_fix = _run_fix(
         fixer=fallback_role,
         reviewer=reviewer,
         findings=findings,
@@ -1643,6 +1688,15 @@ def _maybe_run_fallback_fixer(
         quiet=quiet,
         artifacts_dir=artifacts_dir,
     )
+    # Promote the fallback to the active fixer for ALL subsequent rounds
+    # ONLY on success. A failed fallback should not poison later rounds:
+    # if it eventually succeeds (or the loop terminates for another
+    # reason) the audit trail still records the attempts. The one-shot
+    # promotion mirrors ``state.active_reviewer`` semantics: once a
+    # fallback succeeds it takes over the role for the rest of the loop.
+    if fallback_fix.success:
+        state.active_fixer = fallback_role
+    return fallback_fix
 
 
 def _extract_failure_diagnostics(
