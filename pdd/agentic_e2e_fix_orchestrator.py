@@ -262,6 +262,42 @@ def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[st
     return None
 
 
+def _post_step9_resume_action(
+    step9_output: str,
+    current_cycle: int,
+    max_cycles: int,
+    console: Console,
+) -> str:
+    """Decide what resume should do when last_completed_step >= 9 (Issue #1001).
+
+    The prior buggy code unconditionally advanced the cycle whenever
+    `last_completed_step >= 9` on resume, ignoring what Step 9 actually
+    emitted. This helper inspects the cached Step 9 output and branches:
+
+    - "SUCCESS_FALL_THROUGH" — Step 9 declared success (ALL_TESTS_PASS,
+      LOCAL_TESTS_PASS, or NOT_A_BUG). Caller must keep `current_cycle`,
+      `last_completed_step`, and `step_outputs` intact and fall through
+      to Step 11 cleanup + Step 10 CI validation.
+    - "ADVANCE_CYCLE" — Step 9 wants another cycle and budget remains.
+    - "MAX_CYCLES_REACHED" — Step 9 wants another cycle but budget is
+      exhausted; the caller must surface this as a non-success exit,
+      reusing the same path Step 9 uses when emitting MAX_CYCLES_REACHED
+      directly (see `_apply_step9_resolved_token` MAX_CYCLES_REACHED
+      handler).
+    """
+    # Defensive NOT_A_BUG check: Step 9 normally doesn't emit NOT_A_BUG
+    # (that's Step 3), but if the cached output surfaces it, treat as
+    # success — Step 3 would already have determined no bug exists.
+    if "NOT_A_BUG" in step9_output:
+        return "SUCCESS_FALL_THROUGH"
+    tok = _resolve_step9_loop_token(step9_output, console)
+    if tok in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+        return "SUCCESS_FALL_THROUGH"
+    if current_cycle < max_cycles:
+        return "ADVANCE_CYCLE"
+    return "MAX_CYCLES_REACHED"
+
+
 class _Step9TokenApplyResult(NamedTuple):
     """Outcome of applying a resolved Step 9 loop token (shared initial + retry paths)."""
 
@@ -477,6 +513,7 @@ def _is_intermediate_file(filepath: str) -> bool:
     - *.bak, *.backup, *.orig, *.tmp extensions
     - error_output*.txt (e.g., error_output.txt, error_output_models.txt)
     - .pdd/** (any file under .pdd/ directory — backups, core_dumps, etc.)
+    - .gh-wrapper/** (executor `gh` wrapper artifacts — Issue #1001)
     - *_errors.txt, *_fix_errors.txt (e.g., waitlist_fix_errors.txt)
     - step*_output.md (e.g., step9_output.md)
     - test_issue_*_reproduction.py (e.g., test_issue_824_reproduction.py)
@@ -490,6 +527,13 @@ def _is_intermediate_file(filepath: str) -> bool:
     path = Path(filepath)
     stem = path.stem  # filename without extension
     suffix = path.suffix  # extension including dot
+
+    # Issue #1001: filter executor wrapper artifacts.
+    # Anchor on the directory boundary so legitimate paths like
+    # "gh-wrapper-docs.md" or "tools/gh_wrapper.py" are not over-filtered.
+    normalized_gh = str(filepath).replace("\\", "/")
+    if normalized_gh.startswith(".gh-wrapper/") or "/.gh-wrapper/" in normalized_gh:
+        return True
 
     # Check for backup extensions (e.g., foo.py.bak, foo.py.backup)
     if suffix in _BACKUP_EXTENSIONS:
@@ -1539,6 +1583,9 @@ def run_agentic_e2e_fix_orchestrator(
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
     resumed_initial_file_hashes: Optional[Dict[str, Optional[str]]] = None
     resumed_initial_sha: Optional[str] = None
+    # Issue #1001: deferred action computed during resume that must be applied
+    # after `success`/`final_message` are initialized below. Default: no-op.
+    _resume_deferred_action: Optional[str] = None
 
     # Resume Logic
     if resume:
@@ -1575,11 +1622,30 @@ def run_agentic_e2e_fix_orchestrator(
 
             _check_staleness(loaded_state, cwd)
 
-            # If we finished a cycle but didn't exit, prepare for next cycle
+            # Issue #1001: If Step 9 was the last completed step, branch on its
+            # cached output rather than unconditionally advancing the cycle.
             if last_completed_step >= 9:
-                current_cycle += 1
-                last_completed_step = 0
-                step_outputs = {} # Clear outputs for new cycle
+                resume_action = _post_step9_resume_action(
+                    step_outputs.get("9", ""), current_cycle, max_cycles, console
+                )
+                if resume_action == "ADVANCE_CYCLE":
+                    current_cycle += 1
+                    last_completed_step = 0
+                    step_outputs = {}  # Clear outputs for new cycle
+                elif resume_action == "MAX_CYCLES_REACHED":
+                    # Defer surfacing the failure until after `success` and
+                    # `final_message` are initialized below — mirrors the
+                    # path used by _apply_step9_resolved_token's
+                    # MAX_CYCLES_REACHED handler (final_message set, outer
+                    # loop skipped, post-loop failure handler runs).
+                    _resume_deferred_action = "MAX_CYCLES_REACHED"
+                elif resume_action == "SUCCESS_FALL_THROUGH":
+                    # Step 9 already declared success but workflow was
+                    # interrupted before commit/Step 11/Step 10. Defer
+                    # setting `success=True` until after its initialization
+                    # so we fall through to the success path (commit, code
+                    # cleanup, CI validation).
+                    _resume_deferred_action = "SUCCESS_FALL_THROUGH"
         else:
             # No state found, start fresh
             clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
@@ -1641,6 +1707,15 @@ def run_agentic_e2e_fix_orchestrator(
     consecutive_provider_failures = 0
     import_error_retries = 0  # Global budget: max 1 retry across all cycles
     verification_failure_context = ""  # Injected into Step 1 prompt on retry
+
+    # Issue #1001: Apply deferred resume action now that `success` and
+    # `final_message` exist. Mirrors how the in-cycle Step 9 handler
+    # surfaces these tokens via _apply_step9_resolved_token.
+    if _resume_deferred_action == "SUCCESS_FALL_THROUGH":
+        success = True
+        final_message = "All tests passed after fixes (resumed)."
+    elif _resume_deferred_action == "MAX_CYCLES_REACHED":
+        final_message = "Max cycles reached."
 
     try:
         # Outer Loop
