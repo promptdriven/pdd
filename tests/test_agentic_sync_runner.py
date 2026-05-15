@@ -2600,6 +2600,72 @@ class TestAllowedWriteSet:
         assert runner.allowed_write_paths == set()
         assert runner.max_workers == 1
 
+    def test_async_runner_project_root_kwarg_overrides_cwd(
+        self, tmp_path, monkeypatch
+    ):
+        """Iter-18 M-1: the new keyword-only ``project_root`` kwarg MUST
+        override the default ``Path.cwd()`` and MUST be applied BEFORE the
+        baseline-changed-paths snapshot is taken — otherwise subclasses
+        (e.g. ``DurableSyncRunner``) cannot pin the baseline to a known
+        repo root.
+        """
+        import subprocess
+
+        # Initialise a real git repo at ``durable_root`` so the baseline
+        # snapshot's ``git status`` invocation actually runs.
+        durable_root = tmp_path / "durable_root"
+        durable_root.mkdir()
+        subprocess.run(
+            ["git", "init", "-b", "main", str(durable_root)],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(durable_root), "config", "user.email", "t@t.invalid"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(durable_root), "config", "user.name", "T"],
+            check=True,
+            capture_output=True,
+        )
+        (durable_root / "README.md").write_text("initial")
+        subprocess.run(
+            ["git", "-C", str(durable_root), "add", "README.md"],
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "-C", str(durable_root), "commit", "-m", "init"],
+            check=True,
+            capture_output=True,
+        )
+
+        # Dirty file inside durable_root (should appear in baseline).
+        (durable_root / "dirty.py").write_text("user wip")
+
+        # The CALLER's cwd is a different directory entirely. A dirty file
+        # there MUST NOT leak into the runner's baseline.
+        caller_cwd = tmp_path / "caller_cwd"
+        caller_cwd.mkdir()
+        (caller_cwd / "out.py").write_text("dirty file in caller cwd")
+        monkeypatch.chdir(caller_cwd)
+
+        runner = AsyncSyncRunner(
+            basenames=["a"],
+            dep_graph={"a": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+            allowed_write_set=["pdd/a.py"],
+            project_root=durable_root,
+        )
+
+        assert runner.project_root == durable_root.resolve()
+        assert "dirty.py" in runner._baseline_changed_paths
+        assert "out.py" not in runner._baseline_changed_paths
+
 
 class TestEnforceScopeGuard:
     """Issue #1013 (F9): direct behavioural coverage for ``_enforce_scope_guard``
@@ -2745,23 +2811,27 @@ class TestEnforceScopeGuard:
         # Sibling module's companion artifact must NOT be auto-allowed.
         assert (module_b / ".pdd" / "meta" / "x.json").resolve() not in files
 
-    def test_run_entry_logs_permissive_mode(self, capsys):
-        """Iter-3 F2: runner emits dim INFO on run() entry when no contract."""
+    def test_run_entry_does_not_log_permissive_mode_again(self, capsys):
+        """Iter-18 m-1: ``run_agentic_sync`` already emits one user-facing
+        line per invocation covering all three states (disabled / contract
+        loaded / no contract). The runner used to emit a second duplicate
+        line on ``run()`` entry — removed in iter-18 so the operator sees
+        a single authoritative status line.
+        """
         runner = self._make_runner(
             allowed_write_set=None,
             quiet=False,
         )
-        # Make run() return immediately by emptying the basenames list AFTER
-        # construction; the dispatch loop short-circuits and we only want the
-        # entry log.
         runner.basenames = []
         runner.run()
         out = capsys.readouterr().out
-        assert "permissive mode" in out
+        # The runner-side duplicate is gone.
+        assert "permissive mode" not in out
 
-    def test_run_entry_logs_opt_out_warning(self, capsys):
-        """Iter-3 F2: runner emits dim WARNING on run() entry when scope guard
-        is disabled via --no-scope-guard."""
+    def test_run_entry_does_not_log_opt_out_warning_again(self, capsys):
+        """Iter-18 m-1: caller-side log owns the opt-out warning; the
+        runner-side duplicate was removed.
+        """
         runner = self._make_runner(
             allowed_write_set=["pdd/foo.py"],
             scope_guard_enabled=False,
@@ -2770,7 +2840,7 @@ class TestEnforceScopeGuard:
         runner.basenames = []
         runner.run()
         out = capsys.readouterr().out
-        assert "--no-scope-guard" in out
+        assert "--no-scope-guard" not in out
 
     def test_pre_existing_untracked_files_are_preserved(self, tmp_path):
         """Iter-6 B1 (data-loss bug): a user's pre-existing untracked file

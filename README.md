@@ -1065,7 +1065,7 @@ Options (agentic mode):
 
 When the linked GitHub issue declares an allowed write set (a "split contract"), `pdd sync` enforces it: each per-module subprocess is followed by a scope check that reverts tracked changes and removes untracked new files that fall outside the contract. Companion artifacts under `.pdd/meta/*.json` are auto-allowed because they are sync's own fingerprint bookkeeping; issues may opt additional companions (e.g. examples or architecture entries) into the allowlist explicitly.
 
-The contract is read from the issue body or any of its comments in one of two forms:
+The contract is read from the issue body or any of its comments in one of three forms (tried in priority order — the first match wins):
 
 1. An HTML-comment block (preferred — invisible in rendered Markdown):
    ```html
@@ -1086,6 +1086,21 @@ The contract is read from the issue body or any of its comments in one of two fo
    pdd/prompts/update_main_python.prompt
    tests/test_update_main.py
    ```
+3. A bullet list under an inline `**Allowed write set:**` label (the
+   real-world shape used by sub-issues such as #1005):
+
+   ```markdown
+   ## Split Contract
+   **Command sequence:** change → sync
+   **Allowed write set:**
+   - `pdd/update_main.py`
+   - `pdd/prompts/update_main_python.prompt`
+   - `tests/test_update_main.py`
+   **Acceptance criteria:**
+   - ...
+   ```
+
+   The heading regex is the same as form 2; the inline `**Allowed write set:**` label discriminates the bullet list so unrelated bullets earlier in the body (e.g. a `## Files` section) are NOT captured. Each bullet is one repo-relative POSIX path with optional surrounding backticks. The list terminates at the next `**Label:**` (such as `**Acceptance criteria:**`), a `---` rule, another heading, a non-blank non-bullet line, or end of body.
 
 When an out-of-scope change is detected, the run records a hard failure for that module with a diagnostic of the form:
 

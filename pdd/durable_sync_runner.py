@@ -70,6 +70,14 @@ class DurableSyncRunner(AsyncSyncRunner):
         self._run_id = uuid.uuid4().hex[:8]
         self._prepared = False
 
+        # Issue #1013 iter-18 M-1 (durable baseline-paths bug): forward the
+        # resolved ``git_root`` into ``AsyncSyncRunner.__init__`` via the new
+        # ``project_root`` kwarg so the baseline-changed-paths snapshot is
+        # taken against the durable worktree's repo root rather than against
+        # the caller's current working directory. The previous post-super()
+        # assignment to ``self.project_root`` ran *after* the snapshot, which
+        # captured dirty files from the caller's main checkout and let them
+        # bypass the scope guard inside the durable worktree.
         super().__init__(
             basenames=basenames,
             dep_graph=dep_graph,
@@ -84,8 +92,8 @@ class DurableSyncRunner(AsyncSyncRunner):
             companion_allowlist=companion_allowlist,
             scope_guard_enabled=scope_guard_enabled,
             contract_source=contract_source,
+            project_root=self.git_root,
         )
-        self.project_root = self.git_root
         if self.total_budget is not None:
             self.max_workers = 1
         elif durable_max_parallel is not None:

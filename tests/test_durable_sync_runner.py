@@ -746,3 +746,62 @@ def test_total_budget_keeps_durable_runner_single_worker(tmp_path: Path):
     )
 
     assert runner.max_workers == 1
+
+
+def test_durable_baseline_paths_use_git_root_not_caller_cwd(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Issue #1013 iter-18 M-1: ``DurableSyncRunner`` MUST take its baseline-
+    changed-paths snapshot from the durable repo root, NOT from the caller's
+    current working directory. Reviewer reproduced a regression where a
+    dirty file in the main checkout (``out.py``) was auto-allowed by the
+    scope guard inside the durable worktree because the baseline was taken
+    from ``Path.cwd()`` before ``DurableSyncRunner.__init__`` reassigned
+    ``project_root`` to ``self.git_root``.
+    """
+    caller_cwd = tmp_path / "caller_cwd"
+    caller_cwd.mkdir()
+    # Dirty file under the caller's cwd; should NOT leak into baseline.
+    (caller_cwd / "out.py").write_text("dirty file in caller's cwd")
+
+    durable_root = _init_repo_with_remote(tmp_path)
+    monkeypatch.chdir(caller_cwd)
+
+    runner = _runner(
+        durable_root,
+        runner_cls=EmptyDurableRunner,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    assert runner.project_root == durable_root.resolve()
+    # Baseline snapshot was taken against durable_root, where ``out.py``
+    # does not exist as a dirty file. The caller's dirty ``out.py`` MUST
+    # NOT appear in the baseline.
+    assert "out.py" not in runner._baseline_changed_paths
+
+
+def test_durable_baseline_includes_dirty_files_in_durable_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Iter-18 M-1 (positive case): a dirty file ACTUALLY under the durable
+    repo root MUST appear in ``_baseline_changed_paths`` so the scope guard
+    preserves pre-existing user work-in-progress under the durable worktree.
+    """
+    caller_cwd = tmp_path / "caller_cwd"
+    caller_cwd.mkdir()
+    durable_root = _init_repo_with_remote(tmp_path)
+
+    # Dirty (untracked) file inside the durable repo root.
+    (durable_root / "dirty.py").write_text("user work-in-progress")
+
+    monkeypatch.chdir(caller_cwd)
+    runner = _runner(
+        durable_root,
+        runner_cls=EmptyDurableRunner,
+        allowed_write_set=["pdd/foo.py"],
+        companion_allowlist=[".pdd/meta/*.json"],
+    )
+
+    assert runner.project_root == durable_root.resolve()
+    assert "dirty.py" in runner._baseline_changed_paths

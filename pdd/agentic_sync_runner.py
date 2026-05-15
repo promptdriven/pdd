@@ -878,6 +878,7 @@ class AsyncSyncRunner:
         companion_allowlist: Optional[Iterable[str]] = None,
         scope_guard_enabled: bool = True,
         contract_source: Optional[str] = None,
+        project_root: Optional[Path] = None,
     ):
         self.basenames: List[str] = list(basenames)
         self.dep_graph: Dict[str, List[str]] = {
@@ -888,7 +889,16 @@ class AsyncSyncRunner:
         self.quiet = quiet
         self.verbose = verbose
         self.issue_url = issue_url
-        self.project_root: Path = Path.cwd()
+        # Issue #1013 iter-18 M-1 (durable baseline-paths bug): allow callers
+        # (notably ``DurableSyncRunner``) to pin ``project_root`` to a known
+        # repo root BEFORE the baseline-changed-paths snapshot is taken
+        # below. Without this kwarg the snapshot would always read
+        # ``git status`` from the caller's current working directory, so a
+        # dirty file in the user's main checkout would be auto-allowed in
+        # the durable worktree's scope guard.
+        self.project_root: Path = (
+            Path(project_root).resolve() if project_root is not None else Path.cwd()
+        )
         self.module_cwds: Dict[str, Any] = dict(module_cwds or {})
         self.module_targets: Dict[str, str] = dict(module_targets or {})
         self.initial_cost = float(initial_cost or 0.0)
@@ -1539,23 +1549,13 @@ class AsyncSyncRunner:
     # ------------------------------------------------------------------
     def run(self) -> Tuple[bool, str, float]:
         """Run all syncs respecting dependencies."""
-        # Issue #1013: scope-guard run-entry logging required by the prompt
-        # spec (``agentic_sync_runner_python.prompt`` items 22 permissive
-        # fallback / opt-out). Distinct from the sync-layer "contract loaded"
-        # INFO line in ``run_agentic_sync`` — that one reports *detection*;
-        # this one reports the runtime *enforcement state* at dispatch. Log
-        # before the empty-basenames short-circuit so the state is visible
-        # even when there are no modules to sync.
-        if not self.quiet:
-            if not self.scope_guard_enabled:
-                console.print(
-                    "[yellow dim]Scope guard disabled via --no-scope-guard[/yellow dim]"
-                )
-            elif self.allowed_write_paths is None:
-                console.print(
-                    "[dim]Scope guard: no contract on issue — running in "
-                    "permissive mode[/dim]"
-                )
+        # Issue #1013 iter-18 m-1: scope-guard run-entry logging is owned by
+        # the sync layer (`pdd/agentic_sync.py` ``run_agentic_sync``), which
+        # emits a single user-facing line per invocation covering all three
+        # states (disabled / contract loaded / no contract). The runner used
+        # to log the permissive-fallback and opt-out states a second time
+        # here, which produced a duplicate line for every sync. Removed so
+        # the operator sees one authoritative status line.
 
         if not self.basenames:
             return True, "No modules to sync", self.initial_cost

@@ -7481,3 +7481,160 @@ class TestParseIssueContract:
         assert _is_valid_companion_pattern(".pdd/meta/*.json") is True
         assert _is_valid_companion_pattern("architecture.json") is True
         assert _is_valid_companion_pattern("tests/test_*.py") is True
+
+    # ------------------------------------------------------------------
+    # Issue #1013 iter-18 B-1: bullet-list contract format
+    # ------------------------------------------------------------------
+
+    def test_bullet_list_contract_from_issue_1005(self):
+        """Iter-18 B-1: the real-world #1005 issue body (verbatim) MUST
+        parse to the three paths under ``**Allowed write set:**`` and
+        NOT the six unrelated paths under the earlier ``## Files``
+        section.
+        """
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Problem\n"
+            "Single-file `pdd update <code>` clears stale `_run.json` reports but does not reliably save a fingerprint on success. This leaves `.pdd/meta/` looking partially synced.\n"
+            "\n"
+            "## Files\n"
+            "- `pdd/update_main.py`\n"
+            "- `pdd/prompts/update_main_python.prompt`\n"
+            "- `pdd/prompts/agentic_update_python.prompt`\n"
+            "- `.pdd/meta/update_main_python.json`\n"
+            "- `.pdd/meta/update_main_python_run.json`\n"
+            "- `tests/test_update_main.py` (regression test)\n"
+            "\n"
+            "## Desired Behavior\n"
+            "...\n"
+            "\n"
+            "---\n"
+            "## Split Contract\n"
+            "**Command sequence:** change → sync\n"
+            "**Allowed write set:**\n"
+            "- `pdd/update_main.py`\n"
+            "- `pdd/prompts/update_main_python.prompt`\n"
+            "- `tests/test_update_main.py`\n"
+            "**Acceptance criteria:**\n"
+            "- Successful `pdd update <code>` writes a current fingerprint to `.pdd/meta/<module>.json`.\n"
+            "- Finalization failure produces an explicit user-visible warning (no silent stale metadata).\n"
+            "- Regression test in `tests/test_update_main.py` covers fingerprint save on success and the warning path on finalization failure.\n"
+            "**Independently mergeable:** True\n"
+            "**Scope rule:** Do not expand beyond this contract or implement sibling sub-issue work. If the contract is insufficient, report the gap instead.\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == (
+            "pdd/update_main.py",
+            "pdd/prompts/update_main_python.prompt",
+            "tests/test_update_main.py",
+        )
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_stops_at_next_label(self):
+        """Iter-18 B-1: the ``**Acceptance criteria:**`` label terminates
+        the bullet list — bullets under it MUST NOT join the write set.
+        """
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- pdd/foo.py\n"
+            "- tests/test_foo.py\n"
+            "**Acceptance criteria:**\n"
+            "- a thing\n"
+            "- another thing\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_stops_at_horizontal_rule(self):
+        """Iter-18 B-1: ``---`` terminates the bullet list."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- pdd/foo.py\n"
+            "- tests/test_foo.py\n"
+            "---\n"
+            "Other section\n"
+            "- not_in_contract.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+
+    def test_bullet_list_strips_backticks_on_paths(self):
+        """Iter-18 B-1: backtick-wrapped paths in bullets are accepted; the
+        backticks are stripped before validation."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- `pdd/foo.py`\n"
+            "- `tests/test_foo.py`\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_under_allowed_write_set_heading(self):
+        """Iter-18 B-1: ``## Allowed Write Set`` is an accepted heading
+        (matches the same regex as ``## Split Contract``)."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Allowed Write Set\n"
+            "**Allowed write set:**\n"
+            "- pdd/foo.py\n"
+            "- tests/test_foo.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("pdd/foo.py", "tests/test_foo.py")
+        assert c.source == "bullet-list"
+
+    def test_bullet_list_with_no_valid_paths(self):
+        """Iter-18 B-1: bullets that are all invalid (parent-traversal,
+        absolute, etc.) reduce to a degenerate reject-all contract per
+        the iter-8 B5 semantics — the contract is still returned with
+        ``allowed_paths=()``, NOT ``None``."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- ../escape\n"
+            "- /absolute/path\n"
+            "- pdd\\windows_sep.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ()
+        assert c.source == "bullet-list"
+
+    def test_html_comment_wins_over_bullet_list(self):
+        """Iter-18 B-1: when BOTH formats appear, the HTML-comment branch
+        wins (spec-preferred priority order is preserved)."""
+        from pdd.agentic_common import parse_issue_contract, IssueContract
+
+        body = (
+            '<!-- PDD_ISSUE_CONTRACT\n'
+            '{"allowed_paths": ["from_html.py"]}\n'
+            '-->\n'
+            "\n"
+            "## Split Contract\n"
+            "**Allowed write set:**\n"
+            "- from_bullets.py\n"
+        )
+        c = parse_issue_contract(body)
+        assert isinstance(c, IssueContract)
+        assert c.allowed_paths == ("from_html.py",)
+        assert c.source == "html-comment"

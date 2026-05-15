@@ -2380,7 +2380,8 @@ class IssueContract:
             :data:`DEFAULT_SYNC_COMPANION_ALLOWLIST` to produce the effective
             allowlist.
         source: Diagnostic label describing where the contract was detected
-            (currently ``"html-comment"`` or ``"fenced-block"``).
+            (currently ``"html-comment"``, ``"fenced-block"``, or
+            ``"bullet-list"``).
     """
 
     allowed_paths: Tuple[str, ...]
@@ -2417,6 +2418,26 @@ _HTML_COMMENT_CONTRACT_RE = re.compile(
 _FENCED_BLOCK_RE = re.compile(
     r"\A\s*```(?P<lang>text|json)[ \t]*\n(?P<body>.*?)```",
     re.DOTALL,
+)
+
+# Issue #1013 iter-18 B-1: third declaration format — bullet-list contract.
+# Matches the bold inline label ``**Allowed write set:**`` that introduces the
+# bullet list. Anchored to its own line; surrounding whitespace tolerated;
+# optional whitespace inside the bold delimiters.
+_BULLET_LIST_LABEL_RE = re.compile(
+    r"^\s*\*\*\s*allowed\s+write\s+set\s*:\s*\*\*\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Matches one ``-``/``*``/``+`` bullet line whose content is captured.
+_BULLET_LINE_RE = re.compile(
+    r"^\s*[-*+]\s+(?P<entry>.+?)\s*$"
+)
+
+# Matches another bold inline label (e.g. ``**Acceptance criteria:**``).
+# Used as a stop terminator while scanning bullets.
+_NEXT_LABEL_RE = re.compile(
+    r"^\s*\*\*[^*\n]+\*\*\s*$"
 )
 
 
@@ -2635,8 +2656,93 @@ def _parse_fenced_block_contract(text: str) -> Optional[IssueContract]:
     )
 
 
+def _parse_bullet_list_contract(text: str) -> Optional[IssueContract]:
+    """Return a contract parsed from a heading + ``**Allowed write set:**``
+    inline label + bullet list, else ``None``. This is the third supported
+    format (Issue #1013 iter-18 B-1), motivated by the real-world shape used
+    in #1005 where the contract is written as Markdown bullets under a bold
+    inline label rather than inside a fenced code block or HTML comment.
+
+    Algorithm:
+
+    1. Find a heading line matching :data:`_FENCED_BLOCK_HEADER_RE`
+       (``## Split Contract`` / ``## Allowed Write Set`` / etc.).
+    2. After the heading, scan forward for the inline label line
+       ``**Allowed write set:**`` (case-insensitive). The label is the
+       discriminator — bullets BEFORE the label (e.g. under a ``## Files``
+       section earlier in the body) MUST NOT be picked up.
+    3. Collect contiguous ``-`` / ``*`` / ``+`` bullets that follow the
+       label, skipping blank lines. Stop the list at the first of:
+
+       - another ``**Label:**`` line (e.g. ``**Acceptance criteria:**``)
+       - a ``---`` horizontal rule
+       - another ``#``-prefixed heading
+       - a non-blank line that is not a bullet
+       - end of body.
+
+    4. Each captured bullet entry has its surrounding backticks stripped
+       (users write ``- `pdd/foo.py``` because they're showing code paths),
+       then is validated by :func:`_is_valid_contract_path`. Invalid entries
+       are dropped silently — same policy as the other branches.
+    5. An empty bullet list (no valid paths captured) is still returned as a
+       degenerate reject-all contract per the iter-8 B5 semantics.
+    """
+    header_match = _FENCED_BLOCK_HEADER_RE.search(text)
+    if not header_match:
+        return None
+    after_header = text[header_match.end():]
+    label_match = _BULLET_LIST_LABEL_RE.search(after_header)
+    if not label_match:
+        return None
+
+    body = after_header[label_match.end():]
+    paths: List[str] = []
+    seen: set = set()
+    for raw_line in body.splitlines():
+        stripped = raw_line.strip()
+        if not stripped:
+            # Blank line: do not terminate; bullets can be separated by
+            # blank lines in some Markdown styles. Continue scanning.
+            continue
+        if stripped.startswith("---"):
+            break
+        if stripped.startswith("#"):
+            break
+        # Another bold inline label (e.g. ``**Acceptance criteria:**``)
+        # terminates the bullet list.
+        if _NEXT_LABEL_RE.match(raw_line):
+            break
+        bullet_match = _BULLET_LINE_RE.match(raw_line)
+        if not bullet_match:
+            # First non-blank, non-terminator, non-bullet line ends the list.
+            break
+        entry = bullet_match.group("entry").strip()
+        # Users wrap code-shaped paths in backticks; strip a single layer of
+        # surrounding backticks before validation.
+        entry = entry.strip("`").strip()
+        if not _is_valid_contract_path(entry):
+            continue
+        if entry not in seen:
+            paths.append(entry)
+            seen.add(entry)
+
+    return IssueContract(
+        allowed_paths=tuple(paths),
+        companion_allowlist=(),
+        source="bullet-list",
+    )
+
+
 def _parse_contract_from_text(text: Optional[str]) -> Optional[IssueContract]:
-    """Try HTML-comment first, then fenced-block. Returns None on any failure."""
+    """Try HTML-comment first, then fenced-block, then bullet-list. Returns
+    ``None`` when no branch matches.
+
+    Priority order (Issue #1013 iter-18 B-1): HTML comment is authoritative
+    (spec-preferred form, invisible in rendered Markdown), then fenced block
+    (the existing iter-3 form), then bullet list (the real-world shape used
+    in #1005 and similar issues). The first branch that returns a
+    non-``None`` :class:`IssueContract` wins.
+    """
     if not text:
         return None
     try:
@@ -2646,7 +2752,13 @@ def _parse_contract_from_text(text: Optional[str]) -> Optional[IssueContract]:
     if html_contract is not None:
         return html_contract
     try:
-        return _parse_fenced_block_contract(text)
+        fenced_contract = _parse_fenced_block_contract(text)
+    except Exception:  # noqa: BLE001 — parser MUST NOT raise on any input
+        fenced_contract = None
+    if fenced_contract is not None:
+        return fenced_contract
+    try:
+        return _parse_bullet_list_contract(text)
     except Exception:  # noqa: BLE001 — parser MUST NOT raise on any input
         return None
 
@@ -2658,9 +2770,9 @@ def parse_issue_contract(
     """
     Parse an issue split-contract from an issue body or its comments.
 
-    Two declaration formats are supported (Issue #1013):
+    Three declaration formats are supported (Issue #1013):
 
-    1. HTML-comment block (authoritative)::
+    1. HTML-comment block (authoritative, spec-preferred)::
 
            <!-- PDD_ISSUE_CONTRACT
            {"allowed_paths": ["pdd/foo.py"],
@@ -2680,7 +2792,29 @@ def parse_issue_contract(
            ```
 
        One repo-relative path per line; blank lines and ``#``-prefixed
-       comments are ignored.
+       comments are ignored. ``json`` info-string fences carry a JSON array
+       of repo-relative path strings instead.
+
+    3. Bullet-list under a ``**Allowed write set:**`` inline label
+       (Issue #1013 iter-18 B-1 — the real-world shape used in #1005)::
+
+           ## Split Contract
+           **Command sequence:** change → sync
+           **Allowed write set:**
+           - `pdd/foo.py`
+           - `tests/test_foo.py`
+           **Acceptance criteria:**
+           - ...
+
+       The heading discriminator is the same regex as branch 2; the inline
+       ``**Allowed write set:**`` label tells the parser where the bullets
+       start so unrelated bullet lists earlier in the body (e.g. a
+       ``## Files`` section) are NOT captured. Each bullet is one
+       repo-relative POSIX path with optional surrounding backticks. The
+       list terminates at the next ``**Label:**``, a ``---`` rule, another
+       heading, a non-blank non-bullet line, or end of body.
+
+    Branches are tried in this priority order; the first match wins.
 
     The body is scanned first; if no contract is found there, each comment is
     scanned in order. When both sources declare a contract, the body wins
