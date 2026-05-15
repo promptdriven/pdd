@@ -15,7 +15,7 @@ import random
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple, Dict, Any, Union
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from rich.console import Console
 
@@ -43,6 +43,14 @@ _DEFAULT_PROVIDER_PREFERENCE: List[str] = ["anthropic", "google", "openai", "ope
 # Semantic matching is restricted to the tail to prevent false positives
 # when LLMs quote/discuss a status without declaring it (Issue #865).
 _SEMANTIC_TAIL_LINES = 30
+
+# Issue #1013 — sync scope guard: glob patterns for companion artifacts that
+# ``pdd sync`` MAY touch as legitimate metadata even when an issue split
+# contract narrows the primary write set. Only fingerprint metadata under
+# ``.pdd/meta/`` is auto-allowed; everything else (architecture.json, examples,
+# unrelated prompts, README/CHANGELOG, etc.) must be opted-in by the contract's
+# own ``companion_allowlist`` field.
+DEFAULT_SYNC_COMPANION_ALLOWLIST: Tuple[str, ...] = (".pdd/meta/*.json",)
 
 # Semantic fallback patterns for when LLMs paraphrase instead of emitting exact tokens.
 # Each token maps to a list of regex patterns that capture common paraphrases.
@@ -2285,6 +2293,236 @@ def _revert_out_of_scope_changes(
                     ", ".join(str(p.name) for p in reverted[:10]),
                 )
     return reverted
+
+
+# ---------------------------------------------------------------------------
+# Issue #1013 — split-contract scope guard: issue body / comment parser
+# ---------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class IssueContract:
+    """
+    Parsed split-contract declaration extracted from a GitHub issue body or
+    comment.
+
+    Attributes:
+        allowed_paths: Repo-relative POSIX path strings the linked sync run is
+            permitted to modify as its primary write set. Resolved against the
+            module's repo root by the caller (this dataclass does NOT resolve
+            to absolute filesystem paths).
+        companion_allowlist: Glob patterns (e.g. ``".pdd/meta/*.json"``) for
+            companion artifacts the run MAY touch outside the primary write
+            set. The caller unions this with
+            :data:`DEFAULT_SYNC_COMPANION_ALLOWLIST` to produce the effective
+            allowlist.
+        source: Diagnostic label describing where the contract was detected
+            (currently ``"html-comment"`` or ``"fenced-block"``).
+    """
+
+    allowed_paths: Tuple[str, ...]
+    companion_allowlist: Tuple[str, ...]
+    source: str
+
+
+# Matches the heading line introducing a fenced-block contract. Case-insensitive
+# multiline match so the heading can be ``## Allowed Write Set``,
+# ``# split-contract``, etc.
+_FENCED_BLOCK_HEADER_RE = re.compile(
+    r"^\s*(?:#+\s*)?(?:allowed[\s_-]*write[\s_-]*set|split[\s_-]*contract)\b.*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Matches the HTML-comment JSON block, e.g.::
+#
+#     <!-- PDD_ISSUE_CONTRACT
+#     {"allowed_paths": ["pdd/foo.py"]}
+#     -->
+_HTML_COMMENT_CONTRACT_RE = re.compile(
+    r"<!--\s*PDD_ISSUE_CONTRACT\s*(?P<json>.*?)\s*-->",
+    re.DOTALL,
+)
+
+# Matches a fenced code block (```text``` or ```json```) optionally preceded by
+# whitespace/newlines. Captures the inner body.
+_FENCED_BLOCK_RE = re.compile(
+    r"```(?:[a-zA-Z0-9_-]+)?\s*\n(?P<body>.*?)```",
+    re.DOTALL,
+)
+
+
+def _is_valid_contract_path(raw: object) -> bool:
+    """
+    Return True iff *raw* is a non-empty repo-relative POSIX path string with
+    no traversal segments and no Windows separators.
+
+    Validation runs inside the parser so a malformed entry never reaches the
+    runner. Per the docstring on :func:`parse_issue_contract`, invalid entries
+    are dropped silently; if all entries drop, the parser returns None.
+    """
+    if not isinstance(raw, str):
+        return False
+    candidate = raw.strip()
+    if not candidate:
+        return False
+    if "\\" in candidate:
+        return False
+    if candidate.startswith("/"):
+        return False
+    # Reject parent-traversal segments at any position
+    parts = candidate.split("/")
+    if any(part == ".." for part in parts):
+        return False
+    return True
+
+
+def _parse_html_comment_contract(text: str) -> Optional[IssueContract]:
+    """Return a contract parsed from a ``<!-- PDD_ISSUE_CONTRACT ... -->`` block, else None."""
+    match = _HTML_COMMENT_CONTRACT_RE.search(text)
+    if not match:
+        return None
+    raw_json = match.group("json").strip()
+    if not raw_json:
+        return None
+    try:
+        parsed = json.loads(raw_json)
+    except (ValueError, TypeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    raw_allowed = parsed.get("allowed_paths")
+    if not isinstance(raw_allowed, list):
+        return None
+    # Drop invalid entries silently; if all entries drop, treat as no contract.
+    allowed = tuple(p.strip() for p in raw_allowed if _is_valid_contract_path(p))
+    if not allowed:
+        return None
+    raw_companion = parsed.get("companion_allowlist", [])
+    if not isinstance(raw_companion, list):
+        raw_companion = []
+    companion = tuple(
+        p.strip() for p in raw_companion if isinstance(p, str) and p.strip()
+    )
+    return IssueContract(
+        allowed_paths=allowed,
+        companion_allowlist=companion,
+        source="html-comment",
+    )
+
+
+def _parse_fenced_block_contract(text: str) -> Optional[IssueContract]:
+    """Return a contract parsed from a heading + fenced code block, else None."""
+    header_match = _FENCED_BLOCK_HEADER_RE.search(text)
+    if not header_match:
+        return None
+    after_header = text[header_match.end():]
+    block_match = _FENCED_BLOCK_RE.search(after_header)
+    if not block_match:
+        return None
+    body = block_match.group("body")
+    # One repo-relative path per line; ignore blank lines and "#" comments.
+    paths: List[str] = []
+    seen: set = set()
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        # Strip surrounding backticks if a user wrapped the path
+        line = line.strip("`").strip()
+        if not _is_valid_contract_path(line):
+            continue
+        if line not in seen:
+            paths.append(line)
+            seen.add(line)
+    if not paths:
+        return None
+    return IssueContract(
+        allowed_paths=tuple(paths),
+        companion_allowlist=(),
+        source="fenced-block",
+    )
+
+
+def _parse_contract_from_text(text: Optional[str]) -> Optional[IssueContract]:
+    """Try HTML-comment first, then fenced-block. Returns None on any failure."""
+    if not text:
+        return None
+    try:
+        html_contract = _parse_html_comment_contract(text)
+    except Exception:  # noqa: BLE001 — parser MUST NOT raise on any input
+        html_contract = None
+    if html_contract is not None:
+        return html_contract
+    try:
+        return _parse_fenced_block_contract(text)
+    except Exception:  # noqa: BLE001 — parser MUST NOT raise on any input
+        return None
+
+
+def parse_issue_contract(
+    issue_body: Optional[str],
+    issue_comments: Optional[List[str]] = None,
+) -> Optional[IssueContract]:
+    """
+    Parse an issue split-contract from an issue body or its comments.
+
+    Two declaration formats are supported (Issue #1013):
+
+    1. HTML-comment block (authoritative)::
+
+           <!-- PDD_ISSUE_CONTRACT
+           {"allowed_paths": ["pdd/foo.py"],
+            "companion_allowlist": [".pdd/meta/*.json"]}
+           -->
+
+       JSON ``allowed_paths`` is required (list of repo-relative path
+       strings); ``companion_allowlist`` is optional (list of glob patterns).
+
+    2. Fenced-code-block following a heading line matching
+       ``allowed write set`` or ``split contract``::
+
+           ## Allowed Write Set
+           ```text
+           pdd/foo.py
+           tests/test_foo.py
+           ```
+
+       One repo-relative path per line; blank lines and ``#``-prefixed
+       comments are ignored.
+
+    The body is scanned first; if no contract is found there, each comment is
+    scanned in order. When both sources declare a contract, the body wins
+    (issues are edited authoritatively; comments are append-only and may carry
+    stale snapshots from earlier workflow steps).
+
+    Path entries are validated as repo-relative POSIX paths: invalid entries
+    (absolute, containing ``..``, empty, or using Windows separators ``\\``)
+    are dropped silently. If ``allowed_paths`` becomes empty after dropping,
+    the parser returns ``None`` (treated as "no contract → permissive
+    fallback"). Resolution to absolute filesystem paths is the caller's job
+    once it knows the repo root.
+
+    The parser MUST NOT raise on any input: malformed JSON, missing fields,
+    unexpected types, or absent markers all return ``None``.
+
+    Args:
+        issue_body: Raw issue body markdown.
+        issue_comments: Optional list of raw issue comment markdown bodies
+            (oldest first or newest first is fine; the parser picks the first
+            comment with a valid contract).
+
+    Returns:
+        Parsed :class:`IssueContract` or ``None`` when no valid contract is
+        present.
+    """
+    body_contract = _parse_contract_from_text(issue_body)
+    if body_contract is not None:
+        return body_contract
+    for comment in issue_comments or []:
+        contract = _parse_contract_from_text(comment)
+        if contract is not None:
+            return contract
+    return None
+
 
 _CLAUDE_OAUTH_PROBE_TIMEOUT_SECONDS = 10
 _ANTHROPIC_KEY_STRIP_NOTICE_LOGGED: Dict[str, bool] = {}
