@@ -54,6 +54,8 @@
 %  - Resolve output path:
 %      * If `output` is None, or is a directory path or ends with '/', write to the resolved file from `construct_paths`.
 %      * If `merge` is True and `existing_tests` is provided, write to `existing_tests[0]` using append mode ("a"), prepending "\n\n" before new content.
+%      * If overwrite mode would replace an existing non-empty test file, call the shared `_verify_test_churn` helper from `code_generator_main` before writing; on `TestChurnError`, attach failed-attempt `total_cost`/`model_name` and re-raise so sync retry parsers receive the structured error.
+%      * For agentic test generation, snapshot the canonical output test file before invoking the agent. If the agent has already overwritten that file and `_verify_test_churn` rejects the returned content, restore the pre-existing file contents before re-raising `TestChurnError`.
 %      * Ensure parent directories exist and write with UTF-8 encoding.
 %  - On any error (path construction, generation, postprocess, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}", None)` to allow the orchestrator to handle gracefully. Re-raise `click.Abort` exceptions to properly handle user cancellations.
 

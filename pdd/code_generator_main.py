@@ -11,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Set
 
 import click
 from rich.console import Console
@@ -137,10 +137,11 @@ class PublicSurfaceRegressionError(click.UsageError):
         self._repair_directive_override = repair_directive
         output_display = self.output_path or "<unknown>"
         super().__init__(
-            f"Public surface regression for {prompt_name}: removed public symbols: "
-            f"{', '.join(self.removed_symbols)}. Output: {output_display}. "
-            f"Pre surface size: {self.pre_surface_size}. "
-            f"Post surface size: {self.post_surface_size}."
+            f"Public surface regression for {prompt_name}:\n"
+            f"removed: {', '.join(self.removed_symbols)}\n"
+            f"output: {output_display}\n"
+            f"pre_surface_size: {self.pre_surface_size}\n"
+            f"post_surface_size: {self.post_surface_size}"
         )
 
     @property
@@ -186,10 +187,12 @@ class TestChurnError(click.UsageError):
         self._repair_directive_override = repair_directive
         output_display = self.output_path or "<unknown>"
         super().__init__(
-            f"Test churn threshold exceeded for {prompt_name}: churn ratio "
-            f"{self.churn_ratio:.2f} exceeds threshold {self.threshold:.2f}. "
-            f"Output: {output_display}. Pre lines: {self.pre_line_count}. "
-            f"Post lines: {self.post_line_count}."
+            f"Test churn threshold exceeded for {prompt_name}:\n"
+            f"ratio: {self.churn_ratio:.2f}\n"
+            f"threshold: {self.threshold:.2f}\n"
+            f"output: {output_display}\n"
+            f"pre_line_count: {self.pre_line_count}\n"
+            f"post_line_count: {self.post_line_count}"
         )
 
     @property
@@ -225,7 +228,7 @@ def _env_flag_enabled(name: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
+def _prompt_has_breaking_change_marker(prompt_content: Optional[str]) -> bool:
     """Return True when the prompt explicitly opts into breaking changes."""
     return bool(prompt_content and "BREAKING-CHANGE:" in prompt_content)
 
@@ -249,12 +252,14 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
     )
 
 
-def _collect_python_public_surface(source: str) -> List[str]:
+def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
     """Collect public top-level names plus direct public class methods/imports."""
+    if (language or "").lower() not in {"python", "py"}:
+        return set()
     try:
-        tree = ast.parse(source or "")
+        tree = ast.parse(code_text or "")
     except SyntaxError:
-        return []
+        return set()
 
     names: set[str] = set()
 
@@ -285,7 +290,22 @@ def _collect_python_public_surface(source: str) -> List[str]:
                 public_name = alias.asname or alias.name.split(".", 1)[0]
                 add(public_name)
 
-    return sorted(names)
+    return names
+
+
+def _diff_public_surface(pre: Set[str], post: Set[str]) -> List[str]:
+    """Return public symbols present before generation but absent after it."""
+    return sorted(set(pre) - set(post))
+
+
+def _collect_python_public_surface(source: str) -> List[str]:
+    """Backward-compatible wrapper for older tests and local imports."""
+    return sorted(_snapshot_public_surface(source, "python"))
+
+
+def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
+    """Backward-compatible wrapper for the public marker helper."""
+    return _prompt_has_breaking_change_marker(prompt_content)
 
 
 def _verify_public_surface_regression(
@@ -300,17 +320,17 @@ def _verify_public_surface_regression(
     if (
         not existing_code
         or not existing_code.strip()
-        or _prompt_allows_breaking_change(prompt_content)
+        or _prompt_has_breaking_change_marker(prompt_content)
         or _is_test_output_path(output_path)
         or not _is_python_generation(language, output_path)
     ):
         return
 
-    before = _collect_python_public_surface(existing_code)
-    after = _collect_python_public_surface(generated_code)
+    before = _snapshot_public_surface(existing_code, language or "python")
+    after = _snapshot_public_surface(generated_code, language or "python")
     if not before:
         return
-    removed = sorted(set(before) - set(after))
+    removed = _diff_public_surface(before, after)
     if removed:
         raise PublicSurfaceRegressionError(
             prompt_name=prompt_name,
@@ -332,9 +352,9 @@ def _get_test_churn_threshold() -> float:
     return value
 
 
-def _calculate_test_churn_ratio(before: str, after: str) -> float:
-    before_lines = (before or "").splitlines()
-    after_lines = (after or "").splitlines()
+def _compute_test_churn_ratio(pre_text: str, post_text: str) -> float:
+    before_lines = (pre_text or "").splitlines()
+    after_lines = (post_text or "").splitlines()
     diff = difflib.unified_diff(before_lines, after_lines, lineterm="")
     added = 0
     removed = 0
@@ -346,6 +366,11 @@ def _calculate_test_churn_ratio(before: str, after: str) -> float:
         elif line.startswith("-"):
             removed += 1
     return min(max(added, removed) / max(len(before_lines), 1), 1.0)
+
+
+def _calculate_test_churn_ratio(before: str, after: str) -> float:
+    """Backward-compatible wrapper for the prompt-named churn helper."""
+    return _compute_test_churn_ratio(before, after)
 
 
 def _verify_test_churn(
@@ -360,12 +385,12 @@ def _verify_test_churn(
         not existing_code
         or not existing_code.strip()
         or not _is_test_output_path(output_path)
-        or _prompt_allows_breaking_change(prompt_content)
+        or _prompt_has_breaking_change_marker(prompt_content)
     ):
         return
 
     threshold = _get_test_churn_threshold()
-    ratio = _calculate_test_churn_ratio(existing_code, generated_code)
+    ratio = _compute_test_churn_ratio(existing_code, generated_code)
     if ratio > threshold:
         raise TestChurnError(
             prompt_name=prompt_name,

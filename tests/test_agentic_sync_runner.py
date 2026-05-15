@@ -1401,6 +1401,47 @@ class TestSyncOneModule:
     @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
     @patch("pdd.agentic_sync_runner.subprocess.Popen")
     @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
+    def test_model_and_context_options_are_forwarded_to_child_sync(
+        self, mock_find, mock_popen, mock_cost, mock_unlink
+    ):
+        """Repair retries must not re-resolve context/model knobs differently."""
+        mock_popen.return_value = _make_mock_popen(
+            stdout_text="Overall status: Success\n",
+            exit_code=0,
+        )
+
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={
+                "context": "backend",
+                "strength": 0.7,
+                "temperature": 0.2,
+            },
+            github_info=None,
+            quiet=True,
+        )
+
+        success, _, _ = runner._sync_one_module("foo")
+
+        assert success
+        cmd = mock_popen.call_args[0][0]
+        assert cmd[:8] == [
+            "/usr/bin/pdd",
+            "--force",
+            "--context",
+            "backend",
+            "--strength",
+            "0.7",
+            "--temperature",
+            "0.2",
+        ]
+        assert cmd[8] == "sync"
+
+    @patch("pdd.agentic_sync_runner.os.unlink")
+    @patch("pdd.agentic_sync_runner._parse_cost_from_csv", return_value=0.15)
+    @patch("pdd.agentic_sync_runner.subprocess.Popen")
+    @patch("pdd.agentic_sync_runner._find_pdd_executable", return_value="/usr/bin/pdd")
     def test_target_coverage_is_forwarded_to_child_sync(
         self, mock_find, mock_popen, mock_cost, mock_unlink
     ):

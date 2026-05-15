@@ -9,6 +9,7 @@ import click
 import requests
 from click import Context
 from pdd.cmd_test_main import cmd_test_main
+from pdd.code_generator_main import TestChurnError
 from pdd.core.cloud import CloudConfig, get_cloud_timeout
 
 
@@ -455,6 +456,102 @@ def test_cmd_test_main_non_python_agentic_writes_content_to_output_path(mock_ctx
     assert expected_output.read_text() == generated_content, (
         "Output file content must match generated_content returned by run_agentic_test_generate."
     )
+
+
+def test_cmd_test_main_blocks_high_churn_native_test_rewrite(mock_ctx_fixture, tmp_path, monkeypatch):
+    output_path = tmp_path / "tests" / "test_calc.py"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text(
+        "\n".join(
+            [
+                "def test_a(): pass",
+                "def test_b(): pass",
+                "def test_c(): pass",
+                "def test_d(): pass",
+                "def test_e(): pass",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    generated_content = "\n".join(
+        [
+            "def test_new_a(): pass",
+            "def test_new_b(): pass",
+            "def test_new_c(): pass",
+            "def test_new_d(): pass",
+            "def test_new_e(): pass",
+        ]
+    )
+    monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test", return_value=(generated_content, 0.1, "model")):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "python",
+        )
+
+        with pytest.raises(TestChurnError):
+            cmd_test_main(
+                ctx=mock_ctx_fixture,
+                prompt_file="prompts/calc.prompt",
+                code_file="src/calc.py",
+                output=str(output_path),
+                language="python",
+            )
+
+    assert "test_a" in output_path.read_text(encoding="utf-8")
+
+
+def test_cmd_test_main_blocks_and_restores_agentic_test_rewrite(mock_ctx_fixture, tmp_path, monkeypatch):
+    output_path = tmp_path / "tests" / "test_calc.ts"
+    output_path.parent.mkdir(parents=True)
+    original_content = "\n".join(
+        [
+            "test('a', () => {});",
+            "test('b', () => {});",
+            "test('c', () => {});",
+            "test('d', () => {});",
+            "test('e', () => {});",
+        ]
+    )
+    generated_content = "\n".join(
+        [
+            "test('new a', () => {});",
+            "test('new b', () => {});",
+            "test('new c', () => {});",
+            "test('new d', () => {});",
+            "test('new e', () => {});",
+        ]
+    )
+    output_path.write_text(original_content, encoding="utf-8")
+    monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+
+    def fake_agentic(*_args, **_kwargs):
+        output_path.write_text(generated_content, encoding="utf-8")
+        return generated_content, 0.1, "agentic-cli", True, ""
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", fake_agentic):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "typescript",
+        )
+
+        with pytest.raises(TestChurnError):
+            cmd_test_main(
+                ctx=mock_ctx_fixture,
+                prompt_file="prompts/calc.prompt",
+                code_file="src/calc.ts",
+                output=str(output_path),
+                language="typescript",
+            )
+
+    assert output_path.read_text(encoding="utf-8") == original_content
 
 
 def test_cmd_test_main_uses_safe_ctx_obj_access():

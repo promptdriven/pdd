@@ -18,6 +18,7 @@ from .core.cloud import CloudConfig, get_cloud_timeout, get_cloud_request_timeou
 from .generate_test import generate_test
 from .increase_tests import increase_tests
 from .test_result import TestResult
+from .code_generator_main import TestChurnError, _verify_test_churn
 
 console = Console()
 
@@ -140,6 +141,13 @@ def cmd_test_main(
             )
 
         output_test_path = Path(output_file_paths.get("output", "test_output"))
+        prompt_content_for_churn = input_strings.get("prompt_file", "")
+        existing_test_content = ""
+        if output_test_path.exists() and output_test_path.is_file():
+            try:
+                existing_test_content = output_test_path.read_text(encoding="utf-8")
+            except OSError:
+                existing_test_content = ""
 
         generated_content, total_cost, model_name, agentic_success, agentic_error = run_agentic_test_generate(
             prompt_file=Path(prompt_file),
@@ -160,6 +168,20 @@ def cmd_test_main(
             if detected_language and detected_language.lower() == 'python':
                 from .generate_test import _inject_sys_path_preamble
                 generated_content = _inject_sys_path_preamble(generated_content)
+            try:
+                _verify_test_churn(
+                    existing_code=existing_test_content,
+                    generated_code=generated_content,
+                    prompt_name=Path(prompt_file).name,
+                    output_path=str(output_test_path),
+                    prompt_content=prompt_content_for_churn,
+                )
+            except TestChurnError as churn_err:
+                churn_err.total_cost = float(total_cost or 0.0)
+                churn_err.model_name = model_name or "unknown"
+                if existing_test_content:
+                    output_test_path.write_text(existing_test_content, encoding="utf-8")
+                raise
             # Write to sync-expected path for all languages (fix: non-Python was skipped)
             output_test_path.parent.mkdir(parents=True, exist_ok=True)
             output_test_path.write_text(generated_content, encoding="utf-8")
@@ -429,12 +451,28 @@ def cmd_test_main(
             if verbose:
                 console.print(f"Merging new tests into existing file: {final_output_path}")
 
+        if write_mode == "w":
+            existing_test_content = ""
+            if final_output_path.exists() and final_output_path.is_file():
+                existing_test_content = final_output_path.read_text(encoding="utf-8")
+            _verify_test_churn(
+                existing_code=existing_test_content,
+                generated_code=content_to_write,
+                prompt_name=Path(prompt_file).name,
+                output_path=str(final_output_path),
+                prompt_content=input_strings.get("prompt_file", ""),
+            )
+
         with open(str(final_output_path), write_mode, encoding="utf-8") as f:
             f.write(content_to_write)
 
         if not ctx.obj.get("quiet", False):
             console.print(f"[green]Successfully wrote tests to {final_output_path}[/green]")
 
+    except TestChurnError as e:
+        e.total_cost = float(total_cost or 0.0)
+        e.model_name = model_name or "unknown"
+        raise
     except Exception as e:
         console.print(f"[bold red]Error writing output file: {e}[/bold red]")
         return TestResult("", 0.0, f"Error: {e}", None, str(e))

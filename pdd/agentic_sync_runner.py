@@ -507,12 +507,14 @@ def _parse_public_surface_failure(
     combined = (stdout or "") + "\n" + (stderr or "")
     if _PUBLIC_SURFACE_PREFIX not in combined:
         return None
-    match = re.search(
-        r"removed public symbols:\s*(.+?)"
-        r"(?=\.\s+(?:Output|Pre surface size|Post surface size)\b|\.\s*$|\n|$)",
-        combined,
-        re.MULTILINE,
-    )
+    match = re.search(r"^removed:\s*(.+)$", combined, re.MULTILINE)
+    if not match:
+        match = re.search(
+            r"removed public symbols:\s*(.+?)"
+            r"(?=\.\s+(?:Output|Pre surface size|Post surface size)\b|\.\s*$|\n|$)",
+            combined,
+            re.MULTILINE,
+        )
     if not match:
         return None
     removed = tuple(
@@ -548,14 +550,23 @@ def _parse_test_churn_failure(
         return None
     ratio = "unknown"
     threshold = "unknown"
-    match = re.search(
+    match = re.search(r"^ratio:\s*([0-9.]+)", combined, re.MULTILINE)
+    threshold_match = re.search(r"^threshold:\s*([0-9.]+)", combined, re.MULTILINE)
+    if match and threshold_match:
+        ratio, threshold = match.group(1), threshold_match.group(1)
+    else:
+        match = re.search(
         r"churn ratio\s+([0-9.]+)\s+exceeds threshold\s+([0-9.]+)",
         combined,
-    )
-    if match:
-        ratio, threshold = match.group(1), match.group(2)
+        )
+        if match:
+            ratio, threshold = match.group(1), match.group(2)
     pre_lines = "unknown"
-    pre_match = re.search(r"Pre lines:\s*(\d+)", combined)
+    pre_match = re.search(
+        r"(?:^|[.\n]\s*)(?:Pre lines|pre_line_count):\s*(\d+)",
+        combined,
+        re.MULTILINE,
+    )
     if pre_match:
         pre_lines = pre_match.group(1)
     signature = (f"ratio={ratio}", f"pre_lines={pre_lines}")
@@ -1701,6 +1712,15 @@ class AsyncSyncRunner:
 
         if self.sync_options.get("local"):
             cmd.append("--local")
+        context_override = self.sync_options.get("context")
+        if context_override:
+            cmd.extend(["--context", str(context_override)])
+        strength = self.sync_options.get("strength")
+        if strength is not None:
+            cmd.extend(["--strength", str(strength)])
+        temperature = self.sync_options.get("temperature")
+        if temperature is not None:
+            cmd.extend(["--temperature", str(temperature)])
         cmd.append("sync")
 
         # Module-specific flags
@@ -1919,6 +1939,14 @@ class AsyncSyncRunner:
         )
 
         def _extract_field(label: str, default: str = "<unknown>") -> str:
+            normalized = label.lower().replace(" ", "_")
+            line_match = re.search(
+                rf"^{re.escape(normalized)}:\s*(.+)$",
+                combined,
+                re.MULTILINE,
+            )
+            if line_match:
+                return line_match.group(1).strip() or default
             pattern = re.compile(
                 rf"{re.escape(label)}:\s*(.*?){field_boundary}",
                 re.DOTALL,
@@ -1965,6 +1993,14 @@ class AsyncSyncRunner:
         field_boundary = r"(?=\.\s+(?:Output|Pre lines|Post lines)\b|\.\s*$|\n|$)"
 
         def _extract_field(label: str, default: str = "<unknown>") -> str:
+            normalized = label.lower().replace(" ", "_")
+            line_match = re.search(
+                rf"^{re.escape(normalized)}:\s*(.+)$",
+                combined,
+                re.MULTILINE,
+            )
+            if line_match:
+                return line_match.group(1).strip() or default
             pattern = re.compile(
                 rf"{re.escape(label)}:\s*(.*?){field_boundary}",
                 re.DOTALL,
@@ -1975,12 +2011,17 @@ class AsyncSyncRunner:
             return match.group(1).strip().rstrip(".").strip() or default
 
         ratio = threshold = "<unknown>"
-        match = re.search(
-            r"churn ratio\s+([0-9.]+)\s+exceeds threshold\s+([0-9.]+)",
-            combined,
-        )
-        if match:
-            ratio, threshold = match.group(1), match.group(2)
+        ratio_match = re.search(r"^ratio:\s*([0-9.]+)", combined, re.MULTILINE)
+        threshold_match = re.search(r"^threshold:\s*([0-9.]+)", combined, re.MULTILINE)
+        if ratio_match and threshold_match:
+            ratio, threshold = ratio_match.group(1), threshold_match.group(1)
+        else:
+            match = re.search(
+                r"churn ratio\s+([0-9.]+)\s+exceeds threshold\s+([0-9.]+)",
+                combined,
+            )
+            if match:
+                ratio, threshold = match.group(1), match.group(2)
 
         return "\n".join(
             [

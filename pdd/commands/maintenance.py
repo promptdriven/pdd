@@ -208,6 +208,9 @@ def sync(
             durable_branch=durable_branch,
             no_resume=no_resume,
             durable_max_parallel=durable_max_parallel,
+            strength=ctx.obj.get("strength"),
+            temperature=ctx.obj.get("temperature"),
+            context_override=ctx.obj.get("context"),
         )
 
     if durable or durable_branch or no_resume or durable_max_parallel is not None:
@@ -337,6 +340,9 @@ def _run_global_sync_dispatch(
             one_session=one_session,
             local=ctx.obj.get("local", False),
             timeout_adder=timeout_adder,
+            strength=ctx.obj.get("strength"),
+            temperature=ctx.obj.get("temperature"),
+            context_override=ctx.obj.get("context"),
         )
 
         if not quiet:
