@@ -4904,6 +4904,87 @@ class TestIssue1072PermanentErrors:
         assert _is_permanent_error("Connection reset by peer") is False
 
 
+class TestCredentialLimitClassification:
+    """Issue (this PR): Claude Code subscription-tier weekly-limit
+    classification.
+
+    The fixer subprocess inside ``pdd checkup --pr`` can return a
+    ``{"api_error_status":429,"result":"You've hit your limit · resets May
+    18, 11pm (UTC)","duration_api_ms":0,"total_cost_usd":0}`` envelope when
+    the user's Claude Code subscription weekly cap fires. ``duration_api_ms:0``
+    + ``total_cost_usd:0`` is the tell that the local CLI rejected before any
+    API call — this is the subscription-tier weekly limit, NOT a transient
+    API 429. The previous ``_is_rate_limited`` short-circuit treated it as
+    transient and burned 3 × 60 s retries; this classification lets the
+    cloud OAuth-token waterfall rotate to a different credential.
+    """
+
+    from pdd.agentic_common import _classify_permanent_error
+
+    EXACT_BUG_ERROR = (
+        'Exit code 1: {"type":"result","subtype":"success","is_error":true,'
+        '"api_error_status":429,"duration_ms":658,"duration_api_ms":0,'
+        '"num_turns":1,"result":"You\'ve hit your limit · resets May 18, '
+        '11pm (UTC)","stop_reason":"stop_sequence","total_cost_usd":0,'
+        '"service_tier":"standard"}'
+    )
+
+    def test_classify_credential_limit_from_claude_subscription_429(self):
+        """The exact JSON envelope from the bug report must classify as
+        ``credential-limit`` — not as the transient rate-limit class. This is
+        the load-bearing assertion: without it, ``run_agentic_task`` retries
+        on the 60s rate-limit floor and the fixer dead-stops the checkup loop.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(self.EXACT_BUG_ERROR) == "credential-limit"
+        ), (
+            "Subscription weekly-limit error misclassified as transient — "
+            "expected stable token 'credential-limit' so pdd_cloud's OAuth "
+            "waterfall can rotate credentials"
+        )
+
+    def test_credential_limit_is_permanent(self):
+        """``_is_permanent_error`` is the public wrapper used by callers
+        outside the classification module."""
+        assert _is_permanent_error(self.EXACT_BUG_ERROR) is True
+
+    def test_generic_429_still_transient(self):
+        """Regression guard for #1384: a generic API-tier 429 without the
+        "hit your limit · resets" anchor MUST stay transient so
+        ``RATE_LIMIT_BACKOFF_FLOOR`` still applies. Without this, every
+        provider 429 would be marked permanent and a recoverable
+        rate-limit window would be reported as a hard failure.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(
+                "Error: api_error_status: 429 rate limit exceeded"
+            )
+            is None
+        )
+        assert (
+            _classify_permanent_error('{"api_error_status":429,"result":"Too many requests"}')
+            is None
+        )
+
+    def test_credential_limit_phrase_alone_does_not_false_positive(self):
+        """The pattern MUST require BOTH "hit your limit" AND "reset(s)"
+        anchors. A reviewer/fixer that happens to say "User hit your limit
+        of 10 items" in summary prose (no "resets") must NOT be classified
+        as credential-limit — that would silently kill the retry path for
+        unrelated text.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert _classify_permanent_error("User hit your limit of 10 items") != "credential-limit"
+        # And without any other strong/transient signal, it falls all the way
+        # through to None (no false-permanent classification).
+        assert _classify_permanent_error("User hit your limit of 10 items") is None
+
+
 class TestIssue1072FailureLogging:
     """Tests for _log_agentic_interaction being called even when verbose=False.
 
