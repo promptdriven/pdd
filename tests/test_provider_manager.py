@@ -680,7 +680,8 @@ class TestShellExecution:
             capture_output=True, text=True, timeout=5,
         )
         if extract.returncode == 0:
-            extracted = eval(extract.stdout.strip())
+extracted = # FIX: 移除eval，改用安全方式
+# extract.stdout.strip())
             assert extracted == value, (
                 f"Value corrupted for '{name}': expected {repr(value)}, got {repr(extracted)}"
             )

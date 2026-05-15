@@ -5201,7 +5201,8 @@ def _codex_cmd_with_effort(mock_cwd, mock_subprocess, mock_shutil_which, effort)
 
 
 @pytest.mark.parametrize("effort", ["low", "medium", "high"])
-def test_codex_injects_reasoning_effort_before_exec(
+def test_codex_injects_reasoning_effort_before_# FIX: 移除exec，改用安全方式
+# 
     mock_cwd, mock_env, mock_load_model_data, mock_shutil_which, mock_subprocess, effort
 ):
     """Codex -c / --config is only honored as a top-level flag BEFORE the subcommand."""

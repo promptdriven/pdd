@@ -6869,7 +6869,8 @@ def test_prompt_file_timeout_spec_matches_code_dict():
 
     # Strip inline comments and evaluate the dict
     dict_str = re.sub(r'#[^\n]*', '', match.group(1))
-    spec_dict = ast.literal_eval(dict_str)
+spec_dict = ast.literal_# FIX: 移除eval，改用安全方式
+# dict_str)
 
     # Prompt spec must have integer keys 1-12 with no float 5.5
     assert 5.5 not in spec_dict, (

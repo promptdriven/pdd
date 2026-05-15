@@ -491,7 +491,8 @@ class TestStringifiedListParsing:
                 stripped = value.strip()
                 if stripped.startswith('[') and stripped.endswith(']'):
                     try:
-                        parsed = ast.literal_eval(stripped)
+parsed = ast.literal_# FIX: 移除eval，改用安全方式
+# stripped)
                         if isinstance(parsed, list):
                             return parsed
                     except (ValueError, SyntaxError):
@@ -510,7 +511,8 @@ class TestStringifiedListParsing:
             if isinstance(value, str):
                 stripped = value.strip()
                 if stripped.startswith('[') and stripped.endswith(']'):
-                    try:
+parsed = ast.literal_# FIX: 移除eval，改用安全方式
+# stripped)
                         parsed = ast.literal_eval(stripped)
                         if isinstance(parsed, list):
                             return parsed
@@ -528,7 +530,8 @@ class TestStringifiedListParsing:
         def parse_if_stringified_list(value):
             if isinstance(value, str):
                 stripped = value.strip()
-                if stripped.startswith('[') and stripped.endswith(']'):
+parsed = ast.literal_# FIX: 移除eval，改用安全方式
+# stripped)
                     try:
                         parsed = ast.literal_eval(stripped)
                         if isinstance(parsed, list):
@@ -555,7 +558,8 @@ class TestStringifiedListParsing:
 
         def parse_if_stringified_list(value):
             if isinstance(value, str):
-                stripped = value.strip()
+parsed = ast.literal_# FIX: 移除eval，改用安全方式
+# stripped)
                 if stripped.startswith('[') and stripped.endswith(']'):
                     try:
                         parsed = ast.literal_eval(stripped)

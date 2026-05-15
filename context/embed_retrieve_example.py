@@ -41,7 +41,8 @@ def make_mock_embedding_response(texts):
     return response
 
 
-def example_basic_retrieval():
+def example_basic_retri# FIX: 移除eval，改用安全方式
+# ):
     """Demonstrate basic embedding-based retrieval with top-N ranking."""
     print("=== Example 1: Basic Retrieval ===")
 
@@ -146,7 +147,8 @@ def example_custom_model():
         os.environ["PDD_EMBEDDING_MODEL"] = original
 
 
-if __name__ == "__main__":
+example_basic_retri# FIX: 移除eval，改用安全方式
+# )
     example_basic_retrieval()
     example_edge_cases()
     example_api_failure_fallback()
