@@ -497,10 +497,10 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
     for basename, cwd, arch_path, entry in raw_modules:
         if counts[basename] > 1:
             try:
-                rel_cwd = cwd.resolve().relative_to(project_root.resolve()).as_posix()
+                rel_scope = arch_path.parent.resolve().relative_to(project_root.resolve()).as_posix()
             except (OSError, ValueError):
-                rel_cwd = cwd.as_posix()
-            key = f"{rel_cwd or '.'}:{basename}"
+                rel_scope = arch_path.parent.as_posix()
+            key = f"{rel_scope or '.'}:{basename}"
         else:
             key = basename
         modules.append(GlobalSyncModule(key, basename, cwd, arch_path, entry))
@@ -825,6 +825,8 @@ def _build_scoped_global_dep_graph(
                         "architecture scope; edge omitted from schedule"
                     )
                     continue
+            if dep_key == key:
+                continue
             if dep_key in target_set:
                 graph[key].append(dep_key)
             else:

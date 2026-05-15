@@ -559,6 +559,27 @@ class TestGlobalSyncHelpers:
         assert "missing_python.prompt" in warnings[0]
         assert "unresolved dependency" in warnings[0]
 
+    def test_scoped_global_dep_graph_ignores_self_dependency(self, tmp_path):
+        """Self-deps must not leave a module blocked behind itself."""
+        module = _global_module(
+            "app",
+            tmp_path,
+            key="app",
+            entry={
+                "filename": "app_python.prompt",
+                "dependencies": ["app_python.prompt"],
+            },
+        )
+
+        graph, warnings = _build_scoped_global_dep_graph(
+            [module],
+            ["app"],
+            tmp_path,
+        )
+
+        assert graph == {"app": []}
+        assert warnings == []
+
     def test_scoped_global_dep_graph_resolves_unambiguous_cross_arch_dep(self, tmp_path):
         """When a dep doesn't match in the same arch but is unambiguous globally,
         the edge resolves (preserving the prior combined-architecture behaviour)."""
@@ -747,6 +768,49 @@ class TestArchitectureSyncModules:
         assert len(modules) == 1
         assert modules[0].basename == "widget"
         assert modules[0].cwd == nested_dir
+
+    def test_duplicate_basenames_use_arch_scope_even_when_cwd_matches(self, tmp_path):
+        """Duplicate basename keys must stay distinct even if nested .pddrc
+        resolution sends both modules to the same cwd."""
+        shared_dir = tmp_path / "shared"
+        shared_dir.mkdir()
+        for arch_dir in (tmp_path, shared_dir):
+            (arch_dir / "architecture.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "filename": "report_python.prompt",
+                            "filepath": "report.py",
+                            "dependencies": [],
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+        (shared_dir / "prompts").mkdir()
+        (shared_dir / "prompts" / "report_python.prompt").write_text(
+            "% shared report prompt", encoding="utf-8"
+        )
+        self._write_pddrc(
+            shared_dir / ".pddrc",
+            {
+                "shared": {
+                    "paths": ["report"],
+                    "defaults": {"prompts_dir": "prompts"},
+                }
+            },
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+
+        report_modules = [module for module in modules if module.basename == "report"]
+        assert len(report_modules) == 2
+        assert {module.key for module in report_modules} == {
+            ".:report",
+            "shared:report",
+        }
+        assert {module.cwd for module in report_modules} == {shared_dir}
 
 
 class TestRunGlobalSync:
