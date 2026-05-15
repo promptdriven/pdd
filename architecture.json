@@ -7983,7 +7983,7 @@
           },
           {
             "name": "commit_and_push",
-            "signature": "(healed_modules: List[str], skip_ci: bool, checkpoint: bool, finalized_modules: Optional[List[Tuple[str, str]]] = None)",
+            "signature": "(healed_modules: Sequence[DriftInfo], skip_ci: bool, checkpoint: bool, finalized_modules: Optional[List[Tuple[str, str]]] = None)",
             "returns": "bool"
           }
         ]

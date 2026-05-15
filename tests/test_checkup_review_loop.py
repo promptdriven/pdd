@@ -2423,6 +2423,8 @@ class TestCommitAndPushIfChanged:
 
         def fake_run(cmd: List[str], **_kwargs: Any):
             runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -2483,6 +2485,8 @@ class TestCommitAndPushIfChanged:
 
         def fake_run(cmd: List[str], **_kwargs: Any):
             runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -2533,6 +2537,8 @@ class TestCommitAndPushIfChanged:
 
         def fake_run(cmd: List[str], **_kwargs: Any):
             runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
             if cmd[:2] == ["git", "rebase"] and "--abort" not in cmd:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
@@ -2578,6 +2584,8 @@ class TestCommitAndPushIfChanged:
 
         def fake_run(cmd: List[str], **_kwargs: Any):
             runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
             if cmd[:3] == ["git", "fetch", "--no-tags"]:
                 if "x-access-token" not in cmd[3]:
                     return type(
