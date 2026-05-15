@@ -6454,6 +6454,22 @@ class TestPostStep9ResumeAction:
         )
         assert result == "MAX_CYCLES_REACHED"
 
+    def test_explicit_max_cycles_reached_token_returns_max_cycles_reached(self, helper, console):
+        """Explicit MAX_CYCLES_REACHED from Step 9 must override budget check.
+
+        Regression: prior to the fix, when the resolver returned MAX_CYCLES_REACHED
+        but current_cycle < max_cycles, the action incorrectly returned ADVANCE_CYCLE
+        instead of MAX_CYCLES_REACHED. This let resume restart fix work after Step 9
+        had already declared the loop terminal.
+        """
+        result = helper(
+            "MAX_CYCLES_REACHED",
+            current_cycle=1,  # well under budget
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "MAX_CYCLES_REACHED"
+
     def test_unrecognized_output_advances_when_under_budget(self, helper, console):
         """Unrecognized Step 9 output + budget remaining → ADVANCE_CYCLE.
 
