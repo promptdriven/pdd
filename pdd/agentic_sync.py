@@ -21,7 +21,12 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 from rich.console import Console
 
 from .agentic_change import _check_gh_cli, _escape_format_braces, _parse_issue_url, _run_gh_command
-from .agentic_common import run_agentic_task
+from .agentic_common import (
+    DEFAULT_SYNC_COMPANION_ALLOWLIST,
+    IssueContract,
+    parse_issue_contract,
+    run_agentic_task,
+)
 from .agentic_sync_runner import (
     AsyncSyncRunner,
     _architecture_entry_aliases,
@@ -736,7 +741,13 @@ def run_global_sync(
     scope_guard: bool = True,
 ) -> Tuple[bool, str, float, str]:
     """Run project-wide Tier 1 global sync from architecture.json."""
-    del scope_guard
+    # Per ``agentic_sync_python.prompt`` § Global Sync 1: the ``scope_guard``
+    # kwarg is accepted for CLI signature parity with ``run_agentic_sync`` but
+    # has no effect in global mode. Global sync has no issue body to parse, so
+    # the runner is always constructed in permissive fallback mode regardless
+    # of ``scope_guard``. The kwarg exists so ``pdd sync --no-scope-guard``
+    # does not raise ``TypeError`` when dispatched into global mode.
+    _ = scope_guard
     project_root = _find_project_root(Path.cwd())
     architecture, arch_path = _load_architecture_json(project_root)
     if architecture is None:
@@ -1356,50 +1367,19 @@ def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, 
 
 
 def _extract_allowed_write_paths(issue_text: str) -> List[str]:
-    """Extract a split-contract allowed write set from issue text."""
-    if not issue_text:
-        return []
+    """
+    Deprecated thin wrapper around :func:`parse_issue_contract` (Issue #1013, F3).
 
-    allowed: List[str] = []
-    seen: set[str] = set()
-    capture = False
-    path_re = re.compile(r"`([^`]+)`")
-
-    for raw_line in issue_text.splitlines():
-        line = raw_line.strip()
-        lower = line.lower()
-        marker_line = re.sub(r"^(?:#+\s*|[-*]\s*)", "", lower).strip()
-        if (
-            marker_line.startswith(("allowed write set", "allowed write-set"))
-            or marker_line.startswith(("allowed files", "allowed paths"))
-            or marker_line.startswith("allowed only")
-            or (
-                marker_line.startswith(("split contract", "issue contract"))
-                and "allowed" in marker_line
-            )
-        ):
-            capture = True
-        elif capture and line.startswith("#"):
-            break
-
-        if not capture:
-            continue
-
-        matches = path_re.findall(line)
-        if not matches:
-            if allowed and not line:
-                break
-            continue
-
-        for match in matches:
-            path = match.strip().replace("\\", "/").lstrip("./")
-            if not path or " " in path or path.startswith("#"):
-                continue
-            if path not in seen:
-                allowed.append(path)
-                seen.add(path)
-
-    return allowed
+    This helper used to do its own loose markdown scan for allowed-write
+    paths. It now delegates to the structured contract parser in
+    :mod:`pdd.agentic_common` so the public contract API (HTML-comment JSON
+    and fenced-block formats) is the single source of truth. The wrapper is
+    kept for one release so any external caller that imported the private
+    name does not crash at import time; it returns an empty list whenever
+    :func:`parse_issue_contract` cannot find a valid contract.
+    """
+    contract = parse_issue_contract(issue_text)
+    return list(contract.allowed_paths) if contract is not None else []
 
 
 def _apply_architecture_corrections(
@@ -1547,7 +1527,7 @@ def run_agentic_sync(
 
     # 5. Build issue content
     issue_content = f"Title: {title}\n\nDescription:\n{body}\n"
-    raw_contract_text = body
+    comment_bodies: List[str] = []
     if comments_data and isinstance(comments_data, list):
         issue_content += "\nComments:\n"
         for comment in comments_data:
@@ -1555,11 +1535,48 @@ def run_agentic_sync(
                 c_user = comment.get("user", {}).get("login", "unknown")
                 c_body = comment.get("body", "")
                 issue_content += f"\n--- Comment by {c_user} ---\n{c_body}\n"
-                raw_contract_text += f"\n{c_body}\n"
+                if isinstance(c_body, str) and c_body:
+                    comment_bodies.append(c_body)
 
-    allowed_write_paths = (
-        _extract_allowed_write_paths(raw_contract_text) if scope_guard else []
-    )
+    # Issue #1013 — split-contract scope guard (F3, F4, F11):
+    # Parse the structured contract from the issue body first, then comments.
+    # When ``scope_guard=False``, log a single WARNING and skip parsing so the
+    # runner falls back to permissive mode regardless of contract content.
+    issue_contract: Optional[IssueContract] = None
+    if scope_guard:
+        issue_contract = parse_issue_contract(body, comment_bodies)
+        if not quiet:
+            if issue_contract is not None:
+                console.print(
+                    f"[dim]Sync scope guard: contract loaded from "
+                    f"{issue_contract.source} "
+                    f"({len(issue_contract.allowed_paths)} allowed paths)[/dim]"
+                )
+            else:
+                console.print(
+                    "[dim]Sync scope guard: no contract on issue — "
+                    "running in permissive mode[/dim]"
+                )
+    else:
+        if not quiet:
+            console.print(
+                "[yellow]Sync scope guard: disabled via --no-scope-guard[/yellow]"
+            )
+
+    # Resolve effective allow set / companion allowlist for the runner.
+    # ``None`` (permissive) is preserved when no contract was parsed so the
+    # runner can distinguish "no contract" from "explicit empty contract".
+    if issue_contract is not None:
+        allowed_write_paths: Optional[List[str]] = list(issue_contract.allowed_paths)
+        effective_companion_allowlist: Tuple[str, ...] = tuple(
+            dict.fromkeys(
+                tuple(issue_contract.companion_allowlist)
+                + tuple(DEFAULT_SYNC_COMPANION_ALLOWLIST)
+            )
+        )
+    else:
+        allowed_write_paths = None
+        effective_companion_allowlist = tuple(DEFAULT_SYNC_COMPANION_ALLOWLIST)
 
     issue_content = _escape_format_braces(issue_content)
 
@@ -1815,6 +1832,9 @@ def run_agentic_sync(
         "cwd": project_root,
     } if use_github_state else None
 
+    contract_source: Optional[str] = (
+        issue_contract.source if issue_contract is not None else None
+    )
     if durable:
         runner = DurableSyncRunner(
             basenames=modules_to_sync,
@@ -1832,7 +1852,9 @@ def run_agentic_sync(
             module_cwds=module_cwds,
             initial_cost=llm_cost,
             allowed_write_set=allowed_write_paths,
+            companion_allowlist=effective_companion_allowlist,
             scope_guard_enabled=scope_guard,
+            contract_source=contract_source,
         )
     else:
         runner = AsyncSyncRunner(
@@ -1846,7 +1868,9 @@ def run_agentic_sync(
             module_cwds=module_cwds,
             initial_cost=llm_cost,
             allowed_write_set=allowed_write_paths,
+            companion_allowlist=effective_companion_allowlist,
             scope_guard_enabled=scope_guard,
+            contract_source=contract_source,
         )
 
     runner_success, runner_msg, total_cost = runner.run()
