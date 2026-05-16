@@ -50,14 +50,6 @@ from pathlib import Path
 
 import pytest
 
-from pdd.load_prompt_template import load_prompt_template
-
-
-@pytest.fixture(autouse=True)
-def set_pdd_path(monkeypatch):
-    """Resolve prompt templates from this worktree, not the parent repo checkout."""
-    monkeypatch.setenv("PDD_PATH", str(Path(__file__).resolve().parent.parent))
-
 
 def _strip_pdd_metadata(template: str) -> str:
     """Strip ``<pdd-reason>`` and ``<pdd-interface>`` metadata blocks from a prompt template."""
@@ -115,9 +107,8 @@ def _get_orchestrator_architecture_entry() -> dict:
 
 @pytest.fixture(scope="module")
 def orchestrator_prompt_body() -> str:
-    """Load and metadata-strip the orchestrator prompt body once per module."""
-    template = load_prompt_template("agentic_e2e_fix_orchestrator_python")
-    assert template is not None, "agentic_e2e_fix_orchestrator_python.prompt must load"
+    """Read and metadata-strip the orchestrator prompt body once per module."""
+    template = _read_repo_text("pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt")
     return _strip_pdd_metadata(template)
 
 

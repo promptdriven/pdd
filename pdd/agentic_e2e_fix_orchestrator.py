@@ -1110,6 +1110,20 @@ def _has_unpushed_commits(cwd: Path) -> bool:
     return False
 
 
+def _push_unpushed_commits_or_report_noop(
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """Push ahead commits if present; otherwise treat the commit step as a no-op."""
+    if _has_unpushed_commits(cwd):
+        push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
+        if push_ok:
+            return True, "Pushed existing commits"
+        return False, f"Push failed: {push_err}"
+    return True, "No changes to commit"
+
+
 def push_with_retry(
     cwd: Path,
     *,
@@ -1345,15 +1359,8 @@ def _commit_and_push(
         fallback_files = [f for f in fallback_files if not _is_intermediate_file(f)]
         if fallback_files:
             files_to_commit = list(fallback_files)
-        elif _has_unpushed_commits(cwd):
-            # Check if there are unpushed commits to push
-            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
-            if push_ok:
-                return True, "Pushed existing commits"
-            else:
-                return False, f"Push failed: {push_err}"
         else:
-            return True, "No changes to commit"
+            return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
 
     # Stage only workflow-changed files
     for filepath in files_to_commit:
@@ -1378,12 +1385,12 @@ def _commit_and_push(
         # Commit may fail with "nothing to commit" when fallback files were
         # already committed on the branch (merge-base diff includes them).
         # In that case, push any unpushed commits instead of failing.
-        if _has_unpushed_commits(cwd):
-            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
-            if push_ok:
-                return True, "Pushed existing commits"
-            else:
-                return False, f"Push failed: {push_err}"
+        commit_output = f"{commit_result.stdout}\n{commit_result.stderr}".lower()
+        if (
+            "nothing to commit" in commit_output
+            or "no changes added to commit" in commit_output
+        ):
+            return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
         return False, f"Failed to commit: {commit_result.stderr}"
 
     # Push to remote with retry on auth failure
