@@ -8744,6 +8744,314 @@ class TestPublicSurfaceBindingKind:
 
         assert "User" in excinfo.value.changed_signatures
 
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-6): the synth ignored
+    # ``@dataclass(init=False)`` (which keeps ``object.__init__``)
+    # and did not pull in fields declared on dataclass-decorated base
+    # classes. Both gaps allowed real constructor-shape regressions to
+    # slip past the gate.
+    # ------------------------------------------------------------------
+    def test_dataclass_init_false_decorator_flip_to_default_is_detected(self):
+        # ``@dataclass(init=False)`` does NOT synthesise an __init__ —
+        # the class keeps ``object.__init__`` (zero positional args).
+        # Flipping to the default ``@dataclass`` adds a synthesised
+        # ``(name: str)`` constructor: callers must update.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_init_false_decorator_keeps_zero_arg_signature(self):
+        # Adding fields under ``@dataclass(init=False)`` does NOT change
+        # the runtime constructor (still ``object.__init__()``). The
+        # snapshot must NOT diff — false-positive that the bare-synth
+        # implementation would have raised.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclasses_dataclass_init_false_form_works(self):
+        # The attribute form ``@dataclasses.dataclass(init=False)``
+        # should be recognised identically to the bare-import form.
+        # Adding a field still must NOT trip the gate.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass(init=False)\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_inherited_field_added_to_private_base_is_detected(self):
+        # Reviewer's exact repro: ``_Base`` gains a required field;
+        # ``User`` itself is unchanged. The runtime ``User`` constructor
+        # signature changes from ``User(base, name)`` to
+        # ``User(base, token, name)`` — public-surface regression.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "    token: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_unchanged_inheritance_is_allowed(self):
+        # Same inheritance shape on both sides; no fields change. The
+        # snapshot must be stable — adding inheritance support must not
+        # create churn in unchanged modules.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_unresolved_base_is_marked_uncertain(self):
+        # When the base class is imported from another module we cannot
+        # see its fields. The snapshot encodes that with an
+        # ``[inherited_unresolved]`` token: adding a field LOCALLY
+        # still trips the gate (the derived synth changes), but a
+        # purely-base change we can't observe correctly slips through —
+        # the gate is conservative for invisible parents.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+            _snapshot_public_signatures,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "from external_mod import Base\n"
+            "@dataclass\n"
+            "class User(Base):\n"
+            "    name: str\n"
+        )
+        # Local change: adding a required field. Must trip.
+        after_local = (
+            "from dataclasses import dataclass\n"
+            "from external_mod import Base\n"
+            "@dataclass\n"
+            "class User(Base):\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        # First: signature snapshot includes the marker.
+        sig_before = _snapshot_public_signatures(before, "python")
+        assert "[inherited_unresolved]" in sig_before["User"]
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after_local,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_multiple_inheritance_left_to_right(self):
+        # ``class C(A, B)`` should yield the synth ``(a, b, c)`` — A's
+        # field first, then B's, then C's own. Reordering bases to
+        # ``class C(B, A)`` changes the synth to ``(b, a, c)`` so a
+        # base-order swap is observed as a constructor regression.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+            _snapshot_public_signatures,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class A:\n"
+            "    a: int\n"
+            "@dataclass\n"
+            "class B:\n"
+            "    b: int\n"
+            "@dataclass\n"
+            "class C(A, B):\n"
+            "    c: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class A:\n"
+            "    a: int\n"
+            "@dataclass\n"
+            "class B:\n"
+            "    b: int\n"
+            "@dataclass\n"
+            "class C(B, A):\n"
+            "    c: int\n"
+        )
+
+        # Sanity: snapshot reflects left-to-right merge.
+        sig = _snapshot_public_signatures(before, "python")
+        assert "(a: int, b: int, c: int)" in sig["C"]
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "C" in excinfo.value.changed_signatures
+
+    def test_dataclass_explicit_init_still_takes_precedence_with_inheritance(self):
+        # When the derived class has an explicit ``__init__``,
+        # dataclasses skip synthesising — inheritance must NOT be
+        # walked. Adding a field to the base would otherwise look like
+        # a synth diff, but the explicit init shields callers.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+            "    def __init__(self, x: int):\n"
+            "        self.x = x\n"
+        )
+        # Base gains a field — explicit ``__init__`` on User does not
+        # call ``super().__init__`` here, so callers are unaffected.
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "    token: str\n"
+            "@dataclass\n"
+            "class User(_Base):\n"
+            "    name: str\n"
+            "    def __init__(self, x: int):\n"
+            "        self.x = x\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
 
 class TestFrontMatterStripping:
     """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front
