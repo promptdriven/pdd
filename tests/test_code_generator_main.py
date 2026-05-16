@@ -8180,6 +8180,323 @@ class TestPublicSurfaceBindingKind:
         # regular arg (not at the end).
         assert signature.startswith("(x, /, y)"), signature
 
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-4): top-level imports were
+    # captured by the surface helper but NOT by the signatures helper.
+    # That asymmetry let ``from pathlib import Path`` → ``def Path():
+    # ...`` slip through — the surface set kept ``Path`` (no removal),
+    # and the signatures dict had no ``Path`` entry on the before side
+    # so the new ``[function] ()`` looked like a brand-new symbol, not
+    # a re-export break. Recording imports as ``[import:...]`` in the
+    # signatures dict closes the gap.
+    # ------------------------------------------------------------------
+    def test_from_import_to_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "from pathlib import Path\n"
+        # Same bound name ``Path`` but now resolves to a local function;
+        # ``Path("/tmp")`` callers that expect the pathlib API break.
+        after = "def Path():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Path" in excinfo.value.changed_signatures
+
+    def test_import_to_assignment_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "import pathlib\n"
+        # Same bound name ``pathlib`` but now ``None`` — code that does
+        # ``pathlib.Path(...)`` raises ``AttributeError`` after the
+        # rewrite.
+        after = "pathlib = None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "pathlib" in excinfo.value.changed_signatures
+
+    def test_import_aliased_to_function_flip_is_detected(self):
+        # ``import pathlib as p`` binds ``p``; replacing with a local
+        # ``def p()`` is the same flip as the unaliased form. The alias
+        # is encoded in the signatures snapshot so this still trips.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "import pathlib as p\n"
+        after = "def p():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "p" in excinfo.value.changed_signatures
+
+    def test_unchanged_from_import_is_allowed(self):
+        # Sanity check: identical ``from X import Y`` on both sides must
+        # NOT produce a snapshot diff. The encoded source module keeps
+        # the entry stable across regeneration.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "from pathlib import Path\n"
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-4): when a class has no explicit
+    # ``__init__`` the snapshot was ``[class] ()`` regardless of the
+    # synthesised dataclass init. Adding a required field
+    # (``@dataclass class User: name: str`` → add ``age: int``) left
+    # the snapshot unchanged so the gate missed a constructor break.
+    # ``_synthesize_dataclass_init_signature`` mirrors the synthesised
+    # init from the field annotations so the snapshot moves when the
+    # field list does.
+    # ------------------------------------------------------------------
+    def test_dataclass_adding_required_field_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        # ``age`` is added as a required field, so existing callers of
+        # ``User(name)`` break with a ``TypeError: missing argument``.
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_adding_optional_field_is_detected_as_signature_change(self):
+        # Adding an OPTIONAL field (with a default) is still a public
+        # surface change — callers introspecting fields, constructing
+        # positionally, or pickling instances may be affected. The
+        # snapshot diff should fire so reviewers can decide.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int = 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_removing_field_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_explicit_init_still_takes_precedence(self):
+        # When a ``@dataclass`` class has an explicit ``__init__``,
+        # dataclasses skip synthesising one and uses the user's. The
+        # snapshot must follow suit — adding a field annotation while
+        # keeping the explicit init signature should NOT trip the gate.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    def __init__(self, name: str):\n"
+            "        self.name = name\n"
+        )
+        # Add a class-level annotation that runtime dataclasses would
+        # have folded into the synthesised init — but the explicit
+        # ``__init__`` takes precedence, so callers are not affected.
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    metadata: dict\n"
+            "    def __init__(self, name: str):\n"
+            "        self.name = name\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclasses_dataclass_attribute_decorator_form_works(self):
+        # The attribute form ``@dataclasses.dataclass`` should be
+        # recognised identically to the bare ``@dataclass`` form.
+        # Adding a required field MUST trip the gate.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "import dataclasses\n"
+            "@dataclasses.dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_classvar_field_is_excluded(self):
+        # ``ClassVar`` annotations are class-level constants per PEP
+        # 557, NOT positional init params. Toggling a ``ClassVar``
+        # annotation must NOT trip the dataclass init synthesis (the
+        # synthesised constructor is unchanged at runtime).
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "from typing import ClassVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        # Add a ``ClassVar``-typed attribute — this changes module
+        # source but the synthesised ``__init__`` signature stays
+        # ``(name: str)``.
+        after = (
+            "from dataclasses import dataclass\n"
+            "from typing import ClassVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    DEFAULT_ROLE: ClassVar[str] = 'guest'\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
 
 class TestFrontMatterStripping:
     """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front
