@@ -3933,6 +3933,40 @@ class TestFingerprintIncludeDependencies:
         assert len(deps) == 1, f"Expected 1 include dep, got {len(deps)}"
         assert str(dep_file) in deps or any("shared_types.py" in k for k in deps)
 
+    @pytest.mark.parametrize(
+        "attributed_include",
+        [
+            '<include select="def:helper">utils.py</include>',
+            '<include query="utility helpers">utils.py</include>',
+            '<include select="def:helper" mode="interface">utils.py</include>',
+        ],
+        ids=["select-attr", "query-attr", "select-plus-mode"],
+    )
+    def test_extract_include_deps_finds_attributed_includes(
+        self, pdd_test_environment, attributed_include
+    ):
+        """extract_include_deps must match attributed <include …> forms.
+
+        ``auto_include`` emits ``<include select="…">`` and
+        ``<include query="…">`` directives; if the extractor's regex only
+        matched bare ``<include>`` the fingerprint would lose those deps
+        and dependency changes would go undetected by sync.
+        """
+        prompts_dir = pdd_test_environment / "prompts"
+        dep_file = pdd_test_environment / "utils.py"
+        create_file(dep_file, "def helper(): pass\n")
+
+        prompt_path = prompts_dir / f"{BASENAME}_{LANGUAGE}.prompt"
+        create_file(prompt_path, f"Build module.\n{attributed_include}\n")
+
+        deps = extract_include_deps(prompt_path)
+        assert len(deps) == 1, (
+            f"Expected 1 dep for {attributed_include!r}, got {deps!r}"
+        )
+        assert any("utils.py" in k for k in deps), (
+            f"Expected utils.py in deps keys, got {list(deps)}"
+        )
+
     def test_extract_include_deps_finds_backtick_includes(self, pdd_test_environment):
         """extract_include_deps should find ```<file>``` backtick includes."""
         prompts_dir = pdd_test_environment / "prompts"
