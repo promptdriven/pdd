@@ -389,6 +389,26 @@ _PERMANENT_ERROR_CLASSES: Tuple[Tuple[str, Tuple[str, ...]], ...] = (
         ),
     ),
     (
+        # Issue (this PR): Claude Code subscription-tier weekly limit ("You've
+        # hit your limit · resets [TIME]"). Distinct from API-tier 429 because
+        # the reset window is hours-to-days, not seconds-to-minutes — retrying
+        # on the 60s rate-limit floor wastes minutes. Stable token
+        # `credential-limit` lets pdd_cloud's OAuth-token waterfall detect this
+        # and rotate to a different credential instead of retrying the dead one.
+        "credential-limit",
+        (
+            # Proximity + time-token guard. Requires "hit your limit" and
+            # "resets" within 40 chars (typical envelope is "... limit ·
+            # resets May 18, 11pm (UTC) ...") AND requires a time-token
+            # OR delimiter immediately after "resets" so distant prose
+            # like "if you hit your limit, nothing resets automatically"
+            # does NOT classify as credential-limit. Without the time
+            # token, any sentence stringing both phrases together would
+            # short-circuit the rate-limit retry path on benign text.
+            r"hit\s+your\s+limit[^\n]{0,40}?\bresets?\b\s*(?:[·:|\-]|in\s|at\s|on\s|\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)",
+        ),
+    ),
+    (
         # Issue #1072: quota exhaustion (permanent even when 429 is present)
         "quota",
         (

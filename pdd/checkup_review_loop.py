@@ -610,6 +610,13 @@ class ReviewLoopConfig:
     # keep working unchanged. Off by default to preserve existing CI
     # expectations.
     fallback_reviewer_on_failure: bool = False
+    # APPENDED — optional secondary fixer role to try once when the primary
+    # fixer cannot address the reviewer's findings (e.g. subscription-tier
+    # credential exhausted). Must differ from the primary fixer and from
+    # the reviewer to preserve reviewer/fixer role independence. MUST stay
+    # at the end of the field list so positional callers keep working
+    # unchanged.
+    fixer_fallback: Optional[str] = None
 
 
 @dataclass
@@ -658,6 +665,26 @@ class ReviewLoopState:
     # ``classification``, ``exit_code``, ``reason`` (last ~20 lines of
     # stderr/stdout), and ``status``.
     reviewer_status_details: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Set lazily once ``fixer_fallback`` runs and succeeds. Once set, all
+    # subsequent rounds drive ``_run_fix`` with this role instead of the
+    # original primary, and ``_maybe_run_fallback_fixer`` early-returns.
+    # The one-shot fallback contract promises the fallback runs exactly
+    # once: re-invoking the exhausted primary in later rounds (credential-
+    # limit resets are hours-to-days) would just burn another fallback
+    # invocation needlessly. Parallel to ``active_reviewer``. Kept at the
+    # end of the field list so positional construction stays stable.
+    active_fixer: Optional[str] = None
+    # Originally configured primary reviewer, captured once at loop
+    # start and never reassigned. ``active_reviewer`` rotates when a
+    # ``reviewer_fallback`` takes over; this field preserves the
+    # original so ``_maybe_run_fallback_fixer`` can enforce the
+    # documented rule that the fixer-fallback role must differ from
+    # the *originally configured* reviewer as well as the active one.
+    # Without this, ``--reviewer codex --reviewer-fallback gemini
+    # --fixer claude --fixer-fallback codex`` would silently run
+    # codex as the fixer after gemini took over reviewing, even
+    # though the docs say codex (the original reviewer) is excluded.
+    original_reviewer: Optional[str] = None
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -698,6 +725,7 @@ def run_checkup_review_loop(
     state = ReviewLoopState(
         reviewer_status=reviewer_status,
         active_reviewer=reviewer,
+        original_reviewer=reviewer,
     )
     deadline = time.monotonic() + (config.max_minutes * 60.0)
     worktree, setup_error = _setup_pr_worktree(
@@ -769,11 +797,19 @@ def run_checkup_review_loop(
                     [config.reviewer_fallback] if config.reviewer_fallback else []
                 )
                 fallback = fallback_candidates[0] if fallback_candidates else None
+                # ``state.active_fixer`` may already point at a role
+                # promoted earlier by the fixer-fallback path. Reusing that
+                # same role here as the reviewer-fallback would collapse
+                # reviewer/fixer role independence — the loop would have
+                # the fixer review its own changes — so exclude it from the
+                # reviewer-fallback candidate set the same way ``fixer``
+                # itself is excluded.
                 if (
                     not fallback_used
                     and fallback
                     and fallback != fixer
                     and fallback != reviewer
+                    and (state.active_fixer is None or fallback != state.active_fixer)
                 ):
                     fallback_used = True
                     fallback_review = _run_review(
@@ -884,8 +920,27 @@ def run_checkup_review_loop(
                 break
 
         state.reviewer_status[reviewer] = "findings"
+        # Capture the worktree HEAD BEFORE the primary fixer runs so the
+        # fallback path can reset back to it. ``git reset --hard HEAD``
+        # is insufficient when the failed primary already created a
+        # commit: HEAD has already advanced and the commit survives the
+        # reset, so the fallback's eventual push would carry the failed
+        # primary's work into the PR.
+        pre_fix_sha = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        ).stdout.strip()
+        # Once ``fixer_fallback`` has succeeded in a prior round it
+        # takes over as the active fixer for the rest of the loop. The
+        # original primary is almost certainly still exhausted
+        # (credential-limit reset windows are hours-to-days) so re-running
+        # it just to consume another fallback invocation defeats the
+        # one-shot fallback contract.
+        active_fixer = state.active_fixer or fixer
         fix = _run_fix(
-            fixer=fixer,
+            fixer=active_fixer,
             reviewer=reviewer,
             findings=fix_findings,
             context=context,
@@ -901,10 +956,81 @@ def run_checkup_review_loop(
         _record_fix_attempts(state, fix_findings, fix)
 
         if not fix.success:
-            state.stop_reason = (
-                f"Fixer {fixer} could not address {reviewer}'s findings."
+            # Reset the worktree before invoking the fallback fixer. The
+            # primary may have written partial edits (or even committed)
+            # before dead-stopping (e.g. on credential exhaustion);
+            # without this reset those untrusted edits would be picked
+            # up by ``_commit_and_push_if_changed`` alongside the
+            # fallback's edits, leaking failed primary work into the PR.
+            # Reset to the pre-fix SHA — not bare ``HEAD`` — so we undo
+            # commits the failed primary may have created (HEAD has
+            # advanced past them).
+            _capture = None if verbose else subprocess.DEVNULL
+            reset_target = pre_fix_sha or "HEAD"
+            subprocess.run(
+                ["git", "-C", str(worktree), "reset", "--hard", reset_target],
+                check=False,
+                stdout=_capture,
+                stderr=_capture,
             )
-            break
+            subprocess.run(
+                ["git", "-C", str(worktree), "clean", "-fd"],
+                check=False,
+                stdout=_capture,
+                stderr=_capture,
+            )
+            fallback_fix = _maybe_run_fallback_fixer(
+                primary_fixer=fixer,
+                reviewer=reviewer,
+                findings=fix_findings,
+                context=context,
+                worktree=worktree,
+                round_number=round_number,
+                state=state,
+                config=config,
+                verbose=verbose,
+                quiet=quiet,
+                artifacts_dir=artifacts_dir,
+                deadline=deadline,
+            )
+            if fallback_fix is None or not fallback_fix.success:
+                # Record the failed fallback attempt in the audit trail
+                # before breaking. ``fallback_fix is None`` means the
+                # fallback never ran (budget/guard skip), so there is
+                # nothing to append; a non-None failure means the
+                # fallback executed and its result — summary, changed
+                # files, model — must remain visible in the final
+                # report and ``final-state.json``.
+                if fallback_fix is not None:
+                    state.fixes.append(fallback_fix)
+                # Preserve the existing stop_reason if the fallback path
+                # already wrote one (e.g. budget exhausted before fallback
+                # could run) — the operator-facing detail wins.
+                if not state.stop_reason:
+                    # Name the role that actually ran: ``active_fixer``
+                    # is the fallback once it has taken over from a prior
+                    # round, so a later-round failure should attribute
+                    # to it instead of the long-exhausted original.
+                    state.stop_reason = (
+                        f"Fixer {active_fixer} could not address {reviewer}'s findings"
+                        + (
+                            f" (fallback fixer {config.fixer_fallback} also failed)."
+                            if fallback_fix is not None
+                            else "."
+                        )
+                    )
+                break
+            # Fallback succeeded — it now drives the rest of this round.
+            # Both fixes stay in ``state.fixes`` so the audit trail records
+            # the primary attempt as well as the fallback's takeover.
+            fix = fallback_fix
+            state.fixes.append(fix)
+            # NOTE: we deliberately do NOT call ``_record_fix_attempts``
+            # again here. The primary attempt already incremented every
+            # finding's ``fix_attempts_by_key`` counter; a second bump
+            # would represent the SAME logical fix round as two attempts
+            # and would prematurely trip the oscillation/no-progress
+            # guards downstream.
 
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
@@ -1493,6 +1619,154 @@ def _maybe_run_fallback_reviewer(
         state.reviewer_status_details[primary_reviewer] = original_detail
         state.reviewer_status[primary_reviewer] = "clean"
     return fallback
+
+
+def _maybe_run_fallback_fixer(
+    *,
+    primary_fixer: str,
+    reviewer: str,
+    findings: Sequence[ReviewFinding],
+    context: ReviewLoopContext,
+    worktree: Path,
+    round_number: int,
+    state: ReviewLoopState,
+    config: ReviewLoopConfig,
+    verbose: bool,
+    quiet: bool,
+    artifacts_dir: Path,
+    deadline: float,
+) -> Optional[FixResult]:
+    """Run the configured ``fixer_fallback`` once when the primary fixer fails.
+
+    Mirrors ``_maybe_run_fallback_reviewer`` (Issue #923). Triggers only
+    when:
+    * ``config.fixer_fallback`` is set.
+    * The fallback role differs from both the primary fixer (would be a
+      no-op retry on the same role that just failed) and the active
+      reviewer (reviewer/fixer role independence preserved — promoting
+      the reviewer to fix its own findings collapses the review loop's
+      core design).
+
+    Returns the fallback's ``FixResult`` if it ran, or ``None`` when no
+    fallback was attempted. When a budget cap is already crossed the
+    function marks the budget exhausted on state and sets a descriptive
+    ``stop_reason`` so the operator-facing report attributes the gate
+    correctly rather than reporting a bare "could not address" failure.
+    """
+    fallback_role = config.fixer_fallback
+    if not fallback_role:
+        return None
+    # One-shot fallback contract. Once a prior round's fallback succeeded
+    # it became the active fixer for the rest of the loop (see the call
+    # site in ``run_checkup_review_loop``). The "primary" passed here in
+    # later rounds is already the fallback role, so re-running the
+    # fallback would either no-op against itself or burn a second
+    # invocation against an exhausted credential — both break the
+    # documented one-shot semantics.
+    if state.active_fixer is not None:
+        return None
+    # Alias-aware equality. ``--fixer claude --fixer-fallback anthropic``
+    # is the same OAuth credential — promoting ``anthropic`` after
+    # ``claude`` hit a subscription-tier limit is a no-op retry that
+    # defeats the guard. Reuse the same normalization the reviewer
+    # fallback applies (see ``_maybe_run_fallback_reviewer``) so the two
+    # sides agree on what "same role" means. ``_normalize_reviewers``
+    # returns an empty list for unknown/empty roles; guard with a literal
+    # fallback so callers passing a non-canonical string still get a
+    # meaningful equality check rather than IndexError.
+    normalized_fallback = _normalize_reviewers([fallback_role])
+    normalized_primary = _normalize_reviewers([primary_fixer]) or [primary_fixer]
+    normalized_reviewer = _normalize_reviewers([reviewer]) or [reviewer]
+    # An empty result from ``_normalize_reviewers`` means the role string
+    # isn't a known alias or canonical name. ``_run_fix`` would feed that
+    # raw string into ``ROLE_TO_PROVIDER.get(role, role)`` which then
+    # tries to spawn an invalid provider and fails opaquely; safer to
+    # skip the fallback entirely and tell the operator why so they can
+    # fix their config rather than silently retrying with garbage.
+    if not normalized_fallback:
+        if not quiet:
+            console.print(
+                f"[yellow]Skipping fallback fixer: {fallback_role!r} is not a "
+                f"recognized role (expected one of "
+                f"{sorted(ROLE_TO_PROVIDER)}).[/yellow]"
+            )
+        return None
+    # Use the canonical lowercase role downstream so ``_run_fix`` and the
+    # ``ROLE_TO_PROVIDER`` lookup it performs see a key the table knows
+    # about. The operator-facing messages also reference the canonical
+    # form to keep what we *say* aligned with what we *do*.
+    canonical_fallback = normalized_fallback[0]
+    # ``state.active_reviewer`` may already point at a role promoted by an
+    # earlier reviewer-fallback. If the fixer-fallback names that same
+    # role, running it here would have the active reviewer fix its own
+    # findings — collapsing the reviewer/fixer independence that the
+    # original-reviewer check is meant to preserve.
+    active_reviewer_norm: Optional[str] = None
+    if state.active_reviewer:
+        normalized_active = _normalize_reviewers([state.active_reviewer])
+        if normalized_active:
+            active_reviewer_norm = normalized_active[0]
+    # The reviewer the caller passed in is the *current* reviewer, which
+    # may have rotated after a ``reviewer_fallback`` took over. The docs
+    # (prompt + ``--fixer-fallback`` help) promise the originally
+    # configured reviewer is also excluded — otherwise
+    # ``--reviewer codex --reviewer-fallback gemini --fixer claude
+    # --fixer-fallback codex`` would silently run codex as fixer after
+    # gemini took over reviewing, contradicting documented behavior.
+    original_reviewer_norm: Optional[str] = None
+    if state.original_reviewer:
+        normalized_original = _normalize_reviewers([state.original_reviewer])
+        if normalized_original:
+            original_reviewer_norm = normalized_original[0]
+    if (
+        canonical_fallback == normalized_primary[0]
+        or canonical_fallback == normalized_reviewer[0]
+        or (active_reviewer_norm is not None and canonical_fallback == active_reviewer_norm)
+        or (original_reviewer_norm is not None and canonical_fallback == original_reviewer_norm)
+    ):
+        return None
+
+    # Budget guard. The primary fixer's failed invocation may have already
+    # crossed the cost/duration budget; ``_run_fix`` would otherwise push
+    # us past it. Surface a precise stop reason so the final report
+    # explains why the fallback didn't run instead of claiming the primary
+    # "could not address" findings.
+    if _budget_exhausted(config, state, deadline):
+        _mark_budget_exhausted(config, state, deadline)
+        state.stop_reason = (
+            f"Fixer {primary_fixer} could not address {reviewer}'s findings; "
+            f"budget exhausted before fallback fixer {canonical_fallback} could run."
+        )
+        return None
+
+    if not quiet:
+        console.print(
+            f"[yellow]Primary fixer {primary_fixer} could not address "
+            f"{reviewer}'s findings; running fallback fixer "
+            f"{canonical_fallback}.[/yellow]"
+        )
+    fallback_fix = _run_fix(
+        fixer=canonical_fallback,
+        reviewer=reviewer,
+        findings=findings,
+        context=context,
+        worktree=worktree,
+        round_number=round_number,
+        state=state,
+        config=config,
+        verbose=verbose,
+        quiet=quiet,
+        artifacts_dir=artifacts_dir,
+    )
+    # Promote the fallback to the active fixer for ALL subsequent rounds
+    # ONLY on success. A failed fallback should not poison later rounds:
+    # if it eventually succeeds (or the loop terminates for another
+    # reason) the audit trail still records the attempts. The one-shot
+    # promotion mirrors ``state.active_reviewer`` semantics: once a
+    # fallback succeeds it takes over the role for the rest of the loop.
+    if fallback_fix.success:
+        state.active_fixer = canonical_fallback
+    return fallback_fix
 
 
 def _extract_failure_diagnostics(
@@ -3774,9 +4048,17 @@ def _render_final_report(
         )
         for fix in state.fixes:
             changed = ", ".join(fix.changed_files) if fix.changed_files else "none"
+            # Failed fixer summaries contain raw subprocess output (e.g.
+            # ``[CRITICAL]`` log lines, ``issue_aligned: false`` JSON
+            # fragments, ``max-cost-reached: true``) that the cloud
+            # verdict adapter scans without fence/section awareness.
+            # Without this defang, a verified fallback fix could be
+            # downgraded by trip-wires that lived only in the failed
+            # primary's audit row.
+            safe_summary = _defang_adapter_trip_wires(fix.summary)
             lines.append(
                 f"- {fix.fixer}: {'success' if fix.success else 'failed'}; "
-                f"verification={verification}; changed_files={changed}; {fix.summary}"
+                f"verification={verification}; changed_files={changed}; {safe_summary}"
             )
     else:
         lines.append("- none")

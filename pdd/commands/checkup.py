@@ -120,6 +120,19 @@ from ..core.errors import handle_error
     ),
 )
 @click.option(
+    "--fixer-fallback",
+    type=str,
+    default=None,
+    show_default=False,
+    help=(
+        "Optional secondary fixer role to invoke once if the primary fixer "
+        "cannot address the reviewer's findings (e.g. a subscription-tier "
+        "credential exhaustion such as Claude Code 'You've hit your limit "
+        "· resets …'). Must differ from --fixer and --reviewer to preserve "
+        "reviewer/fixer role independence."
+    ),
+)
+@click.option(
     "--max-review-rounds",
     type=int,
     default=5,
@@ -223,6 +236,7 @@ def checkup(
     reviewer: Optional[str],
     fixer: Optional[str],
     reviewer_fallback: Optional[str],
+    fixer_fallback: Optional[str],
     max_review_rounds: int,
     max_review_cost: float,
     max_review_minutes: float,
@@ -366,6 +380,7 @@ def checkup(
             reviewer=reviewer,
             fixer=fixer,
             reviewer_fallback=reviewer_fallback,
+            fixer_fallback=fixer_fallback,
             max_review_rounds=max_review_rounds,
             max_review_cost=max_review_cost,
             max_review_minutes=max_review_minutes,
