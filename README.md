@@ -2658,6 +2658,14 @@ The command uses a two-stage retrieval pipeline when candidates exceed 50:
 
 After inserting `<include>` directives, the command performs a **deduplication pass** that identifies and removes inline content in the prompt that semantically duplicates what the included documents already provide.
 
+**Metadata finalization (on success):** After a successful `auto-deps` run, the command writes/updates a fingerprint in `.pdd/meta/` for the file that was actually written (with `operation="auto-deps"` and the current include-dependency hashes) and clears any stale per-module `_run.json` report keyed by the same identity, so downstream commands see a consistent view. The fingerprint write and the include-dependency metadata update are committed together (atomic from the caller's perspective) and use hash-based, language-agnostic helpers from `pdd.operation_log`. Finalization errors are surfaced as warnings and do not mask a successful `auto-deps` result. Invalid `<include>` tags stripped by the prompt sanitizer and architecture-merge failures (e.g. `architecture.json` could not be patched in place) are also surfaced as yellow warnings before the success summary.
+
+Identity is derived from the **output path**:
+- **In-place mode** (`--output <PROMPT_FILE>`, or `pdd sync`'s post-move flow): the output path is the canonical prompt, so the fingerprint lands at `.pdd/meta/<basename>_<language>.json`.
+- **Default mode** (output is the separate `<basename>_<language>_with_deps.prompt` derivative): the fingerprint lands at `.pdd/meta/<basename>_<language>_with_deps.json`. Canonical metadata is intentionally untouched in this case — the derivative fingerprint records that an `auto-deps` run produced that file without overwriting the canonical module's record.
+
+**Note on `pdd sync`:** `pdd sync` invokes `auto-deps` with a `*_with_deps.prompt` temp output and then moves it onto the canonical prompt. To avoid leaving orphan `.pdd/meta/*_with_deps.json` files for the moved temp prompt (and to avoid clearing the wrong run report), sync passes the internal `_skip_finalization=True` flag to `auto_deps_main` and owns canonical metadata itself: sync writes the canonical fingerprint via its atomic state machinery (`_save_fingerprint_atomic`) and clears the canonical `_run.json` via `clear_run_report` immediately after the move.
+
 The command maintains a CSV file with the following columns:
 - `full_path`: The full path to the dependency file
 - `file_summary`: A one-sentence summary of the file's content and purpose

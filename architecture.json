@@ -1258,7 +1258,13 @@
   {
     "reason": "CLI entry point for auto-deps with doc discovery, dedup, and parallelization support.",
     "description": "Command-line interface for auto deps. Parses arguments, orchestrates the workflow, and formats output.",
-    "dependencies": [],
+    "dependencies": [
+      "construct_paths_python.prompt",
+      "insert_includes_python.prompt",
+      "validate_prompt_includes_python.prompt",
+      "operation_log_python.prompt",
+      "auto_deps_architecture_python.prompt"
+    ],
     "priority": 35,
     "filename": "auto_deps_main_python.prompt",
     "filepath": "pdd/auto_deps_main.py",
@@ -1272,7 +1278,7 @@
         "functions": [
           {
             "name": "auto_deps_main",
-            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1)",
+            "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, _skip_finalization: bool = False)",
             "returns": "Tuple[str, float, str]"
           }
         ]
