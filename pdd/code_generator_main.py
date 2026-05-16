@@ -787,14 +787,38 @@ def _format_python_signature(node: ast.AST, *, skip_first: bool = False) -> str:
             text += f"={ast.unparse(default)}"
         parts.append(text)
 
-    positional = list(args.posonlyargs) + list(args.args)
-    if skip_first and positional:
-        positional = positional[1:]
+    posonly = list(args.posonlyargs)
+    regular = list(args.args)
+    # ``skip_first=True`` drops the implicit receiver (``self`` /
+    # ``cls``) so an instance method is compared receiver-stripped. The
+    # receiver lives in posonly when present (rare — e.g. PEP 570
+    # methods), otherwise in ``args.args``. Strip from the correct list
+    # so the remaining count used for the ``/`` marker insertion below
+    # stays accurate (external review PR #1015).
+    if skip_first:
+        if posonly:
+            posonly = posonly[1:]
+        elif regular:
+            regular = regular[1:]
+    positional = posonly + regular
     defaults: List[Optional[ast.AST]] = [None] * (
         len(positional) - len(args.defaults)
     ) + list(args.defaults)
+    parts_before_positional = len(parts)
     for arg, default in zip(positional, defaults):
         add_arg(arg, default)
+    # Emit a literal ``/`` separator IMMEDIATELY after the
+    # positional-only group so ``def f(x, /, y)`` and ``def f(x, y)``
+    # produce DIFFERENT signature snapshots — kwarg-only callers
+    # (``f(x=1, y=2)``) succeed against the second but break against
+    # the first, and the public-surface gate must catch the
+    # regression. Mirror the ``*`` insertion below for ``kwonlyargs``.
+    # Skip when no posonly args remain after ``skip_first`` (a
+    # stripped lone-receiver posonly leaves zero, in which case the
+    # function is effectively a regular method and no ``/`` is
+    # needed). External review PR #1015.
+    if posonly:
+        parts.insert(parts_before_positional + len(posonly), "/")
     if args.vararg:
         text = "*" + args.vararg.arg
         if args.vararg.annotation is not None:
