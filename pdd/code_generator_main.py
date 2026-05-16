@@ -917,6 +917,102 @@ def _python_property_accessor_role(node: ast.AST) -> Optional[str]:
     return None
 
 
+def _is_dataclass_decorator(decorator: ast.AST) -> bool:
+    """Return True when ``decorator`` is a stdlib ``@dataclass`` form.
+
+    Recognises ALL four AST shapes the parser produces for the stdlib
+    ``dataclasses.dataclass`` decorator:
+
+    * ``@dataclass``                       -> ``ast.Name(id="dataclass")``
+    * ``@dataclasses.dataclass``           -> ``ast.Attribute(attr="dataclass",
+      value=ast.Name(id="dataclasses"))``
+    * ``@dataclass(frozen=True)``          -> ``ast.Call`` wrapping the Name form
+    * ``@dataclasses.dataclass(frozen=True)`` -> ``ast.Call`` wrapping the
+      Attribute form
+
+    SCOPE NOTE: this intentionally does NOT handle third-party
+    dataclass-like decorators such as ``@attr.s`` / ``@attrs.define`` /
+    ``@attr.define`` / ``@pydantic.dataclasses.dataclass`` (their
+    field-resolution rules diverge — e.g. ``attrs`` filters by
+    ``attr.ib()`` / ``attr.field()`` markers, ``pydantic`` honours
+    ``Field(...)`` defaults differently). The synthesised init signature
+    for those decorators falls back to the existing ``()`` shape and
+    field changes there are NOT yet detected by this snapshot. Future
+    iteration may extend coverage.
+    """
+    target = decorator.func if isinstance(decorator, ast.Call) else decorator
+    if isinstance(target, ast.Name) and target.id == "dataclass":
+        return True
+    if (
+        isinstance(target, ast.Attribute)
+        and target.attr == "dataclass"
+        and isinstance(target.value, ast.Name)
+        and target.value.id == "dataclasses"
+    ):
+        return True
+    return False
+
+
+def _synthesize_dataclass_init_signature(class_node: ast.ClassDef) -> str:
+    """Build a constructor signature for an ``@dataclass`` class with no explicit init.
+
+    Walks the class body in source order, treating each top-level
+    ``ast.AnnAssign`` (annotated assignment) whose target is a bare
+    ``ast.Name`` as a positional field — matching the stdlib
+    ``dataclasses`` runtime behaviour (field order in the synthesised
+    ``__init__`` is the source order of the annotated attributes).
+
+    Excluded:
+
+    * Underscore-prefixed names: dataclass synthesises an init param
+      for them at runtime, but they are NOT part of the *public* API
+      surface this snapshot tracks. Mirroring the ``_is_public_top_level``
+      convention used by the surrounding helper.
+    * ``ClassVar[...]`` annotations: dataclasses skip these per PEP 557.
+      Detected by substring match on the unparsed annotation so both
+      bare ``ClassVar`` and ``typing.ClassVar`` / ``t.ClassVar`` forms
+      work.
+    * ``InitVar[...]`` annotations: dataclasses DO pass these to
+      ``__init__`` and ``__post_init__``, but they are not stored as
+      instance attributes. Treating them as fields would produce a
+      false-positive signature for the snapshot since callers cannot
+      access them as attributes after construction. Same substring
+      detection as ``ClassVar``.
+    * Plain ``ast.Assign`` without annotation: ``x = 5`` is a class-
+      level constant, NOT a dataclass field.
+
+    Default values are emitted verbatim via ``ast.unparse``. This
+    includes ``field(default_factory=...)`` and
+    ``field(default=sentinel)`` expressions — the snapshot diff
+    therefore reflects ANY change to the literal default text, even if
+    runtime semantics are equivalent. That is the conservative
+    behaviour callers expect from the public-surface gate.
+    """
+    parts: List[str] = []
+    for child in class_node.body:
+        if not isinstance(child, ast.AnnAssign):
+            continue
+        target = child.target
+        if not isinstance(target, ast.Name):
+            continue
+        name = target.id
+        if name.startswith("_"):
+            continue
+        annotation_text = ast.unparse(child.annotation) if child.annotation else ""
+        # Substring match handles both bare ``ClassVar`` / ``InitVar`` and
+        # the module-prefixed ``typing.ClassVar`` / ``dataclasses.InitVar``
+        # forms. We intentionally accept false-positive matches like
+        # ``MyClassVarish`` to keep the check trivially robust; real
+        # codebases overwhelmingly use the canonical names.
+        if "ClassVar" in annotation_text or "InitVar" in annotation_text:
+            continue
+        part = f"{name}: {annotation_text}" if annotation_text else name
+        if child.value is not None:
+            part += f" = {ast.unparse(child.value)}"
+        parts.append(part)
+    return f"({', '.join(parts)})"
+
+
 def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
     """Collect signatures for public top-level functions, classes, and class methods.
 
@@ -998,7 +1094,21 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                 explicit_init, skip_first=True
             )
         else:
-            class_signature = "()"
+            # No explicit ``__init__`` — but if the class is a stdlib
+            # ``@dataclass``, the synthesised init mirrors the field
+            # annotations. Build it from the ``AnnAssign`` field list so
+            # that adding/removing/reordering required fields shows up as
+            # a snapshot diff (reviewer reproducer for PR #1015). Falls
+            # back to the previous bare ``()`` for non-dataclass classes
+            # and for unsupported decorator forms (``@attr.s``,
+            # ``@pydantic.dataclasses.dataclass``, etc).
+            is_dataclass = any(
+                _is_dataclass_decorator(dec) for dec in class_node.decorator_list
+            )
+            if is_dataclass:
+                class_signature = _synthesize_dataclass_init_signature(class_node)
+            else:
+                class_signature = "()"
         signatures[qualname] = f"[class] {class_signature}"
 
         # First pass: accumulate property accessor roles per name so a
@@ -1146,6 +1256,55 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
             # declaration is a type hint, not an export. Mirrors the
             # corresponding branch in ``_snapshot_public_surface``.
             _record_assignment_target(node.target)
+        elif isinstance(node, ast.Import):
+            # Record re-exports so a silent break — ``import pathlib`` →
+            # ``pathlib = None``, or ``from pathlib import Path`` →
+            # ``def Path(): ...`` — registers as a snapshot diff instead
+            # of looking like a brand-new symbol. Without this entry the
+            # public-surface set still contains the bound name on both
+            # sides, but the signatures dict has nothing to compare the
+            # new ``def`` against; the regression slipped past iter-3
+            # (external review PR #1015).
+            for alias in node.names:
+                exposed = alias.asname or alias.name.split(".", 1)[0]
+                if not exposed or not _is_public_top_level(exposed):
+                    continue
+                if alias.asname:
+                    # ``import pathlib as p`` → ``p`` binds to the
+                    # ``pathlib`` module. Encoding the source module so
+                    # ``import os as p`` would still produce a distinct
+                    # entry.
+                    signatures[exposed] = f"[import:{alias.name}]"
+                else:
+                    # ``import pathlib`` and ``import a.b.c`` both bind
+                    # a single top-level name; record as plain
+                    # ``[import]`` — the diff key is the bound name
+                    # itself, the source is whatever's documented in
+                    # the prompt body.
+                    signatures[exposed] = "[import]"
+        elif isinstance(node, ast.ImportFrom):
+            # ``from X import *`` does NOT bind a fixed name (the
+            # surface helper already skips these) so it contributes
+            # nothing to the signatures dict either.
+            module = node.module or ""
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                exposed = alias.asname or alias.name
+                if not exposed or not _is_public_top_level(exposed):
+                    continue
+                if alias.asname:
+                    # ``from pathlib import Path as P`` records the
+                    # source identifier so re-pointing the alias at a
+                    # different attribute (``from os.path import join
+                    # as P``) flips the snapshot.
+                    signatures[exposed] = f"[import:from {module}:{alias.name}]"
+                else:
+                    # ``from pathlib import Path`` — the bound name is
+                    # ``alias.name`` so encoding the source module is
+                    # sufficient to distinguish it from a same-named
+                    # ``def Path()`` later in the file.
+                    signatures[exposed] = f"[import:from {module}]"
     return signatures
 
 
