@@ -95,7 +95,7 @@
         • NOTE: `pdd sync` invokes `auto_deps_main` with a temp `<basename>_<language>_with_deps.prompt` output and then `shutil.move`s it onto the canonical prompt; output is therefore *not* the same path as `prompt_file` at the moment this finalizer runs, so the gate above intentionally skips in sync's flow. Sync writes its own fingerprint via its atomic state machinery (`_save_fingerprint_atomic` in `pdd/sync_orchestration.py` around line 2719); aligning sync's `_run.json` lifecycle with its auto-deps step is a sync-side concern outside the scope of this prompt.
 
 <operation_log_interface>
-<include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report" mode="interface">pdd/operation_log.py</include>
+<include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report,def:get_run_report_path" mode="interface">pdd/operation_log.py</include>
 </operation_log_interface>
 
 <operation_log_usage_example>
