@@ -1376,7 +1376,7 @@ def calculate_sha256(file_path: Path) -> Optional[str]:
         return None
 
 
-_INCLUDE_PATTERN = re.compile(r'<include>(.*?)</include>')
+_INCLUDE_PATTERN = re.compile(r'<include\b[^>]*>(.*?)</include>')
 _BACKTICK_INCLUDE_PATTERN = re.compile(r'```<([^>]*?)>```')
 
 
