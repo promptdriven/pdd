@@ -234,9 +234,44 @@ def _env_flag_enabled(name: str) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
+# Match a YAML front matter block: opening ``---`` on line 1, then any
+# content, then a closing ``---`` on its own line. We anchor to the start
+# of the string and require both fences to terminate with a newline so a
+# stray ``---`` that never closes does NOT eat the entire prompt body.
+# ``re.DOTALL`` so ``.`` matches newlines inside the block.
+_YAML_FRONT_MATTER_RE = re.compile(
+    r"\A---\n.*?\n---\n",
+    re.DOTALL,
+)
+
+
+def _strip_yaml_front_matter(prompt_content: Optional[str]) -> str:
+    """Return ``prompt_content`` with a leading YAML front matter block stripped.
+
+    Per the PR #1012 contract, BREAKING-CHANGE: opt-outs must come from the
+    prompt BODY — not from metadata. Currently no shipped prompt uses YAML
+    front matter (verified by scanning ``pdd/prompts/``), so this is
+    defensive hardening against a future convention rather than a current
+    exploit. The stripped form is what every BREAKING-CHANGE parser must
+    see so that an indented directive inside front matter cannot whitelist
+    surface removals or test-churn rewrites.
+
+    The block must begin with ``---\\n`` on line 1 and close with a line
+    that is exactly ``---``. An unterminated opening fence is left alone
+    so we never silently swallow the entire prompt.
+    """
+    if not prompt_content:
+        return ""
+    match = _YAML_FRONT_MATTER_RE.match(prompt_content)
+    if match is None:
+        return prompt_content
+    return prompt_content[match.end():]
+
+
 def _prompt_has_breaking_change_marker(prompt_content: Optional[str]) -> bool:
     """Return True when the prompt explicitly opts into breaking changes."""
-    return bool(prompt_content and "BREAKING-CHANGE:" in prompt_content)
+    body = _strip_yaml_front_matter(prompt_content)
+    return bool(body and "BREAKING-CHANGE:" in body)
 
 
 # Match a BREAKING-CHANGE: directive only when it starts a line (optionally
@@ -272,12 +307,18 @@ def _iter_breaking_change_directives(prompt_content: Optional[str]) -> List[str]
     naming the marker by example) are intentionally ignored so a line like
     ``Use BREAKING-CHANGE: remove old_helper to opt out`` does NOT register as
     a real directive.
+
+    A leading YAML front matter block is stripped before the scan via
+    :func:`_strip_yaml_front_matter` so that an indented directive inside
+    metadata cannot opt the prompt out of the public-surface or
+    test-churn gates. Opt-outs come from the prompt BODY only.
     """
-    if not prompt_content:
+    body = _strip_yaml_front_matter(prompt_content)
+    if not body:
         return []
     return [
         match.group("directive").strip()
-        for match in _BREAKING_CHANGE_DIRECTIVE_RE.finditer(prompt_content)
+        for match in _BREAKING_CHANGE_DIRECTIVE_RE.finditer(body)
     ]
 
 
@@ -763,6 +804,40 @@ def _format_python_signature(node: ast.AST, *, skip_first: bool = False) -> str:
     return f"{prefix}({', '.join(parts)}){returns}"
 
 
+def _python_method_binding_kind(node: ast.AST) -> str:
+    """Return the binding kind ('instance', 'staticmethod', 'classmethod',
+    'property') for a class-body function-like node based on its decorators.
+
+    Used by :func:`_snapshot_public_signatures` to prefix the captured
+    signature string so that a binding-kind flip (e.g. ``def f(self, x)``
+    becoming ``@staticmethod def f(x)``) is detected as a signature change
+    even though the receiver-stripped parameter list is identical. Without
+    this prefix, callers doing ``Class.f(1)`` would silently break across
+    generations because the gate compared only normalized params.
+    """
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return "instance"
+    for decorator in getattr(node, "decorator_list", []):
+        name: Optional[str] = None
+        if isinstance(decorator, ast.Name):
+            name = decorator.id
+        elif isinstance(decorator, ast.Attribute):
+            name = decorator.attr
+        elif isinstance(decorator, ast.Call):
+            inner = decorator.func
+            if isinstance(inner, ast.Name):
+                name = inner.id
+            elif isinstance(inner, ast.Attribute):
+                name = inner.attr
+        if name == "staticmethod":
+            return "staticmethod"
+        if name == "classmethod":
+            return "classmethod"
+        if name == "property":
+            return "property"
+    return "instance"
+
+
 def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
     """Collect signatures for public top-level functions, classes, and class methods.
 
@@ -777,6 +852,14 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
     captured only if it appears in ``__all__``, even when underscore-
     prefixed. Without that mirror the removed-symbol diff and the
     signature-drift diff would disagree on what is "public".
+
+    Class methods are stored with a leading ``[<kind>]`` binding prefix
+    (``[instance]``, ``[staticmethod]``, ``[classmethod]``, ``[property]``)
+    so that a binding flip — e.g. ``def f(self, v)`` → ``@staticmethod def
+    f(v)`` — produces a snapshot diff even when the receiver-stripped
+    parameter list matches. Without this discriminator, ``Class.f(1)``
+    callers would silently break after a rewrite that preserved the
+    parameter shape but changed how the method binds at call time.
     """
     if (language or "").lower() not in {"python", "py"}:
         return {}
@@ -844,15 +927,21 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                 # do not re-add as ``qualname.__init__``.
                 if child.name == "__init__":
                     continue
-                is_staticmethod = any(
-                    (isinstance(d, ast.Name) and d.id == "staticmethod")
-                    or (isinstance(d, ast.Attribute) and d.attr == "staticmethod")
-                    for d in getattr(child, "decorator_list", [])
-                )
-                skip_first = not is_staticmethod
+                binding_kind = _python_method_binding_kind(child)
+                # ``staticmethod`` does NOT receive an implicit first arg
+                # so its signature should NOT strip the leading positional.
+                # ``classmethod`` / ``property`` / ``instance`` all bind
+                # implicitly and skip the receiver. ``property`` getters
+                # have a single ``self`` param that would otherwise vanish
+                # from the snapshot, but the binding-kind prefix makes the
+                # property-vs-method distinction observable on its own.
+                skip_first = binding_kind != "staticmethod"
                 if include_underscore or not child.name.startswith("_"):
-                    signatures[f"{qualname}.{child.name}"] = _format_python_signature(
+                    base_signature = _format_python_signature(
                         child, skip_first=skip_first
+                    )
+                    signatures[f"{qualname}.{child.name}"] = (
+                        f"[{binding_kind}] {base_signature}"
                     )
             elif isinstance(child, ast.ClassDef) and (
                 include_underscore or not child.name.startswith("_")
