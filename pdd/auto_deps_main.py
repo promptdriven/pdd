@@ -16,6 +16,7 @@ from .operation_log import (
     infer_module_identity,
     save_fingerprint,
     clear_run_report,
+    get_run_report_path,
 )
 
 
@@ -175,6 +176,23 @@ def auto_deps_main(
                                 console.print(
                                     f"[yellow]Warning: Failed to clear run report for "
                                     f"{basename}_{language}: {cr_exc}[/yellow]"
+                                )
+                        # Defensive: clear_run_report() in pdd.operation_log silently swallows
+                        # OSError on the actual unlink, so verify the report is really gone.
+                        try:
+                            _stale_report_path = get_run_report_path(basename, language)
+                            if _stale_report_path.exists():
+                                if not quiet:
+                                    console.print(
+                                        f"[yellow]Warning: clear_run_report did not remove "
+                                        f"{_stale_report_path}; downstream sync may still see "
+                                        f"stale results.[/yellow]"
+                                    )
+                        except Exception as _vrf_exc:
+                            if not quiet:
+                                console.print(
+                                    f"[yellow]Warning: could not verify run-report removal: "
+                                    f"{_vrf_exc}[/yellow]"
                                 )
                         try:
                             save_fingerprint(
