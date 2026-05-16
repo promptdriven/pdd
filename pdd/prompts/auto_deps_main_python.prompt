@@ -15,6 +15,7 @@
 <pdd-dependency>insert_includes_python.prompt</pdd-dependency>
 <pdd-dependency>validate_prompt_includes_python.prompt</pdd-dependency>
 <pdd-dependency>operation_log_python.prompt</pdd-dependency>
+<pdd-dependency>auto_deps_architecture_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `auto_deps_main` function that will be part of the `pdd` command-line program. This function will handle the core logic for the `auto-deps` command.
 
@@ -97,6 +98,10 @@
 <operation_log_interface>
 <include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report,def:get_run_report_path" mode="interface">pdd/operation_log.py</include>
 </operation_log_interface>
+
+<auto_deps_architecture_interface>
+<include select="def:merge_auto_deps_includes_from_cwd" mode="interface">pdd/auto_deps_architecture.py</include>
+</auto_deps_architecture_interface>
 
 <operation_log_usage_example>
 <include>context/operation_log_example.py</include>

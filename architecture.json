@@ -1262,7 +1262,8 @@
       "construct_paths_python.prompt",
       "insert_includes_python.prompt",
       "validate_prompt_includes_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "auto_deps_architecture_python.prompt"
     ],
     "priority": 35,
     "filename": "auto_deps_main_python.prompt",
