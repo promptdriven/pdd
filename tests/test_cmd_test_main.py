@@ -9,6 +9,7 @@ import click
 import requests
 from click import Context
 from pdd.cmd_test_main import cmd_test_main
+from pdd.code_generator_main import TestChurnError
 from pdd.core.cloud import CloudConfig, get_cloud_timeout
 
 
@@ -455,6 +456,436 @@ def test_cmd_test_main_non_python_agentic_writes_content_to_output_path(mock_ctx
     assert expected_output.read_text() == generated_content, (
         "Output file content must match generated_content returned by run_agentic_test_generate."
     )
+
+
+def test_cmd_test_main_blocks_high_churn_native_test_rewrite(mock_ctx_fixture, tmp_path, monkeypatch):
+    output_path = tmp_path / "tests" / "test_calc.py"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text(
+        "\n".join(
+            [
+                "def test_a(): pass",
+                "def test_b(): pass",
+                "def test_c(): pass",
+                "def test_d(): pass",
+                "def test_e(): pass",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    generated_content = "\n".join(
+        [
+            "def test_new_a(): pass",
+            "def test_new_b(): pass",
+            "def test_new_c(): pass",
+            "def test_new_d(): pass",
+            "def test_new_e(): pass",
+        ]
+    )
+    monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test", return_value=(generated_content, 0.1, "model")):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "python",
+        )
+
+        with pytest.raises(TestChurnError):
+            cmd_test_main(
+                ctx=mock_ctx_fixture,
+                prompt_file="prompts/calc.prompt",
+                code_file="src/calc.py",
+                output=str(output_path),
+                language="python",
+            )
+
+    assert "test_a" in output_path.read_text(encoding="utf-8")
+
+
+def test_cmd_test_main_blocks_and_restores_agentic_test_rewrite(mock_ctx_fixture, tmp_path, monkeypatch):
+    output_path = tmp_path / "tests" / "test_calc.ts"
+    output_path.parent.mkdir(parents=True)
+    original_content = "\n".join(
+        [
+            "test('a', () => {});",
+            "test('b', () => {});",
+            "test('c', () => {});",
+            "test('d', () => {});",
+            "test('e', () => {});",
+        ]
+    )
+    generated_content = "\n".join(
+        [
+            "test('new a', () => {});",
+            "test('new b', () => {});",
+            "test('new c', () => {});",
+            "test('new d', () => {});",
+            "test('new e', () => {});",
+        ]
+    )
+    output_path.write_text(original_content, encoding="utf-8")
+    monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+
+    def fake_agentic(*_args, **_kwargs):
+        output_path.write_text(generated_content, encoding="utf-8")
+        return generated_content, 0.1, "agentic-cli", True, ""
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", fake_agentic):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "typescript",
+        )
+
+        with pytest.raises(TestChurnError):
+            cmd_test_main(
+                ctx=mock_ctx_fixture,
+                prompt_file="prompts/calc.prompt",
+                code_file="src/calc.ts",
+                output=str(output_path),
+                language="typescript",
+            )
+
+    assert output_path.read_text(encoding="utf-8") == original_content
+
+
+# ---------------------------------------------------------------------------
+# Codex review (#1015) HIGH (iter-5): empty agentic test output with a
+# pre-existing canonical test file is the deletion variant of test
+# churn. The fix in pdd/cmd_test_main.py treats it as maximal churn
+# (ratio=1.0) — restore the file, raise TestChurnError so the existing
+# repair loop in sync_orchestration._run_test_op_with_churn_retry can
+# retry with PDD_REPAIR_DIRECTIVE. First-time generation (no
+# pre-existing file content) remains exempt.
+# ---------------------------------------------------------------------------
+def test_cmd_test_main_agentic_empty_output_with_existing_raises_churn(
+    mock_ctx_fixture, tmp_path, monkeypatch
+):
+    """A successful agentic run that produces empty content over a
+    pre-existing canonical test file MUST raise TestChurnError with
+    churn_ratio=1.0 and restore the original file on disk."""
+    output_path = tmp_path / "tests" / "test_calc.py"
+    output_path.parent.mkdir(parents=True)
+    existing_content = (
+        "def test_a(): pass\n"
+        "def test_b(): pass\n"
+        "def test_c(): pass\n"
+    )
+    output_path.write_text(existing_content, encoding="utf-8")
+    monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+
+    # Force the agentic path by enabling agentic_mode.
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    def fake_agentic(*_args, **_kwargs):
+        # Simulate the agent silently deleting the canonical test file
+        # AND reporting success with empty generated_content.
+        if output_path.exists():
+            output_path.unlink()
+        return ("", 0.05, "model-x", True, None)
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", fake_agentic):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "python",
+        )
+
+        with pytest.raises(TestChurnError) as excinfo:
+            cmd_test_main(
+                ctx=mock_ctx_fixture,
+                prompt_file="prompts/calc.prompt",
+                code_file="src/calc.py",
+                output=str(output_path),
+                language="python",
+                merge=False,
+            )
+
+    # Maximal-churn signal.
+    assert excinfo.value.churn_ratio == pytest.approx(1.0)
+    assert excinfo.value.pre_line_count == len(existing_content.splitlines())
+    assert excinfo.value.post_line_count == 0
+    assert excinfo.value.total_cost == pytest.approx(0.05)
+    assert excinfo.value.model_name == "model-x"
+    # The pre-existing file is restored on disk.
+    assert output_path.read_text(encoding="utf-8") == existing_content
+    # Repair directive surfaces the deletion-preserve-coverage language so
+    # the agentic_sync_runner repair loop knows what to instruct on retry.
+    directive = excinfo.value.repair_directive
+    assert "preserve" in directive.lower() or "preserving" in directive.lower()
+    assert "delete" in directive.lower() or "deleted" in directive.lower()
+
+
+def test_cmd_test_main_agentic_empty_output_first_time_is_exempt(
+    mock_ctx_fixture, tmp_path
+):
+    """First-time generation (no pre-existing canonical test file) keeps
+    the documented warning-and-return behavior — empty agentic content
+    over an empty/missing existing file must NOT raise."""
+    output_path = tmp_path / "tests" / "test_calc.ts"
+    output_path.parent.mkdir(parents=True)
+    # No pre-existing file: the agentic path's `existing_test_content`
+    # remains empty, which is the first-time-generation exemption.
+    assert not output_path.exists()
+
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    def fake_agentic(*_args, **_kwargs):
+        return ("", 0.05, "model-x", True, None)
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", fake_agentic):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "typescript",
+        )
+
+        # Must NOT raise — first-time generation is exempt.
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="prompts/calc.prompt",
+            code_file="src/calc.ts",
+            output=str(output_path),
+            language="typescript",
+            merge=False,
+        )
+
+    # TestResult fields: generated_content, total_cost, model_name,
+    # agentic_success, agentic_error.
+    assert result[0] == ""
+    assert result[2] == "model-x"
+    assert result[3] is True
+    # No content was written when generated_content was empty.
+    assert not output_path.exists()
+
+
+# ---------------------------------------------------------------------------
+# Codex review (#1015) F-B (iter-6): the deletion-as-churn raise must
+# gate on agentic_success. If the agent itself failed (tool error,
+# provider crash) the empty/missing generated_content is NOT churn — it
+# is an agentic failure. Misreporting that as TestChurnError would set
+# a churn repair directive and mask the underlying failure.
+# ---------------------------------------------------------------------------
+def test_cmd_test_main_agentic_failure_with_existing_does_not_raise_churn(
+    mock_ctx_fixture, tmp_path
+):
+    """When agentic_success is False AND existing test content exists,
+    cmd_test_main must NOT raise TestChurnError. It must defensively
+    restore the pre-existing test file and propagate the agentic failure
+    via the returned TestResult so the caller sees the real error."""
+    output_path = tmp_path / "tests" / "test_calc.py"
+    output_path.parent.mkdir(parents=True)
+    existing_content = (
+        "def test_a(): pass\n"
+        "def test_b(): pass\n"
+    )
+    output_path.write_text(existing_content, encoding="utf-8")
+
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    def fake_agentic(*_args, **_kwargs):
+        # Simulate the agent partially modifying the file then failing
+        # (e.g. provider crash mid-write).
+        output_path.write_text("# partial garbage\n", encoding="utf-8")
+        return ("", 0.05, "model-x", False, "provider crashed mid-run")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", fake_agentic):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "python",
+        )
+
+        # Must NOT raise — the agent itself failed, this is not churn.
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="prompts/calc.prompt",
+            code_file="src/calc.py",
+            output=str(output_path),
+            language="python",
+            merge=False,
+        )
+
+    # The agentic failure surfaces through the TestResult.
+    assert result[0] == ""
+    assert result[3] is False
+    assert "provider crashed mid-run" in (result[4] or "")
+    # Defensive restore: the pre-existing test file is back on disk so
+    # accumulated coverage isn't lost even though the agent failed.
+    assert output_path.read_text(encoding="utf-8") == existing_content
+
+
+def test_cmd_test_main_agentic_failure_first_time_returns_failure(
+    mock_ctx_fixture, tmp_path
+):
+    """When agentic_success is False AND there is no pre-existing test
+    file, cmd_test_main must NOT raise — it returns the agentic failure
+    cleanly so the caller can diagnose."""
+    output_path = tmp_path / "tests" / "test_calc.py"
+    output_path.parent.mkdir(parents=True)
+    assert not output_path.exists()
+
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    def fake_agentic(*_args, **_kwargs):
+        return ("", 0.05, "model-x", False, "agent timed out")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", fake_agentic):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "prompt", "code_file": "code"},
+            {"output": str(output_path)},
+            "python",
+        )
+
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="prompts/calc.prompt",
+            code_file="src/calc.py",
+            output=str(output_path),
+            language="python",
+            merge=False,
+        )
+
+    assert result[0] == ""
+    assert result[3] is False
+    assert "agent timed out" in (result[4] or "")
+
+
+# ---------------------------------------------------------------------------
+# Codex review (#1015) F-A / F-H (iter-10): the repair directive must
+# reach the native test-generation prompt via the explicit
+# `repair_directive` kwarg. cmd_test_main MUST NOT read
+# `PDD_REPAIR_DIRECTIVE` from the environment — a stale outer value
+# (set by the caller's shell, a parent orchestration layer, or a prior
+# PDD command) would otherwise contaminate direct CLI invocations that
+# have no active retry context.
+# ---------------------------------------------------------------------------
+def test_cmd_test_main_pdd_repair_directive_reaches_native_generate(
+    mock_ctx_fixture, mock_files_fixture, monkeypatch
+):
+    """For the native (cloud/local) path, when `repair_directive` is
+    passed the directive must be appended to `prompt_content` inside a
+    `<test_repair_directive>` block before generate_test is called."""
+    # Ensure no ambient env contamination — kwarg is the only channel.
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "original prompt body", "code_file": "code"},
+            {"output": mock_files_fixture["output"]},
+            "python",
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+            repair_directive="repair text for retry",
+        )
+
+    # generate_test should have received the augmented prompt.
+    assert mock_generate_test.call_count == 1
+    sent_prompt = mock_generate_test.call_args.kwargs["prompt"]
+    assert "original prompt body" in sent_prompt
+    assert "<test_repair_directive>" in sent_prompt
+    assert "repair text for retry" in sent_prompt
+    assert "</test_repair_directive>" in sent_prompt
+
+
+def test_cmd_test_main_pdd_repair_directive_absent_when_kwarg_unset(
+    mock_ctx_fixture, mock_files_fixture, monkeypatch
+):
+    """When `repair_directive` is None (default), no directive block
+    is injected into the generation prompt."""
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "original prompt body", "code_file": "code"},
+            {"output": mock_files_fixture["output"]},
+            "python",
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+        )
+
+    sent_prompt = mock_generate_test.call_args.kwargs["prompt"]
+    assert "<test_repair_directive>" not in sent_prompt
+
+
+def test_cmd_test_main_ignores_stale_env_directive_without_kwarg(
+    mock_ctx_fixture, mock_files_fixture, monkeypatch
+):
+    """Codex F-H: cmd_test_main MUST NOT read `PDD_REPAIR_DIRECTIVE`
+    from the environment. Direct CLI invocations with a stale outer
+    env value but no `repair_directive` kwarg must NOT inject a
+    `<test_repair_directive>` block."""
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER-DIRECTIVE")
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.cmd_test_main.generate_test") as mock_generate_test, \
+         patch("builtins.open", mock_open()):
+        mock_construct_paths.return_value = (
+            {},
+            {"prompt_file": "original prompt body", "code_file": "code"},
+            {"output": mock_files_fixture["output"]},
+            "python",
+        )
+        mock_generate_test.return_value = ("unit_test_code", 0.10, "model_v1")
+
+        cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file=mock_files_fixture["prompt_file"],
+            code_file=mock_files_fixture["code_file"],
+            output=mock_files_fixture["output"],
+            language=None,
+            coverage_report=None,
+            existing_tests=None,
+            target_coverage=None,
+            merge=False,
+            # No repair_directive kwarg — direct CLI invocation.
+        )
+
+    sent_prompt = mock_generate_test.call_args.kwargs["prompt"]
+    # Stale env must not leak into the prompt.
+    assert "<test_repair_directive>" not in sent_prompt
+    assert "STALE-OUTER-DIRECTIVE" not in sent_prompt
 
 
 def test_cmd_test_main_uses_safe_ctx_obj_access():

@@ -55,7 +55,13 @@ from .sync_determine_operation import (
     _safe_basename,
 )
 from .auto_deps_main import auto_deps_main
-from .code_generator_main import code_generator_main
+from .code_generator_main import (
+    code_generator_main,
+    PublicSurfaceRegressionError,
+    TestChurnError,
+    _verify_public_surface_regression,
+)
+from .agentic_sync_runner import build_test_churn_hard_failure_from_error
 from .context_generator_main import context_generator_main
 from .crash_main import crash_main
 from .fix_verification_main import fix_verification_main
@@ -125,6 +131,246 @@ def _extract_model_from_result(operation: str, result: tuple) -> str:
     if len(result) > idx and isinstance(result[idx], str):
         return result[idx]
     return 'unknown'
+
+
+def _fold_test_churn_cost_into_result(
+    result: Any,
+    *,
+    accumulated_cost: float,
+    accumulated_model: str,
+) -> Any:
+    """Return ``result`` with prior failed-attempt cost/model folded in.
+
+    The test op's return type is ``TestResult`` (a ``NamedTuple``) in
+    production, but legacy paths and tests may return a ``dict`` (with
+    ``cost``/``model`` keys) or a generic tuple where ``cost`` is at
+    index 1 and ``model`` at index 2 (matches ``_extract_cost_from_result``
+    /``_extract_model_from_result`` for the test op).
+
+    When the successful retry's model is absent/empty, fall back to the
+    accumulated model from the last failed attempt so the run report
+    still attributes the spend correctly. Shapes the helper doesn't
+    recognize are returned unchanged — the bug is most acute for the
+    canonical ``TestResult`` shape and we keep behavior conservative
+    for anything exotic.
+    """
+    # TestResult is a NamedTuple — use ``_replace`` to keep all other
+    # fields (content/agentic_success/error_message) intact.
+    if hasattr(result, "_replace") and hasattr(result, "_fields"):
+        fields = getattr(result, "_fields", ())
+        updates: Dict[str, Any] = {}
+        if "cost" in fields:
+            updates["cost"] = float(getattr(result, "cost", 0.0) or 0.0) + accumulated_cost
+        if "model" in fields:
+            current_model = getattr(result, "model", "") or ""
+            updates["model"] = current_model or accumulated_model or "unknown"
+        if updates:
+            return result._replace(**updates)
+        return result
+    if isinstance(result, dict):
+        folded = dict(result)
+        folded["cost"] = float(folded.get("cost", 0.0) or 0.0) + accumulated_cost
+        current_model = folded.get("model", "") or ""
+        folded["model"] = current_model or accumulated_model or "unknown"
+        return folded
+    if isinstance(result, tuple) and len(result) >= 3:
+        cost_idx = 1
+        model_idx = 2
+        existing_cost = result[cost_idx] if isinstance(result[cost_idx], (int, float)) and not isinstance(result[cost_idx], bool) else 0.0
+        existing_model = result[model_idx] if isinstance(result[model_idx], str) else ""
+        new_cost = float(existing_cost or 0.0) + accumulated_cost
+        new_model = existing_model or accumulated_model or "unknown"
+        return result[:cost_idx] + (new_cost, new_model) + result[model_idx + 1:]
+    return result
+
+
+def _run_test_op_with_churn_retry(
+    call: Callable[[Optional[str]], Any],
+    *,
+    basename: str,
+    budget_remaining: float,
+) -> Any:
+    """Run a `cmd_test_main` call inside a bounded `TestChurnError` repair loop.
+
+    The test-op uses the same `PDD_REPAIR_DIRECTIVE` plumbing as the
+    generate-op architecture-conformance / public-surface loop (#866, #1012),
+    but caps retries at one extra attempt: churn rewrites rarely converge,
+    and the directive forces an additive-only edit on the retry.
+
+    The ``call`` callable accepts an ``Optional[str]`` repair_directive
+    argument: attempt 1 receives ``None`` (no in-loop failure yet);
+    attempt 2 receives the prior ``TestChurnError.repair_directive``.
+    Callers are expected to forward this to ``cmd_test_main(..., repair_directive=...)``
+    so the directive flows into the test-generation prompt via the
+    explicit kwarg rather than ``os.environ`` (#1012, F-G / F-H).
+
+    Behavior:
+    - On each ``TestChurnError`` accumulate ``exc.total_cost`` / ``exc.model_name``
+      onto the exception (so callers can charge for failed attempts).
+    - Track the repair directive in a loop-local variable
+      ``pending_repair_directive`` (source of truth for the next
+      attempt's ``call`` argument). Also write
+      ``os.environ["PDD_REPAIR_DIRECTIVE"]`` so nested PDD CLI
+      subprocesses spawned by agentic test generation inherit it via
+      the env (load-bearing for ``code_generator_main``'s own repair
+      loop in the child process); but this loop ITSELF does not read
+      the env to drive the call.
+    - Skip the retry if the remaining budget is already exhausted by the
+      failed attempt's accumulated cost.
+    - On exhaustion, emit the structured ``=== test churn threshold exceeded ===``
+      block to stderr and re-raise the last exception.
+    - On a successful retry, fold any prior failed-attempt cost (and the
+      last failed-attempt model when the success response leaves the
+      model blank) into the returned ``TestResult`` so the sync budget
+      charges the operator for every attempt.
+    - Always restore ``PDD_REPAIR_DIRECTIVE`` to its prior value in a
+      ``finally`` block.
+    - **Stale outer env protection** (#1012, F-G): pop
+      ``PDD_REPAIR_DIRECTIVE`` from the env BEFORE attempt 1 so a stale
+      outer value (set by the caller's shell, a parent orchestration
+      layer, or a prior PDD command) cannot leak through env inheritance
+      into nested subprocesses during attempt 1. The prior value is
+      restored in ``finally``.
+
+    The previous behavior (only the generic ``except`` printed the hard
+    block) is preserved on exhaustion, so this function is the single
+    source-of-truth for emitting the diagnostic — the per-operation
+    ``except`` no longer prints it for the test op.
+    """
+    from .agentic_sync_runner import MAX_CONFORMANCE_ATTEMPTS
+
+    prev_repair = os.environ.get("PDD_REPAIR_DIRECTIVE")
+    # Pop the env var BEFORE attempt 1 so any nested PDD CLI subprocess
+    # spawned by agentic test generation during the first attempt sees a
+    # CLEAN env. Only failures raised inside THIS loop populate the
+    # directive for subsequent attempts.
+    os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
+    # Loop-local source of truth for the next attempt's call argument.
+    pending_repair_directive: Optional[str] = None
+    try:
+        last_exc: Optional[TestChurnError] = None
+        last_signature: Optional[tuple] = None
+        accumulated_cost = 0.0
+        accumulated_model = ""
+        for attempt in range(MAX_CONFORMANCE_ATTEMPTS):
+            try:
+                result = call(pending_repair_directive)
+                # Fold prior failed-attempt cost/model into the successful
+                # retry's result so the caller charges all attempts against
+                # the sync budget. Mirrors the generate-op repair loop's
+                # post-success rewrap (see #1015 Codex review) and the
+                # `one_session_sync` accumulation.
+                if accumulated_cost > 0:
+                    result = _fold_test_churn_cost_into_result(
+                        result,
+                        accumulated_cost=accumulated_cost,
+                        accumulated_model=accumulated_model,
+                    )
+                return result
+            except TestChurnError as exc:
+                attempt_cost = float(getattr(exc, "total_cost", 0.0) or 0.0)
+                accumulated_cost += attempt_cost
+                exc.total_cost = accumulated_cost
+                exc_model = getattr(exc, "model_name", "") or ""
+                if exc_model and exc_model != "unknown":
+                    accumulated_model = exc_model
+                    exc.model_name = accumulated_model
+                signature = (
+                    f"{exc.churn_ratio:.2f}",
+                    str(exc.pre_line_count),
+                )
+                # Stop early if the retry produced the identical churn
+                # signature (no progress is being made).
+                if last_signature is not None and signature == last_signature:
+                    last_exc = exc
+                    break
+                last_signature = signature
+                last_exc = exc
+                if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                    break
+                # Test-churn retries are unlikely to converge — cap at one
+                # extra attempt (mirrors the generate-op test-churn branch).
+                if attempt >= 1:
+                    break
+                if accumulated_cost >= max(budget_remaining, 0.0):
+                    break
+                # Record the directive for the next attempt's `call`
+                # argument (loop-local source of truth) AND set the env
+                # var so any re-entrant PDD CLI subprocess spawned by
+                # agentic test generation inherits it.
+                pending_repair_directive = exc.repair_directive
+                os.environ["PDD_REPAIR_DIRECTIVE"] = exc.repair_directive
+        if last_exc is not None:
+            hard_block = build_test_churn_hard_failure_from_error(last_exc, basename)
+            print(hard_block, file=sys.stderr)
+            raise last_exc
+        # Unreachable: the loop either returns or sets last_exc.
+        return None
+    finally:
+        if prev_repair is None:
+            os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
+        else:
+            os.environ["PDD_REPAIR_DIRECTIVE"] = prev_repair
+
+
+def _verify_code_surface_after_write(
+    *,
+    code_path: Path,
+    pre_code: str,
+    basename: str,
+    language: str,
+    prompt_path: Path,
+    operation: str,
+) -> Optional[PublicSurfaceRegressionError]:
+    """Verify the public surface of ``code_path`` against ``pre_code`` (#1012, P2.A).
+
+    Called AFTER a non-generate operation (``crash_main`` /
+    ``fix_verification_main`` / ``fix_main``) writes the code file
+    directly. The generate-op repair loop only protects
+    ``code_generator_main``; without this gate, downstream operations
+    can silently regress the public surface that the generate gate
+    accepted. Returns the ``PublicSurfaceRegressionError`` instance on
+    detection (so the caller can emit the structured hard-failure
+    block and record an appropriate error), or ``None`` when the
+    surface is preserved.
+
+    On detection the helper ALSO restores ``pre_code`` to disk so the
+    regression does NOT persist between operations or across sync
+    runs. Unlike the generate-op repair loop, no retry is triggered:
+    each of these operations already has its own internal iterative
+    fix loop (``loop=True``, ``max_attempts=N``); wrapping them in an
+    outer retry would compound retries (N×M). The user sees the
+    structured hard-failure block and a clear "operation failed" exit.
+    """
+    try:
+        post_code = code_path.read_text(encoding="utf-8")
+    except OSError:
+        post_code = ""
+    prompt_content = ""
+    try:
+        if prompt_path.exists():
+            prompt_content = prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        prompt_content = ""
+    try:
+        _verify_public_surface_regression(
+            existing_code=pre_code,
+            generated_code=post_code,
+            prompt_name=f"{basename}_{language}.prompt",
+            output_path=str(code_path),
+            language=language,
+            prompt_content=prompt_content,
+        )
+    except PublicSurfaceRegressionError as surface_err:
+        # Restore the pre-operation code file so the regression does
+        # not persist on disk. The caller decides what to surface
+        # (error string + hard-failure block).
+        try:
+            code_path.write_text(pre_code, encoding="utf-8")
+        except OSError:
+            pass
+        return surface_err
+    return None
 
 
 def _use_agentic_path(language: str, agentic_mode: bool) -> bool:
@@ -2226,15 +2472,38 @@ def sync_orchestration(
                                 # sees the missing-export instruction. Mirrors the loop in
                                 # sync_main.py / agentic_sync_runner.py for parity across all
                                 # `pdd sync` entry points.
-                                from .code_generator_main import ArchitectureConformanceError
+                                from .code_generator_main import (
+                                    ArchitectureConformanceError,
+                                    PublicSurfaceRegressionError,
+                                )
                                 from .agentic_sync_runner import (
                                     MAX_CONFORMANCE_ATTEMPTS,
                                     build_conformance_hard_failure_from_error,
+                                    build_public_surface_hard_failure_from_error,
                                 )
                                 _prev_repair = os.environ.get("PDD_REPAIR_DIRECTIVE")
+                                # Pop the env var BEFORE attempt 1 (#1012,
+                                # F-J) so `code_generator_main` reads a
+                                # CLEAN env on the first try. Without
+                                # this, a stale outer `PDD_REPAIR_DIRECTIVE`
+                                # (set by the caller's shell, a parent
+                                # orchestration layer, or a prior PDD
+                                # command) would be injected into the
+                                # first generation attempt's prompt via
+                                # the `<architecture_repair_directive>`
+                                # block read at code_generator_main.py:1990.
+                                # Only failures raised inside THIS loop
+                                # populate the directive for subsequent
+                                # attempts. The `finally` block below
+                                # restores the prior outer value when
+                                # the loop exits. Mirrors the parallel
+                                # pop in `_run_test_op_with_churn_retry`
+                                # (F-G) and `one_session_sync` (F-I).
+                                os.environ.pop("PDD_REPAIR_DIRECTIVE", None)
                                 try:
-                                    last_conform_exc: Optional[ArchitectureConformanceError] = None
-                                    last_conform_missing: Optional[tuple] = None
+                                    last_conform_exc: Optional[Any] = None
+                                    last_conform_signature: Optional[tuple] = None
+                                    last_conform_kind: Optional[str] = None
                                     conformance_failed_cost = 0.0
                                     conformance_failed_model = ""
                                     for _conform_attempt in range(MAX_CONFORMANCE_ATTEMPTS):
@@ -2243,20 +2512,59 @@ def sync_orchestration(
                                             result = code_generator_main(ctx, prompt_file=str(pdd_files['prompt'].resolve()), output=str(pdd_files['code'].resolve()), original_prompt_file_path=None, force_incremental_flag=False, output_from_config=True)
                                             last_conform_exc = None
                                             break
-                                        except ArchitectureConformanceError as _conform_exc:
+                                        except (
+                                            ArchitectureConformanceError,
+                                            PublicSurfaceRegressionError,
+                                            TestChurnError,
+                                        ) as _conform_exc:
                                             attempt_cost = float(getattr(_conform_exc, "total_cost", 0.0) or 0.0)
                                             conformance_failed_cost += attempt_cost
                                             _conform_exc.total_cost = conformance_failed_cost
                                             exc_model = getattr(_conform_exc, "model_name", "") or ""
                                             if exc_model and exc_model != "unknown":
                                                 conformance_failed_model = exc_model
-                                            new_missing = tuple(sorted(set(_conform_exc.missing_symbols)))
-                                            if last_conform_missing is not None and new_missing == last_conform_missing:
+                                            if isinstance(_conform_exc, PublicSurfaceRegressionError):
+                                                new_kind = "public_surface"
+                                                new_signature = tuple(
+                                                    [
+                                                        f"removed:{symbol}"
+                                                        for symbol in sorted(set(_conform_exc.removed_symbols))
+                                                    ]
+                                                    + [
+                                                        f"signature_changed:{symbol}"
+                                                        for symbol in sorted(
+                                                            set(
+                                                                getattr(
+                                                                    _conform_exc,
+                                                                    "changed_signatures",
+                                                                    [],
+                                                                )
+                                                            )
+                                                        )
+                                                    ]
+                                                )
+                                            elif isinstance(_conform_exc, TestChurnError):
+                                                new_kind = "test_churn"
+                                                new_signature = (
+                                                    f"{_conform_exc.churn_ratio:.2f}",
+                                                    str(_conform_exc.pre_line_count),
+                                                )
+                                            else:
+                                                new_kind = "architecture"
+                                                new_signature = tuple(sorted(set(_conform_exc.missing_symbols)))
+                                            if (
+                                                last_conform_signature is not None
+                                                and new_signature == last_conform_signature
+                                                and new_kind == last_conform_kind
+                                            ):
                                                 last_conform_exc = _conform_exc
                                                 break
-                                            last_conform_missing = new_missing
+                                            last_conform_signature = new_signature
+                                            last_conform_kind = new_kind
                                             last_conform_exc = _conform_exc
                                             if _conform_attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
+                                                break
+                                            if isinstance(_conform_exc, TestChurnError) and _conform_attempt >= 1:
                                                 break
                                             if conformance_failed_cost >= max(budget - current_cost_ref[0], 0.0):
                                                 break
@@ -2269,9 +2577,18 @@ def sync_orchestration(
                                         # converts the exception into an errors.append
                                         # entry, but the structured block has already
                                         # been written to stderr for the user.
-                                        hard_block = build_conformance_hard_failure_from_error(
-                                            last_conform_exc, basename
-                                        )
+                                        if isinstance(last_conform_exc, PublicSurfaceRegressionError):
+                                            hard_block = build_public_surface_hard_failure_from_error(
+                                                last_conform_exc, basename
+                                            )
+                                        elif isinstance(last_conform_exc, TestChurnError):
+                                            hard_block = build_test_churn_hard_failure_from_error(
+                                                last_conform_exc, basename
+                                            )
+                                        else:
+                                            hard_block = build_conformance_hard_failure_from_error(
+                                                last_conform_exc, basename
+                                            )
                                         print(hard_block, file=sys.stderr)
                                         raise last_conform_exc
                                     if conformance_failed_cost and isinstance(result, tuple) and len(result) >= 4:
@@ -2458,6 +2775,14 @@ def sync_orchestration(
                                             crash_log_content = f"Auto-fix attempted ({auto_fix_msg}) but still failing:\nRETRY STDOUT:\n{retry_stdout}\nRETRY STDERR:\n{retry_stderr}\n"
 
                                     Path("crash.log").write_text(crash_log_content)
+                                    # Snapshot pre-operation code so the
+                                    # public-surface gate (#1012, P2.A)
+                                    # can verify crash_main's rewrite
+                                    # did not regress public symbols.
+                                    try:
+                                        _crash_pre_code = pdd_files['code'].read_text(encoding="utf-8")
+                                    except OSError:
+                                        _crash_pre_code = ""
                                     try:
                                         # For non-Python languages (or agentic mode), set max_attempts=0 to skip iterative loop
                                         # and go directly to agentic fallback
@@ -2467,6 +2792,56 @@ def sync_orchestration(
                                         print(f"Crash fix failed: {e}")
                                         skipped_operations.append('crash')
                                         continue
+                                    # Post-operation public-surface gate
+                                    # (#1012, P2.A). crash_main writes
+                                    # the code file directly; without
+                                    # this check it could silently
+                                    # regress the surface that the
+                                    # generate gate accepted.
+                                    _crash_surface_exc = _verify_code_surface_after_write(
+                                        code_path=pdd_files['code'],
+                                        pre_code=_crash_pre_code,
+                                        basename=basename,
+                                        language=language,
+                                        prompt_path=pdd_files['prompt'],
+                                        operation='crash',
+                                    )
+                                    if _crash_surface_exc is not None:
+                                        from .agentic_sync_runner import (
+                                            build_public_surface_hard_failure_from_error,
+                                        )
+                                        hard_block = build_public_surface_hard_failure_from_error(
+                                            _crash_surface_exc, basename
+                                        )
+                                        print(hard_block, file=sys.stderr)
+                                        # Charge the failed helper's cost
+                                        # against the budget (#1012, P3.A)
+                                        # — without this, expensive
+                                        # crash_main spend that produced
+                                        # a regressing rewrite goes
+                                        # un-billed.
+                                        if isinstance(result, tuple):
+                                            current_cost_ref[0] += _extract_cost_from_result(
+                                                'crash', result
+                                            )
+                                        errors.append(
+                                            f"crash operation regressed public surface — refusing to continue. "
+                                            f"Add a `BREAKING-CHANGE:` directive to the prompt to opt out, "
+                                            f"or fix the prompt/code to preserve the public symbols. "
+                                            f"Details: {_crash_surface_exc}"
+                                        )
+                                        skipped_operations.append('crash')
+                                        # Terminate the operation loop
+                                        # (#1012, P3.A): a surface
+                                        # regression is a contract
+                                        # violation, not a transient
+                                        # failure. `continue` would let
+                                        # `sync_determine_operation`
+                                        # re-select the same op next
+                                        # iteration and spin
+                                        # indefinitely on deterministic
+                                        # bad output.
+                                        break
 
                             elif operation == 'verify':
                                 if not pdd_files['example'].exists():
@@ -2475,13 +2850,72 @@ def sync_orchestration(
                                 # For non-Python languages (or agentic mode), set max_attempts=0 to skip iterative loop
                                 # and go directly to agentic fallback
                                 effective_max_attempts = 0 if _use_agentic_path(language, agentic_mode) else max_attempts
+                                # Snapshot pre-operation code so the
+                                # public-surface gate (#1012, P2.A) can
+                                # verify the verify-op's rewrite did
+                                # not regress public symbols.
+                                try:
+                                    _verify_pre_code = pdd_files['code'].read_text(encoding="utf-8")
+                                except OSError:
+                                    _verify_pre_code = ""
                                 result = fix_verification_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), program_file=str(pdd_files['example']), output_results=f"{basename.replace('/', '_')}_verify_results.log", output_code=str(pdd_files['code']), output_program=str(pdd_files['example']), loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], strength=strength, temperature=temperature)
+                                _verify_surface_exc = _verify_code_surface_after_write(
+                                    code_path=pdd_files['code'],
+                                    pre_code=_verify_pre_code,
+                                    basename=basename,
+                                    language=language,
+                                    prompt_path=pdd_files['prompt'],
+                                    operation='verify',
+                                )
+                                if _verify_surface_exc is not None:
+                                    from .agentic_sync_runner import (
+                                        build_public_surface_hard_failure_from_error,
+                                    )
+                                    hard_block = build_public_surface_hard_failure_from_error(
+                                        _verify_surface_exc, basename
+                                    )
+                                    print(hard_block, file=sys.stderr)
+                                    # Charge the failed helper's cost
+                                    # (#1012, P3.A).
+                                    if isinstance(result, tuple):
+                                        current_cost_ref[0] += _extract_cost_from_result(
+                                            'verify', result
+                                        )
+                                    errors.append(
+                                        f"verify operation regressed public surface — refusing to continue. "
+                                        f"Add a `BREAKING-CHANGE:` directive to the prompt to opt out, "
+                                        f"or fix the prompt/code to preserve the public symbols. "
+                                        f"Details: {_verify_surface_exc}"
+                                    )
+                                    skipped_operations.append('verify')
+                                    # Terminate the operation loop
+                                    # (#1012, P3.A): a surface
+                                    # regression is a contract
+                                    # violation. The verify op has no
+                                    # consecutive-operation guard, so
+                                    # `continue` would let
+                                    # `sync_determine_operation`
+                                    # re-select it and spin
+                                    # indefinitely on deterministic
+                                    # bad output.
+                                    break
                             elif operation == 'test':
                                 pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
                                 # Use merge=True when test file exists to preserve fixes and append new tests
                                 # instead of regenerating from scratch (which would overwrite fixes)
                                 test_file_exists = pdd_files['test'].exists()
-                                result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature)
+                                # Wrap `cmd_test_main` in the test-churn repair loop so
+                                # `TestChurnError` thrown by `_verify_test_churn` round-trips
+                                # through `PDD_REPAIR_DIRECTIVE` (mirrors the generate-op loop;
+                                # #1012). The helper restores the previous env value on exit
+                                # and prints the hard-failure block on exhaustion before
+                                # re-raising — keep the generic `except` below clear of any
+                                # duplicate print.
+                                result = _run_test_op_with_churn_retry(
+                                    lambda _repair_directive: cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=[str(pdd_files['test'])] if test_file_exists else None, target_coverage=target_coverage, merge=test_file_exists, strength=strength, temperature=temperature, repair_directive=_repair_directive),
+                                    basename=basename,
+                                    budget_remaining=budget - current_cost_ref[0],
+                                )
 
                                 # Always run real tests to get accurate pass/fail counts.
                                 # sync_determine_operation needs real tests_failed to recommend 'fix'.
@@ -2501,18 +2935,26 @@ def sync_orchestration(
                                 pdd_files['test'].parent.mkdir(parents=True, exist_ok=True)
                                 if pdd_files['test'].exists():
                                     existing_test_path = str(pdd_files['test'])
-                                    result = cmd_test_main(
-                                        ctx,
-                                        prompt_file=str(pdd_files['prompt']),
-                                        code_file=str(pdd_files['code']),
-                                        output=str(pdd_files['test']),
-                                        language=language,
-                                        coverage_report=None,
-                                        existing_tests=[existing_test_path],
-                                        target_coverage=target_coverage,
-                                        merge=True,
-                                        strength=strength,
-                                        temperature=temperature
+                                    # Same test-churn repair loop as the plain `test`
+                                    # op so coverage-extension regenerations also get
+                                    # one bounded retry under `PDD_REPAIR_DIRECTIVE`.
+                                    result = _run_test_op_with_churn_retry(
+                                        lambda _repair_directive: cmd_test_main(
+                                            ctx,
+                                            prompt_file=str(pdd_files['prompt']),
+                                            code_file=str(pdd_files['code']),
+                                            output=str(pdd_files['test']),
+                                            language=language,
+                                            coverage_report=None,
+                                            existing_tests=[existing_test_path],
+                                            target_coverage=target_coverage,
+                                            merge=True,
+                                            strength=strength,
+                                            temperature=temperature,
+                                            repair_directive=_repair_directive,
+                                        ),
+                                        basename=basename,
+                                        budget_remaining=budget - current_cost_ref[0],
                                     )
 
                                     # Always run real tests for accurate pass/fail counts.
@@ -2526,8 +2968,16 @@ def sync_orchestration(
                                         test_files=pdd_files.get('test_files'),  # Bug #156
                                     )
                                 else:
-                                    # No existing test file, fall back to regular test generation
-                                    result = cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature)
+                                    # No existing test file, fall back to regular test generation.
+                                    # Pre-existing file is empty so the churn gate would not
+                                    # trip (`_compute_test_churn_ratio` returns 0 for an empty
+                                    # pre), but wrap in the same helper for symmetry and so the
+                                    # `PDD_REPAIR_DIRECTIVE` env var is still cleaned up.
+                                    result = _run_test_op_with_churn_retry(
+                                        lambda _repair_directive: cmd_test_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), output=str(pdd_files['test']), language=language, coverage_report=None, existing_tests=None, target_coverage=target_coverage, merge=False, strength=strength, temperature=temperature, repair_directive=_repair_directive),
+                                        basename=basename,
+                                        budget_remaining=budget - current_cost_ref[0],
+                                    )
 
                                     # Always run real tests for accurate pass/fail counts.
                                     if pdd_files['test'].exists():
@@ -2661,7 +3111,50 @@ def sync_orchestration(
                                 # fix_error_loop runs them together. This detects test isolation
                                 # failures that only manifest when multiple test files interact.
                                 test_files_for_fix = [str(f) for f in pdd_files.get('test_files', [pdd_files['test']])]
+                                # Snapshot pre-operation code so the
+                                # public-surface gate (#1012, P2.A) can
+                                # verify fix_main's rewrite did not
+                                # regress public symbols.
+                                try:
+                                    _fix_pre_code = pdd_files['code'].read_text(encoding="utf-8")
+                                except OSError:
+                                    _fix_pre_code = ""
                                 result = fix_main(ctx, prompt_file=str(pdd_files['prompt']), code_file=str(pdd_files['code']), unit_test_file=unit_test_file_for_fix, error_file=str(error_file_path), output_test=output_test_for_fix, output_code=str(pdd_files['code']), output_results=f"{basename.replace('/', '_')}_fix_results.log", loop=True, verification_program=str(pdd_files['example']), max_attempts=effective_max_attempts, budget=budget - current_cost_ref[0], auto_submit=(not local), strength=strength, temperature=temperature, test_files=test_files_for_fix)
+                                _fix_surface_exc = _verify_code_surface_after_write(
+                                    code_path=pdd_files['code'],
+                                    pre_code=_fix_pre_code,
+                                    basename=basename,
+                                    language=language,
+                                    prompt_path=pdd_files['prompt'],
+                                    operation='fix',
+                                )
+                                if _fix_surface_exc is not None:
+                                    from .agentic_sync_runner import (
+                                        build_public_surface_hard_failure_from_error,
+                                    )
+                                    hard_block = build_public_surface_hard_failure_from_error(
+                                        _fix_surface_exc, basename
+                                    )
+                                    print(hard_block, file=sys.stderr)
+                                    # Charge the failed helper's cost
+                                    # (#1012, P3.A).
+                                    if isinstance(result, tuple):
+                                        current_cost_ref[0] += _extract_cost_from_result(
+                                            'fix', result
+                                        )
+                                    errors.append(
+                                        f"fix operation regressed public surface — refusing to continue. "
+                                        f"Add a `BREAKING-CHANGE:` directive to the prompt to opt out, "
+                                        f"or fix the prompt/code to preserve the public symbols. "
+                                        f"Details: {_fix_surface_exc}"
+                                    )
+                                    skipped_operations.append('fix')
+                                    # Terminate the operation loop
+                                    # (#1012, P3.A): surface regression
+                                    # is a contract violation; let the
+                                    # sync exit cleanly rather than
+                                    # spin.
+                                    break
                             elif operation == 'update':
                                 result = update_main(ctx, input_prompt_file=str(pdd_files['prompt']), modified_code_file=str(pdd_files['code']), input_code_file=None, output=str(pdd_files['prompt']), use_git=True, strength=strength, temperature=temperature)
                             else:
@@ -2707,6 +3200,12 @@ def sync_orchestration(
                         except Exception as e:
                             if operation_rollback is not None:
                                 operation_rollback.restore()
+                            # NOTE: TestChurnError no longer prints the structured
+                            # hard-failure block here. Both the generate-op repair
+                            # loop and `_run_test_op_with_churn_retry` already emit
+                            # `=== test churn threshold exceeded ===` before
+                            # re-raising, so printing it again would duplicate the
+                            # diagnostic in stderr.
                             error_msg = str(e) if str(e) else type(e).__name__
                             errors.append(f"Exception during '{operation}': {error_msg}")
                             exc_cost = float(getattr(e, "total_cost", 0.0) or 0.0)

@@ -152,6 +152,7 @@ def run_agentic_test_generate(
     *,
     verbose: bool = False,
     quiet: bool = False,
+    repair_directive: str | None = None,
 ) -> tuple[str, float, str, bool]:
     """
     Agentic test generation for non-Python languages.
@@ -165,6 +166,14 @@ def run_agentic_test_generate(
         output_test_file: Path where the test file should be written.
         verbose: Enable verbose logging.
         quiet: Suppress standard output.
+        repair_directive: Optional repair-loop instruction to inject into
+            the agent's prompt content inside a ``<test_repair_directive>``
+            block (#1012, F-H). Sourced explicitly from the caller's
+            loop-local state rather than ``os.environ`` so a stale
+            outer ``PDD_REPAIR_DIRECTIVE`` cannot contaminate a direct/
+            non-retry invocation. The on-disk prompt file is NOT
+            mutated; only the in-process ``prompt_content`` flowing
+            into the agent instruction template is augmented.
 
     Returns:
         Tuple (generated_content, cost, model_name, success):
@@ -211,6 +220,28 @@ def run_agentic_test_generate(
     except OSError as e:
         if verbose and not quiet:
             console.print(f"[yellow]Warning: Could not read prompt file: {e}[/yellow]")
+
+    # Test-generation repair directive (set by retrying callers such as
+    # sync_orchestration._run_test_op_with_churn_retry when a prior
+    # generation tripped TestChurnError). Append to the prompt inside a
+    # `<test_repair_directive>` block so the next attempt sees concrete
+    # "preserve coverage / extend rather than rewrite" instructions.
+    # Mirrors the `<architecture_repair_directive>` injection in
+    # `code_generator_main` and the native-path injection in
+    # `cmd_test_main` (#1012, F-A / F-H). The on-disk prompt file is
+    # NOT mutated — only the in-process `prompt_content` flowing into
+    # the agent instruction template is augmented.
+    #
+    # Sourced EXPLICITLY from the `repair_directive` kwarg (#1012,
+    # F-H). The env var `PDD_REPAIR_DIRECTIVE` is NOT read here; the
+    # caller's loop-local state is the source of truth, so a stale
+    # outer env value cannot contaminate the agent prompt.
+    if repair_directive and repair_directive.strip():
+        prompt_content = (
+            f"{prompt_content}\n\n<test_repair_directive>\n"
+            f"{repair_directive.strip()}\n"
+            "</test_repair_directive>\n"
+        )
 
     try:
         if code_file.exists():

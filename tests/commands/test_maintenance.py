@@ -134,6 +134,7 @@ class TestSyncCommand:
 
     def test_sync_github_url_dispatches_to_agentic(self, runner, base_ctx_obj):
         """When basename is a GitHub URL, sync dispatches to run_agentic_sync."""
+        base_ctx_obj["context"] = "backend"
         cli = _make_cli(sync, base_ctx_obj)
         mock_agentic = (True, "synced 2 modules", 0.30, "claude-3")
 
@@ -158,6 +159,9 @@ class TestSyncCommand:
             assert kw["durable_branch"] is None
             assert kw["no_resume"] is False
             assert kw["durable_max_parallel"] is None
+            assert kw["strength"] == base_ctx_obj["strength"]
+            assert kw["temperature"] == base_ctx_obj["temperature"]
+            assert kw["context_override"] == base_ctx_obj["context"]
 
     @pytest.mark.parametrize(
         ("extra_args", "expected"),
@@ -599,6 +603,9 @@ class TestAgenticSyncDispatch:
                 timeout_adder=0.0,
                 no_github_state=False,
                 one_session=True,
+                strength=0.7,
+                temperature=0.2,
+                context_override="backend",
             )
 
             assert result == ("All synced", 0.50, "claude-3")
@@ -606,6 +613,9 @@ class TestAgenticSyncDispatch:
             assert kw["use_github_state"] is True
             assert kw["dry_run"] is False
             assert kw["one_session"] is True
+            assert kw["strength"] == 0.7
+            assert kw["temperature"] == 0.2
+            assert kw["context_override"] == "backend"
 
     def test_dispatch_failure_raises_exit_1(self):
         """Failed agentic sync raises click.exceptions.Exit(1)."""

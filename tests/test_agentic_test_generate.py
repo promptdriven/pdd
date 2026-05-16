@@ -651,3 +651,125 @@ def test_early_return_missing_template_returns_5_tuple_with_error(mock_load, moc
     assert returned_error != "", (
         "Early return (missing template) should include a non-empty error message"
     )
+
+
+# ---------------------------------------------------------------------------
+# Codex review (#1015) F-A / F-H (iter-10): the repair directive must
+# reach the agentic test-generation instruction via the explicit
+# `repair_directive` kwarg. run_agentic_test_generate MUST NOT read
+# `PDD_REPAIR_DIRECTIVE` from the environment — a stale outer value
+# would otherwise contaminate direct invocations that have no active
+# retry context.
+# ---------------------------------------------------------------------------
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_pdd_repair_directive_reaches_agentic_instruction(
+    mock_agents, mock_load, mock_run, mock_env, monkeypatch
+):
+    """When `repair_directive` is passed, run_agentic_test_generate
+    must append a `<test_repair_directive>` block to prompt_content
+    before formatting the agent instruction. The on-disk prompt file
+    is NOT mutated; only the in-process prompt content sent to the
+    agent is augmented."""
+    # Ensure no ambient env contamination — kwarg is the only channel.
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = (
+        "Template prompt_content={prompt_content} code={code_content} "
+        "prompt_path={prompt_path} code_path={code_path} test_path={test_path} "
+        "project_root={project_root}"
+    )
+
+    def side_effect(*args, **kwargs):
+        mock_env["test"].write_text("test content")
+        return (True, '{"success": true}', 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_test_generate(
+        mock_env["prompt"],
+        mock_env["code"],
+        mock_env["test"],
+        quiet=True,
+        repair_directive="repair text for test retry",
+    )
+
+    # The injected directive must be present in the agent's instruction.
+    assert mock_run.call_count == 1
+    instruction = mock_run.call_args.kwargs["instruction"]
+    assert "<test_repair_directive>" in instruction
+    assert "repair text for test retry" in instruction
+    assert "</test_repair_directive>" in instruction
+    # Original prompt content is preserved.
+    assert "Create a function that adds two numbers" in instruction
+    # On-disk prompt file is not mutated.
+    assert mock_env["prompt"].read_text(encoding="utf-8") == (
+        "Create a function that adds two numbers"
+    )
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_pdd_repair_directive_absent_when_kwarg_unset(
+    mock_agents, mock_load, mock_run, mock_env, monkeypatch
+):
+    """When `repair_directive` is None (default), no directive block
+    is injected."""
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = (
+        "Template prompt_content={prompt_content} code={code_content} "
+        "prompt_path={prompt_path} code_path={code_path} test_path={test_path} "
+        "project_root={project_root}"
+    )
+
+    def side_effect(*args, **kwargs):
+        mock_env["test"].write_text("test content")
+        return (True, '{"success": true}', 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    instruction = mock_run.call_args.kwargs["instruction"]
+    assert "<test_repair_directive>" not in instruction
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_agentic_test_generate_ignores_stale_env_directive_without_kwarg(
+    mock_agents, mock_load, mock_run, mock_env, monkeypatch
+):
+    """Codex F-H: run_agentic_test_generate MUST NOT read
+    `PDD_REPAIR_DIRECTIVE` from the environment. Direct invocations
+    with a stale outer env value but no `repair_directive` kwarg must
+    NOT inject a `<test_repair_directive>` block."""
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER-DIRECTIVE")
+
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = (
+        "Template prompt_content={prompt_content} code={code_content} "
+        "prompt_path={prompt_path} code_path={code_path} test_path={test_path} "
+        "project_root={project_root}"
+    )
+
+    def side_effect(*args, **kwargs):
+        mock_env["test"].write_text("test content")
+        return (True, '{"success": true}', 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    instruction = mock_run.call_args.kwargs["instruction"]
+    assert "<test_repair_directive>" not in instruction
+    assert "STALE-OUTER-DIRECTIVE" not in instruction
