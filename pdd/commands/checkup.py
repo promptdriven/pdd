@@ -142,7 +142,7 @@ from ..core.errors import handle_error
 @click.option(
     "--max-review-cost",
     type=float,
-    default=10.0,
+    default=50.0,
     show_default=True,
     help="Maximum review-loop LLM cost in USD.",
 )

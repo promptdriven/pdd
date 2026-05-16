@@ -582,7 +582,7 @@ class ReviewLoopConfig:
     reviewer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
-    max_cost: float = 10.0
+    max_cost: float = 50.0
     max_minutes: float = 90.0
     # Kept for CLI/API compatibility. The loop has one authoritative reviewer,
     # so this is no longer used as a ship gate.
@@ -785,6 +785,7 @@ def run_checkup_review_loop(
                 quiet=quiet,
                 artifacts_dir=artifacts_dir,
                 pr_metadata=pr_metadata,
+                deadline=deadline,
             )
             _record_review(state, review)
             _mark_non_required_findings_advisory(state, config)
@@ -823,6 +824,7 @@ def run_checkup_review_loop(
                         quiet=quiet,
                         artifacts_dir=artifacts_dir,
                         pr_metadata=pr_metadata,
+                        deadline=deadline,
                     )
                     _record_review(state, fallback_review)
                     _mark_non_required_findings_advisory(state, config)
@@ -1062,6 +1064,7 @@ def run_checkup_review_loop(
             findings_to_verify=fix_findings,
             fix_result=fix,
             pr_metadata=pr_metadata,
+            deadline=deadline,
         )
         _record_review(state, verify)
         _mark_non_required_findings_advisory(state, config)
@@ -1599,6 +1602,7 @@ def _maybe_run_fallback_reviewer(
         artifacts_dir=artifacts_dir,
         mode="fallback",
         pr_metadata=pr_metadata,
+        deadline=deadline,
     )
     _record_review(state, fallback)
 
@@ -1886,6 +1890,7 @@ def _run_review(
     findings_to_verify: Optional[Sequence[ReviewFinding]] = None,
     fix_result: Optional[FixResult] = None,
     pr_metadata: Optional[Dict[str, Any]] = None,
+    deadline: Optional[float] = None,
 ) -> ReviewResult:
     candidate_findings = _collect_static_analysis_candidate_findings(
         worktree,
@@ -1961,7 +1966,10 @@ def _run_review(
             )
             result.status_exit_code = result.status_exit_code or exit_code
             result.status_reason = result.status_reason or reason
-        if _should_attempt_parse_repair(output, result):
+        if (
+            _should_attempt_parse_repair(output, result)
+            and not _budget_exhausted(config, state, deadline or float("inf"))
+        ):
             repaired = _run_review_parse_repair(
                 reviewer=reviewer,
                 raw_output=output,
