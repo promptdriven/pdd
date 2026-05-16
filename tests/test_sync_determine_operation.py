@@ -1988,6 +1988,29 @@ class TestIsWorkflowComplete:
         
         assert _is_workflow_complete(paths) is False  # Requires test file
         assert _is_workflow_complete(paths, skip_tests=True) is True  # Skip test requirement
+
+    def test_workflow_complete_with_both_skip_flags_needs_no_run_report(self, tmp_path, monkeypatch):
+        """When tests and verify are skipped, file existence is enough."""
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".pdd" / "meta").mkdir(parents=True)
+        code_file = tmp_path / "test.py"
+        example_file = tmp_path / "test_example.py"
+        code_file.write_text("def add(a, b): return a + b")
+        example_file.write_text("from test import add")
+
+        paths = {
+            'code': code_file,
+            'example': example_file,
+            'test': tmp_path / "test_test.py"
+        }
+
+        assert _is_workflow_complete(
+            paths,
+            skip_tests=True,
+            skip_verify=True,
+            basename="test",
+            language="python",
+        ) is True
     
     def test_workflow_incomplete(self, tmp_path):
         """Test workflow is incomplete when required files are missing."""
@@ -2824,7 +2847,6 @@ class TestAllFilesExistWorkflowIncomplete:
             f"Expected 'nothing' when workflow complete, "
             f"got '{decision.operation}' with reason: {decision.reason}"
         )
-
 
 # --- Part 6: PDD Doctrine - Derived Artifacts Tests ---
 

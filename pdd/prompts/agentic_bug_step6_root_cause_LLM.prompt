@@ -122,15 +122,9 @@ You are working on step 6 of 12 in an agentic bug investigation workflow. Previo
 
 % Output
 
-After completing your analysis, use `gh issue comment` to post your findings to issue #{issue_number}:
+Return your findings between `<step_report>` and `</step_report>` tags. The PDD orchestrator will sanitize, truncate, and post the contents as a GitHub comment using trusted credentials. **Do NOT run `gh issue comment` yourself** — model subprocesses cannot reliably authenticate.
 
-```
-gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-```
-
-Your comment should follow this format:
-
-```markdown
+<step_report>
 ## Step 6: Root Cause Analysis
 
 **Root Cause Identified:** [Yes | Partially | No]
@@ -187,9 +181,9 @@ problematic_code_snippet()
 
 ---
 *Proceeding to Step 7: Prompt Classification*
-```
+</step_report>
 
-After posting your comment, output two machine-readable markers. Both are parsed by the orchestrator and injected into downstream steps as structured variables:
+After the closing `</step_report>` tag, emit two machine-readable markers on their own lines (the orchestrator parses raw output for these — they MUST live OUTSIDE the report block):
 
 ```
 FIX_LOCATIONS: path/to/file1.py, path/to/file2.py
@@ -223,4 +217,4 @@ Examples:
 - The fix location you recommend here directly determines which component pdd bug will create tests for — getting this wrong means tests will target the wrong code
 - If root cause is unclear, document what you learned and hypotheses
 - **Cross-cutting check**: Count how many call sites would need the same change. If 5+, stop and think about a centralized solution. A fix that patches 10 functions with the same `if not flag:` guard is a code smell — the right fix is usually one mechanism at a higher level.
-- Always post your findings as a GitHub comment before completing
+- Place your findings inside the `<step_report>` block — the orchestrator will post it to GitHub for you. Keep `FIX_LOCATIONS:`, `EXPANSION_ITEMS:`, and `PATTERN_SEARCH:` markers OUTSIDE the tags so the orchestrator can parse them.

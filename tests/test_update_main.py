@@ -2254,6 +2254,17 @@ class TestFindPrdFile:
 class TestStrengthTemperatureResolution:
     """Tests for strength/temperature parameter resolution."""
 
+    @staticmethod
+    def _fake_resolve_runtime_config(
+        ctx, *, prompt_file=None, code_file=None, resolved_config=None,
+        strength=None, temperature=None,
+    ):
+        """Bypass .pddrc loading while honoring explicit-param override semantics."""
+        return {
+            "strength": strength if strength is not None else ctx.obj.get("strength"),
+            "temperature": temperature if temperature is not None else ctx.obj.get("temperature"),
+        }
+
     def test_explicit_params_override_ctx(self):
         """Explicit strength/temperature should override ctx.obj values."""
         ctx = click.Context(click.Command("update"))
@@ -2271,6 +2282,8 @@ class TestStrengthTemperatureResolution:
         with patch("pdd.update_main.get_available_agents", return_value=[]), \
              patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
              patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
+             patch("pdd.update_main._resolve_update_runtime_config",
+                   side_effect=self._fake_resolve_runtime_config), \
              patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
             update_main(
                 ctx=ctx,
@@ -2283,6 +2296,7 @@ class TestStrengthTemperatureResolution:
                 simple=True,
             )
 
+        assert mock_up.call_args is not None, "update_prompt was not called"
         kwargs = mock_up.call_args.kwargs
         assert kwargs["strength"] == 0.9
         assert kwargs["temperature"] == 0.5
@@ -2307,6 +2321,8 @@ class TestStrengthTemperatureResolution:
         with patch("pdd.update_main.get_available_agents", return_value=[]), \
              patch("pdd.update_main.update_prompt", return_value=("prompt", 0.01, "model")) as mock_up, \
              patch("pdd.update_main.resolve_prompt_code_pair", return_value=("/tmp/test.prompt", "/tmp/test.py")), \
+             patch("pdd.update_main._resolve_update_runtime_config",
+                   side_effect=self._fake_resolve_runtime_config), \
              patch("builtins.open", mock_open(read_data="def foo(): pass\n")):
             update_main(
                 ctx=ctx,
@@ -2319,6 +2335,10 @@ class TestStrengthTemperatureResolution:
                 simple=True,
             )
 
+        assert mock_up.call_args is not None, "update_prompt was not called"
+        kwargs = mock_up.call_args.kwargs
+        assert kwargs["strength"] == 0.7
+        assert kwargs["temperature"] == 0.3
         assert ctx.obj["strength"] == 0.7
         assert ctx.obj["temperature"] == 0.3
 
@@ -2802,7 +2822,21 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
     mock_update_prompt,
     mock_open_file,
 ):
-    # Legacy true-update path: assert orchestrator is invoked after update_prompt
+    # Legacy true-update path: assert orchestrator is invoked after update_prompt.
+    # Override the construct_paths mock so the written output path matches the
+    # canonical source prompt — otherwise the redirected-output guard skips the
+    # orchestrator (#1007 follow-up).
+    canonical_prompt = minimal_input_files["input_prompt_file"]
+    mock_construct_paths.return_value = (
+        {},
+        {
+            "input_prompt_file": "prompt content",
+            "modified_code_file": "def modified_code(): pass",
+            "input_code_file": "def original_code(): pass",
+        },
+        {"output": canonical_prompt},
+        None,
+    )
     call_order = []
     mock_update_prompt.side_effect = lambda **kw: (call_order.append("update_prompt") or ("updated prompt text", 0.123, "test-model"))
 
@@ -2815,10 +2849,10 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
 
         result = update_main(
             ctx=mock_ctx,
-            input_prompt_file=minimal_input_files["input_prompt_file"],
+            input_prompt_file=canonical_prompt,
             modified_code_file=minimal_input_files["modified_code_file"],
             input_code_file=minimal_input_files["input_code_file"],
-            output="custom_output.prompt",
+            output=None,
             use_git=False,
             sync_metadata=True,
         )
@@ -2826,7 +2860,7 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_true_update_legacy(
     assert result == ("updated prompt text", 0.123, "test-model")
     assert mock_sync.call_count == 1
     kwargs = mock_sync.call_args.kwargs
-    assert kwargs["prompt_path"] == Path("updated_prompt.prompt")
+    assert kwargs["prompt_path"] == Path(canonical_prompt)
     assert kwargs["code_path"] == Path(minimal_input_files["modified_code_file"])
     assert kwargs["dry_run"] is False
     # update_prompt must run before run_metadata_sync
@@ -2839,14 +2873,17 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
     mock_git_update,
     mock_open_file,
 ):
-    # Legacy git-update path: orchestrator runs after git_update succeeds
+    # Legacy git-update path: orchestrator runs after git_update succeeds.
+    # Output path must match the canonical source prompt so the
+    # redirected-output guard does not skip the orchestrator (#1007 follow-up).
+    canonical_prompt = "some_prompt_file.prompt"
     mock_construct_paths.return_value = (
         {},
         {
             "input_prompt_file": "prompt content",
             "modified_code_file": "def git_modified_code(): pass",
         },
-        {"output": "updated_prompt_git.prompt"},
+        {"output": canonical_prompt},
         None,
     )
     call_order = []
@@ -2861,10 +2898,10 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
 
         result = update_main(
             ctx=mock_ctx,
-            input_prompt_file="some_prompt_file.prompt",
+            input_prompt_file=canonical_prompt,
             modified_code_file="modified_code.py",
             input_code_file=None,
-            output="git_output.prompt",
+            output=None,
             use_git=True,
             sync_metadata=True,
         )
@@ -2872,7 +2909,7 @@ def test_sync_metadata_true_invokes_run_metadata_sync_in_git_update_legacy(
     assert result == ("updated prompt from git", 0.5, "git-model")
     assert mock_sync.call_count == 1
     kwargs = mock_sync.call_args.kwargs
-    assert kwargs["prompt_path"] == Path("updated_prompt_git.prompt")
+    assert kwargs["prompt_path"] == Path(canonical_prompt)
     assert kwargs["code_path"] == Path("modified_code.py")
     assert kwargs["dry_run"] is False
     assert call_order == ["git_update", "run_metadata_sync"]
@@ -2996,6 +3033,351 @@ def test_sync_metadata_false_does_not_invoke_run_metadata_sync_in_regeneration(
     assert mock_sync.call_count == 0
 
 
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_default_single_file_update_writes_fresh_fingerprint(
+    mock_resolve_pair,
+    mock_ctx,
+    mock_update_prompt,
+    tmp_path,
+):
+    # Issue #1007 / PR #1009 Requirement 15: a successful default single-file
+    # `pdd update <code>` must finalize a current fingerprint for the
+    # affected (prompt, code) pair so the next preflight run does not
+    # re-detect the file as changed. Patch save_fingerprint on the
+    # operation_log module (where _finalize_single_file_fingerprint imports
+    # it from) and assert one call with the resolved identity and paths.
+    code_file = tmp_path / "modified_code.py"
+    code_file.write_text("def foo(): return 1\n")
+    derived_prompt = tmp_path / "modified_code_python.prompt"
+    mock_resolve_pair.return_value = (str(derived_prompt), str(code_file))
+    mock_ctx.obj["quiet"] = True
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("modified_code", "python")) as mock_infer, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_file),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert result is not None
+    # Orchestrator is the sync_metadata=True path; default must NOT use it.
+    assert mock_sync.call_count == 0
+    # infer_module_identity drives the basename/language used for the write.
+    mock_infer.assert_called_once_with(Path(str(derived_prompt)))
+    # Exactly one fresh fingerprint write for the affected (prompt, code).
+    assert mock_save_fp.call_count == 1
+    kwargs = mock_save_fp.call_args.kwargs
+    assert mock_save_fp.call_args.args == ("modified_code", "python")
+    assert kwargs["operation"] == "update"
+    assert kwargs["paths"] == {
+        "prompt": Path(str(derived_prompt)),
+        "code": Path(str(code_file)),
+    }
+
+
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_default_single_file_update_writes_real_fingerprint_to_disk(
+    mock_resolve_pair,
+    mock_update_prompt,
+    tmp_path,
+    monkeypatch,
+):
+    # Issue #1007 / PR #1009 Requirement 15 — integration regression.
+    # The mock-only test above asserts save_fingerprint is *called*; this one
+    # leaves save_fingerprint unmocked and asserts the user-visible
+    # .pdd/meta/<basename>_<language>.json file is actually written and that
+    # its prompt_hash / code_hash reflect the post-update files on disk.
+    #
+    # Build a plain ctx after monkeypatch.chdir instead of using the mock_ctx
+    # fixture: mock_ctx enters CliRunner().isolated_filesystem(), and chdir'ing
+    # to tmp_path on top of it leaves monkeypatch trying to restore into the
+    # isolated dir after the fixture has already removed it.
+    import hashlib
+    import json
+
+    # Lay out a realistic prompts/ + code structure so infer_module_identity
+    # resolves to ("foo", "python") from the absolute prompt path.
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("old prompt content\n")
+    code_path = tmp_path / "foo.py"
+    code_path.write_text("def foo(): return 1\n")
+
+    # save_fingerprint resolves META_DIR relative to cwd.
+    monkeypatch.chdir(tmp_path)
+
+    ctx = click.Context(click.Command("update"))
+    ctx.params = {"force": False, "quiet": True}
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "quiet": True,
+    }
+
+    new_prompt_text = "new updated prompt content\n"
+    mock_update_prompt.return_value = (new_prompt_text, 0.123456, "test-model")
+    mock_resolve_pair.return_value = (str(prompt_path), str(code_path))
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]):
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_path),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert result is not None
+
+    fingerprint_path = tmp_path / ".pdd" / "meta" / "foo_python.json"
+    assert fingerprint_path.exists(), (
+        f"Expected fingerprint at {fingerprint_path}; "
+        f".pdd contents: "
+        f"{sorted(p.relative_to(tmp_path) for p in (tmp_path / '.pdd').rglob('*')) if (tmp_path / '.pdd').exists() else 'no .pdd dir'}"
+    )
+
+    fingerprint_data = json.loads(fingerprint_path.read_text())
+    assert fingerprint_data["command"] == "update"
+
+    # code_hash is sha256 of the modified code file on disk.
+    expected_code_hash = hashlib.sha256(code_path.read_bytes()).hexdigest()
+    assert fingerprint_data["code_hash"] == expected_code_hash
+
+    # The legacy regeneration path writes the new prompt before finalizing the
+    # fingerprint; with no <include> tags, prompt_hash is plain sha256 of the
+    # freshly-written prompt file.
+    assert prompt_path.read_text() == new_prompt_text
+    expected_prompt_hash = hashlib.sha256(prompt_path.read_bytes()).hexdigest()
+    assert fingerprint_data["prompt_hash"] == expected_prompt_hash
+
+
+@patch("pdd.update_main.resolve_prompt_code_pair")
+def test_default_single_file_update_clears_stale_run_report(
+    mock_resolve_pair,
+    mock_update_prompt,
+    tmp_path,
+    monkeypatch,
+):
+    # Issue #1007 / PR #1009 follow-up: when the finalizer writes a fresh
+    # fingerprint, any pre-existing <basename>_<language>_run.json must be
+    # cleared in the same step so later sync decisions do not trust a
+    # successful run report from before the update.
+    import json
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("old prompt content\n")
+    code_path = tmp_path / "foo.py"
+    code_path.write_text("def foo(): return 1\n")
+
+    monkeypatch.chdir(tmp_path)
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    run_report_path = meta_dir / "foo_python_run.json"
+    run_report_path.write_text(json.dumps({"passed": True, "stale": True}))
+
+    ctx = click.Context(click.Command("update"))
+    ctx.params = {"force": False, "quiet": True}
+    ctx.obj = {
+        "strength": 0.5,
+        "temperature": 0.0,
+        "verbose": False,
+        "quiet": True,
+    }
+
+    mock_update_prompt.return_value = ("new prompt\n", 0.0, "test-model")
+    mock_resolve_pair.return_value = (str(prompt_path), str(code_path))
+
+    with patch("pdd.update_main.get_available_agents", return_value=[]):
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=str(code_path),
+            input_code_file=None,
+            output=None,
+            use_git=False,
+        )
+
+    assert result is not None
+    assert not run_report_path.exists(), (
+        "Stale run report must be cleared when the finalizer writes a fresh "
+        "fingerprint for the (prompt, code) pair."
+    )
+    assert (meta_dir / "foo_python.json").exists()
+
+
+def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # When infer_module_identity returns (None, None) the finalizer must
+    # skip save_fingerprint (and emit an info log when not quiet), preserving
+    # the successful return tuple. Use the canonical input path so the
+    # output-redirected guard does not shadow the identity-unknown branch.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=(None, None)), \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="updated_prompt.prompt",
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="updated_prompt.prompt",
+            use_git=False,
+        )
+
+    assert result is not None
+    mock_save_fp.assert_not_called()
+
+
+def test_default_single_file_update_swallows_fingerprint_save_failure(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # A save_fingerprint exception must not break the success return — the
+    # update tuple is the contract; fingerprint write is best-effort. Use the
+    # canonical input path so the output-redirected guard does not skip
+    # save_fingerprint before the OSError can be raised.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")), \
+         patch("pdd.operation_log.save_fingerprint", side_effect=OSError("disk full")):
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="updated_prompt.prompt",
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="updated_prompt.prompt",
+            use_git=False,
+        )
+
+    assert result == ("updated prompt text", 0.123456, "test-model")
+
+
+def test_default_single_file_update_skips_fingerprint_when_output_redirected(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # Issue #1007 / PR #1009 follow-up: a successful
+    # `pdd update --output <other_prompt>` must NOT finalize a fingerprint
+    # against the redirected output path, because the canonical source prompt
+    # for the module was never overwritten. Writing a fresh fingerprint
+    # against the redirected file would let later sync detection treat the
+    # canonical prompt as in-sync via the matching code hash and leave it
+    # stale (the same stale-state class the issue is closing).
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")) as mock_infer, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="some_prompt_file.prompt",
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="other_prompt.prompt",
+            use_git=False,
+        )
+
+    assert result is not None
+    mock_save_fp.assert_not_called()
+    mock_infer.assert_not_called()
+
+
+def test_sync_metadata_true_with_redirected_output_skips_orchestrator(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+    capsys,
+):
+    # Issue #1007 / PR #1009 follow-up: with `--sync-metadata --output <other>`
+    # the metadata sync orchestrator MUST also be skipped, not only the default
+    # fingerprint finalizer. The orchestrator's fingerprint stage would
+    # otherwise save a fingerprint against the redirected path and reintroduce
+    # the stale-state class the issue is closing — the canonical source prompt
+    # was never overwritten in true-update redirected-output mode.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp:
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file="some_prompt_file.prompt",
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output="other_prompt.prompt",
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    mock_sync.assert_not_called()
+    mock_save_fp.assert_not_called()
+    captured = capsys.readouterr()
+    out = captured.out + captured.err
+    assert "output redirected" in out
+
+
+def test_sync_metadata_true_skips_default_fingerprint_finalization(
+    mock_ctx,
+    minimal_input_files,
+    mock_construct_paths,
+    mock_update_prompt,
+    mock_open_file,
+):
+    # When the orchestrator runs (sync_metadata=True), the default fingerprint
+    # write must be skipped so we do not double-write the same fingerprint.
+    # The orchestrator is only invoked when the written prompt path matches
+    # the canonical source — pass output=None so the legacy path overwrites
+    # the input prompt in place and the redirected-output skip does not fire.
+    with patch("pdd.update_main.get_available_agents", return_value=[]), \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.update_main.construct_paths") as mock_cp:
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": "prompt content",
+                "modified_code_file": "def modified_code(): pass",
+                "input_code_file": "def original_code(): pass",
+            },
+            {"output": minimal_input_files["input_prompt_file"]},
+            None,
+        )
+        mock_sync.side_effect = lambda prompt_path, code_path, dry_run: _make_sync_result(prompt_path, code_path)
+        result = update_main(
+            ctx=mock_ctx,
+            input_prompt_file=minimal_input_files["input_prompt_file"],
+            modified_code_file=minimal_input_files["modified_code_file"],
+            input_code_file=minimal_input_files["input_code_file"],
+            output=None,
+            use_git=False,
+            sync_metadata=True,
+        )
+
+    assert result is not None
+    mock_sync.assert_called_once()
+    mock_save_fp.assert_not_called()
+
+
 def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     mock_ctx,
     minimal_input_files,
@@ -3009,15 +3391,28 @@ def test_sync_metadata_helper_propagates_orchestrator_exception_and_logs(
     # the subprocess returncode) does not mark a half-synced update as
     # healed (#871 acceptance criterion). The helper still logs the
     # orchestrator error before propagating.
+    # Pass output=None so the orchestrator is actually invoked — otherwise the
+    # redirected-output guard skips the sync stage before it can raise.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")):
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=RuntimeError("boom")), \
+         patch("pdd.update_main.construct_paths") as mock_cp:
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": "prompt content",
+                "modified_code_file": "def modified_code(): pass",
+                "input_code_file": "def original_code(): pass",
+            },
+            {"output": minimal_input_files["input_prompt_file"]},
+            None,
+        )
         with pytest.raises(click.exceptions.Exit) as excinfo:
             update_main(
                 ctx=mock_ctx,
                 input_prompt_file=minimal_input_files["input_prompt_file"],
                 modified_code_file=minimal_input_files["modified_code_file"],
                 input_code_file=minimal_input_files["input_code_file"],
-                output="custom_output.prompt",
+                output=None,
                 use_git=False,
                 sync_metadata=True,
             )
@@ -3054,15 +3449,28 @@ def test_sync_metadata_failed_stage_propagates_failure(
             stages=failed_stages,
         )
 
+    # Pass output=None so the orchestrator is actually invoked — otherwise the
+    # redirected-output guard skips the sync stage before it can fail.
     with patch("pdd.update_main.get_available_agents", return_value=[]), \
-         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync):
+         patch("pdd.metadata_sync.run_metadata_sync", side_effect=_sync), \
+         patch("pdd.update_main.construct_paths") as mock_cp:
+        mock_cp.return_value = (
+            {},
+            {
+                "input_prompt_file": "prompt content",
+                "modified_code_file": "def modified_code(): pass",
+                "input_code_file": "def original_code(): pass",
+            },
+            {"output": minimal_input_files["input_prompt_file"]},
+            None,
+        )
         with pytest.raises(click.exceptions.Exit) as excinfo:
             update_main(
                 ctx=mock_ctx,
                 input_prompt_file=minimal_input_files["input_prompt_file"],
                 modified_code_file=minimal_input_files["modified_code_file"],
                 input_code_file=minimal_input_files["input_code_file"],
-                output="custom_output.prompt",
+                output=None,
                 use_git=False,
                 sync_metadata=True,
             )
@@ -3448,7 +3856,7 @@ def test_repo_mode_sync_metadata_true_still_runs_prd_sync_when_arch_changed(
     with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
          patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
         # Force agentic PRD-sync to claim it didn't need an update.
-        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
 
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
@@ -3518,7 +3926,7 @@ def test_repo_mode_sync_metadata_true_skips_prd_when_arch_not_updated(
 
     with patch("pdd.metadata_sync.run_metadata_sync", side_effect=_orchestrator), \
          patch("pdd.agentic_common.run_agentic_task") as mock_agentic:
-        mock_agentic.return_value = "NO_UPDATE_NEEDED"
+        mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.0, "agent_model")
 
         ctx = click.Context(click.Command("update"))
         ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": True}
@@ -3610,3 +4018,147 @@ def test_repo_mode_summary_emits_partial_when_arch_stage_skipped(
     assert result is not None
     captured = capsys.readouterr()
     assert "partial:architecture" in captured.out, captured.out
+
+
+def _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd):
+    mock_update.return_value = {
+        "prompt_file": "prompts/src/module1_python.prompt",
+        "status": "✅ Success",
+        "cost": 0.05,
+        "model": "mock_model",
+        "error": ""
+    }
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    arch_file = repo_root / "architecture.json"
+    arch_file.write_text("{}")
+    prd_file = repo_root / "PRD.md"
+    prd_file.write_text("old PRD content")
+    prompts_dir = repo_root / "prompts"
+    prompts_dir.mkdir()
+    mock_find_arch.return_value = [arch_file]
+    mock_find_prd.return_value = prd_file
+    ctx = click.Context(click.Command('update'))
+    ctx.obj = {"verbose": False}
+    return repo_root, prd_file, ctx
+
+
+def _run_prd_sync_update(repo_root, ctx, sync_metadata=False):
+    with (
+        patch(
+            "pdd.update_main.find_and_resolve_all_pairs",
+            return_value=[("prompts/src/module1_python.prompt", "src/module1.py")],
+        ),
+        patch("pdd.update_main.git.Repo") as mock_repo,
+        patch("pdd.update_main.os.getcwd", return_value=str(repo_root)),
+        patch("pdd.pddrc_initializer.ensure_pddrc_for_scan"),
+    ):
+        mock_repo.return_value.working_tree_dir = str(repo_root)
+        return update_main(
+            ctx=ctx,
+            use_git=False,
+            repo=True,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            dry_run=False,
+            sync_metadata=sync_metadata,
+        )
+
+
+@patch('pdd.update_main.update_file_pair')
+@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.architecture_registry.find_architecture_for_project')
+@patch('pdd.update_main._find_prd_file')
+@patch(
+    'pdd.architecture_sync.update_architecture_from_prompt',
+    return_value={"success": True, "updated": True, "changes": {}},
+)
+@patch('pdd.agentic_common.run_agentic_task')
+def test_prd_sync_updated(
+    mock_agentic,
+    mock_arch,
+    mock_find_prd,
+    mock_find_arch,
+    mock_git,
+    mock_changed,
+    mock_update,
+    tmp_path,
+    capsys,
+):
+    """
+    Test that PRD file is updated when the agent returns updated PRD content,
+    and that the cost is aggregated appropriately. Tests resolution of issue #882.
+    """
+    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
+    mock_agentic.return_value = (True, "<updated-prd>new PRD content</updated-prd>", 0.12, "agent_model")
+    result = _run_prd_sync_update(repo_root, ctx)
+    assert "new PRD content" in prd_file.read_text(), "PRD file was not updated."
+    assert result is not None
+    assert result[1] == pytest.approx(0.17), f"Cost should be 0.17, got {result[1]}"
+
+
+@patch('pdd.update_main.update_file_pair')
+@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.architecture_registry.find_architecture_for_project')
+@patch('pdd.update_main._find_prd_file')
+@patch(
+    'pdd.architecture_sync.update_architecture_from_prompt',
+    return_value={"success": True, "updated": True, "changes": {}},
+)
+@patch('pdd.agentic_common.run_agentic_task')
+def test_prd_sync_no_update_needed(
+    mock_agentic,
+    mock_arch,
+    mock_find_prd,
+    mock_find_arch,
+    mock_git,
+    mock_changed,
+    mock_update,
+    tmp_path,
+    capsys,
+):
+    """
+    Test that when the agent returns NO_UPDATE_NEEDED, the PRD file remains unchanged.
+    """
+    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
+    mock_agentic.return_value = (True, "NO_UPDATE_NEEDED", 0.05, "agent_model")
+    result = _run_prd_sync_update(repo_root, ctx)
+    assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged."
+    assert result is not None
+    assert result[1] == pytest.approx(0.10), f"Cost should be 0.10, got {result[1]}"
+
+
+@patch('pdd.update_main.update_file_pair')
+@patch('pdd.update_main.is_code_changed', return_value=(True, ""))
+@patch('pdd.update_main.get_git_changed_files', return_value=set())
+@patch('pdd.architecture_registry.find_architecture_for_project')
+@patch('pdd.update_main._find_prd_file')
+@patch(
+    'pdd.architecture_sync.update_architecture_from_prompt',
+    return_value={"success": True, "updated": True, "changes": {}},
+)
+@patch('pdd.agentic_common.run_agentic_task')
+def test_prd_sync_failure(
+    mock_agentic,
+    mock_arch,
+    mock_find_prd,
+    mock_find_arch,
+    mock_git,
+    mock_changed,
+    mock_update,
+    tmp_path,
+    capsys,
+):
+    """
+    Test that when the agent task fails, the error is recorded without crashing the entire repository update.
+    """
+    repo_root, prd_file, ctx = _setup_prd_sync_test(tmp_path, mock_update, mock_find_arch, mock_find_prd)
+    mock_agentic.return_value = (False, "API Limit reached", 0.0, "agent_model")
+    _run_prd_sync_update(repo_root, ctx)
+    out = capsys.readouterr().out
+    assert "old PRD content" in prd_file.read_text(), "PRD file should remain unchanged on failure."
+    assert "API Limit reached" in out, "Failure reason should be in the output."

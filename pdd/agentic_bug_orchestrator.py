@@ -20,6 +20,9 @@ from .agentic_common import (
     clear_workflow_state,
     set_agentic_progress,
     clear_agentic_progress,
+    post_step_comment,
+    _extract_step_report,
+    _sanitize_comment_body,
     DEFAULT_MAX_RETRIES,
 )
 from .get_test_command import get_test_command_for_file
@@ -922,6 +925,146 @@ def _check_hard_stop(step_num: Union[int, float], output: str, files_extracted: 
     return None
 
 
+def _state_safe_step_output(output: str) -> str:
+    """Redact secrets before persisting step output to resumable/GitHub state."""
+    if not isinstance(output, str):
+        return output
+    return _sanitize_comment_body(output, max_chars=max(len(output) + 1024, 25_000))
+
+
+def _parse_e2e_needed_marker(output: str) -> Optional[str]:
+    """Return the last E2E_NEEDED yes/no marker outside any step_report block."""
+    if not output:
+        return None
+    outside_report = re.sub(
+        r"<step_report>.*?</step_report>",
+        "",
+        output,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    matches = re.findall(
+        r"(?im)^\s*E2E_NEEDED:\s*(yes|no)\b",
+        outside_report,
+    )
+    return matches[-1].lower() if matches else None
+
+
+def _maybe_post_step_comment(
+    *,
+    step_success: bool,
+    step_num: Union[int, float],
+    description: str,
+    step_output: str,
+    state: Dict,
+    state_dir: Path,
+    cwd: Path,
+    issue_number: int,
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool,
+    github_comment_id: Optional[str],
+) -> Optional[str]:
+    """Post a per-step visible comment via trusted credentials (issue #964).
+
+    Used by the bug orchestrator's three step-exit paths (success-continue,
+    FAST_TRACK-continue at step 3, and hard-stop early return). Resume-safe:
+    ``state["step_comments"][n]["posted"]`` gates reposts. Returns the
+    (possibly refreshed) ``github_comment_id`` so the caller can thread it.
+
+    NOTE: a literal ``</step_report>`` substring inside the model body would
+    terminate ``_extract_step_report`` early. Acceptable for v1 — models do
+    not normally emit the closing tag inside their own report body.
+    """
+    # Defensive normalization: stale/corrupted persisted state (e.g. a list, or
+    # a per-step entry that isn't a dict) would otherwise crash on `.get()`.
+    # Only a literal `True` for `posted` counts — truthy strings/ints don't.
+    raw_sc = state.get("step_comments")
+    if not isinstance(raw_sc, dict):
+        raw_sc = {}
+    state["step_comments"] = raw_sc
+    entry = raw_sc.get(str(step_num))
+    if not step_success:
+        if isinstance(entry, dict) and entry.get("failed_posted") is True:
+            return github_comment_id
+        step_num_int = step_num if isinstance(step_num, int) else int(step_num)
+        posted = post_step_comment(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=step_num_int,
+            total_steps=12,
+            description=description,
+            output=step_output,
+            cwd=cwd,
+        )
+        state["step_comments"][str(step_num)] = {
+            "failed_posted": bool(posted),
+            "failed_pending": not bool(posted),
+        }
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+        return github_comment_id
+    if isinstance(entry, dict) and entry.get("posted") is True:
+        return github_comment_id
+    extracted = _extract_step_report(step_output)
+    is_fallback = extracted is None
+    if is_fallback:
+        body_to_post = (
+            f"_Step {step_num} completed; no `<step_report>` block "
+            f"returned by agent. Raw output retained in workflow state._"
+        )
+    else:
+        body_to_post = extracted
+    step_num_int = step_num if isinstance(step_num, int) else int(step_num)
+    posted = post_step_comment(
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+        step_num=step_num_int,
+        total_steps=12,
+        description=description,
+        output=step_output,
+        cwd=cwd,
+        body=body_to_post,
+    )
+    # Persist outcome regardless of success so the resume backfill can
+    # distinguish PR-era no-report fallback attempts (retryable) from legacy
+    # pre-PR outputs (where the agent posted comments itself and we must NOT
+    # repost). For no-report outputs the saved state is the only signal —
+    # `_extract_step_report` will return None on resume too.
+    if posted:
+        entry: Dict[str, object] = {"posted": True}
+        if is_fallback:
+            entry["fallback"] = True
+        state["step_comments"][str(step_num)] = entry
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+    elif is_fallback:
+        # Transient GitHub posting failure on a no-report step: mark it so
+        # the resume backfill knows to retry. Without this marker the backfill
+        # at the top of the orchestrator would skip the saved output (no
+        # `<step_report>` to extract) and the comment would be lost forever.
+        state["step_comments"][str(step_num)] = {
+            "posted": False,
+            "fallback_pending": True,
+        }
+        save_result = save_workflow_state(
+            cwd, issue_number, "bug", state, state_dir,
+            repo_owner, repo_name, use_github_state, github_comment_id,
+        )
+        if save_result:
+            github_comment_id = save_result
+    return github_comment_id
+
+
 def _get_state_dir(cwd: Path) -> Path:
     """Get the state directory relative to git root."""
     root = _get_git_root(cwd) or cwd
@@ -1326,7 +1469,7 @@ def run_agentic_bug_orchestrator(
     reasoning_time: Optional[float] = None,
 ) -> Tuple[bool, str, float, str, List[str]]:
     """
-    Orchestrates the 11-step agentic bug investigation workflow.
+    Orchestrates the 12-step agentic bug investigation workflow.
     
     Returns:
         (success, final_message, total_cost, model_used, changed_files)
@@ -1354,6 +1497,11 @@ def run_agentic_bug_orchestrator(
         github_comment_id = loaded_gh_id
         worktree_path_str = state.get("worktree_path")
         worktree_path = Path(worktree_path_str) if worktree_path_str else None
+        # Normalize the persisted `step_comments` shape early so any code path
+        # touching it (backfill sweep, `_maybe_post_step_comment`) sees a dict
+        # rather than crashing on a corrupted/legacy value (e.g. a list).
+        if not isinstance(state.get("step_comments"), dict):
+            state["step_comments"] = {}
     else:
         state = {"step_outputs": {}}
         last_completed_step = 0
@@ -1381,7 +1529,7 @@ def run_agentic_bug_orchestrator(
     for s_key, s_out in step_outputs.items():
         context[f"step{s_key}_output"] = s_out
 
-    # Re-extract files from step 5.5/7/9 outputs if available
+    # Re-extract files from step 5/7/9/11 outputs if available
     changed_files: List[str] = []
     
     # Step 5
@@ -1391,7 +1539,7 @@ def run_agentic_bug_orchestrator(
         repro_files = _parse_changed_files(s5_out, "REPRO_FILES_CREATED")
         changed_files.extend(repro_files)
 
-    # Step 5.5
+    # Legacy fractional prompt-classification state from older resumed runs.
     if "step5.5_output" in context:
         s55_out = context["step5.5_output"]
         prompt_fixed = _parse_changed_files(s55_out, "PROMPT_FIXED")
@@ -1430,6 +1578,27 @@ def run_agentic_bug_orchestrator(
 
     # State validation: find actual last successful step
     ordered_steps: List[Union[int, float]] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+    # Codex review #5 of PR #966: legacy E2E-skip states (before we persisted
+    # a synthetic Step 11 entry) can have step_outputs with keys 1..10 + 12
+    # but no 11. The contiguous walk below would stop at 10, downgrade a
+    # completed last_completed_step from 12 → 10, miss Step 12's backfill,
+    # and rerun the side-effectful PR creation step. Heal those states by
+    # synthesizing the missing Step 11 entry in-memory when Step 10's cached
+    # output indicates E2E_NEEDED:no AND Step 12 is also cached.
+    s10_out_pre = step_outputs.get("10")
+    s12_out_pre = step_outputs.get("12")
+    if (
+        "11" not in step_outputs
+        and isinstance(s10_out_pre, str)
+        and _parse_e2e_needed_marker(s10_out_pre) == "no"
+        and isinstance(s12_out_pre, str)
+        and not s12_out_pre.startswith("FAILED:")
+    ):
+        step_outputs["11"] = (
+            "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+            "provide sufficient coverage."
+        )
+        state.setdefault("step_outputs", {})["11"] = step_outputs["11"]
     actual_last: Union[int, float] = 0
     for s in ordered_steps:
         key = str(s)
@@ -1476,9 +1645,86 @@ def run_agentic_bug_orchestrator(
 
     total_steps = len(steps_config)  # 12
 
+    # Issue #964: backfill any visible step comments missed by a prior crash
+    # or transient `gh issue comment` failure. Only retries steps whose
+    # outputs we already trust (not "FAILED:" sentinels). The helper is
+    # idempotent — successful resumes are gated by step_comments[n].posted.
+    #
+    # Gating (codex review #4 of PR #966):
+    # - Require the saved output to contain a `<step_report>` block, OR a
+    #   prior fallback attempt that failed (`fallback_pending`). Legacy pre-PR
+    #   states (where models posted comments themselves) and the synthetic
+    #   skipped-step outputs from FAST_TRACK (lines 1796-1797 below) both
+    #   lack this marker AND have no `step_comments` entry, so they're skipped
+    #   — preventing duplicate or bogus comments on resume.
+    # - Codex review #5 of PR #966: persist `fallback_pending` for no-report
+    #   outputs whose initial post failed, so we can safely retry them here
+    #   without confusing them with legacy outputs.
+    # - Normalize `step_comments` shape: a stale list / non-dict entry / non-
+    #   boolean `posted` would otherwise crash with AttributeError here.
+    # - Codex review #6 of PR #966: gate the sweep to the contiguous trusted
+    #   range. The validator above corrects `last_completed_step` down when
+    #   `step_outputs` has gaps (e.g. cached 1 and 3 but no 2). Iterating
+    #   every saved key would then publish a visible comment for stale
+    #   downstream step 3 before step 2 is rerun — leaking progress the
+    #   orchestrator has already decided is not valid. Walk `ordered_steps`
+    #   only up to `last_completed_step` (post-validation) instead.
+    if state.get("step_outputs") and last_completed_step > 0:
+        raw_sc = state.get("step_comments")
+        if not isinstance(raw_sc, dict):
+            raw_sc = {}
+        state["step_comments"] = raw_sc
+        step_outputs_map = state["step_outputs"]
+        for s_num in ordered_steps:
+            if s_num > last_completed_step:
+                break
+            s_key = str(s_num)
+            s_out = step_outputs_map.get(s_key)
+            if not isinstance(s_out, str) or s_out.startswith("FAILED:"):
+                continue
+            entry = raw_sc.get(s_key)
+            if isinstance(entry, dict) and entry.get("posted") is True:
+                continue
+            fallback_pending = (
+                isinstance(entry, dict) and entry.get("fallback_pending") is True
+            )
+            if _extract_step_report(s_out) is None and not fallback_pending:
+                continue
+            try:
+                s_num_int = int(float(s_key))
+            except (TypeError, ValueError):
+                continue
+            desc = next(
+                (d for (n, _name, d) in steps_config if n == s_num_int),
+                str(s_key),
+            )
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=s_num_int,
+                description=desc,
+                step_output=s_out,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
+
     current_work_dir = cwd
     consecutive_failures = 0
+    terminal_step_failed: Optional[str] = None
     skip_e2e = False
+
+    # Codex review #5 of PR #966: rehydrate skip_e2e from cached Step 10
+    # output so a resume that lands on Step 11 (e.g. after a crash between
+    # Steps 10 and 11) still honors the E2E_NEEDED:no classification instead
+    # of unconditionally rerunning E2E generation.
+    cached_step10 = step_outputs.get("10")
+    if isinstance(cached_step10, str) and _parse_e2e_needed_marker(cached_step10) == "no":
+        skip_e2e = True
 
     # Worktree restoration for resume
     if start_step >= 5 and start_step <= 12:
@@ -1556,6 +1802,28 @@ def run_agentic_bug_orchestrator(
         if step_num == 11 and skip_e2e:
             if not quiet:
                 console.print("Skipping Step 11 (E2E): unit tests provide sufficient coverage")
+            # Codex review #5 of PR #966: persist a synthetic Step 11 skip
+            # entry. Without it, step_outputs has a gap at "11" so the resume
+            # validator (lines 1531-1543) walks contiguously, stops at 10,
+            # and silently downgrades a completed last_completed_step=12 to
+            # 10 — causing Step 12's cached body to miss backfill AND the
+            # side-effectful PR creation step to rerun on resume. The
+            # synthetic body intentionally omits <step_report> so the
+            # backfill sweep (lines 1622-1623) correctly skips posting any
+            # bogus "step 11 done" comment.
+            synthetic = (
+                "Step 11 skipped: E2E_NEEDED:no from Step 10 — unit tests "
+                "provide sufficient coverage."
+            )
+            state["step_outputs"]["11"] = synthetic
+            state["last_completed_step"] = 11
+            last_completed_step = 11
+            save_result = save_workflow_state(
+                cwd, issue_number, "bug", state, state_dir,
+                repo_owner, repo_name, use_github_state, github_comment_id,
+            )
+            if save_result:
+                github_comment_id = save_result
             continue
 
         # Record progress so KeyboardInterrupt can report how far we got.
@@ -1682,8 +1950,24 @@ def run_agentic_bug_orchestrator(
             consecutive_failures += 1
             if consecutive_failures >= 3:
                 state["last_completed_step"] = last_completed_step
-                state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
-                save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                state["step_outputs"][str(step_num)] = f"FAILED: {_state_safe_step_output(step_output)}"
+                save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+                if save_result:
+                    github_comment_id = save_result
+                _maybe_post_step_comment(
+                    step_success=False,
+                    step_num=step_num,
+                    description=description,
+                    step_output=step_output,
+                    state=state,
+                    state_dir=state_dir,
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    use_github_state=use_github_state,
+                    github_comment_id=github_comment_id,
+                )
                 return False, "Aborting: 3 consecutive steps failed — agent providers unavailable", total_cost, model_used, changed_files
         else:
             consecutive_failures = 0
@@ -1697,13 +1981,37 @@ def run_agentic_bug_orchestrator(
             fast_track_summary = fast_track_match.group(1).strip() if fast_track_match else "Pre-diagnosed by issue author"
             context["step4_output"] = f"Step 4 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
             context["step5_output"] = f"Step 5 skipped (fast-track): Issue was pre-diagnosed by the author. Root cause: {fast_track_summary}"
-            state["step_outputs"]["4"] = context["step4_output"]
-            state["step_outputs"]["5"] = context["step5_output"]
+            # Persist step 3's actual output BEFORE the synthetic 4/5 entries
+            # (codex review of PR #966 #3). Without this, the resume validator
+            # at lines 1495-1507 walks ordered_steps, finds the gap at "3", and
+            # downgrades last_completed_step to 0 — forcing a re-run of triage
+            # even though step 3's comment was already posted.
+            state["step_outputs"]["3"] = _state_safe_step_output(step_output)
+            state["step_outputs"]["4"] = _state_safe_step_output(context["step4_output"])
+            state["step_outputs"]["5"] = _state_safe_step_output(context["step5_output"])
             state["last_completed_step"] = 5
             last_completed_step = 5
             # Recalculate start_step so the loop skips 4 and 5
             start_step = 6
-            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+            # Issue #964: post the step-3 triage comment before short-circuiting,
+            # otherwise the user sees no visible signal that triage succeeded.
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=step_num,
+                description=description,
+                step_output=step_output,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
             if not quiet:
                 console.print(f"[cyan]  → Fast-track: skipping Steps 4-5 (issue pre-diagnosed)[/cyan]")
             continue
@@ -2268,7 +2576,7 @@ def run_agentic_bug_orchestrator(
         if step_num == 10:
             # Check for E2E classification marker in step output.
             # Safe default: if marker is missing, E2E runs (backward compatible).
-            if "E2E_NEEDED: no" in step_output:
+            if _parse_e2e_needed_marker(step_output) == "no":
                 skip_e2e = True
                 if not quiet:
                     console.print("   (E2E skipped: E2E_NEEDED: no)")
@@ -2300,8 +2608,29 @@ def run_agentic_bug_orchestrator(
             if not quiet:
                 console.print(f"[yellow]⏹️  Investigation stopped at Step {step_num}: {stop_reason}[/yellow]")
             state["last_completed_step"] = step_num
-            state["step_outputs"][str(step_num)] = step_output
-            save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
+            save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
+            if save_result:
+                github_comment_id = save_result
+            # Issue #964: post the model's report even on hard stop. The step's
+            # WORK succeeded (e.g. detected duplicate, classified user error);
+            # the orchestrator just decided not to continue. Without this the
+            # final visible signal (Duplicate-of-X, Needs-More-Info, etc.) is
+            # lost to the user.
+            github_comment_id = _maybe_post_step_comment(
+                step_success=True,
+                step_num=step_num,
+                description=description,
+                step_output=step_output,
+                state=state,
+                state_dir=state_dir,
+                cwd=cwd,
+                issue_number=issue_number,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
+                github_comment_id=github_comment_id,
+            )
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
         if not step_success:
@@ -2310,15 +2639,36 @@ def run_agentic_bug_orchestrator(
 
         # Update state
         if step_success:
-            state["step_outputs"][str(step_num)] = step_output
+            state["step_outputs"][str(step_num)] = _state_safe_step_output(step_output)
             state["last_completed_step"] = step_num
             last_completed_step = step_num
         else:
-            state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+            state["step_outputs"][str(step_num)] = f"FAILED: {_state_safe_step_output(step_output)}"
+            if step_num == 12:
+                terminal_step_failed = step_output
 
         save_result = save_workflow_state(cwd, issue_number, "bug", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
         if save_result:
             github_comment_id = save_result
+
+        # Issue #964: orchestrator (not the model) owns visible step comments.
+        # Posting through trusted credentials means Gemini's sandboxed shell no
+        # longer needs GH_TOKEN passthrough. The posted-state is tracked in
+        # workflow state so a resume after an interruption does not double-post.
+        github_comment_id = _maybe_post_step_comment(
+            step_success=step_success,
+            step_num=step_num,
+            description=description,
+            step_output=step_output,
+            state=state,
+            state_dir=state_dir,
+            cwd=cwd,
+            issue_number=issue_number,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+            github_comment_id=github_comment_id,
+        )
 
         # Print step completion marker (required for credential waterfall detection)
         if not quiet:
@@ -2331,6 +2681,17 @@ def run_agentic_bug_orchestrator(
         url_match = re.search(r"https://github.com/\S+/pull/\d+", s10_out)
         if url_match:
             pr_url = url_match.group(0)
+
+    if terminal_step_failed is not None:
+        if not quiet:
+            console.print("\n[red]❌ Investigation failed[/red]")
+            console.print(f"   Total cost: ${total_cost:.4f}")
+            console.print(f"   Files changed: {', '.join(changed_files) if changed_files else 'none'}")
+            if worktree_path:
+                console.print(f"   Worktree: {worktree_path}")
+            console.print("   PR created: none")
+        detail = terminal_step_failed.strip().splitlines()[0] if terminal_step_failed.strip() else "unknown error"
+        return False, f"Investigation failed at step 12: {detail}", total_cost, model_used, changed_files
 
     if not quiet:
         console.print("\n[green]✅ Investigation complete[/green]")

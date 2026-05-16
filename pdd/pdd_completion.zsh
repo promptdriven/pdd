@@ -465,6 +465,7 @@ _pdd_checkup() {
     '--reviewer[Primary reviewer role]:reviewer:' \
     '--fixer[Fixer role]:fixer:' \
     '--reviewer-fallback[Fallback reviewer when primary fails]:reviewer:' \
+    '--fixer-fallback[Fallback fixer when primary fixer fails (e.g. credential-limit)]:fixer:' \
     '--max-review-rounds[Max review rounds]:rounds:' \
     '--max-review-cost[Max review cost (USD)]:cost:' \
     '--max-review-minutes[Max review wall-clock minutes]:minutes:' \

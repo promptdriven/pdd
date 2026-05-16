@@ -5191,3 +5191,28 @@ def test_scope_architecture_dict_format_no_corruption(tmp_path):
     a_entry = next(m for m in modules if m["filename"] == "a_Python.prompt")
     assert a_entry["dependencies"] == []
 
+
+def test_preflight_drift_heal_metadata_failure_is_hard_failure(tmp_path):
+    """Preflight drift-heal must not treat metadata-finalization failures as advisory."""
+    from pdd.agentic_change_orchestrator import _preflight_drift_heal
+    from pdd.ci_drift_heal import DriftInfo
+
+    drift = DriftInfo(
+        basename="auth",
+        language="python",
+        operation="update",
+        reason="changed",
+        code_path="pdd/auth.py",
+        prompt_path="pdd/prompts/auth_python.prompt",
+    )
+    result = subprocess.CompletedProcess(
+        args=["pdd"],
+        returncode=1,
+        stdout="",
+        stderr="[metadata-sync] fingerprint: failed",
+    )
+
+    with patch("pdd.ci_drift_heal.detect_drift", return_value=([drift], [])), \
+         patch("pdd.agentic_change_orchestrator.subprocess.run", return_value=result), \
+         pytest.raises(RuntimeError, match="preflight metadata finalization failed"):
+        _preflight_drift_heal(tmp_path, quiet=True)

@@ -78,7 +78,7 @@ class ReviewLoopConfig:
     reviewer_fallback: Optional[str] = None
     review_only: bool = False
     max_rounds: int = 5
-    max_cost: float = 10.0
+    max_cost: float = 50.0
     max_minutes: float = 90.0
     require_all_reviewers_clean: bool = True
     continue_on_reviewer_limit: bool = False
@@ -103,6 +103,11 @@ class ReviewLoopConfig:
     # example mirrors the live dataclass at
     # ``pdd/checkup_review_loop.py``. Off by default.
     fallback_reviewer_on_failure: bool = False
+    # Optional secondary fixer invoked at most once across the loop when
+    # the primary fixer fails (e.g., subscription-tier credential exhausted).
+    # Must differ from the primary fixer and the active reviewer. Kept at
+    # the end of the field list so positional callers stay stable.
+    fixer_fallback: Optional[str] = None
 
 
 @dataclass
@@ -146,6 +151,16 @@ class ReviewLoopState:
     dispute_notes_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_feedback_by_key: Dict[str, str] = field(default_factory=dict)
     reviewer_status_details: Dict[str, Dict[str, str]] = field(default_factory=dict)
+    # Set lazily once ``fixer_fallback`` runs and succeeds; from that point on
+    # every subsequent round drives the fix step with this role instead of the
+    # exhausted primary. Parallel to ``active_reviewer``.
+    active_fixer: Optional[str] = None
+    # Originally configured primary reviewer captured at loop init and never
+    # reassigned. ``active_reviewer`` rotates after a reviewer-fallback takeover;
+    # this field preserves the original so the fixer-fallback exclusion check
+    # can enforce the documented "must differ from --reviewer" rule even after
+    # the active reviewer has rotated.
+    original_reviewer: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

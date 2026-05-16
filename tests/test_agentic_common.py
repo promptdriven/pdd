@@ -535,12 +535,15 @@ def test_run_agentic_task_codex_success(mock_cwd, mock_env, mock_load_model_data
     assert abs(cost - 7.50) < 0.0001
 
     # Verify command - now uses full path from _find_cli_binary
-    args, _ = mock_subprocess.call_args
+    args, kwargs = mock_subprocess.call_args
     cmd = args[0]
     assert cmd[0] == "/bin/codex"  # Uses discovered path, not hardcoded name
     assert "--sandbox" in cmd
     assert "danger-full-access" in cmd
     assert "--json" in cmd
+    assert cmd[-1] == "-"
+    assert kwargs["input"] is not None
+    assert "instruction" in kwargs["input"]
 
 def test_run_agentic_task_fallback(mock_shutil_which, mock_subprocess_run, mock_env, mock_load_model_data, tmp_path):
     """Test fallback from Anthropic (failure) to Google (success)."""
@@ -3582,6 +3585,47 @@ def test_issue557_ndjson_modern_item_completed_parsing(tmp_path):
     assert "auth" in output and "payments" in output
 
 
+def test_codex_provider_pipes_prompt_via_stdin(tmp_path):
+    """Codex positional prompt must be '-' so it receives the prompt body."""
+    from pdd.agentic_common import _run_with_provider
+
+    with patch.dict(
+        os.environ,
+        {"OPENAI_API_KEY": "test-key", "CODEX_MODEL": "test-model"},
+        clear=False,
+    ), \
+         patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/codex"), \
+         patch("pdd.agentic_common._subprocess_run") as mock_run:
+        mock_run.return_value = MagicMock(
+            returncode=0,
+            stdout=json.dumps({
+                "type": "result",
+                "output": "ok",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 10,
+                    "cached_input_tokens": 0,
+                },
+            }),
+            stderr="",
+        )
+        prompt_file = tmp_path / ".agentic_prompt_test.txt"
+        prompt_file.write_text("test prompt body")
+
+        success, output, _cost, _model = _run_with_provider(
+            "openai", prompt_file, tmp_path, timeout=60.0, verbose=False, quiet=False
+        )
+
+    assert success is True
+    assert output == "ok"
+    args, kwargs = mock_run.call_args
+    cmd = args[0]
+    assert cmd[cmd.index("--json") + 1] == "-"
+    assert cmd[cmd.index("--model") + 1] == "test-model"
+    assert str(prompt_file) not in cmd
+    assert kwargs["input"] == "test prompt body"
+
+
 def test_issue557_ndjson_multiple_item_completed_picks_agent_message(tmp_path):
     """
     Issue #557 Bug 1 edge case: When NDJSON contains multiple item.completed
@@ -4858,6 +4902,140 @@ class TestIssue1072PermanentErrors:
         assert _is_permanent_error("Rate limit exceeded") is False
         assert _is_permanent_error("Timeout expired") is False
         assert _is_permanent_error("Connection reset by peer") is False
+
+
+class TestCredentialLimitClassification:
+    """Issue (this PR): Claude Code subscription-tier weekly-limit
+    classification.
+
+    The fixer subprocess inside ``pdd checkup --pr`` can return a
+    ``{"api_error_status":429,"result":"You've hit your limit · resets May
+    18, 11pm (UTC)","duration_api_ms":0,"total_cost_usd":0}`` envelope when
+    the user's Claude Code subscription weekly cap fires. ``duration_api_ms:0``
+    + ``total_cost_usd:0`` is the tell that the local CLI rejected before any
+    API call — this is the subscription-tier weekly limit, NOT a transient
+    API 429. The previous ``_is_rate_limited`` short-circuit treated it as
+    transient and burned 3 × 60 s retries; this classification lets the
+    cloud OAuth-token waterfall rotate to a different credential.
+    """
+
+    from pdd.agentic_common import _classify_permanent_error
+
+    EXACT_BUG_ERROR = (
+        'Exit code 1: {"type":"result","subtype":"success","is_error":true,'
+        '"api_error_status":429,"duration_ms":658,"duration_api_ms":0,'
+        '"num_turns":1,"result":"You\'ve hit your limit · resets May 18, '
+        '11pm (UTC)","stop_reason":"stop_sequence","total_cost_usd":0,'
+        '"service_tier":"standard"}'
+    )
+
+    def test_classify_credential_limit_from_claude_subscription_429(self):
+        """The exact JSON envelope from the bug report must classify as
+        ``credential-limit`` — not as the transient rate-limit class. This is
+        the load-bearing assertion: without it, ``run_agentic_task`` retries
+        on the 60s rate-limit floor and the fixer dead-stops the checkup loop.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(self.EXACT_BUG_ERROR) == "credential-limit"
+        ), (
+            "Subscription weekly-limit error misclassified as transient — "
+            "expected stable token 'credential-limit' so pdd_cloud's OAuth "
+            "waterfall can rotate credentials"
+        )
+
+    def test_credential_limit_is_permanent(self):
+        """``_is_permanent_error`` is the public wrapper used by callers
+        outside the classification module."""
+        assert _is_permanent_error(self.EXACT_BUG_ERROR) is True
+
+    def test_generic_429_still_transient(self):
+        """Regression guard for #1384: a generic API-tier 429 without the
+        "hit your limit · resets" anchor MUST stay transient so
+        ``RATE_LIMIT_BACKOFF_FLOOR`` still applies. Without this, every
+        provider 429 would be marked permanent and a recoverable
+        rate-limit window would be reported as a hard failure.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(
+                "Error: api_error_status: 429 rate limit exceeded"
+            )
+            is None
+        )
+        assert (
+            _classify_permanent_error('{"api_error_status":429,"result":"Too many requests"}')
+            is None
+        )
+
+    def test_credential_limit_phrase_alone_does_not_false_positive(self):
+        """The pattern MUST require BOTH "hit your limit" AND "reset(s)"
+        anchors. A reviewer/fixer that happens to say "User hit your limit
+        of 10 items" in summary prose (no "resets") must NOT be classified
+        as credential-limit — that would silently kill the retry path for
+        unrelated text.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert _classify_permanent_error("User hit your limit of 10 items") != "credential-limit"
+        # And without any other strong/transient signal, it falls all the way
+        # through to None (no false-permanent classification).
+        assert _classify_permanent_error("User hit your limit of 10 items") is None
+
+    def test_credential_limit_does_not_match_prose_with_substrings_apart(self):
+        """Reviewer finding bodies embedded in subprocess stdout can contain
+        BOTH anchors in prose — e.g. a reviewer describing this very bug —
+        with no time-token between them. The pattern must require proximity
+        plus a time-token after ``resets`` so distant-substring prose does
+        NOT classify as ``credential-limit`` (which would short-circuit the
+        rate-limit retry path on benign text).
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        assert (
+            _classify_permanent_error(
+                "if you hit your limit, nothing resets automatically"
+            )
+            is None
+        ), (
+            "Loose ``hit your limit.*?resets?`` greedy pattern is matching "
+            "unrelated prose. Tighten the regex to require a time-token after "
+            "``resets`` and cap proximity between the anchors."
+        )
+
+    def test_credential_limit_matches_subscription_envelope_with_full_date(self):
+        """The exact Claude Code envelope with a full date after ``resets``
+        — e.g. ``You've hit your limit · resets May 18, 11pm (UTC)`` — MUST
+        classify as ``credential-limit``. This is the load-bearing case the
+        regex tightening must not regress.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        envelope = (
+            'Exit code 1: {"api_error_status":429,'
+            '"result":"You\'ve hit your limit · resets May 18, '
+            '11pm (UTC)"}'
+        )
+        assert (
+            _classify_permanent_error(envelope) == "credential-limit"
+        )
+
+    def test_credential_limit_matches_subscription_envelope_with_time_only(self):
+        """Same envelope but with only a time-of-day after ``resets`` —
+        the regex must still match when a time token follows the anchor
+        even without a date prefix.
+        """
+        from pdd.agentic_common import _classify_permanent_error
+
+        envelope = (
+            'Exit code 1: {"api_error_status":429,'
+            '"result":"You\'ve hit your limit · resets 11pm (UTC)"}'
+        )
+        assert (
+            _classify_permanent_error(envelope) == "credential-limit"
+        )
 
 
 class TestIssue1072FailureLogging:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
@@ -106,6 +107,27 @@ class TestCheckupReviewLoopCli:
         assert kwargs["max_review_cost"] == 3.5
         assert kwargs["max_review_minutes"] == 12
         assert kwargs["require_final_fresh_review"] is True
+
+    def test_review_loop_default_max_review_cost_is_50(self) -> None:
+        runner = CliRunner()
+        with patch(
+            "pdd.commands.checkup.run_agentic_checkup",
+            return_value=(True, "ok", 0.0, "model"),
+        ) as run_mock:
+            result = runner.invoke(
+                checkup,
+                [
+                    "--pr",
+                    "https://github.com/o/r/pull/1",
+                    "--issue",
+                    "https://github.com/o/r/issues/2",
+                    "--review-loop",
+                ],
+                obj={},
+            )
+
+        assert result.exit_code == 0, result.output
+        assert run_mock.call_args.kwargs["max_review_cost"] == 50.0
 
     def test_review_loop_rejects_no_fix(self) -> None:
         runner = CliRunner()
@@ -261,6 +283,92 @@ class TestCheckupReviewLoopRuntime:
         assert "Review loop stopped on a configured safety limit" not in report
         assert "The PR does not test the new workflow." in report
 
+    def test_cost_cap_after_fixer_pushes_then_stops_before_verifier(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[str] = []
+        finding = {
+            "severity": "critical",
+            "area": "api",
+            "location": "pdd/api.py:5",
+            "evidence": "missing guard",
+            "finding": "The API accepts invalid input.",
+            "required_fix": "Validate the input before use.",
+        }
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "fix-" in label:
+                return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
+            return True, _json("findings", [finding]), 0.1, role
+
+        pushes: List[str] = []
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
+        )
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert round(cost, 2) == 1.1
+        assert calls == [
+            "checkup-review-loop-review-codex-round1",
+            "checkup-review-loop-fix-claude-for-codex-round1",
+        ]
+        assert pushes == ["pushed"]
+        assert "max-cost-reached: true" in report
+        assert "issue_aligned: unknown" in report
+        assert "The API accepts invalid input." in report
+        assert "verification=unverified" in report
+
+    def test_unparseable_review_at_cost_cap_skips_parse_repair(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append(kwargs["label"])
+            return True, "Needs changes, but not JSON.", 0.5, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pytest.fail("must not push after review cost cap"),
+        )
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert cost == 0.5
+        assert calls == ["checkup-review-loop-review-codex-round1"]
+        assert "max-cost-reached: true" in report
+
     def test_cost_cap_after_fixer_stops_before_commit_and_push(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -285,11 +393,13 @@ class TestCheckupReviewLoopRuntime:
                 return True, '{"summary":"fixed","changed_files":["pdd/api.py"]}', 1.0, role
             return True, _json("findings", [finding]), 0.1, role
 
+        pushes: List[str] = []
+
         monkeypatch.setattr(mod, "_run_role_task", fake_task)
         monkeypatch.setattr(
             mod,
             "_commit_and_push_if_changed",
-            lambda *a, **k: pytest.fail("must not push after fixer cost cap"),
+            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
         )
 
         success, report, cost, _model = run_checkup_review_loop(
@@ -306,6 +416,7 @@ class TestCheckupReviewLoopRuntime:
             "checkup-review-loop-review-codex-round1",
             "checkup-review-loop-fix-claude-for-codex-round1",
         ]
+        assert pushes == ["pushed"]
         assert "max-cost-reached: true" in report
         assert "issue_aligned: unknown" in report
         assert "The API accepts invalid input." in report
@@ -1318,6 +1429,122 @@ class TestCheckupReviewLoopRuntime:
             "| codex | degraded (optional, superseded by gemini) |" in report
         ), report
 
+    def test_reviewer_fallback_skips_parse_repair_past_deadline(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The direct ``reviewer_fallback`` path must propagate ``deadline``
+        into ``_run_review`` so a fallback that returns a parseable-but-failed
+        payload after the wall-clock deadline does NOT trigger an extra
+        parse-repair LLM call.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        clock = [1000.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        monkeypatch.setattr(mod.time, "monotonic", fake_monotonic)
+
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                # Primary failure forces the reviewer_fallback path.
+                clock[0] += 1.0
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            if role == "gemini":
+                # Fallback returns parseable JSON with status=failed and
+                # no findings, which without the deadline guard would let
+                # ``_should_attempt_parse_repair`` fire. Advance the clock
+                # past the deadline so the budget guard must skip the
+                # extra parse-repair LLM call.
+                clock[0] += 600.0
+                return True, _json("failed"), 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                reviewer_fallback="gemini",
+                max_minutes=1.0,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The fallback reviewer must have been called…
+        assert any(role == "gemini" for role, _ in calls), calls
+        # …but parse-repair must NOT fire after the deadline has passed.
+        assert not any(
+            "parse-repair" in label for _, label in calls
+        ), calls
+
+    def test_fallback_reviewer_on_failure_skips_parse_repair_past_deadline(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The ``fallback_reviewer_on_failure`` path (fixer-as-fallback) must
+        also propagate ``deadline`` so an exhausted wall-clock budget skips
+        the parse-repair LLM call.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        clock = [1000.0]
+
+        def fake_monotonic() -> float:
+            return clock[0]
+
+        monkeypatch.setattr(mod.time, "monotonic", fake_monotonic)
+
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if role == "codex":
+                clock[0] += 1.0
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            if role == "claude" and "fallback" in kwargs["label"]:
+                # Fallback fixer-as-reviewer returns parseable-but-failed
+                # JSON. Without the deadline guard, parse-repair would
+                # fire here — and the fake clock has already advanced
+                # past the deadline.
+                clock[0] += 600.0
+                return True, _json("failed"), 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                fallback_reviewer_on_failure=True,
+                max_minutes=1.0,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The fallback fixer-as-reviewer must have been invoked…
+        assert any(
+            "fallback-claude" in label for _, label in calls
+        ), calls
+        # …but parse-repair must NOT fire after the deadline has passed.
+        assert not any(
+            "parse-repair" in label for _, label in calls
+        ), calls
+
     def test_no_reviewer_fallback_preserves_legacy_behavior(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -1609,6 +1836,1163 @@ class TestCheckupReviewLoopRuntime:
         assert (
             "| codex | degraded (optional, superseded by gemini) |" in report
         ), report
+
+    # ------------------------------------------------------------------
+    # ``fixer_fallback`` (this PR). Mirrors ``reviewer_fallback`` from
+    # #923: when the primary fixer can't address the reviewer's findings
+    # (because a Claude Code subscription-tier credential is exhausted,
+    # for instance) the loop dead-stops instead of trying a second
+    # configured fixer. These tests pin the fallback contract.
+    # ------------------------------------------------------------------
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "medium",
+            "area": "test",
+            "location": "tests/test_flow.py:12",
+            "evidence": "missing assertion",
+            "finding": "The PR does not test the new workflow.",
+            "required_fix": "Add a regression test.",
+        }
+
+    def test_fixer_fallback_runs_when_primary_fails(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Primary fixer (claude) fails; configured ``fixer_fallback``
+        (gemini) succeeds. The loop must NOT stop on the primary failure —
+        it must invoke the fallback fixer and then continue into the
+        verify pass.
+
+        This test also pins two contracts the implementer claimed but no
+        existing test verified:
+
+        * ``state.fix_attempts_by_key[k]`` increments EXACTLY ONCE per
+          logical fix round (not twice — even though both the primary and
+          fallback ``FixResult`` are appended to ``state.fixes``). The
+          counter is used by the no-progress/oscillation guard, and a
+          double-bump would prematurely abort the loop on a perfectly
+          healthy primary→fallback rotation.
+        * ``state.fixes`` keeps BOTH ``FixResult`` rows after a
+          successful fallback round so the audit trail records the
+          credential rotation. The primary entry's ``success`` is
+          ``False``; the fallback's is ``True`` and its ``fixer`` is the
+          configured fallback role.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        # State-capture seam. ``run_checkup_review_loop`` doesn't return
+        # state — wrap ``_finalize`` (which receives state at the call
+        # site) to capture and forward. Cleaner than refactoring the
+        # signature for one test.
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                # Primary fixer hits subscription-tier credential exhaustion.
+                return (
+                    False,
+                    'Exit code 1: {"api_error_status":429,"result":"You\'ve hit your limit · resets May 18, 11pm (UTC)"}',
+                    0.0,
+                    role,
+                )
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                # Fallback fixer succeeds.
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            # Subsequent verify and re-review calls are clean.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fallback fixer's invocation MUST appear; this is the
+        # load-bearing signal that ``_maybe_run_fallback_fixer`` fired.
+        assert any(
+            label == "checkup-review-loop-fix-gemini-for-codex-round1"
+            for _, label in calls
+        ), f"fixer_fallback did not run; calls={calls!r}"
+        # The loop should not have dead-stopped on "could not address".
+        assert "could not address" not in report
+
+        # State-driven assertions: must have captured state via _finalize.
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+
+        # Finding 2: ``_record_fix_attempts`` must be called ONCE per
+        # logical fix round (primary attempt). Calling it again for the
+        # fallback would double-bump the per-finding counter and would
+        # mis-trip the oscillation/no-progress guards downstream.
+        assert state.fix_attempts_by_key, (
+            "no fix_attempts recorded — primary should have incremented it once"
+        )
+        for key, count in state.fix_attempts_by_key.items():
+            assert count == 1, (
+                f"finding {key!r} bumped {count}× in one fix round; "
+                f"expected 1× (primary records, fallback does not double-record)"
+            )
+
+        # Finding 4: ``state.fixes`` keeps BOTH FixResults — the failed
+        # primary AND the succeeding fallback — so the audit trail
+        # records the credential rotation.
+        assert len(state.fixes) >= 2, (
+            f"expected primary+fallback FixResults retained in state.fixes; "
+            f"got len={len(state.fixes)}: {[f.fixer for f in state.fixes]!r}"
+        )
+        primary_entry = state.fixes[0]
+        fallback_entry = state.fixes[1]
+        assert primary_entry.fixer == "claude" and primary_entry.success is False, (
+            f"primary FixResult expected (claude, success=False); got "
+            f"({primary_entry.fixer}, success={primary_entry.success})"
+        )
+        assert fallback_entry.fixer == "gemini" and fallback_entry.success is True, (
+            f"fallback FixResult expected (gemini, success=True); got "
+            f"({fallback_entry.fixer}, success={fallback_entry.success})"
+        )
+
+    def test_fixer_fallback_resets_worktree_before_fallback_runs(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When the primary fixer dead-stops (e.g. on credential
+        exhaustion) it may have left partial edits in the worktree.
+        Before invoking the fallback fixer the loop MUST run
+        ``git reset --hard HEAD`` + ``git clean -fd`` on the worktree so
+        the fallback runs from the same baseline as the primary did and
+        the failed primary's untrusted edits cannot leak into the
+        eventual ``_commit_and_push_if_changed`` call (codex iter-04 P1).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "primary credential-limit dead-stop", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        # Record all subprocess.run calls so we can assert the
+        # reset+clean pair fires between primary failure and fallback
+        # invocation. Keep the real subprocess.run behavior — the loop
+        # invokes other ``git`` commands that must still succeed.
+        real_run = subprocess.run
+        subprocess_calls: List[List[str]] = []
+
+        def recording_run(cmd: Any, *args: Any, **kwargs: Any):
+            if isinstance(cmd, list):
+                subprocess_calls.append(list(cmd))
+            return real_run(cmd, *args, **kwargs)
+
+        monkeypatch.setattr(mod.subprocess, "run", recording_run)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Locate the indices of the primary failure, the reset/clean
+        # pair, and the fallback invocation. The reset+clean must sit
+        # strictly between the two role tasks.
+        role_labels = [label for _, label in calls]
+        primary_idx = role_labels.index(
+            "checkup-review-loop-fix-claude-for-codex-round1"
+        )
+        fallback_idx = role_labels.index(
+            "checkup-review-loop-fix-gemini-for-codex-round1"
+        )
+        assert primary_idx < fallback_idx, (
+            f"primary fixer must precede fallback; calls={role_labels!r}"
+        )
+
+        # Find a reset+clean pair anywhere in the recorded subprocess
+        # calls. They are inserted before the fallback fires; with the
+        # bug present, neither command would be issued.
+        reset_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 5 and c[0] == "git" and c[1] == "-C"
+            and c[3:5] == ["reset", "--hard"]
+        ]
+        clean_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 4 and c[0] == "git" and c[1] == "-C"
+            and c[3] == "clean"
+        ]
+        assert reset_calls, (
+            f"expected 'git reset --hard HEAD' before fallback; "
+            f"recorded subprocess calls={subprocess_calls!r}"
+        )
+        assert clean_calls, (
+            f"expected 'git clean -fd' before fallback; "
+            f"recorded subprocess calls={subprocess_calls!r}"
+        )
+
+        # The reset+clean pair must appear in order, and the first
+        # reset must precede the first clean.
+        first_reset_idx = subprocess_calls.index(reset_calls[0])
+        first_clean_idx = subprocess_calls.index(clean_calls[0])
+        assert first_reset_idx < first_clean_idx, (
+            f"reset must come before clean; "
+            f"reset at {first_reset_idx}, clean at {first_clean_idx}"
+        )
+
+    def test_fixer_fallback_defangs_failed_primary_summary_in_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Failed-primary subprocess output can contain cloud verdict
+        adapter trip-wires (``[CRITICAL]``, ``issue_aligned: false``,
+        ``max-cost-reached: true``). When the fallback succeeds and
+        the run reports verified, those trip-wires must not survive
+        into the rendered fixer audit row, or they would falsely
+        downgrade the adapter's verdict for an otherwise-clean fix."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        primary_output = (
+            "[CRITICAL] subprocess error; "
+            "issue_aligned: false; max-cost-reached: true; "
+            'api_error_status:429 "You\'ve hit your limit · resets May 18, 11pm (UTC)"'
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, primary_output, 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Verdict-adapter trip-wires from the failed primary's raw
+        # output must not appear verbatim anywhere in the report.
+        assert "[CRITICAL]" not in report, (
+            "verbatim [CRITICAL] from failed primary leaked through; "
+            "cloud verdict adapter would downgrade an otherwise-clean fallback"
+        )
+        assert "issue_aligned: false" not in report.lower()
+        assert "max-cost-reached: true" not in report.lower()
+
+    def test_fixer_fallback_failure_is_recorded_in_state_fixes(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When the configured ``fixer_fallback`` runs but also fails,
+        its ``FixResult`` must still be appended to ``state.fixes`` so
+        the audit trail and ``final-state.json`` show the attempt. A
+        ``None`` fallback (never ran) is the only case that should NOT
+        leave a row."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return (
+                    False,
+                    'Exit code 1: {"api_error_status":429,"result":"You\'ve hit your limit · resets May 18, 11pm (UTC)"}',
+                    0.0,
+                    role,
+                )
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return False, "gemini fixer also failed", 0.05, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "fallback fixer gemini also failed" in report
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+        assert len(state.fixes) >= 2, (
+            f"failed fallback must still be appended to state.fixes; "
+            f"got len={len(state.fixes)}: {[f.fixer for f in state.fixes]!r}"
+        )
+        primary_entry, fallback_entry = state.fixes[0], state.fixes[1]
+        assert primary_entry.fixer == "claude" and primary_entry.success is False
+        assert fallback_entry.fixer == "gemini" and fallback_entry.success is False, (
+            f"failed fallback FixResult expected (gemini, success=False); got "
+            f"({fallback_entry.fixer}, success={fallback_entry.success})"
+        )
+
+    def test_fixer_fallback_not_configured_breaks_loop(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Regression guard for the legacy behavior: with no
+        ``fixer_fallback`` configured, the loop MUST still break with a
+        ``Fixer ... could not address ...`` stop reason."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "fixer failed for unrelated reason", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not address" in report
+        # No fallback was configured; no gemini fixer attempt is allowed.
+        assert not any(
+            label.startswith("checkup-review-loop-fix-gemini-")
+            for _, label in calls
+        ), f"gemini must not run when fixer_fallback is unset; calls={calls!r}"
+
+    def test_fixer_fallback_same_as_primary_skips(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When ``fixer_fallback == fixer``, the fallback would be a
+        no-op retry on the same role that just failed. Skip it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="claude"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not address" in report
+        # Only the primary fix-claude call may exist; no second attempt.
+        claude_fix_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-fix-claude-")
+        ]
+        assert len(claude_fix_calls) == 1, (
+            f"primary fixer must not be retried as its own fallback; got "
+            f"{claude_fix_calls!r}"
+        )
+
+    def test_fixer_fallback_normalizes_anthropic_alias_against_claude(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``--fixer claude --fixer-fallback anthropic`` MUST be treated as
+        the same provider — promoting ``anthropic`` to fallback after
+        ``claude`` failed would be a no-op retry on the same OAuth
+        credential that just hit a subscription-tier weekly limit.
+        ``_normalize_reviewers`` maps the alias (``anthropic``) to its
+        canonical role (``claude``), so the equality check must operate
+        on normalized roles, not literal strings.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            # Any anthropic fix attempt would have its own label; falling
+            # through here as "clean" would let it succeed and mask the bug.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="anthropic"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Only ONE fix invocation total (the primary) — fallback skipped
+        # because ``anthropic`` normalizes to the same role as ``claude``.
+        fix_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-fix-")
+        ]
+        assert len(fix_calls) == 1, (
+            f"expected exactly one fix attempt (primary, no alias fallback); "
+            f"got {fix_calls!r}"
+        )
+        assert "could not address" in report
+
+    def test_fixer_fallback_normalizes_canonical_role(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``--fixer-fallback Gemini`` (mixed case) or ``--fixer-fallback
+        OpenAI`` (provider alias) MUST be canonicalised before reaching
+        ``_run_fix`` and ``state.active_fixer``. Downstream code does a
+        case-sensitive ``ROLE_TO_PROVIDER.get(role, role)`` lookup — if a
+        raw ``"Gemini"`` leaks through, the provider table misses, an
+        invalid provider is spawned, and the fallback fails opaquely
+        instead of running. The execution path must see the lowercase
+        canonical role even when the operator typed an alias or odd
+        casing.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "fixer failed", 0.0, role
+            # Fallback path. The label MUST be the lowercase canonical
+            # role (``gemini``) — not ``Gemini`` — for the run to
+            # succeed at all. If the raw alias leaks through, this
+            # branch never matches and the assertion below fires.
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["tests/test_flow.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            # Mixed case + provider-name input — both must canonicalise
+            # to ``gemini`` before execution.
+            config=_config(fixer_fallback="Gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        fix_labels = [label for _, label in calls if "-fix-" in label]
+        assert "checkup-review-loop-fix-gemini-for-codex-round1" in fix_labels, (
+            f"fallback did not run with canonical 'gemini' role; "
+            f"fix labels seen: {fix_labels!r}"
+        )
+        # No raw "Gemini" label may appear — that would mean the raw
+        # alias reached ``_run_fix`` and we'd be back to the bug.
+        assert not any("fix-Gemini" in label for _, label in calls), (
+            f"raw 'Gemini' leaked into fix invocation; calls={calls!r}"
+        )
+
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+
+        # Active-fixer promotion must store the canonical role so later
+        # rounds dispatch to a provider the lookup table knows.
+        assert state.active_fixer == "gemini", (
+            f"state.active_fixer expected 'gemini' (canonical); "
+            f"got {state.active_fixer!r}"
+        )
+
+        # And the audited FixResult should record the canonical role too.
+        fallback_entries = [f for f in state.fixes if f.fixer == "gemini"]
+        assert fallback_entries, (
+            f"no FixResult recorded with canonical 'gemini' fixer; "
+            f"got fixers={[f.fixer for f in state.fixes]!r}"
+        )
+
+    def test_fixer_fallback_unknown_role_skips_safely(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """An unrecognized ``fixer_fallback`` (typo, removed provider,
+        etc.) MUST be skipped rather than passed through to ``_run_fix``.
+        ``ROLE_TO_PROVIDER`` would otherwise return the raw string as
+        the provider name, which crashes opaquely. The loop should fall
+        through to its normal "could not address" termination instead.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="not-a-real-role"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Loop terminates on the primary failure; the bogus fallback is
+        # never invoked.
+        assert success is True
+        assert "could not address" in report
+        assert not any(
+            "fix-not-a-real-role" in label for _, label in calls
+        ), f"unknown fallback role should not be executed; calls={calls!r}"
+
+    def test_fixer_fallback_same_as_reviewer_skips(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When ``fixer_fallback == reviewer``, promoting the reviewer to
+        author the fix would collapse the reviewer/fixer role independence
+        the review loop exists to enforce. Skip it."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                return False, "fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="codex"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "could not address" in report
+        # codex must NOT have authored a fix. Only its review (and any
+        # later verify) calls are allowed.
+        codex_fix_calls = [
+            label for _, label in calls
+            if label.startswith("checkup-review-loop-fix-codex-")
+        ]
+        assert not codex_fix_calls, (
+            f"reviewer must not be promoted to fixer fallback; got {codex_fix_calls!r}"
+        )
+
+    def test_fixer_fallback_is_one_shot_across_rounds(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Once the fallback fixer has taken over (succeeded in a prior
+        round) it MUST drive every subsequent fix call instead of the
+        exhausted primary. The fallback contract is one-shot: re-invoking
+        the original primary in round N+1 just to burn another fallback
+        invocation defeats the purpose, because credential-limit reset
+        windows are hours-to-days. Track this via ``state.active_fixer``
+        (parallel to ``state.active_reviewer``).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        # Capture state via _finalize hook so we can assert active_fixer.
+        captured_state: List[Any] = []
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        # Force the loop to do two fix rounds: round 1's verify still
+        # reports findings (so the loop continues into round 2). In
+        # round 2 it should NOT call the primary again — the fallback
+        # has taken over.
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex-round1" in label and "verify" not in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                # Primary fixer dead-stops on credential exhaustion.
+                return False, "primary credential-limit dead-stop", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                # Fallback succeeds — should now drive round 2 too.
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            if "verify-codex-round1" in label:
+                # Verify pass still has findings → loop continues.
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round2":
+                # Round 2 must use the fallback fixer (active_fixer).
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            if "verify-codex-round2" in label:
+                return True, _json("clean"), 0.1, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        labels = [label for _, label in calls]
+
+        # Round 1 must exercise both the primary (failing) and the
+        # fallback fixer (succeeding) — that's how the takeover gets
+        # established in the first place.
+        assert "checkup-review-loop-fix-claude-for-codex-round1" in labels, (
+            f"round 1 primary fixer call missing; calls={labels!r}"
+        )
+        assert "checkup-review-loop-fix-gemini-for-codex-round1" in labels, (
+            f"round 1 fallback fixer call missing; calls={labels!r}"
+        )
+
+        # The one-shot contract: round 2 MUST NOT re-invoke the primary
+        # claude fixer. The exhausted credential has not reset (and the
+        # loop has no way to know that anyway), so retrying it would
+        # just consume another fallback invocation needlessly.
+        assert "checkup-review-loop-fix-claude-for-codex-round2" not in labels, (
+            f"primary fixer was re-invoked in round 2 despite fallback "
+            f"takeover; calls={labels!r}"
+        )
+
+        # Round 2 must use the fallback as the active fixer.
+        assert "checkup-review-loop-fix-gemini-for-codex-round2" in labels, (
+            f"active fixer (gemini) did not drive round 2; calls={labels!r}"
+        )
+
+        # The fallback helper must run exactly ONCE across the whole
+        # loop — round 2's gemini call comes from the main-loop
+        # ``active_fixer`` override, not a second helper invocation.
+        gemini_fix_calls = [
+            label for label in labels
+            if label.startswith("checkup-review-loop-fix-gemini-")
+        ]
+        assert len(gemini_fix_calls) == 2, (
+            f"expected exactly one round-1 fallback + one round-2 takeover "
+            f"call; got gemini fix calls={gemini_fix_calls!r}"
+        )
+
+        # The state must record the takeover so audit + later reasoning
+        # can see who the active fixer is.
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+        assert state.active_fixer == "gemini", (
+            f"state.active_fixer should be promoted to fallback role; "
+            f"got {state.active_fixer!r}"
+        )
+
+    def test_fixer_fallback_reset_uses_pre_fix_sha(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``git reset --hard HEAD`` is insufficient when the failed
+        primary fixer creates a commit before returning failure: HEAD has
+        already advanced past the safe pre-fix state, so the reset
+        becomes a no-op and the failed primary's commit survives. The
+        loop MUST capture the pre-fix SHA via ``git rev-parse HEAD``
+        BEFORE the primary runs and reset back to that SHA instead.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "primary failed after committing", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return True, '{"summary":"fixed","changed_files":["a.py"]}', 0.2, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        # Replace subprocess.run with a stub that records every command
+        # and synthesizes the rev-parse output. We use a stub (not a
+        # wrapper around the real subprocess.run) because tmp_path isn't
+        # a real git repo — the real rev-parse would error and force the
+        # safety fallback path. We want to verify the happy-path
+        # behavior: rev-parse succeeds, returns a SHA, reset targets
+        # that SHA.
+        PRE_FIX_SHA = "0123456789abcdef0123456789abcdef01234567"
+        subprocess_calls: List[List[str]] = []
+
+        class _StubCompleted:
+            def __init__(self, stdout: str = "", returncode: int = 0) -> None:
+                self.stdout = stdout
+                self.stderr = ""
+                self.returncode = returncode
+
+        def stub_run(cmd: Any, *args: Any, **kwargs: Any):
+            if isinstance(cmd, list):
+                subprocess_calls.append(list(cmd))
+                if len(cmd) >= 4 and cmd[0] == "git" and cmd[3] == "rev-parse":
+                    return _StubCompleted(stdout=f"{PRE_FIX_SHA}\n")
+            return _StubCompleted()
+
+        monkeypatch.setattr(mod.subprocess, "run", stub_run)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The reset must target the captured pre-fix SHA, not the literal
+        # string "HEAD". With the bug present, the failed primary's
+        # commit would survive the reset and leak into the fallback's
+        # push.
+        reset_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 5 and c[0] == "git" and c[1] == "-C"
+            and c[3:5] == ["reset", "--hard"]
+        ]
+        assert reset_calls, (
+            f"expected a git reset --hard call before the fallback; "
+            f"calls={subprocess_calls!r}"
+        )
+        # The reset target is the 6th argument (index 5).
+        reset_target = reset_calls[0][5]
+        assert reset_target == PRE_FIX_SHA, (
+            f"reset must target the captured pre-fix SHA {PRE_FIX_SHA!r}, "
+            f"not {reset_target!r}; with bare 'HEAD' a failed-primary "
+            f"commit would survive the reset"
+        )
+
+        # A rev-parse HEAD call must precede the reset so the SHA was
+        # actually captured (and not pulled from somewhere stale).
+        rev_parse_calls = [
+            c for c in subprocess_calls
+            if len(c) >= 4 and c[0] == "git" and c[3] == "rev-parse"
+        ]
+        assert rev_parse_calls, (
+            f"expected a git rev-parse HEAD before reset; "
+            f"calls={subprocess_calls!r}"
+        )
+        first_rev_parse_idx = subprocess_calls.index(rev_parse_calls[0])
+        first_reset_idx = subprocess_calls.index(reset_calls[0])
+        assert first_rev_parse_idx < first_reset_idx, (
+            f"rev-parse must precede reset; rev-parse at {first_rev_parse_idx}, "
+            f"reset at {first_reset_idx}"
+        )
+
+    def test_fixer_fallback_budget_exhausted(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When the budget is already exhausted at the moment the primary
+        fixer fails, the fallback must NOT be attempted. The stop reason
+        must mention budget exhaustion so the operator sees what gated
+        the fallback."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            if "review-codex" in label:
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-claude" in label:
+                # Spend the entire $0.30 budget on the primary fixer call
+                # so the fallback budget guard trips.
+                return False, "fixer failed", 0.30, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini", max_cost=0.30),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The fallback must NOT have run — the budget gate cut it off.
+        assert not any(
+            label.startswith("checkup-review-loop-fix-gemini-")
+            for _, label in calls
+        ), f"fallback fixer must not run after budget exhaustion; calls={calls!r}"
+        # The report MUST mention budget exhaustion as the proximate cause
+        # so operators know the fallback was gated, not silently skipped.
+        assert "max-cost-reached: true" in report
+
+    def test_reviewer_fallback_excludes_active_fixer(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The reviewer-fallback explicit-path conditional must exclude
+        ``state.active_fixer`` (already promoted by an earlier fixer-fallback
+        success) on top of the original ``fixer`` and ``reviewer`` exclusions.
+        Otherwise a config that names the same role for both
+        ``--fixer-fallback`` and ``--reviewer-fallback`` could end up with
+        the fixer-fallback role reviewing its own fixes — collapsing the
+        reviewer/fixer independence the loop exists to preserve.
+
+        This is a defense-in-depth guard: today's main-loop control flow
+        keeps ``pending_findings`` populated after the first round so the
+        review-path conditional is hard to reach a second time, but the
+        invariant — fallback != active_fixer — must hold for the
+        conditional regardless of which path the loop arrives through.
+        We assert by pre-seeding ``state.active_fixer`` BEFORE the
+        round-1 review fails, then checking the explicit-fallback path
+        refuses to promote that same role into the reviewer slot.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        calls: List[Tuple[str, str]] = []
+
+        # State-capture seam: also use it to side-set ``state.active_fixer``
+        # the moment the primary reviewer's failure is recorded, which is
+        # the spot the explicit-fallback path runs against. This simulates
+        # "fixer-fallback already promoted gemini in a logically prior
+        # step" without forcing the main loop through an unreachable
+        # pending-findings interleaving.
+        captured_state: List[Any] = []
+        real_record_review = mod._record_review
+
+        def record_then_seed(state_arg: Any, review_arg: Any) -> Any:
+            result = real_record_review(state_arg, review_arg)
+            if state_arg.active_fixer is None:
+                state_arg.active_fixer = "gemini"
+            return result
+
+        monkeypatch.setattr(mod, "_record_review", record_then_seed)
+
+        real_finalize = mod._finalize
+
+        def capture_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg):
+            captured_state.append(state_arg)
+            return real_finalize(context_arg, state_arg, reviewers_arg, artifacts_dir_arg)
+
+        monkeypatch.setattr(mod, "_finalize", capture_finalize)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append((role, label))
+            # Round 1 review: primary reviewer codex auth-fails so the
+            # explicit reviewer-fallback conditional is exercised.
+            if role == "codex":
+                return False, "ERROR: authentication failed: token expired", 0.0, ""
+            # Any gemini review-mode call is exactly the regression we are
+            # guarding against — returning clean keeps the loop from
+            # diverging, but the assertion below fails loud if gemini ever
+            # gets called as a reviewer.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                continue_on_reviewer_limit=True,
+                fixer_fallback="gemini",
+                reviewer_fallback="gemini",
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert captured_state, "_finalize was never called — cannot inspect state"
+        state = captured_state[-1]
+
+        # Pre-seeded active_fixer must still be gemini — nothing in the
+        # loop should have cleared it.
+        assert state.active_fixer == "gemini", (
+            f"test seam should have set state.active_fixer to gemini; "
+            f"got {state.active_fixer!r}"
+        )
+
+        # Load-bearing assertion: gemini must NOT have been promoted to the
+        # active reviewer. The explicit reviewer-fallback path must refuse
+        # to use a role that is already the active fixer.
+        assert state.active_reviewer != "gemini", (
+            f"reviewer-fallback must exclude state.active_fixer; "
+            f"state.active_reviewer={state.active_reviewer!r}"
+        )
+
+        # gemini must never have been invoked as a reviewer. The label
+        # prefix ``checkup-review-loop-review-`` is the marker for
+        # review-mode invocations; ``-review-`` also appears in the
+        # loop-wide prefix so we anchor on the canonical start.
+        gemini_review_calls = [
+            label for role, label in calls
+            if role == "gemini"
+            and label.startswith("checkup-review-loop-review-")
+        ]
+        assert not gemini_review_calls, (
+            f"reviewer-fallback must skip role already active as fixer; "
+            f"got gemini review calls={gemini_review_calls!r}"
+        )
+
+    def test_fixer_fallback_excludes_active_reviewer(self) -> None:
+        """``_maybe_run_fallback_fixer`` already refuses to promote the
+        ORIGINAL primary reviewer to author fixes (that would collapse the
+        review loop's role independence). The same guard must extend to
+        ``state.active_reviewer`` — once a reviewer-fallback has promoted a
+        different role into the reviewer slot, the fixer-fallback must not
+        name that promoted role either."""
+        from pdd.checkup_review_loop import (
+            FixResult,
+            ReviewFinding,
+            ReviewLoopState,
+            _maybe_run_fallback_fixer,
+        )
+        import pdd.checkup_review_loop as mod
+
+        # Original config: primary reviewer = codex, primary fixer = claude,
+        # fixer_fallback = gemini. Reviewer-fallback already ran in a prior
+        # round and promoted gemini into the reviewer slot — so a later
+        # fixer-fallback that also names gemini must be skipped, otherwise
+        # gemini would simultaneously review and fix.
+        state = ReviewLoopState()
+        state.active_reviewer = "gemini"
+
+        finding = ReviewFinding(
+            severity="medium",
+            reviewer="gemini",
+            area="test",
+            evidence="missing assertion",
+            finding="missing test",
+            required_fix="add a test",
+            location="tests/test_flow.py:12",
+        )
+        config = _config(fixer_fallback="gemini")
+        ctx = _ctx(Path("/tmp"))
+
+        # If the guard fires, ``_run_fix`` must NOT be called. Patch it to
+        # explode so an accidental promotion would surface as a test failure
+        # instead of a silent regression.
+        def _explode(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError(
+                "_run_fix must not run when fixer-fallback collides with "
+                "state.active_reviewer"
+            )
+
+        with patch.object(mod, "_run_fix", side_effect=_explode):
+            result = _maybe_run_fallback_fixer(
+                primary_fixer="claude",
+                reviewer="codex",
+                findings=[finding],
+                context=ctx,
+                worktree=Path("/tmp"),
+                round_number=1,
+                state=state,
+                config=config,
+                verbose=False,
+                quiet=True,
+                artifacts_dir=Path("/tmp"),
+                deadline=float("inf"),
+            )
+
+        assert result is None, (
+            f"fixer-fallback must skip role already active as reviewer; "
+            f"got result={result!r}"
+        )
+        # state.active_fixer must stay unset — no promotion happened.
+        assert state.active_fixer is None, (
+            f"state.active_fixer must remain unset when fallback is skipped; "
+            f"got {state.active_fixer!r}"
+        )
+
+    def test_fixer_fallback_excludes_original_reviewer_after_takeover(self) -> None:
+        """When a reviewer-fallback has rotated the active reviewer (so
+        the ORIGINAL primary reviewer is no longer ``state.active_reviewer``),
+        the fixer-fallback must still refuse to promote the original
+        reviewer. Otherwise ``--reviewer codex --reviewer-fallback gemini
+        --fixer claude --fixer-fallback codex`` would silently run codex
+        as the fixer after gemini took over reviewing, contradicting the
+        documented "must differ from --reviewer" rule and re-using the
+        original reviewer's credential in a role the docs forbid."""
+        from pdd.checkup_review_loop import (
+            ReviewFinding,
+            ReviewLoopState,
+            _maybe_run_fallback_fixer,
+        )
+        import pdd.checkup_review_loop as mod
+
+        # Original reviewer = codex; gemini took over after codex failed,
+        # so state.active_reviewer = gemini but state.original_reviewer
+        # still = codex. fixer_fallback names codex.
+        state = ReviewLoopState()
+        state.original_reviewer = "codex"
+        state.active_reviewer = "gemini"
+
+        finding = ReviewFinding(
+            severity="medium",
+            reviewer="gemini",
+            area="test",
+            evidence="missing assertion",
+            finding="missing test",
+            required_fix="add a test",
+            location="tests/test_flow.py:12",
+        )
+        config = _config(fixer_fallback="codex")
+        ctx = _ctx(Path("/tmp"))
+
+        def _explode(*_args: Any, **_kwargs: Any) -> Any:
+            raise AssertionError(
+                "_run_fix must not run when fixer-fallback collides with "
+                "state.original_reviewer"
+            )
+
+        with patch.object(mod, "_run_fix", side_effect=_explode):
+            result = _maybe_run_fallback_fixer(
+                primary_fixer="claude",
+                reviewer="gemini",  # current/active reviewer
+                findings=[finding],
+                context=ctx,
+                worktree=Path("/tmp"),
+                round_number=2,
+                state=state,
+                config=config,
+                verbose=False,
+                quiet=True,
+                artifacts_dir=Path("/tmp"),
+                deadline=float("inf"),
+            )
+
+        assert result is None, (
+            f"fixer-fallback must skip role equal to original_reviewer "
+            f"even after reviewer rotation; got result={result!r}"
+        )
+        assert state.active_fixer is None, (
+            f"state.active_fixer must remain unset when fallback is skipped; "
+            f"got {state.active_fixer!r}"
+        )
 
 
 class TestPromptInjection:
@@ -2038,7 +3422,7 @@ Local tests passed.
         assert result.findings[0].location == "pdd/generate_model_catalog.py:873"
         assert "does not fetch scores" in result.findings[0].finding
 
-    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+    def test_codex_finding_prefix_priority_without_section_is_parsed(self) -> None:
         """Codex exec can emit `Finding: [P2] ...` instead of JSON."""
         from pdd.checkup_review_loop import _parse_review_output
 
@@ -2102,6 +3486,52 @@ Checks: targeted tests passed.
         assert result.findings[0].finding == "PR is not merge-ready against current `main`."
         assert result.findings[1].finding == "Project Gallery link points to a non-existent route."
         assert all("trailing whitespace" not in finding.evidence for finding in result.findings)
+
+    def test_codex_finding_prefix_priority_is_parsed(self) -> None:
+        """Codex can prefix priority headings with 'Finding:'."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """**Findings**
+
+Finding: [P2] Fallback comments still bypass sanitization.
+Trigger: `post_step_comment(..., body=None)` receives failure output containing a token assignment.
+Evidence: [pdd/agentic_common.py:3410](/tmp/w/pdd/agentic_common.py:3410) builds fallback from raw output.
+
+Checks:
+`git diff --check` passed.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 1
+        finding = result.findings[0]
+        assert finding.severity == "medium"
+        assert finding.finding == "Fallback comments still bypass sanitization."
+        assert finding.location == "pdd/agentic_common.py:3410"
+        assert "token assignment" in finding.evidence
+        assert "git diff --check" not in finding.evidence
+
+    def test_multiple_finding_prefix_priority_blocks_stay_separate(self) -> None:
+        """`Finding: [P*]` headings without priority colons split cleanly."""
+        from pdd.checkup_review_loop import _parse_review_output
+
+        output = """Finding: [P1] First issue
+Evidence: [pdd/a.py:10](/tmp/w/pdd/a.py:10) detail.
+
+Finding: [P2] Second issue
+Evidence: [pdd/b.py:20](/tmp/w/pdd/b.py:20) detail.
+"""
+        result = _parse_review_output(output, "codex", 1)
+
+        assert result.status == "findings"
+        assert len(result.findings) == 2
+        assert result.findings[0].severity == "critical"
+        assert result.findings[0].finding == "First issue"
+        assert result.findings[0].location == "pdd/a.py:10"
+        assert "Second issue" not in result.findings[0].evidence
+        assert result.findings[1].severity == "medium"
+        assert result.findings[1].finding == "Second issue"
+        assert result.findings[1].location == "pdd/b.py:20"
 
     def test_bold_priority_colon_bullets_keep_embedded_location(self) -> None:
         """Codex can emit '- **P1:** sentence with inline file links."""
@@ -2337,6 +3767,319 @@ class TestPushWithRetryClonedRemote:
         assert any("x-access-token:" in c[2] for c in retry_cmds)
         # No `git remote set-url` was issued for the URL remote.
         assert not any(c[:3] == ["git", "remote", "set-url"] for c in cmds)
+
+
+class TestCommitAndPushIfChanged:
+    def test_fetch_first_rebases_and_retries_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes: List[Tuple[str, str, bool]] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            pushes.append((
+                kwargs["remote"],
+                kwargs["refspec"],
+                kwargs["force_with_lease_on_non_fast_forward"],
+            ))
+            if len(pushes) == 1:
+                return (
+                    False,
+                    " ! [rejected] HEAD -> feature (fetch first)\n"
+                    "hint: Updates were rejected because the remote contains "
+                    "work that you do not have locally.",
+                )
+            return True, ""
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        assert pushes == [
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+        ]
+        assert [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ] in runs
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+
+    def test_non_fast_forward_rebases_instead_of_force_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes: List[Tuple[str, str, bool]] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            pushes.append((
+                kwargs["remote"],
+                kwargs["refspec"],
+                kwargs["force_with_lease_on_non_fast_forward"],
+            ))
+            if len(pushes) == 1:
+                return (
+                    False,
+                    " ! [rejected] HEAD -> feature (non-fast-forward)\n"
+                    "hint: Updates were rejected because the tip of your "
+                    "current branch is behind.",
+                )
+            return True, ""
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        assert pushes == [
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+            ("https://github.com/o/r.git", "HEAD:feature", False),
+        ]
+        assert [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ] in runs
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+
+    def test_fetch_first_rebase_failure_aborts_before_second_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            return False, " ! [rejected] HEAD -> feature (fetch first)"
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd[:2] == ["git", "rebase"] and "--abort" not in cmd:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is False
+        assert pushes == 1
+        assert "Failed to rebase fixes" in message
+        assert ["git", "rebase", "--abort"] in runs
+
+    def test_fetch_auth_retries_with_tokenized_exact_branch_ref(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        token_file = tmp_path / "token"
+        token_file.write_text("ghs_secret", encoding="utf-8")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            return (pushes > 1, " ! [rejected] HEAD -> feature (fetch first)")
+
+        runs: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            runs.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd[:3] == ["git", "fetch", "--no-tags"]:
+                if "x-access-token" not in cmd[3]:
+                    return type(
+                        "R",
+                        (),
+                        {
+                            "returncode": 1,
+                            "stdout": "",
+                            "stderr": "fatal: could not read Username",
+                        },
+                    )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        fetches = [cmd for cmd in runs if cmd[:3] == ["git", "fetch", "--no-tags"]]
+        assert fetches[0] == [
+            "git",
+            "fetch",
+            "--no-tags",
+            "https://github.com/o/r.git",
+            "refs/heads/feature",
+        ]
+        assert "x-access-token" in fetches[1][3]
+        assert fetches[1][4] == "refs/heads/feature"
+        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+
+    def test_fetch_auth_failure_redacts_token_in_error(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        token_file = tmp_path / "token"
+        token_file.write_text("ghs_secret", encoding="utf-8")
+        monkeypatch.setenv("PDD_GH_TOKEN_FILE", str(token_file))
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd[:3] == ["git", "fetch", "--no-tags"] and "x-access-token" not in cmd[3]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 1,
+                        "stdout": "",
+                        "stderr": "fatal: could not read Username",
+                    },
+                )()
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": "fatal: https://x-access-token:ghs_secret@github.com/o/r.git failed",
+                },
+            )()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._fetch_pr_head_for_rebase(
+            tmp_path,
+            clone_url="https://github.com/o/r.git",
+            head_ref="feature",
+            repo_owner="o",
+            repo_name="r",
+        )
+
+        assert success is False
+        assert "ghs_secret" not in message
+        assert "[REDACTED]" in message
+
+    def test_push_with_retry_can_leave_non_fast_forward_to_caller(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_e2e_fix_orchestrator import push_with_retry
+
+        calls: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            calls.append(list(cmd))
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 1,
+                    "stdout": "",
+                    "stderr": " ! [rejected] HEAD -> feature (non-fast-forward)",
+                },
+            )()
+
+        with patch("pdd.agentic_e2e_fix_orchestrator.subprocess.run", side_effect=fake_run):
+            success, err = push_with_retry(
+                tmp_path,
+                repo_owner="o",
+                repo_name="r",
+                remote="https://github.com/o/r.git",
+                refspec="HEAD:feature",
+                set_upstream=False,
+                force_with_lease_on_non_fast_forward=False,
+            )
+
+        assert success is False
+        assert "non-fast-forward" in err
+        assert not any("--force-with-lease" in cmd for cmd in calls)
 
 
 class TestStaticAnalysisCandidateFindingsIntegration:

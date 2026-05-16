@@ -6164,7 +6164,7 @@
     }
   },
   {
-    "reason": "Orchestrates the 10-step agentic E2E fix workflow for resolving end-to-end test failures, including post-push CI validation.",
+    "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and cleanup.",
     "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
     "dependencies": [
       "agentic_bug_orchestrator_python.prompt"
@@ -6183,7 +6183,7 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False)",
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -6204,7 +6204,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the 10-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.",
+    "reason": "CLI entry point for the 11-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.",
     "description": "Entry point for the agentic E2E fix command. Parses issue URL, finds associated worktree, and delegates to the E2E fix orchestrator.",
     "dependencies": [],
     "priority": 184,

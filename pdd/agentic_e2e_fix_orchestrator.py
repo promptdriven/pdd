@@ -262,6 +262,70 @@ def _resolve_step9_loop_token(step_output: str, console: Console) -> Optional[st
     return None
 
 
+def _resolve_cached_step9_output(step_outputs: Dict[str, str]) -> str:
+    """Return the authoritative Step 9 output for resume token resolution.
+
+    Step 9 may run twice in one cycle: the initial pass, plus a retry when the
+    initial pass emits no recognizable loop-control token. The retry output is
+    stored under ``step_outputs["9_retry"]`` (see the retry persistence site
+    in the inner loop); the initial output is ``step_outputs["9"]``. The retry
+    output is the authoritative one when it ran — if the retry succeeded with
+    ``ALL_TESTS_PASS`` but the workflow was interrupted before the next pause,
+    reading only ``"9"`` (which can be tokenless) would let resume fall
+    through to ``CONTINUE_CYCLE`` and silently advance into a fresh cycle even
+    though Step 9 actually succeeded. Prefer the retry output when present
+    and non-empty (#1001).
+    """
+    retry_out = step_outputs.get("9_retry", "")
+    if retry_out:
+        return retry_out
+    return step_outputs.get("9", "")
+
+
+def _post_step9_resume_action(
+    step9_output: str,
+    current_cycle: int,
+    max_cycles: int,
+    console: Console,
+) -> str:
+    """Decide what resume should do when last_completed_step >= 9 (Issue #1001).
+
+    The prior buggy code unconditionally advanced the cycle whenever
+    `last_completed_step >= 9` on resume, ignoring what Step 9 actually
+    emitted. This helper inspects the cached Step 9 output and branches:
+
+    - "SUCCESS_FALL_THROUGH" — Step 9 declared success (ALL_TESTS_PASS,
+      LOCAL_TESTS_PASS, or NOT_A_BUG). Caller must keep `current_cycle`,
+      `last_completed_step`, and `step_outputs` intact and fall through
+      to Step 11 cleanup + Step 10 CI validation.
+    - "ADVANCE_CYCLE" — Step 9 wants another cycle and budget remains.
+    - "MAX_CYCLES_REACHED" — Either Step 9 explicitly emitted
+      MAX_CYCLES_REACHED (resolved via the tier-1–3 classifier in
+      `_classify_step_output` or the tier-4 LLM fallback in
+      `_resolve_step9_loop_token`), or Step 9 wants another cycle but
+      the cycle budget is exhausted. In both cases the caller must
+      surface this as a non-success exit, reusing the same path Step 9
+      uses when emitting MAX_CYCLES_REACHED directly (see
+      `_apply_step9_resolved_token` MAX_CYCLES_REACHED handler).
+    """
+    # Defensive NOT_A_BUG check: Step 9 normally doesn't emit NOT_A_BUG
+    # (that's Step 3), but if the cached output surfaces it, treat as
+    # success — Step 3 would already have determined no bug exists.
+    if "NOT_A_BUG" in step9_output:
+        return "SUCCESS_FALL_THROUGH"
+    tok = _resolve_step9_loop_token(step9_output, console)
+    if tok in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+        return "SUCCESS_FALL_THROUGH"
+    # Explicit terminal token from Step 9 (tier-1–3 detect_control_token
+    # or tier-4 LLM classifier) must NOT be overridden by the budget
+    # check below — Step 9 already declared the loop terminal.
+    if tok == "MAX_CYCLES_REACHED":
+        return "MAX_CYCLES_REACHED"
+    if current_cycle < max_cycles:
+        return "ADVANCE_CYCLE"
+    return "MAX_CYCLES_REACHED"
+
+
 class _Step9TokenApplyResult(NamedTuple):
     """Outcome of applying a resolved Step 9 loop token (shared initial + retry paths)."""
 
@@ -477,6 +541,7 @@ def _is_intermediate_file(filepath: str) -> bool:
     - *.bak, *.backup, *.orig, *.tmp extensions
     - error_output*.txt (e.g., error_output.txt, error_output_models.txt)
     - .pdd/** (any file under .pdd/ directory — backups, core_dumps, etc.)
+    - .gh-wrapper/** (executor `gh` wrapper artifacts — Issue #1001)
     - *_errors.txt, *_fix_errors.txt (e.g., waitlist_fix_errors.txt)
     - step*_output.md (e.g., step9_output.md)
     - test_issue_*_reproduction.py (e.g., test_issue_824_reproduction.py)
@@ -490,6 +555,13 @@ def _is_intermediate_file(filepath: str) -> bool:
     path = Path(filepath)
     stem = path.stem  # filename without extension
     suffix = path.suffix  # extension including dot
+
+    # Issue #1001: filter executor wrapper artifacts.
+    # Anchor on the directory boundary so legitimate paths like
+    # "gh-wrapper-docs.md" or "tools/gh_wrapper.py" are not over-filtered.
+    normalized_gh = str(filepath).replace("\\", "/")
+    if normalized_gh.startswith(".gh-wrapper/") or "/.gh-wrapper/" in normalized_gh:
+        return True
 
     # Check for backup extensions (e.g., foo.py.bak, foo.py.backup)
     if suffix in _BACKUP_EXTENSIONS:
@@ -1038,6 +1110,20 @@ def _has_unpushed_commits(cwd: Path) -> bool:
     return False
 
 
+def _push_unpushed_commits_or_report_noop(
+    cwd: Path,
+    repo_owner: str,
+    repo_name: str,
+) -> Tuple[bool, str]:
+    """Push ahead commits if present; otherwise treat the commit step as a no-op."""
+    if _has_unpushed_commits(cwd):
+        push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
+        if push_ok:
+            return True, "Pushed existing commits"
+        return False, f"Push failed: {push_err}"
+    return True, "No changes to commit"
+
+
 def push_with_retry(
     cwd: Path,
     *,
@@ -1046,6 +1132,7 @@ def push_with_retry(
     remote: str = "origin",
     refspec: str = "HEAD",
     set_upstream: bool = True,
+    force_with_lease_on_non_fast_forward: bool = True,
 ) -> Tuple[bool, str]:
     """Push to a git remote with shared non-fast-forward and token-refresh retries.
 
@@ -1055,8 +1142,10 @@ def push_with_retry(
 
     Behaviour:
     - First attempt: ``git push [-u] <remote> <refspec>``.
-    - Non-fast-forward: retry with ``--force-with-lease`` (safe — only
-      overwrites the remote if it still matches what we last fetched).
+    - Non-fast-forward: by default, retry with ``--force-with-lease`` (safe —
+      only overwrites the remote if it still matches what we last fetched).
+      Callers that push to a shared PR head can disable this and handle the
+      rejection by fetching/rebasing instead.
     - Auth failure (``Authentication failed``, ``HTTP 401``,
       ``could not read Username``, ``HTTP Basic: Access denied``): read a
       token from a non-empty ``PDD_GH_TOKEN_FILE`` or fall back to
@@ -1086,6 +1175,8 @@ def push_with_retry(
     is_non_fast_forward = any(marker in stderr for marker in non_ff_markers)
 
     if is_non_fast_forward:
+        if not force_with_lease_on_non_fast_forward:
+            return False, stderr
         console.print(
             "[yellow]WARNING: Push rejected (non-fast-forward). "
             "Retrying with --force-with-lease...[/yellow]"
@@ -1268,15 +1359,8 @@ def _commit_and_push(
         fallback_files = [f for f in fallback_files if not _is_intermediate_file(f)]
         if fallback_files:
             files_to_commit = list(fallback_files)
-        elif _has_unpushed_commits(cwd):
-            # Check if there are unpushed commits to push
-            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
-            if push_ok:
-                return True, "Pushed existing commits"
-            else:
-                return False, f"Push failed: {push_err}"
         else:
-            return True, "No changes to commit"
+            return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
 
     # Stage only workflow-changed files
     for filepath in files_to_commit:
@@ -1301,12 +1385,12 @@ def _commit_and_push(
         # Commit may fail with "nothing to commit" when fallback files were
         # already committed on the branch (merge-base diff includes them).
         # In that case, push any unpushed commits instead of failing.
-        if _has_unpushed_commits(cwd):
-            push_ok, push_err = _push_with_retry(cwd, repo_owner, repo_name)
-            if push_ok:
-                return True, "Pushed existing commits"
-            else:
-                return False, f"Push failed: {push_err}"
+        commit_output = f"{commit_result.stdout}\n{commit_result.stderr}".lower()
+        if (
+            "nothing to commit" in commit_output
+            or "no changes added to commit" in commit_output
+        ):
+            return _push_unpushed_commits_or_report_noop(cwd, repo_owner, repo_name)
         return False, f"Failed to commit: {commit_result.stderr}"
 
     # Push to remote with retry on auth failure
@@ -1534,6 +1618,9 @@ def run_agentic_e2e_fix_orchestrator(
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
     resumed_initial_file_hashes: Optional[Dict[str, Optional[str]]] = None
     resumed_initial_sha: Optional[str] = None
+    # Issue #1001: deferred action computed during resume that must be applied
+    # after `success`/`final_message` are initialized below. Default: no-op.
+    _resume_deferred_action: Optional[str] = None
 
     # Resume Logic
     if resume:
@@ -1570,11 +1657,35 @@ def run_agentic_e2e_fix_orchestrator(
 
             _check_staleness(loaded_state, cwd)
 
-            # If we finished a cycle but didn't exit, prepare for next cycle
+            # Issue #1001: If Step 9 was the last completed step, branch on its
+            # cached output rather than unconditionally advancing the cycle.
+            # Prefer the retry output (stored under "9_retry") when present —
+            # otherwise a retry that emitted ALL_TESTS_PASS but was interrupted
+            # before the post-Step-9 pause could be misread as a tokenless "9"
+            # and silently advance into a fresh cycle.
             if last_completed_step >= 9:
-                current_cycle += 1
-                last_completed_step = 0
-                step_outputs = {} # Clear outputs for new cycle
+                step9_cached = _resolve_cached_step9_output(step_outputs)
+                resume_action = _post_step9_resume_action(
+                    step9_cached, current_cycle, max_cycles, console
+                )
+                if resume_action == "ADVANCE_CYCLE":
+                    current_cycle += 1
+                    last_completed_step = 0
+                    step_outputs = {}  # Clear outputs for new cycle
+                elif resume_action == "MAX_CYCLES_REACHED":
+                    # Defer surfacing the failure until after `success` and
+                    # `final_message` are initialized below — mirrors the
+                    # path used by _apply_step9_resolved_token's
+                    # MAX_CYCLES_REACHED handler (final_message set, outer
+                    # loop skipped, post-loop failure handler runs).
+                    _resume_deferred_action = "MAX_CYCLES_REACHED"
+                elif resume_action == "SUCCESS_FALL_THROUGH":
+                    # Step 9 already declared success but workflow was
+                    # interrupted before commit/Step 11/Step 10. Defer
+                    # setting `success=True` until after its initialization
+                    # so we fall through to the success path (commit, code
+                    # cleanup, CI validation).
+                    _resume_deferred_action = "SUCCESS_FALL_THROUGH"
         else:
             # No state found, start fresh
             clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
@@ -1636,6 +1747,113 @@ def run_agentic_e2e_fix_orchestrator(
     consecutive_provider_failures = 0
     import_error_retries = 0  # Global budget: max 1 retry across all cycles
     verification_failure_context = ""  # Injected into Step 1 prompt on retry
+
+    # Issue #1001 round 11: save-before-verify race.
+    # The inner-loop state save at line ~2049 persists step_outputs["9"] with
+    # the LLM's raw output BEFORE the independent verification at line ~2061 /
+    # _apply_step9_resolved_token at line ~2154 runs. A process pause in that
+    # window can leave disk state with ALL_TESTS_PASS even though verification
+    # would have failed. Re-run _verify_tests_independently on resume to close
+    # the race BEFORE treating the cycle as terminal. On failure, demote the
+    # resume action to ADVANCE_CYCLE (or MAX_CYCLES_REACHED if budget
+    # exhausted) and overwrite step_outputs["9"] with a
+    # FAILED: VERIFICATION_FAILED_ON_RESUME: prefix so the cached state
+    # reflects reality.
+    if _resume_deferred_action == "SUCCESS_FALL_THROUGH":
+        test_files = _extract_test_files(
+            issue_content, changed_files, cwd, initial_file_hashes
+        )
+        if test_files:
+            verified, verify_output = _verify_tests_independently(test_files, cwd)
+            # Mirror the cap-downgrade in _apply_step9_resolved_token for
+            # symmetry with the initial Step 9 verification path.
+            if _fallback_scan_was_capped and verified:
+                verified = False
+                verify_output += (
+                    f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                    "hundreds of test files were verified; cannot confirm full "
+                    "suite pass."
+                )
+            if not verified:
+                console.print(
+                    "[yellow]Resume re-verification: cached Step 9 success no "
+                    "longer verified by independent pytest run; advancing "
+                    "cycle.[/yellow]"
+                )
+                step_outputs["9"] = (
+                    f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
+                )
+
+                # Issue #1001 round 12 (LOW): persist the FAILED marker BEFORE
+                # the ADVANCE_CYCLE branch clears step_outputs, otherwise the
+                # diagnostic is dead code — the inner-loop's first state save
+                # would only land after cycle advance with an empty step_outputs.
+                # Assemble the full state dict here (state_data is not yet in
+                # scope at this point in the function; it is first defined at
+                # the inner-loop site). The shape mirrors that site exactly so
+                # other fields (total_cost, dev_unit_states, initial_sha, etc.)
+                # are not clobbered on disk.
+                _state_data_resume = {
+                    "workflow": workflow_name,
+                    "issue_url": issue_url,
+                    "issue_number": issue_number,
+                    "current_cycle": current_cycle,
+                    "last_completed_step": last_completed_step,
+                    "step_outputs": step_outputs.copy(),
+                    "dev_unit_states": dev_unit_states.copy(),
+                    "total_cost": total_cost,
+                    "model_used": model_used,
+                    "changed_files": changed_files.copy(),
+                    "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+                    "last_saved_at": datetime.now().isoformat(),
+                    "github_comment_id": github_comment_id,
+                    "initial_file_hashes": dict(initial_file_hashes),
+                    "initial_sha": initial_sha,
+                }
+                try:
+                    new_gh_id = save_workflow_state(
+                        cwd,
+                        issue_number,
+                        workflow_name,
+                        _state_data_resume,
+                        state_dir,
+                        repo_owner,
+                        repo_name,
+                        use_github_state,
+                        github_comment_id,
+                    )
+                    if new_gh_id:
+                        github_comment_id = new_gh_id
+                except Exception as _save_exc:
+                    # Best-effort: the FAILED marker is still observable in
+                    # the in-memory step_outputs if we later save again
+                    # within the same cycle; don't crash resume on a save
+                    # transient.
+                    logger.debug(
+                        "Best-effort resume-reverify state save failed: %s",
+                        _save_exc,
+                        exc_info=True,
+                    )
+
+                if current_cycle < max_cycles:
+                    current_cycle += 1
+                    last_completed_step = 0
+                    step_outputs = {}  # ADVANCE_CYCLE: clear for new cycle
+                    _resume_deferred_action = None
+                else:
+                    _resume_deferred_action = "MAX_CYCLES_REACHED"
+        # else: no test files — match the initial-flow fallback (no
+        # independent verification possible). Trust the cached token, fall
+        # through to the existing SUCCESS_FALL_THROUGH handling below.
+
+    # Issue #1001: Apply deferred resume action now that `success` and
+    # `final_message` exist. Mirrors how the in-cycle Step 9 handler
+    # surfaces these tokens via _apply_step9_resolved_token.
+    if _resume_deferred_action == "SUCCESS_FALL_THROUGH":
+        success = True
+        final_message = "All tests passed after fixes (resumed)."
+    elif _resume_deferred_action == "MAX_CYCLES_REACHED":
+        final_message = "Max cycles reached."
 
     try:
         # Outer Loop

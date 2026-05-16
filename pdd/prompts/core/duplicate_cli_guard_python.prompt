@@ -29,6 +29,7 @@ You are an expert backend engineer implementing a CLI guard module for a Prompt-
     - **Blocking**: In interactive TTY sessions, prompt the user for confirmation. In non-interactive/CI environments, block the execution with a `UsageError` or warning.
     - **Bypass**: Provide mechanisms to bypass the guard using a `--force` flag or environment variables (`PDD_ALLOW_DUPLICATE_RUN`).
     - **Filtering**: Only guard a specific set of expensive subcommands (e.g., sync, generate, fix, bug, etc.).
+    - **Dry-run policy**: Skip duplicate checking and skip recording when the argv contains `--dry-run`; read-only inventory commands must remain repeatable during audits and should not poison the expensive-run dedup store.
     - **Meaningful Signature Required**: If the argv tail is empty or unavailable, skip duplicate checking and skip recording rather than using an empty argv signature. An empty argv signature is too broad for programmatic/hosted invocation wrappers and can cause unrelated label-triggered jobs to block each other.
     - **Recording Policy**: Only persist a dedup record for *successful* invocations. Failed runs (exceptions, command returning a failure sentinel, or any reported non-success) must NOT be recorded, so the user can immediately retry the same command without waiting for the dedup window to expire or manually clearing state.
 6. **Migration & Robustness**: 
@@ -74,6 +75,7 @@ You are an expert backend engineer implementing a CLI guard module for a Prompt-
     1. Check if the guard is enabled.
     2. Check if the current subcommand is in the guarded list.
     3. Resolve the argv tail and return immediately if it is empty.
+    3a. Return immediately if the argv tail contains `--dry-run`.
     4. Look up the previous record for the specific command signature.
     5. Validate if the record is within the time window and if the inputs (argv and git fingerprint) match.
     6. Block or prompt as required.

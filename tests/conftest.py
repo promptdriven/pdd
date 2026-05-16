@@ -389,6 +389,8 @@ def pytest_runtest_makereport(item: pytest.Item, call):
 collect_ignore_glob = [
     "csv/*",
     "fixtures/*",
+    "*_fixed.py",
+    "**/*_fixed.py",
 ]
 
 

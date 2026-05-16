@@ -344,8 +344,9 @@ def run_metadata_sync(
     # `update_architecture_from_prompt` writes architecture.json on success;
     # running it after a tags-stage failure means the architecture entry can
     # be modified on disk before the overall result reports `failed`, which
-    # on the push-to-main auto-heal path can land via `git add -A` even
-    # though downstream stages (run_report, fingerprint) correctly stop.
+    # on the push-to-main auto-heal path can still be picked up by the
+    # scoped `git add -u` (architecture.json is tracked) even though
+    # downstream stages (run_report, fingerprint) correctly stop.
     # Skip symmetrically so all write-bearing stages share one failure gate.
     _stage_log_enter("architecture")
     _arch_prior_failed = [
@@ -413,9 +414,10 @@ def run_metadata_sync(
     # Gate the run_report side effect on prior stages, the same way
     # fingerprint is gated below. clear_run_report() deletes tracked
     # entries on disk; running it after an earlier hard failure would
-    # leave partial .pdd/meta state that auto-heal could pick up via
-    # `git add -A` on the push-to-main path, even though fingerprint
-    # itself is correctly held back. Skip symmetrically with fingerprint.
+    # leave partial .pdd/meta state that auto-heal's scoped `git add -u`
+    # would still pick up on the push-to-main path (run-report files are
+    # tracked), even though fingerprint itself is correctly held back.
+    # Skip symmetrically with fingerprint.
     _rr_prior_failed = [
         name
         for name in ("prompt", "tags", "architecture")
@@ -484,10 +486,24 @@ def run_metadata_sync(
                 )
                 _stage_log_exit("fingerprint", "dry_run", detail)
             else:
+                # Preserve the previous user-facing command so
+                # `sync_determine_operation._is_workflow_complete` (which only
+                # recognizes verify/test/fix/update as complete) still sees the
+                # workflow as synced after this internal finalization step.
+                # Falls back to "fix" when no prior fingerprint exists or the
+                # prior fingerprint was itself written by metadata_sync.
+                from .sync_determine_operation import read_fingerprint
+                _prev_fp = read_fingerprint(basename, language)
+                _prev_cmd = getattr(_prev_fp, "command", None) if _prev_fp else None
+                _preserved_command = (
+                    _prev_cmd
+                    if _prev_cmd in ("verify", "test", "fix", "update")
+                    else "fix"
+                )
                 save_fingerprint(
                     basename=basename,
                     language=language,
-                    operation="metadata_sync",
+                    operation=_preserved_command,
                     paths=paths,
                     cost=0.0,
                     model="metadata_sync",

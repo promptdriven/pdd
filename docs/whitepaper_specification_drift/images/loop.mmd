@@ -1,0 +1,9 @@
+flowchart LR
+    A["Fix orchestrator"] --> B["Breaks webhook"]
+    B --> C["Fix webhook"]
+    C --> D["Breaks credentials"]
+    D --> E["Fix credentials"]
+    E --> F["Re-breaks\norchestrator"]
+    F --> A
+
+    style F fill:#ffcccc,stroke:#cc0000
