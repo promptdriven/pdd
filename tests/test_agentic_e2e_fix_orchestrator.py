@@ -6330,3 +6330,1366 @@ class TestNotABugGuardResumeSnapshot:
                 "state_data must include initial_sha for resume to restore it"
             )
             assert isinstance(saved_state["initial_file_hashes"], dict)
+
+
+# ============================================================================
+# Issue #1001: .gh-wrapper artifact filter (runtime defect 1)
+# ============================================================================
+
+
+class TestGhWrapperFilter:
+    """Behavioral tests for _is_intermediate_file filtering .gh-wrapper/** (Issue #1001).
+
+    The agentic e2e fix workflow ships a `gh` wrapper under `.gh-wrapper/`
+    when an executor needs a constrained shell. These wrapper artifacts must
+    never be committed. The filter is the single gate at both the hash-diff
+    staging path and the `_get_modified_and_untracked` fallback path.
+    """
+
+    @pytest.fixture
+    def is_intermediate(self):
+        from pdd.agentic_e2e_fix_orchestrator import _is_intermediate_file
+        return _is_intermediate_file
+
+    def test_filters_top_level_gh_wrapper_files(self, is_intermediate):
+        """.gh-wrapper/gh and .gh-wrapper/git must be filtered."""
+        assert is_intermediate(".gh-wrapper/gh") is True
+        assert is_intermediate(".gh-wrapper/git") is True
+
+    def test_does_not_overfilter_unrelated_names(self, is_intermediate):
+        """Legitimate paths containing 'gh-wrapper' as a substring must NOT
+        be filtered. The check must anchor on the directory boundary."""
+        assert is_intermediate("gh-wrapper-docs.md") is False
+        assert is_intermediate("tools/gh_wrapper.py") is False
+        assert is_intermediate("gh_wrapper.txt") is False
+
+    def test_filters_nested_gh_wrapper_directory(self, is_intermediate):
+        """A .gh-wrapper/ directory anywhere in the path must be filtered."""
+        assert is_intermediate("subdir/.gh-wrapper/gh") is True
+
+    def test_handles_windows_path_separators(self, is_intermediate):
+        """Windows-style backslash separators must be normalized before
+        the .gh-wrapper/ check so the filter is platform-neutral."""
+        assert is_intermediate(".gh-wrapper\\gh") is True
+
+
+# ============================================================================
+# Issue #1001: post-Step-9 resume branching (runtime defect 2)
+# ============================================================================
+
+
+class TestPostStep9ResumeAction:
+    """Behavioral tests for _post_step9_resume_action (Issue #1001).
+
+    On resume, when `last_completed_step >= 9`, the prior buggy code
+    unconditionally advanced the cycle. It must instead branch on the
+    cached Step 9 output:
+      - success tokens (ALL_TESTS_PASS / LOCAL_TESTS_PASS / NOT_A_BUG)
+        preserve state and fall through to Step 11 cleanup + Step 10 CI.
+      - CONTINUE_CYCLE advances when budget remains, surfaces
+        MAX_CYCLES_REACHED otherwise.
+    """
+
+    @pytest.fixture
+    def helper(self):
+        from pdd.agentic_e2e_fix_orchestrator import _post_step9_resume_action
+        return _post_step9_resume_action
+
+    @pytest.fixture
+    def console(self):
+        return MagicMock()
+
+    def test_all_tests_pass_preserves_state(self, helper, console):
+        """ALL_TESTS_PASS in cached Step 9 output → SUCCESS_FALL_THROUGH."""
+        result = helper(
+            "ALL_TESTS_PASS verification succeeded",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "SUCCESS_FALL_THROUGH"
+
+    def test_local_tests_pass_preserves_state(self, helper, console):
+        """LOCAL_TESTS_PASS in cached Step 9 output → SUCCESS_FALL_THROUGH."""
+        result = helper(
+            "LOCAL_TESTS_PASS observed during verification",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "SUCCESS_FALL_THROUGH"
+
+    def test_not_a_bug_preserves_state(self, helper, console):
+        """NOT_A_BUG in cached Step 9 output → SUCCESS_FALL_THROUGH.
+
+        Defensive: a Step 9 output that surfaces NOT_A_BUG must not be
+        treated as "advance the cycle" — the prior Step 3 already
+        determined no bug exists.
+        """
+        result = helper(
+            "NOT_A_BUG — issue determined to be expected behavior",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "SUCCESS_FALL_THROUGH"
+
+    def test_continue_cycle_advances_when_under_budget(self, helper, console):
+        """CONTINUE_CYCLE in cached output + budget remaining → ADVANCE_CYCLE."""
+        result = helper(
+            "CONTINUE_CYCLE — more work needed",
+            current_cycle=1,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "ADVANCE_CYCLE"
+
+    def test_continue_cycle_max_cycles_reached_surfaces_failure(self, helper, console):
+        """CONTINUE_CYCLE at the budget boundary → MAX_CYCLES_REACHED."""
+        result = helper(
+            "CONTINUE_CYCLE — more work needed",
+            current_cycle=3,
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "MAX_CYCLES_REACHED"
+
+    def test_explicit_max_cycles_reached_token_returns_max_cycles_reached(self, helper, console):
+        """Explicit MAX_CYCLES_REACHED from Step 9 must override budget check.
+
+        Regression: prior to the fix, when the resolver returned MAX_CYCLES_REACHED
+        but current_cycle < max_cycles, the action incorrectly returned ADVANCE_CYCLE
+        instead of MAX_CYCLES_REACHED. This let resume restart fix work after Step 9
+        had already declared the loop terminal.
+        """
+        result = helper(
+            "MAX_CYCLES_REACHED",
+            current_cycle=1,  # well under budget
+            max_cycles=3,
+            console=console,
+        )
+        assert result == "MAX_CYCLES_REACHED"
+
+    def test_unrecognized_output_advances_when_under_budget(self, helper, console):
+        """Unrecognized Step 9 output + budget remaining → ADVANCE_CYCLE.
+
+        When the resolver cannot identify a token (and the tier-4 LLM
+        classifier is unavailable or returns nothing), an unresolvable
+        cached output should behave like CONTINUE_CYCLE rather than
+        silently dropping the resume into MAX_CYCLES_REACHED.
+        """
+        # Mock the tier-4 LLM classifier so the helper does not make a
+        # real network call. Returning None forces the resolver to fall
+        # through with no token.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.classify_step_output",
+            return_value=None,
+        ):
+            result = helper(
+                "",
+                current_cycle=0,
+                max_cycles=3,
+                console=console,
+            )
+        assert result == "ADVANCE_CYCLE"
+
+
+# ============================================================================
+# Issue #1001 round 9: prefer Step 9 retry output when resolving cached
+# resume token. Step 9 may run twice in one cycle — the initial pass + a
+# retry when the initial pass emits no token. The retry output is stored
+# under step_outputs["9_retry"], the initial output under "9". The resume
+# routing must read the retry output when present so a retry that succeeded
+# with ALL_TESTS_PASS but was interrupted before the post-Step-9 pause is
+# not misread as a tokenless "9" and silently advanced into a fresh cycle.
+# ============================================================================
+
+
+class TestResolveCachedStep9Output:
+    """Unit tests for ``_resolve_cached_step9_output`` (Issue #1001 round 9).
+
+    Step 9 may run twice in one cycle: the initial pass plus a retry when
+    the initial pass emits no recognizable loop-control token. The retry
+    output lives under ``step_outputs["9_retry"]``; the initial output
+    under ``"9"``. The helper must prefer the retry output when present
+    and non-empty — otherwise a retry-success that was interrupted before
+    the next pause would be misread as a tokenless ``"9"`` on resume.
+    """
+
+    @pytest.fixture
+    def helper(self):
+        from pdd.agentic_e2e_fix_orchestrator import _resolve_cached_step9_output
+        return _resolve_cached_step9_output
+
+    def test_returns_retry_when_present(self, helper):
+        """When ``"9_retry"`` holds a real token, prefer it over a tokenless
+        ``"9"``. This is the load-bearing case: a Step 9 retry that emitted
+        ``ALL_TESTS_PASS`` must drive the resume routing, not the initial
+        tokenless output that triggered the retry.
+        """
+        step_outputs = {"9": "no token", "9_retry": "ALL_TESTS_PASS"}
+        assert helper(step_outputs) == "ALL_TESTS_PASS"
+
+    def test_returns_primary_when_no_retry(self, helper):
+        """When no retry ran, fall back to ``"9"``. This is the normal
+        single-pass case: Step 9 emitted a token on the first try.
+        """
+        step_outputs = {"9": "CONTINUE_CYCLE"}
+        assert helper(step_outputs) == "CONTINUE_CYCLE"
+
+    def test_returns_primary_when_retry_empty_string(self, helper):
+        """An empty-string retry value must not shadow a real primary output.
+        Defensive: only a truthy retry value should preempt the primary.
+        """
+        step_outputs = {"9": "CONTINUE_CYCLE", "9_retry": ""}
+        assert helper(step_outputs) == "CONTINUE_CYCLE"
+
+    def test_returns_empty_string_when_neither_present(self, helper):
+        """An empty dict must yield ``""``, which the downstream resolver
+        treats as "no token resolved" and routes to ``ADVANCE_CYCLE`` /
+        ``MAX_CYCLES_REACHED`` per the budget check.
+        """
+        assert helper({}) == ""
+
+
+# ============================================================================
+# Issue #1001: post-Step-9 resume routing — orchestrator-level integration
+# ============================================================================
+
+
+class TestPostStep9ResumeRoutesToCleanupNotStep1:
+    """Orchestrator-level integration tests for post-Step-9 resume routing
+    (Issue #1001).
+
+    The unit tests in :class:`TestPostStep9ResumeAction` cover the helper in
+    isolation. These tests prove the helper is actually wired into
+    :func:`run_agentic_e2e_fix_orchestrator`: a saved state with
+    ``last_completed_step=9`` and a cached Step 9 success token must NOT
+    re-run Steps 1-9 on resume, while a cached ``CONTINUE_CYCLE`` MUST
+    advance the cycle and re-run Steps 1-9.
+
+    The discriminator: under the old unconditional ``current_cycle += 1;
+    last_completed_step = 0; step_outputs = {}`` block, the success test
+    fails because Steps 1-9 are re-invoked. Under the post-fix branching,
+    the success test passes (the inner loop skips every step and falls
+    through to the post-success path).
+    """
+
+    @pytest.fixture
+    def mock_deps(self, tmp_path):
+        """Heavyweight mock surface mirroring TestIssue467BlindResume.mock_deps.
+
+        Mocks every external interaction:
+          - ``run_agentic_task``: the per-step LLM invocation site. A
+            tracker built on top of this records which step labels are
+            invoked, which is the discriminator signal.
+          - ``load_workflow_state``: returns a synthesized resume state
+            pre-populated with ``last_completed_step=9``.
+          - ``save_workflow_state`` / ``clear_workflow_state``: no-op.
+          - ``load_prompt_template``: returns a benign template that
+            tolerates ``str.replace`` substitution.
+          - ``_get_file_hashes`` / ``_commit_and_push``: keep the
+            post-success path side-effect-free against a real filesystem.
+          - ``post_final_comment``: keep the failure path side-effect-free
+            (the CONTINUE_CYCLE test ends in ``MAX_CYCLES_REACHED``).
+          - ``_check_e2e_environment``: forces Step 2 to run rather than
+            short-circuit via ``E2E_SKIP``.
+          - ``classify_step_output``: returns ``None`` so the resolver
+            falls back to token detection in Step 9 output.
+        """
+        with patch("pdd.agentic_e2e_fix_orchestrator.run_agentic_task") as mock_run, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_workflow_state") as mock_load, \
+             patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save, \
+             patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state") as mock_clear, \
+             patch("pdd.agentic_e2e_fix_orchestrator.load_prompt_template") as mock_template, \
+             patch("pdd.agentic_e2e_fix_orchestrator.console") as mock_console, \
+             patch("pdd.agentic_e2e_fix_orchestrator._get_file_hashes") as mock_hashes, \
+             patch("pdd.agentic_e2e_fix_orchestrator._commit_and_push") as mock_commit, \
+             patch("pdd.agentic_e2e_fix_orchestrator.post_final_comment") as mock_post, \
+             patch("pdd.agentic_e2e_fix_orchestrator._check_e2e_environment", return_value=(True, "")) as mock_e2e, \
+             patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None) as mock_classify:
+            mock_run.return_value = (True, "Step Output", 0.1, "gpt-4")
+            mock_load.return_value = (None, None)
+            mock_save.return_value = None
+            mock_template.return_value = "Prompt for {issue_number}"
+            mock_hashes.return_value = {}
+            mock_commit.return_value = (True, "No changes")
+            mock_post.return_value = None
+
+            yield {
+                "run": mock_run,
+                "load": mock_load,
+                "save": mock_save,
+                "clear": mock_clear,
+                "template": mock_template,
+                "console": mock_console,
+                "hashes": mock_hashes,
+                "commit": mock_commit,
+                "post": mock_post,
+                "e2e": mock_e2e,
+                "classify": mock_classify,
+            }
+
+    @staticmethod
+    def _executed_step_numbers(executed_labels):
+        """Extract numeric step IDs from labels like 'cycle1_step3'.
+
+        Robust against substring traps where 'step1' would match 'step11'
+        or 'step10'. Returns the set of integer step numbers seen.
+        """
+        out = set()
+        for label in executed_labels:
+            m = re.search(r"_step(\d+)\b", label)
+            if m:
+                out.add(int(m.group(1)))
+        return out
+
+    def test_resume_with_step9_all_tests_pass_skips_steps_1_through_9(
+        self, mock_deps, tmp_path
+    ):
+        """A resumed state with ``last_completed_step=9`` and a cached
+        ``ALL_TESTS_PASS`` Step 9 output MUST NOT re-run Steps 1-9.
+
+        Under the post-fix routing this drives the orchestrator straight
+        into the post-success path (``_commit_and_push`` + Step 11
+        cleanup + Step 10 CI). Steps 1-9 are skipped because
+        ``last_completed_step=9`` and ``success`` is set to True via the
+        deferred ``SUCCESS_FALL_THROUGH`` action before the outer loop.
+
+        This is the discriminator test. With the old unconditional
+        ``current_cycle += 1; last_completed_step = 0; step_outputs = {}``
+        block, ``last_completed_step`` is reset to 0 and the inner loop
+        runs Steps 1-9 from scratch — the assertion below would fail.
+
+        ``skip_cleanup=True`` and ``skip_ci=True`` are set to keep the
+        post-success path short: the orchestrator returns from the
+        ``skip_ci`` branch without calling Step 11 or Step 10.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — verification succeeded",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1001",
+            issue_content="E2E failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1001,
+            issue_author="user",
+            issue_title="Resume from Step 9",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=3,
+            resume=True,
+            use_github_state=False,
+            skip_cleanup=True,
+            skip_ci=True,
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+
+        # Discriminator: NONE of Steps 1-9 may have been invoked.
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Issue #1001: Resume with cached ALL_TESTS_PASS at Step 9 must "
+            f"NOT re-invoke Steps 1-9, but these step numbers were executed: "
+            f"{sorted(executed_steps)} (labels: {executed_labels}). Under the "
+            f"old unconditional advance, Steps 1-9 would all be re-run."
+        )
+
+        # The post-success path is reached: orchestrator returns True from
+        # the skip_ci branch, _commit_and_push is invoked.
+        assert success is True, (
+            f"Expected post-Step-9 success fall-through to return True; "
+            f"got success={success}, final_message={final_message!r}."
+        )
+        assert mock_deps["commit"].called, (
+            "Issue #1001: post-success path must invoke _commit_and_push "
+            "to record any deferred edits when resuming from a Step 9 "
+            "success token."
+        )
+
+    def test_resume_with_step9_retry_all_tests_pass_skips_steps_1_through_9(
+        self, mock_deps, tmp_path
+    ):
+        """A resumed state with ``last_completed_step=9``, a tokenless cached
+        ``"9"``, and ``"9_retry" = ALL_TESTS_PASS`` MUST NOT re-run Steps 1-9
+        (Issue #1001 round 9).
+
+        Scenario this reproduces: the initial Step 9 pass emitted a tokenless
+        output, the retry ran and emitted ``ALL_TESTS_PASS`` (stored under
+        ``"9_retry"``), but the workflow was interrupted before the next
+        pause. On resume, the routing must read the retry output, recognize
+        the success token, and fall through to the post-success path —
+        rather than reading the tokenless ``"9"`` and silently advancing
+        into a fresh cycle.
+
+        Discriminator: with the original resume site reading only
+        ``step_outputs.get("9", "")``, the tokenless primary value causes
+        ``_post_step9_resume_action`` to return ``ADVANCE_CYCLE`` (budget
+        remaining), and Steps 1-9 are re-invoked under the new cycle. With
+        the fix (``_resolve_cached_step9_output`` preferring ``"9_retry"``),
+        the retry success token routes to ``SUCCESS_FALL_THROUGH`` and the
+        inner loop is skipped entirely.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                # Tokenless initial Step 9 output — would route to
+                # ADVANCE_CYCLE under the old resume site.
+                "9": "some intermediate text",
+                # Retry success — must drive the routing under the fix.
+                "9_retry": "ALL_TESTS_PASS — retry verification succeeded",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1001",
+            issue_content="E2E failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1001,
+            issue_author="user",
+            issue_title="Resume from Step 9 retry success",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=3,
+            resume=True,
+            use_github_state=False,
+            skip_cleanup=True,
+            skip_ci=True,
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+
+        # Discriminator: NONE of Steps 1-9 may have been invoked. Under the
+        # old code (reading only step_outputs["9"]), the tokenless primary
+        # would route to ADVANCE_CYCLE and Steps 1-9 would be re-invoked.
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Issue #1001 round 9: Resume with cached ALL_TESTS_PASS at "
+            f"step_outputs['9_retry'] (and tokenless primary '9') must NOT "
+            f"re-invoke Steps 1-9, but these step numbers were executed: "
+            f"{sorted(executed_steps)} (labels: {executed_labels}). Under "
+            f"the old resume site reading only step_outputs.get('9', ''), "
+            f"the tokenless primary would route to ADVANCE_CYCLE and Steps "
+            f"1-9 would be re-invoked."
+        )
+
+        # The post-success path is reached: orchestrator returns True from
+        # the skip_ci branch, _commit_and_push is invoked.
+        assert success is True, (
+            f"Expected retry-success fall-through to return True; "
+            f"got success={success}, final_message={final_message!r}."
+        )
+        assert mock_deps["commit"].called, (
+            "Issue #1001 round 9: post-success path must invoke "
+            "_commit_and_push when resuming from a Step 9 retry success "
+            "token (stored under '9_retry')."
+        )
+
+    def test_resume_with_step9_continue_cycle_advances_and_reruns_steps_1_through_9(
+        self, mock_deps, tmp_path
+    ):
+        """A resumed state with ``last_completed_step=9`` and a cached
+        ``CONTINUE_CYCLE`` Step 9 output MUST advance the cycle and re-run
+        Steps 1-9.
+
+        This is the positive case for the ``ADVANCE_CYCLE`` branch of
+        ``_post_step9_resume_action``: with ``current_cycle=0`` and
+        ``max_cycles=3``, budget remains, so the resume routing advances
+        ``current_cycle`` to 1, clears ``last_completed_step`` and
+        ``step_outputs``, and the inner loop runs Steps 1-9 from scratch.
+
+        Step 9 is stubbed to emit ``MAX_CYCLES_REACHED`` so the new cycle
+        terminates cleanly without further loop iterations. We assert
+        Step 1 (in particular) is rerun — that's the observable signal
+        that the cycle advanced.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 0,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "CONTINUE_CYCLE — more work needed",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            # Terminate the new cycle cleanly at Step 9 so the test does
+            # not exhaust the cycle budget.
+            if "step9" in label:
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+            issue_url="http://github.com/owner/repo/issues/1001",
+            issue_content="E2E failure",
+            repo_owner="owner",
+            repo_name="repo",
+            issue_number=1001,
+            issue_author="user",
+            issue_title="Resume CONTINUE_CYCLE",
+            cwd=tmp_path,
+            quiet=True,
+            max_cycles=3,
+            resume=True,
+            use_github_state=False,
+            skip_cleanup=True,
+            skip_ci=True,
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+
+        # Positive case: ADVANCE_CYCLE must rerun Steps 1-9. We assert on
+        # Step 1 as the load-bearing signal (cycle advanced; inner loop
+        # restarted from the beginning).
+        assert 1 in executed_steps, (
+            f"Issue #1001: Resume with cached CONTINUE_CYCLE at Step 9 must "
+            f"advance the cycle and rerun Step 1, but executed step numbers "
+            f"were: {sorted(executed_steps)} (labels: {executed_labels})."
+        )
+
+        # The new cycle is cycle 1 (current_cycle advanced from 0 to 1).
+        # Verify via the cycle label prefix.
+        assert any(label.startswith("cycle1_") for label in executed_labels), (
+            f"Issue #1001: After ADVANCE_CYCLE, new cycle must be cycle 1 "
+            f"(current_cycle advanced from 0 → 1); labels were: "
+            f"{executed_labels}."
+        )
+
+        # Final outcome: MAX_CYCLES_REACHED at Step 9 of the new cycle
+        # terminates the workflow without success.
+        assert success is False, (
+            f"Expected MAX_CYCLES_REACHED in new cycle to return False; "
+            f"got success={success}, final_message={final_message!r}."
+        )
+
+    def test_resume_with_stale_all_tests_pass_token_reverifies_and_demotes_on_failure(
+        self, mock_deps, tmp_path
+    ):
+        """Issue #1001 round 11 (save-before-verify race): when cached state
+        says ALL_TESTS_PASS but the actual tests fail on resume, the
+        orchestrator MUST re-run ``_verify_tests_independently`` and demote
+        the resume action — it MUST NOT skip verification and commit as
+        success.
+
+        Reproduces the reviewer's mocked resume scenario:
+          * cached ``step_outputs["9"] = "ALL_TESTS_PASS"``
+          * ``_verify_tests_independently`` mocked to return ``(False, "stale pass")``
+          * assert ``_verify_tests_independently`` WAS called
+          * assert orchestrator did NOT return success=True
+
+        The inner-loop save at line ~2049 writes the LLM's raw pass token
+        BEFORE the independent verification at line ~2154 runs (Step 9's
+        ``_apply_step9_resolved_token``). A process pause in that window
+        leaves disk state with ``ALL_TESTS_PASS`` even though the
+        verification would have failed. Without the re-verify gate, resume
+        skips Steps 1-9 and commits as success.
+
+        Discriminator: temporarily remove the SUCCESS_FALL_THROUGH
+        re-verify block from the orchestrator. This test must fail
+        because ``_verify_tests_independently`` won't be called and
+        ``success`` will be True.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — but state was saved before verify ran",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            # If any new cycle proceeds, terminate it at Step 9 with
+            # MAX_CYCLES_REACHED so the test doesn't burn the budget.
+            if "step9" in label:
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        # Patch _extract_test_files to return a non-empty list so the
+        # re-verify path actually runs (with empty changed_files and a
+        # blank tmp_path, the real helper would return []).
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_stale.py"],
+        ) as extract_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, "stale pass: pytest exit code 1"),
+        ) as verify_mock:
+            success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume with stale ALL_TESTS_PASS",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        # Discriminator 1: _verify_tests_independently MUST have been called
+        # on resume. Without the re-verify gate this assertion fails.
+        assert verify_mock.called, (
+            "Issue #1001 round 11: Resume with cached ALL_TESTS_PASS MUST "
+            "re-run _verify_tests_independently to close the save-before-"
+            "verify race. _verify_tests_independently was not called — the "
+            "orchestrator trusted the stale cached pass token and would "
+            "have proceeded to commit/cleanup/CI as if the run succeeded."
+        )
+        # Sanity: _extract_test_files runs first to feed the verifier.
+        assert extract_mock.called, (
+            "Issue #1001 round 11: _extract_test_files must run on resume "
+            "so the re-verify path has test files to check."
+        )
+
+        # Discriminator 2: orchestrator MUST NOT return success=True with a
+        # stale pass token. Either it demoted to ADVANCE_CYCLE (and then
+        # hit MAX_CYCLES_REACHED in the new cycle, returning False) or it
+        # demoted directly to MAX_CYCLES_REACHED.
+        assert success is not True, (
+            f"Issue #1001 round 11: stale ALL_TESTS_PASS on resume must "
+            f"NOT lead to success=True. Got success={success}, "
+            f"final_message={final_message!r}. The bug the reviewer "
+            f"reproduced: resume skips Steps 1-9, does not rerun "
+            f"verification, and proceeds to commit/cleanup/CI as success."
+        )
+
+    def test_resume_with_all_tests_pass_reverifies_and_proceeds_when_verify_passes(
+        self, mock_deps, tmp_path
+    ):
+        """Positive case for the round-11 re-verify gate: when the cached
+        Step 9 success token IS confirmed by an independent re-verification
+        on resume, the orchestrator proceeds to the post-success path
+        (commit / cleanup / CI) WITHOUT re-running Steps 1-9.
+
+        Proves the re-verify gate does not break the happy path: if the
+        runtime independently confirms the cached pass, the cycle is still
+        treated as terminal and the inner loop is skipped entirely.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — and verify still agrees",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_ok.py"],
+        ) as extract_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "pytest exit code 0"),
+        ) as verify_mock:
+            success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume with confirmed ALL_TESTS_PASS",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        # Re-verification did run.
+        assert extract_mock.called and verify_mock.called, (
+            "Issue #1001 round 11: re-verify gate must execute on resume "
+            "even when the cached token is confirmed."
+        )
+
+        executed_steps = self._executed_step_numbers(executed_labels)
+        # Steps 1-9 must NOT be re-run when verification confirms the
+        # cached token.
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Issue #1001 round 11: with a re-verified cached "
+            f"ALL_TESTS_PASS, Steps 1-9 MUST be skipped. Executed steps: "
+            f"{sorted(executed_steps)} (labels: {executed_labels})."
+        )
+
+        # And the orchestrator returns success.
+        assert success is True, (
+            f"Issue #1001 round 11: a re-verified cached ALL_TESTS_PASS "
+            f"MUST drive success=True. Got success={success}, "
+            f"final_message={final_message!r}."
+        )
+        assert mock_deps["commit"].called, (
+            "Issue #1001 round 11: post-success path must invoke "
+            "_commit_and_push when resume re-verification confirms the "
+            "cached Step 9 success token."
+        )
+
+    def test_resume_reverify_failure_persists_failed_marker_before_advancing(
+        self, mock_deps, tmp_path
+    ):
+        """Issue #1001 round 12 (LOW): when resume re-verification fails and
+        the cycle advances, the ``FAILED: VERIFICATION_FAILED_ON_RESUME:``
+        marker MUST be persisted to disk BEFORE ``step_outputs`` is cleared
+        on cycle advance.
+
+        The round-11 re-verify block writes the FAILED marker into
+        ``step_outputs["9"]`` and then takes the ADVANCE_CYCLE branch which
+        resets ``step_outputs = {}``. Without an intermediate
+        ``save_workflow_state`` call, the marker never lands on disk — it
+        is dead code, and the next save in the new cycle starts with an
+        empty ``step_outputs``. This test asserts the marker is observable
+        in AT LEAST ONE call to ``save_workflow_state`` before being
+        cleared.
+
+        Discriminator: temporarily drop the new ``save_workflow_state`` call
+        from the round-11 re-verify block. This test MUST fail because the
+        only saves observable are inside the new cycle's inner loop (after
+        ``step_outputs`` was cleared), so no save call's ``state`` arg
+        carries the ``VERIFICATION_FAILED_ON_RESUME`` substring.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "Step 3 done",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — but state was saved before verify ran",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            # Terminate the new cycle cleanly at Step 9 so the test does
+            # not exhaust the cycle budget.
+            if "step9" in label:
+                return (True, "MAX_CYCLES_REACHED", 0.1, "gpt-4")
+            return (True, "Step Output", 0.1, "gpt-4")
+
+        mock_deps["run"].side_effect = track_run
+
+        # Drive the failure branch of the round-11 re-verify gate.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_stale.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(False, "stale pass: pytest exit code 1"),
+        ):
+            run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume reverify FAILED marker persistence",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        # The contract: among ALL save_workflow_state calls, AT LEAST ONE
+        # must have been driven with a ``state`` dict whose
+        # ``step_outputs["9"]`` contains the ``VERIFICATION_FAILED_ON_RESUME``
+        # marker. Without the round-12 save call, the marker would have
+        # been clobbered by ``step_outputs = {}`` before any save reached
+        # it. The state dict is the 4th positional argument
+        # (``cwd, issue_number, workflow_type, state, ...``).
+        save_calls = mock_deps["save"].call_args_list
+        assert save_calls, (
+            "Issue #1001 round 12: orchestrator must call "
+            "save_workflow_state at least once during resume — otherwise "
+            "the FAILED marker can never be persisted."
+        )
+
+        def _extract_state(call):
+            # Prefer positional; fall back to kwargs for flexibility.
+            if len(call.args) > 3:
+                return call.args[3]
+            return call.kwargs.get("state", {})
+
+        found = any(
+            "VERIFICATION_FAILED_ON_RESUME"
+            in (_extract_state(c).get("step_outputs", {}) or {}).get("9", "")
+            for c in save_calls
+        )
+        assert found, (
+            "Issue #1001 round 12 (LOW): FAILED VERIFICATION_FAILED_ON_RESUME "
+            "marker must be persisted via save_workflow_state BEFORE the "
+            "cycle is advanced and step_outputs is cleared. Otherwise the "
+            "diagnostic is dead code — the next state save lands after the "
+            "advance with an empty step_outputs and no record of the "
+            "verification failure ever existed on disk.\n"
+            f"Observed save_workflow_state state args (step_outputs['9'] "
+            f"snippets): "
+            f"{[(_extract_state(c).get('step_outputs', {}) or {}).get('9', '')[:80] for c in save_calls]}"
+        )
+
+
+class TestPostStep9ResumeAlreadyPushedFixCommit:
+    """Regression for Greg's #1002 review: Step 9 resume after fix commit push."""
+
+    @staticmethod
+    def _init_repo_with_already_pushed_fix(tmp_path):
+        """Create main -> feature where the feature fix commit is already pushed."""
+        from pdd.agentic_e2e_fix_orchestrator import _get_file_hashes
+
+        bare = tmp_path / "bare.git"
+        worktree = tmp_path / "worktree"
+
+        subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(bare), str(worktree)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        module = worktree / "module.py"
+        module.write_text("x = 1\n")
+        subprocess.run(["git", "add", "module.py"], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        base_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "push", "-u", "origin", base_branch],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        initial_hashes = _get_file_hashes(worktree)
+        initial_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feature"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        module.write_text("x = 2  # fixed before resume\n")
+        subprocess.run(["git", "add", "module.py"], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "fix: already pushed"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "push", "-u", "origin", "feature"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        pushed_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert status == ""
+
+        return worktree, initial_hashes, initial_sha, pushed_sha
+
+    def test_resume_step9_all_tests_pass_continues_when_fix_commit_already_pushed(self, tmp_path):
+        """last_completed_step=9 + cached ALL_TESTS_PASS must not fail on commit no-op."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        worktree, initial_hashes, initial_sha, pushed_sha = (
+            self._init_repo_with_already_pushed_fix(tmp_path)
+        )
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {"9": "ALL_TESTS_PASS — verification succeeded"},
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": ["module.py"],
+            "dev_unit_states": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": initial_sha,
+        }
+        executed_labels = []
+
+        def fail_if_step_runs(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            raise AssertionError(f"Steps 1-9 must not run on post-Step-9 resume: {executed_labels}")
+
+        with (
+            patch(
+                "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+                return_value=(resumed_state, None),
+            ),
+            patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state"),
+            patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state"),
+            patch("pdd.agentic_e2e_fix_orchestrator.console"),
+            patch(
+                "pdd.agentic_e2e_fix_orchestrator.run_agentic_task",
+                side_effect=fail_if_step_runs,
+            ),
+            patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=[]),
+            patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None),
+        ):
+            success, final_message, _, _, changed_files = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume after already pushed fix",
+                cwd=worktree,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        assert success is True, final_message
+        assert "module.py" in changed_files
+        assert executed_labels == []
+
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert head_sha == pushed_sha
+        assert status == ""
+
+
+# ============================================================================
+# Issue #1001 round 8: _commit_and_push must filter .gh-wrapper/* in BOTH
+# staging paths (hash-diff and fallback). The unit-level filter test
+# (TestGhWrapperFilter) proves _is_intermediate_file works in isolation; these
+# tests prove _commit_and_push ACTUALLY USES it on the right files at the right
+# call sites in a real git repo.
+# ============================================================================
+
+
+class TestCommitAndPushFiltersGhWrapper:
+    """Integration tests for ``_commit_and_push`` filtering ``.gh-wrapper/*``
+    artifacts in BOTH staging paths (Issue #1001 round 8).
+
+    The runtime function has two staging sites:
+
+    1. **Hash-diff path** (``agentic_e2e_fix_orchestrator.py:1317``)
+       -- ``files_to_commit = [f for f in changed_files_raw if not
+       _is_intermediate_file(f)]``. Fires when the hash snapshot DOES detect
+       changes between ``initial_file_hashes`` and the current tree.
+
+    2. **Fallback path** (``agentic_e2e_fix_orchestrator.py:1325``)
+       -- ``fallback_files = [f for f in fallback_files if not
+       _is_intermediate_file(f)]``. Fires when the hash-diff path produces no
+       files (tainted snapshot scenario, #545) and the function calls
+       ``_get_modified_and_untracked`` directly.
+
+    The reviewer's concern (round 8): unit tests of ``_is_intermediate_file``
+    pass in isolation, but a regression could remove the filter call at
+    either site and the unit tests wouldn't catch it. These tests exercise
+    both sites against a real git tree containing real ``.gh-wrapper/gh`` and
+    ``.gh-wrapper/git`` files plus a real source file we DO want committed.
+    """
+
+    @staticmethod
+    def _init_git_repo_with_remote(tmp_path):
+        """Local copy of ``TestIssue545CommitAndPushWithTaintedHashes._init_git_repo_with_remote``.
+
+        Creates a worktree cloned from a bare remote so ``_commit_and_push``
+        can call its real push code path without network mocking. Returns
+        ``(worktree, module)`` where ``module`` is ``worktree / "module.py"``
+        committed with content ``"x = 1\\n"``.
+        """
+        bare = tmp_path / "bare.git"
+        worktree = tmp_path / "worktree"
+
+        subprocess.run(
+            ["git", "init", "--bare", str(bare)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "clone", str(bare), str(worktree)],
+            check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        module = worktree / "module.py"
+        module.write_text("x = 1\n")
+        subprocess.run(
+            ["git", "add", "."],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "push", "-u", "origin", branch],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        return worktree, module
+
+    @staticmethod
+    def _committed_files(worktree) -> set:
+        """Return the set of files in the most recent commit (HEAD)."""
+        result = subprocess.run(
+            ["git", "log", "--name-only", "--pretty=format:", "-1", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        )
+        return {line for line in result.stdout.splitlines() if line.strip()}
+
+    def test_commit_and_push_hash_diff_path_filters_gh_wrapper_files(self, tmp_path):
+        """Hash-diff staging: when ``.gh-wrapper/gh`` and ``.gh-wrapper/git``
+        are 'new' files (not in ``initial_file_hashes``) and ``module.py`` is
+        modified, ``_commit_and_push`` must drop the wrapper files via
+        ``_is_intermediate_file`` before staging.
+
+        Regression for #1001 staging path 1 (``:1317``). Discriminator: if the
+        filter call site is removed (``files_to_commit = changed_files_raw``),
+        ``.gh-wrapper/gh`` and ``.gh-wrapper/git`` appear in the committed
+        tree and this test fails.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _commit_and_push, _get_file_hashes,
+        )
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # 1. Take a clean baseline hash snapshot BEFORE any of the workflow
+        #    changes exist on disk -- this is the "fresh run" pattern the
+        #    hash-diff path is designed for.
+        initial_hashes = _get_file_hashes(worktree)
+
+        # 2. Now create the workflow's outputs on disk:
+        #    - a real source change we DO want committed
+        #    - the .gh-wrapper artifacts we DO NOT want committed
+        module.write_text("x = 2  # the real fix\n")
+        gh_wrapper = worktree / ".gh-wrapper"
+        gh_wrapper.mkdir()
+        (gh_wrapper / "gh").write_text("#!/bin/sh\n# wrapper for gh CLI\n")
+        (gh_wrapper / "git").write_text("#!/bin/sh\n# wrapper for git CLI\n")
+
+        # 3. Call _commit_and_push. With a clean baseline snapshot and three
+        #    files newly differing, the function enters the hash-diff branch
+        #    (not the fallback).
+        success, message = _commit_and_push(
+            cwd=worktree,
+            issue_number=1001,
+            issue_title="Filter .gh-wrapper artifacts on hash-diff path",
+            repo_owner="owner", repo_name="repo",
+            initial_file_hashes=initial_hashes,
+            quiet=True,
+        )
+
+        # 4. The commit must succeed and contain only the real source change.
+        assert success is True, (
+            f"_commit_and_push should have succeeded on the hash-diff path; "
+            f"got message={message!r}"
+        )
+        assert "Committed and pushed" in message, (
+            f"Expected hash-diff path to reach the commit-and-push branch; "
+            f"got message={message!r}"
+        )
+
+        committed = self._committed_files(worktree)
+        assert "module.py" in committed, (
+            f"#1001 hash-diff: module.py must be in the commit "
+            f"(committed files: {committed!r})"
+        )
+        assert ".gh-wrapper/gh" not in committed, (
+            f"#1001 hash-diff path: .gh-wrapper/gh leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1317 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
+        assert ".gh-wrapper/git" not in committed, (
+            f"#1001 hash-diff path: .gh-wrapper/git leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1317 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
+
+    def test_commit_and_push_fallback_path_filters_gh_wrapper_files(self, tmp_path):
+        """Fallback staging: when the hash-diff path produces no files
+        (tainted-snapshot scenario, #545), ``_commit_and_push`` falls back to
+        ``_get_modified_and_untracked``. The fallback MUST also apply
+        ``_is_intermediate_file`` so ``.gh-wrapper/*`` is dropped there too.
+
+        Regression for #1001 staging path 2 (``:1325``).
+
+        How the fallback is forced deterministically:
+
+        * ``_get_file_hashes`` walks ``_get_modified_and_untracked`` to build
+          its dict. If we put all three files (``module.py`` modified,
+          ``.gh-wrapper/gh``, ``.gh-wrapper/git``) on disk BEFORE taking the
+          snapshot, ``initial_file_hashes`` already contains them with their
+          current hashes.
+        * Inside ``_commit_and_push``, ``current_hashes`` is computed AGAIN
+          off the same on-disk state, so it equals ``initial_file_hashes``.
+        * ``changed_files_raw`` is therefore empty, ``files_to_commit`` is
+          empty, and the function enters the fallback ``if not
+          files_to_commit:`` branch.
+        * ``_get_modified_and_untracked`` (called fresh by the fallback)
+          returns the same three files -- but now the staging filter MUST be
+          applied at line :1325, not just :1317.
+
+        Discriminator: spy on ``_get_modified_and_untracked`` and assert it
+        is called TWICE (once from ``_get_file_hashes``, once from the
+        fallback) -- proves the test actually walks the fallback branch
+        rather than passing vacuously.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import (
+            _commit_and_push, _get_file_hashes,
+        )
+        import pdd.agentic_e2e_fix_orchestrator as orch_mod
+
+        worktree, module = self._init_git_repo_with_remote(tmp_path)
+
+        # 1. Put everything on disk BEFORE taking the snapshot -- so the
+        #    snapshot is "tainted" with all three files. This forces the
+        #    hash-diff path to find zero deltas and fall through.
+        module.write_text("x = 2  # the real fix from a prior interrupted run\n")
+        gh_wrapper = worktree / ".gh-wrapper"
+        gh_wrapper.mkdir()
+        (gh_wrapper / "gh").write_text("#!/bin/sh\n# wrapper for gh CLI\n")
+        (gh_wrapper / "git").write_text("#!/bin/sh\n# wrapper for git CLI\n")
+
+        # 2. Capture tainted hashes AFTER all three files exist -- mimics
+        #    the resume scenario where the prior run's state was already on
+        #    disk when the new run's snapshot was taken.
+        tainted_hashes = _get_file_hashes(worktree)
+        # Sanity: tainted snapshot must already contain all three files.
+        assert "module.py" in tainted_hashes
+        assert ".gh-wrapper/gh" in tainted_hashes
+        assert ".gh-wrapper/git" in tainted_hashes
+
+        # 3. Spy on _get_modified_and_untracked so we can prove the fallback
+        #    branch actually fires (it'd be called twice: once inside
+        #    _get_file_hashes at :1303, once at the fallback :1323). Wrap
+        #    rather than replace so the real implementation still runs.
+        original = orch_mod._get_modified_and_untracked
+        spy = MagicMock(wraps=original)
+        with patch.object(orch_mod, "_get_modified_and_untracked", spy):
+            success, message = _commit_and_push(
+                cwd=worktree,
+                issue_number=1001,
+                issue_title="Filter .gh-wrapper artifacts on fallback path",
+                repo_owner="owner", repo_name="repo",
+                initial_file_hashes=tainted_hashes,
+                quiet=True,
+            )
+
+        # 4. Prove the fallback branch was actually walked. The spy must
+        #    record at least 2 calls: one from _get_file_hashes (line 1303
+        #    inside the function body), one from the fallback itself
+        #    (line 1323). Without this assertion, a regression that made the
+        #    hash-diff path detect changes (e.g. via a different snapshot
+        #    behavior) would let this test pass vacuously without ever
+        #    exercising :1325.
+        assert spy.call_count >= 2, (
+            f"Expected _get_modified_and_untracked to be called at least "
+            f"twice (once by _get_file_hashes, once by the fallback at "
+            f":1323); got {spy.call_count} calls. The fallback branch was "
+            f"not exercised -- this test would pass vacuously."
+        )
+
+        # 5. The commit must succeed and contain only the real source change.
+        assert success is True, (
+            f"_commit_and_push should have succeeded on the fallback path; "
+            f"got message={message!r}"
+        )
+        assert "Committed and pushed" in message, (
+            f"Expected fallback path to reach the commit-and-push branch; "
+            f"got message={message!r}"
+        )
+
+        committed = self._committed_files(worktree)
+        assert "module.py" in committed, (
+            f"#1001 fallback: module.py must be in the commit "
+            f"(committed files: {committed!r})"
+        )
+        assert ".gh-wrapper/gh" not in committed, (
+            f"#1001 fallback path: .gh-wrapper/gh leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1325 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
+        assert ".gh-wrapper/git" not in committed, (
+            f"#1001 fallback path: .gh-wrapper/git leaked into the commit. "
+            f"The filter at agentic_e2e_fix_orchestrator.py:1325 must drop "
+            f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
+        )
