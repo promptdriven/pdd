@@ -8497,6 +8497,253 @@ class TestPublicSurfaceBindingKind:
             "",
         )
 
+    # ------------------------------------------------------------------
+    # External review (PR #1015, iter-5): the pass-2 synthesizer
+    # ignored ``kw_only=True`` / ``KW_ONLY`` / ``InitVar`` / ``field(
+    # init=False)`` — all of which alter the runtime constructor
+    # signature. These tests pin the four corrected behaviours.
+    # ------------------------------------------------------------------
+    def test_dataclass_kw_only_decorator_change_is_detected(self):
+        # Flipping ``@dataclass`` to ``@dataclass(kw_only=True)`` makes
+        # every field kw-only at runtime: callers passing positionally
+        # break with ``TypeError``. The snapshot must move.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(kw_only=True)\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_kw_only_sentinel_added_is_detected(self):
+        # Inserting ``_: KW_ONLY`` between fields converts trailing
+        # fields to kw-only. Callers passing positionally break.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass, KW_ONLY\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    age: int\n"
+        )
+        after = (
+            "from dataclasses import dataclass, KW_ONLY\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    _: KW_ONLY\n"
+            "    age: int\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_initvar_field_is_included(self):
+        # ``InitVar`` params are part of the synthesised ``__init__``
+        # signature even though they are not stored as instance
+        # attributes. Adding one is a constructor-shape change.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, InitVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    seed: InitVar[int] = 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_initvar_change_is_detected(self):
+        # Flipping ``InitVar[int]`` to a plain ``int`` annotation
+        # changes the field semantics (constructor param without
+        # instance storage → constructor param WITH instance storage).
+        # The annotation text differs so the snapshot diffs.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass, InitVar\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    seed: InitVar[int] = 0\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    seed: int = 0\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_init_false_field_is_excluded_from_synth(self):
+        # ``field(init=False, ...)`` fields are NOT part of the
+        # synthesised ``__init__`` so adding one must NOT trip the
+        # public-surface gate (false-positive from the iter-4 build).
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    cache: dict = field(init=False, default_factory=dict)\n"
+        )
+
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_dataclass_init_true_field_is_included(self):
+        # Explicit ``init=True`` (the default) keeps the field IN the
+        # synth: adding one is a real constructor-shape change.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    extras: dict = field(init=True, default_factory=dict)\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
+    def test_dataclass_field_without_init_kwarg_is_included(self):
+        # ``field(default=...)`` with no ``init`` kwarg defaults to
+        # ``init=True`` at runtime, so the field stays in the synth.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass, field\n"
+            "@dataclass\n"
+            "class User:\n"
+            "    name: str\n"
+            "    extras: dict = field(default_factory=dict)\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "User" in excinfo.value.changed_signatures
+
 
 class TestFrontMatterStripping:
     """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front
