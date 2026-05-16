@@ -7130,6 +7130,134 @@ class TestNotABugSuppressedOnResume:
             "reviewer P1 regression. final_message={!r}".format(final_message)
         )
 
+    def test_resume_with_fresh_post_edit_cycle_start_hashes_does_not_terminal_success(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """External reviewer P1 follow-up regression: the in-memory
+        ``cycle_baseline_unverified`` flag from the prior fix is NOT
+        persisted. After a legacy resume reruns Step 3 (with the flag
+        blocking inline terminal-success), the normal state save would
+        write a FRESH post-edit ``cycle_start_hashes`` and forget the
+        unverified marker. The very next resume would restore that
+        snapshot, the helper would see ``cycle_start_hashes != None``
+        with no in-cycle progress (post-edit baseline matches current
+        tree), and the cycle-waste-breaker terminal-success path
+        would fire immediately — zero step calls — on a baseline that
+        is still unverified.
+
+        Fix: persist ``cycle_start_hashes`` as ``None`` at all save
+        sites while ``cycle_baseline_unverified`` is True, so the
+        next resume's missing-snapshot path re-sets the flag and the
+        helper demotes via the same legacy-state branch.
+
+        This test simulates the disk state AFTER the bad save:
+        ``cycle_start_hashes`` is a fresh post-edit snapshot, all
+        other markers unchanged. With the fix this state cannot be
+        produced (the save persists None). The test instead verifies
+        directly that the helper, when given the in-memory snapshot
+        the reviewer reproduced, demotes via the missing-snapshot path
+        when ``cycle_start_hashes`` is None (the persist-as-None
+        behavior). The end-to-end flow is verified by asserting that
+        a save invoked while ``cycle_baseline_unverified`` is True
+        writes ``cycle_start_hashes=None``.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Legacy resume: no cycle_start_hashes saved, Step 3 cached as
+        # NOT_A_BUG, last_completed_step=3 mid-cycle 2.
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            # NOTE: no "cycle_start_hashes" key (legacy state).
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+        initial_hashes = resumed_state["initial_file_hashes"]
+
+        def detect_side_effect(cwd, hashes):
+            # Direct edits exist vs initial_file_hashes; no progress vs
+            # any fresh cycle baseline.
+            if hashes is initial_hashes or (
+                isinstance(hashes, dict) and hashes == initial_hashes
+            ):
+                return ["src/module.py"]
+            return []
+
+        saved_states = []
+
+        def capture_save(cwd, issue_number, workflow_name, state_data,
+                         state_dir, repo_owner, repo_name, use_github_state,
+                         github_comment_id):
+            saved_states.append({
+                "current_cycle": state_data.get("current_cycle"),
+                "last_completed_step": state_data.get("last_completed_step"),
+                "cycle_start_hashes": state_data.get("cycle_start_hashes"),
+            })
+            return None
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value={"src/module.py": "freshpostedithash"},
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: NOT_A_BUG — expected behavior.", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # While cycle_baseline_unverified is True (the resumed cycle),
+        # every save MUST persist cycle_start_hashes=None — NOT the
+        # fresh post-edit local that _get_file_hashes returned.
+        unverified_cycle_saves = [
+            s for s in saved_states
+            if s["current_cycle"] == 2 and s["last_completed_step"] is not None
+        ]
+        assert unverified_cycle_saves, (
+            f"No saves captured for the unverified cycle. saved_states={saved_states}"
+        )
+        for save in unverified_cycle_saves:
+            assert save["cycle_start_hashes"] is None, (
+                f"Save during cycle_baseline_unverified=True wrote a non-None "
+                f"cycle_start_hashes={save['cycle_start_hashes']!r}; the next "
+                f"resume would restore it as a valid baseline and terminal-"
+                f"success on an unverified cycle. Full save: {save}"
+            )
+
     def test_bug_step_outputs_not_a_bug_resuppressed_by_dev_units(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args, tmp_path
     ):

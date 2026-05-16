@@ -2061,6 +2061,18 @@ def run_agentic_e2e_fix_orchestrator(
                     "github_comment_id": github_comment_id,
                     "initial_file_hashes": dict(initial_file_hashes),
                     "initial_sha": initial_sha,
+                    # Persist None when the resumed cycle's baseline is
+                    # unverified (legacy state / pre-snapshot interrupt) —
+                    # otherwise the next resume would trust the fresh
+                    # post-edit snapshot and immediately terminal-success.
+                    "cycle_start_hashes": (
+                        None if cycle_baseline_unverified
+                        else (
+                            dict(resumed_cycle_start_hashes)
+                            if isinstance(resumed_cycle_start_hashes, dict)
+                            else None
+                        )
+                    ),
                 }
                 try:
                     new_gh_id = save_workflow_state(
@@ -2471,10 +2483,19 @@ def run_agentic_e2e_fix_orchestrator(
                     # collapse `{}` to `None` and trick resume into thinking
                     # the baseline is missing, recapturing the post-edit tree
                     # and mis-reporting no progress.
+                    # Persist None when the resumed cycle's baseline is
+                    # unverified (legacy state / pre-snapshot interrupt) —
+                    # the in-memory cycle_start_hashes was either restored
+                    # from a stale prior session save or freshly captured
+                    # post-edit; either way the next resume must not trust
+                    # it.
                     "cycle_start_hashes": (
-                        dict(cycle_start_hashes)
-                        if isinstance(cycle_start_hashes, dict)
-                        else None
+                        None if cycle_baseline_unverified
+                        else (
+                            dict(cycle_start_hashes)
+                            if isinstance(cycle_start_hashes, dict)
+                            else None
+                        )
                     ),
                 }
                 
@@ -2892,10 +2913,17 @@ def run_agentic_e2e_fix_orchestrator(
                 else None
             ),
             "initial_sha": _interrupt_initial_sha if isinstance(_interrupt_initial_sha, str) else None,
+            # If the cycle was running on an unverified baseline, save None
+            # so the next resume re-detects "unverified" via the missing-
+            # snapshot path rather than trusting a stale post-edit local.
             "cycle_start_hashes": (
-                dict(_interrupt_cycle_start_hashes)
-                if isinstance(_interrupt_cycle_start_hashes, dict)
-                else None
+                None
+                if locals().get("cycle_baseline_unverified", False)
+                else (
+                    dict(_interrupt_cycle_start_hashes)
+                    if isinstance(_interrupt_cycle_start_hashes, dict)
+                    else None
+                )
             ),
         }
         save_workflow_state(
@@ -2936,10 +2964,18 @@ def run_agentic_e2e_fix_orchestrator(
                     else None
                 ),
                 "initial_sha": _exc_initial_sha if isinstance(_exc_initial_sha, str) else None,
+                # If the cycle was running on an unverified baseline, save
+                # None so the next resume re-detects "unverified" via the
+                # missing-snapshot path rather than trusting a stale post-
+                # edit local.
                 "cycle_start_hashes": (
-                    dict(_exc_cycle_start_hashes)
-                    if isinstance(_exc_cycle_start_hashes, dict)
-                    else None
+                    None
+                    if locals().get("cycle_baseline_unverified", False)
+                    else (
+                        dict(_exc_cycle_start_hashes)
+                        if isinstance(_exc_cycle_start_hashes, dict)
+                        else None
+                    )
                 ),
             }
             save_workflow_state(
