@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "auto_deps_main", "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1)", "returns": "Tuple[str, float, str]"}
+      {"name": "auto_deps_main", "signature": "(ctx: click.Context, prompt_file: str, directory_path: str, auto_deps_csv_path: Optional[str], output: Optional[str], force_scan: Optional[bool] = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, no_dedup: bool = False, concurrency: int = 1, _skip_finalization: bool = False)", "returns": "Tuple[str, float, str]"}
     ]
   }
 }
@@ -34,6 +34,7 @@
     - `include_docs` (`bool`): Flag to include documentation files (`.md`, `.txt`, `.rst`) in dependency discovery. Default False.
     - `no_dedup` (`bool`): Flag to disable redundant inline content removal. Default False.
     - `concurrency` (`int`): Number of parallel workers for file summarization. Default 1.
+    - `_skip_finalization` (`bool`): Internal flag — when True, return immediately after the success console output without writing a fingerprint or clearing any run report. Default False. `pdd sync` sets this to True because sync owns canonical metadata bookkeeping itself (see the sync NOTE in the Behavior section). Leading underscore signals this is not part of the public CLI surface.
 
     Outputs:
     - Returns a tuple containing (`str`, `float`, `str`):
@@ -94,7 +95,7 @@
         • Surface non-exception failures from the architecture merge (return shape `{"updated": bool, "messages": list[str], …}`): if the helper returned `updated=False`, emit each `messages` entry as a yellow `Warning: architecture.json not updated: …` line so the success message does not mask a silent no-op.
         • Surface invalid `<include>` tags stripped by `sanitize_prompt_output` (it returns `(cleaned_prompt, invalid_includes: list[str])`): if `invalid_includes` is non-empty, emit a yellow warning naming the count, the output path, and the stripped entries so the user knows generated dependencies were dropped.
         • Finalization errors must not mask a successful `auto-deps` result: log a yellow warning (unless `quiet`) and continue; do not raise.
-        • NOTE: `pdd sync` invokes `auto_deps_main` with a temp `<basename>_<language>_with_deps.prompt` output and then `shutil.move`s it onto the canonical prompt. The finalizer here records a fingerprint under the *with_deps* derivative's identity; sync then writes its own canonical fingerprint via its atomic state machinery (`_save_fingerprint_atomic` in `pdd/sync_orchestration.py` around line 2719). Both records can coexist — the canonical one is the one sync reads on subsequent runs.
+        • NOTE: `pdd sync` invokes `auto_deps_main` with a temp `<basename>_<language>_with_deps.prompt` output and then `shutil.move`s it onto the canonical prompt. To avoid leaving an orphan `.pdd/meta/*_with_deps.json` for that temp identity after the move (and to avoid clearing the wrong run report), sync passes the internal flag `_skip_finalization=True` and owns canonical metadata itself: it writes the canonical fingerprint via `_save_fingerprint_atomic` (`pdd/sync_orchestration.py` around line 2719) and clears the canonical `_run.json` via `clear_run_report` immediately after the move. When `_skip_finalization=True`, this finalizer must return immediately after the success console output without writing a fingerprint or clearing any run report.
 
 <operation_log_interface>
 <include select="def:save_fingerprint,def:infer_module_identity,def:clear_run_report,def:get_run_report_path" mode="interface">pdd/operation_log.py</include>
