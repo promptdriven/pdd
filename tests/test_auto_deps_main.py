@@ -1073,3 +1073,87 @@ def test_auto_deps_finalization_writes_include_deps_and_clears_run_report(
     assert not run_report.exists(), (
         "_run.json should have been removed by clear_run_report"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: auto_include emits attributed ``<include select="...">`` and
+# ``<include query="...">`` directives (pdd/auto_include.py:148). The
+# finalization path persists include dep hashes via ``save_fingerprint``,
+# which reads them through ``extract_include_deps``. If that extractor only
+# matched bare ``<include>...</include>``, attributed deps would silently
+# vanish from the fingerprint and downstream sync would miss real changes.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "include_directive",
+    [
+        '<include select="def:parent_helper">parent.py</include>',
+        '<include query="parent module helpers">parent.py</include>',
+    ],
+    ids=["select-attr", "query-attr"],
+)
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_finalization_captures_attributed_include_deps(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+    monkeypatch,
+    use_real_finalization,
+    include_directive,
+):
+    meta_dir = use_real_finalization
+    work_dir = tmp_path.resolve()
+    monkeypatch.chdir(work_dir)
+
+    prompt_file = work_dir / "child_python.prompt"
+    prompt_file.write_text("original prompt body\n", encoding="utf-8")
+
+    # ``parent.py`` must define ``parent_helper`` so the
+    # ``select="def:parent_helper"`` variant's selector validator (run by
+    # ``sanitize_prompt_output``) resolves successfully and the attributed
+    # include survives to reach ``extract_include_deps``.
+    dep_file = work_dir / "parent.py"
+    dep_file.write_text("def parent_helper():\n    return 1\n", encoding="utf-8")
+
+    modified_prompt = f"original prompt body\n{include_directive}\n"
+    csv_path = work_dir / "deps.csv"
+
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": prompt_file.read_text(encoding="utf-8")},
+        {"output": str(prompt_file), "csv": str(csv_path)},
+        None,
+    )
+    mock_insert_includes.return_value = (
+        modified_prompt,
+        "",
+        0.01,
+        "test-model",
+    )
+
+    auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(prompt_file),
+        directory_path=str(work_dir),
+        auto_deps_csv_path=str(csv_path),
+        output=str(prompt_file),
+        force_scan=False,
+    )
+
+    fingerprint_path = meta_dir / "child_python.json"
+    assert fingerprint_path.exists(), (
+        f"fingerprint JSON missing at {fingerprint_path}"
+    )
+    fp = json.loads(fingerprint_path.read_text(encoding="utf-8"))
+
+    include_deps = fp.get("include_deps")
+    assert isinstance(include_deps, dict) and include_deps, (
+        f"include_deps should capture attributed includes, got {include_deps!r}"
+    )
+    assert "parent.py" in include_deps, (
+        f"expected 'parent.py' key in include_deps, got {list(include_deps)}"
+    )
+    assert len(include_deps["parent.py"]) == 64, (
+        "include_deps hash should be a SHA-256 hex digest"
+    )
