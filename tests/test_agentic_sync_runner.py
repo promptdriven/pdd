@@ -1746,6 +1746,66 @@ class TestSyncOneModule:
         block = build_test_churn_hard_failure_from_error(exc, "update_main")
         assert "BREAKING-CHANGE:" in block
 
+    # -----------------------------------------------------------------
+    # External review (PR #1015, iter-5): the subprocess hard-failure
+    # path uses the AsyncSyncRunner's INTERNAL builders
+    # (`_build_public_surface_hard_failure` /
+    # `_build_test_churn_hard_failure`), not the importable ones above.
+    # End users see THESE blocks, so they MUST carry the same
+    # ``BREAKING-CHANGE:`` opt-out instruction.
+    # -----------------------------------------------------------------
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_runner_public_surface_hard_block_includes_breaking_change(
+        self, _mock_env
+    ):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Public surface regression for foo_python.prompt:\n"
+            "removed: calculate_sha256\n"
+            "signature_changed: <none>\n"
+            "output: pdd/foo.py\n"
+            "pre_surface_size: 10\n"
+            "post_surface_size: 9\n"
+        )
+
+        block = runner._build_public_surface_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "BREAKING-CHANGE:" in block
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_runner_test_churn_hard_block_includes_breaking_change(
+        self, _mock_env
+    ):
+        runner = AsyncSyncRunner(
+            basenames=["foo"],
+            dep_graph={"foo": []},
+            sync_options={},
+            github_info=None,
+            quiet=True,
+        )
+        stderr = (
+            "Test churn threshold exceeded for test_foo_python.prompt:\n"
+            "ratio: 0.82\n"
+            "threshold: 0.40\n"
+            "output: tests/test_foo.py\n"
+            "pre_line_count: 120\n"
+            "post_line_count: 80\n"
+        )
+
+        block = runner._build_test_churn_hard_failure(
+            "foo", "Overall status: Failed", "", stderr
+        )
+
+        assert "BREAKING-CHANGE:" in block
+
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(
             basenames=["foo"],

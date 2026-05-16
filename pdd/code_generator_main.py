@@ -953,33 +953,131 @@ def _is_dataclass_decorator(decorator: ast.AST) -> bool:
     return False
 
 
+def _dataclass_decorator_is_kw_only(decorator: ast.AST) -> bool:
+    """Return True when ``decorator`` is ``@dataclass(kw_only=True)``.
+
+    Companion to :func:`_is_dataclass_decorator`. The caller is expected
+    to invoke this on a decorator that ALREADY passed the dataclass
+    check, so this helper focuses only on the ``kw_only`` keyword
+    extraction. Returns False for the bare ``@dataclass`` form (no Call
+    wrapper) and for any explicit ``kw_only=False`` — matching the
+    runtime default where fields are positional unless opted out.
+    """
+    if not isinstance(decorator, ast.Call):
+        return False
+    for keyword in decorator.keywords:
+        if (
+            keyword.arg == "kw_only"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is True
+        ):
+            return True
+    return False
+
+
+def _is_kw_only_sentinel(annotation: Optional[ast.AST]) -> bool:
+    """Return True when ``annotation`` is the stdlib ``KW_ONLY`` sentinel.
+
+    Accepts bare ``KW_ONLY`` (``ast.Name``) and the module-qualified
+    ``dataclasses.KW_ONLY`` (``ast.Attribute``) forms. Used by
+    :func:`_synthesize_dataclass_init_signature` to recognise the
+    in-body marker that splits earlier positional fields from later
+    keyword-only fields.
+    """
+    if annotation is None:
+        return False
+    if isinstance(annotation, ast.Name) and annotation.id == "KW_ONLY":
+        return True
+    if isinstance(annotation, ast.Attribute) and annotation.attr == "KW_ONLY":
+        return True
+    return False
+
+
+def _dataclass_field_call_is_init_false(value: Optional[ast.AST]) -> bool:
+    """Return True for a ``field(init=False, ...)`` / ``dataclasses.field(init=False, ...)`` call.
+
+    Mirrors the stdlib ``dataclasses`` rule that a field whose
+    ``field(init=False)`` call excludes the attribute from the
+    synthesised ``__init__``. Used by
+    :func:`_synthesize_dataclass_init_signature` to drop such fields
+    from the snapshot — including them was a false-positive source
+    (``cache: dict = field(init=False, default_factory=dict)`` is an
+    implementation detail, not a constructor parameter).
+
+    Defensive about everything else: ``field(init=True)``,
+    ``field(default=...)`` without ``init``, or any non-``field`` call
+    return False so the field stays IN the snapshot. Matching the bare
+    ``field`` name and the ``dataclasses.field`` attribute form covers
+    the common import styles.
+    """
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Name):
+        if func.id != "field":
+            return False
+    elif isinstance(func, ast.Attribute):
+        if func.attr != "field":
+            return False
+    else:
+        return False
+    for keyword in value.keywords:
+        if (
+            keyword.arg == "init"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+        ):
+            return True
+    return False
+
+
 def _synthesize_dataclass_init_signature(class_node: ast.ClassDef) -> str:
     """Build a constructor signature for an ``@dataclass`` class with no explicit init.
 
     Walks the class body in source order, treating each top-level
     ``ast.AnnAssign`` (annotated assignment) whose target is a bare
-    ``ast.Name`` as a positional field — matching the stdlib
+    ``ast.Name`` as a constructor field — matching the stdlib
     ``dataclasses`` runtime behaviour (field order in the synthesised
     ``__init__`` is the source order of the annotated attributes).
 
-    Excluded:
+    Keyword-only handling:
 
-    * Underscore-prefixed names: dataclass synthesises an init param
-      for them at runtime, but they are NOT part of the *public* API
-      surface this snapshot tracks. Mirroring the ``_is_public_top_level``
-      convention used by the surrounding helper.
-    * ``ClassVar[...]`` annotations: dataclasses skip these per PEP 557.
-      Detected by substring match on the unparsed annotation so both
-      bare ``ClassVar`` and ``typing.ClassVar`` / ``t.ClassVar`` forms
-      work.
-    * ``InitVar[...]`` annotations: dataclasses DO pass these to
-      ``__init__`` and ``__post_init__``, but they are not stored as
-      instance attributes. Treating them as fields would produce a
-      false-positive signature for the snapshot since callers cannot
-      access them as attributes after construction. Same substring
-      detection as ``ClassVar``.
+    * ``@dataclass(kw_only=True)`` on the class decorator: ALL fields
+      go after a single ``*`` marker. Detected by
+      :func:`_dataclass_decorator_is_kw_only`.
+    * ``_: KW_ONLY`` sentinel inside the class body (``KW_ONLY`` or
+      ``dataclasses.KW_ONLY``): fields BEFORE the sentinel are
+      positional; fields AFTER are kw-only. Detected by
+      :func:`_is_kw_only_sentinel`. The sentinel itself contributes no
+      param. When the decorator already opts the whole class into
+      kw-only mode, the sentinel is redundant — emit only one ``*``.
+
+    Excluded from the synth:
+
+    * Underscore-prefixed field names: dataclass DOES synthesise an
+      init param for them at runtime, but they are NOT part of the
+      *public* API surface this snapshot tracks. The ``KW_ONLY``
+      sentinel check runs BEFORE this skip so the canonical ``_:
+      KW_ONLY`` marker still splits the signature.
+    * ``ClassVar[...]`` annotations: dataclasses skip these per PEP
+      557. Substring match on the unparsed annotation handles both
+      bare ``ClassVar`` and the ``typing.ClassVar`` / ``t.ClassVar``
+      forms.
+    * ``field(init=False, ...)`` defaults: the stdlib excludes these
+      from the synthesised ``__init__``. Detected by
+      :func:`_dataclass_field_call_is_init_false`.
     * Plain ``ast.Assign`` without annotation: ``x = 5`` is a class-
       level constant, NOT a dataclass field.
+
+    Included (vs. the previous iteration):
+
+    * ``InitVar[...]`` annotations: dataclasses DO pass these to
+      ``__init__`` (and ``__post_init__``) — they ARE constructor
+      parameters even though they are not stored as instance
+      attributes. Treating them as fields keeps ``inspect.signature``
+      and the snapshot in sync. Flipping an ``InitVar[int]`` to a
+      regular ``int`` annotation surfaces as a diff naturally because
+      the snapshot prints the verbatim annotation text.
 
     Default values are emitted verbatim via ``ast.unparse``. This
     includes ``field(default_factory=...)`` and
@@ -988,28 +1086,59 @@ def _synthesize_dataclass_init_signature(class_node: ast.ClassDef) -> str:
     runtime semantics are equivalent. That is the conservative
     behaviour callers expect from the public-surface gate.
     """
+    decorator_kw_only = any(
+        _dataclass_decorator_is_kw_only(dec)
+        for dec in class_node.decorator_list
+        if _is_dataclass_decorator(dec)
+    )
     parts: List[str] = []
+    kw_only_marker_inserted = False
+    if decorator_kw_only:
+        # ``@dataclass(kw_only=True)`` short-circuits to a single ``*``
+        # at the front; any ``_: KW_ONLY`` sentinel inside the body
+        # becomes redundant and must NOT emit a second marker.
+        parts.append("*")
+        kw_only_marker_inserted = True
     for child in class_node.body:
         if not isinstance(child, ast.AnnAssign):
             continue
         target = child.target
         if not isinstance(target, ast.Name):
             continue
+        # ``_: KW_ONLY`` is the canonical sentinel — its name starts
+        # with ``_`` so the underscore-prefix skip below would otherwise
+        # swallow it. Recognise the sentinel FIRST and translate it into
+        # a positional ``*`` marker (unless the decorator already
+        # injected one).
+        if _is_kw_only_sentinel(child.annotation):
+            if not kw_only_marker_inserted:
+                parts.append("*")
+                kw_only_marker_inserted = True
+            continue
         name = target.id
         if name.startswith("_"):
             continue
         annotation_text = ast.unparse(child.annotation) if child.annotation else ""
-        # Substring match handles both bare ``ClassVar`` / ``InitVar`` and
-        # the module-prefixed ``typing.ClassVar`` / ``dataclasses.InitVar``
-        # forms. We intentionally accept false-positive matches like
-        # ``MyClassVarish`` to keep the check trivially robust; real
-        # codebases overwhelmingly use the canonical names.
-        if "ClassVar" in annotation_text or "InitVar" in annotation_text:
+        # ``ClassVar`` annotations are class-level constants per PEP
+        # 557, NOT init params. ``InitVar`` is intentionally NOT
+        # filtered: it IS an init parameter; the annotation text rides
+        # through verbatim so an ``InitVar[int]`` ↔ ``int`` flip diffs.
+        if "ClassVar" in annotation_text:
+            continue
+        if _dataclass_field_call_is_init_false(child.value):
+            # ``cache: dict = field(init=False, default_factory=dict)``
+            # — runtime constructor omits this field, so the snapshot
+            # must too.
             continue
         part = f"{name}: {annotation_text}" if annotation_text else name
         if child.value is not None:
             part += f" = {ast.unparse(child.value)}"
         parts.append(part)
+    # Strip a trailing ``*`` if no kw-only fields followed the sentinel
+    # — ``(*)`` is not a valid signature and would falsely diff against
+    # an empty ``()`` synth.
+    if parts and parts[-1] == "*":
+        parts.pop()
     return f"({', '.join(parts)})"
 
 
