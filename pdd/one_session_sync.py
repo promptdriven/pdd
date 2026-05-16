@@ -650,6 +650,23 @@ def run_one_session_sync(
                 churn_gate_passed = True
                 break
             except TestChurnError as churn_err:
+                # Restore the pre-session code file BEFORE the retry/break
+                # decision. The agentic session rewrites both code and test
+                # in-place; rejecting only the test would leave the code
+                # mutated on disk, so the next ``pdd sync`` would treat the
+                # mutated code as the baseline. Mirror the surface handler
+                # at lines ~530-533: best-effort write, swallow ``OSError``.
+                # ``existing_code_content`` is captured once pre-loop at
+                # line ~248-252 (the same bytes the surface gate compares
+                # against), so restoring to those bytes keeps subsequent
+                # invocations seeing a clean baseline.
+                if existing_code_content is not None:
+                    try:
+                        code_path.write_text(
+                            existing_code_content, encoding="utf-8"
+                        )
+                    except OSError:
+                        pass
                 # Restore the pre-existing test file before deciding on retry
                 # so we never leave a high-churn rewrite on disk.
                 test_path.write_text(existing_test_content, encoding="utf-8")

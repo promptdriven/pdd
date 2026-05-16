@@ -8086,6 +8086,100 @@ class TestPublicSurfaceBindingKind:
             "",
         )
 
+    # ------------------------------------------------------------------
+    # External review (PR #1015): the positional-only ``/`` marker was
+    # silently dropped from ``_format_python_signature``. As a result,
+    # ``def f(x, /, y)`` and ``def f(x, y)`` both snapshotted as
+    # ``(x, y)`` and the public-surface gate missed a real ABI break —
+    # ``f(x=1, y=2)`` succeeds against the second form but raises
+    # ``TypeError`` against the first. The fix inserts a literal ``/``
+    # token between the posonly group and the regular args (mirroring
+    # the existing ``*`` insertion for kwonlyargs).
+    # ------------------------------------------------------------------
+    def test_positional_only_added_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def f(x, y):\n    return x + y\n"
+        # Same arg names, but ``x`` is now positional-only — callers
+        # doing ``f(x=1, y=2)`` will break.
+        after = "def f(x, /, y):\n    return x + y\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "f" in excinfo.value.changed_signatures
+
+    def test_positional_only_removed_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # Reverse direction: the ``/`` is dropped. While dropping
+        # positional-only is technically a strict broadening of the
+        # callable contract, the snapshot must still register the
+        # change so reviewers can see the surface shift.
+        before = "def f(x, /, y):\n    return x + y\n"
+        after = "def f(x, y):\n    return x + y\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "f" in excinfo.value.changed_signatures
+
+    def test_unchanged_positional_only_is_allowed(self):
+        # Sanity check: identical posonly markers on both sides must
+        # NOT produce a snapshot diff.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "def f(x, /, y):\n    return x + y\n"
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_format_python_signature_emits_posonly_marker(self):
+        """Direct snapshot-string test: ``def f(x, /, y)`` MUST produce
+        a signature containing the literal ``/`` token. Pins the marker
+        independently of the diff machinery — a future refactor that
+        accidentally drops the marker from ``_format_python_signature``
+        will fail this test even if the diff path coincidentally still
+        catches the change via another tag."""
+        import ast
+        from pdd.code_generator_main import _format_python_signature
+
+        tree = ast.parse("def f(x, /, y):\n    return x + y\n")
+        func_node = tree.body[0]
+        signature = _format_python_signature(func_node)
+        assert "/" in signature, (
+            f"posonly ``/`` marker missing from signature: {signature!r}"
+        )
+        # And the marker must sit BETWEEN the posonly arg and the
+        # regular arg (not at the end).
+        assert signature.startswith("(x, /, y)"), signature
+
 
 class TestFrontMatterStripping:
     """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front
