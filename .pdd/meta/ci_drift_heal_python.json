@@ -1,8 +1,8 @@
 {
   "pdd_version": "0.0.238",
-  "timestamp": "2026-05-15T18:47:59.493360+00:00",
+  "timestamp": "2026-05-16T20:50:00.404547+00:00",
   "command": "fix",
-  "prompt_hash": "5ffc1f645760734e1d0e06797bb5ed78657aefed0495cce7c37e4911a1ca4520",
+  "prompt_hash": "1fff863a3ee0bfb0a089bcbb45ab5dd31e029c99da7d1091f96ee320d3db06a2",
   "code_hash": "78311b392805cb4914b6e65760be57299270cf2af9cec597100244fd1475e098",
   "example_hash": "d587ecf2e5a8b620b51409f1b1f37f270838403da4299a5262fa6eef167c8f7e",
   "test_hash": "1513a83211efd7ee746315a28e0a45ca5b90de923a49aab487f52f2846b9a763",
@@ -10,6 +10,12 @@
     "test_ci_drift_heal.py": "1513a83211efd7ee746315a28e0a45ca5b90de923a49aab487f52f2846b9a763"
   },
   "include_deps": {
+    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/agentic_langtest_example.py": "dbc5c87dc1b75d3299dbfb67b17df1838f9ba2c9bdb457097df0832cea112c3f",
+    "context/agentic_sync_runner_example.py": "fcb36209abb5ab882ad551754fb574d62509c968f8c564e18163be7f2b7ef35a",
+    "context/architecture_sync_example.py": "3dbf29b2f53c4ad341c5722e2778ce1c3ffde318e1b2c0161c343e28505c32fa",
+    "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
+    "context/metadata_sync_example.py": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
     "context/operation_log_example.py": "6cd7962ab255d6080aeb97897175250f987ce936cf7333e7601f10834405a940",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/sync_determine_operation_example.py": "94a333b37d9875bcc9b39e22d4d00de1b196ad2f7e0fa997e6f638e153dbdfad"
