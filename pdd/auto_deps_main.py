@@ -31,6 +31,7 @@ def auto_deps_main(
     include_docs: bool = False,
     no_dedup: bool = False,
     concurrency: int = 1,
+    _skip_finalization: bool = False,
 ) -> Tuple[str, float, str]:
     """
     CLI entry point for the `auto-deps` command.
@@ -149,10 +150,18 @@ def auto_deps_main(
                         f"[yellow]Warning: architecture.json merge failed: {merge_exc}[/yellow]"
                     )
             else:
-                # Non-exception failures (e.g. patcher returns updated=False with a
-                # `messages` list) must still reach the user; otherwise the CLI
-                # prints success while architecture.json was silently left unchanged.
-                if isinstance(merge_result, dict) and not merge_result.get("updated", True):
+                # Non-exception failures must still reach the user; otherwise the
+                # CLI prints success while architecture.json was silently left
+                # unchanged. ``updated=False`` is also returned for legitimate
+                # no-ops (auto_deps_architecture.py:326 — nothing needed adding),
+                # so gate the warning on ``added_dependencies`` being non-empty:
+                # that distinguishes "we wanted to write X but couldn't" from
+                # "nothing to write."
+                if (
+                    isinstance(merge_result, dict)
+                    and not merge_result.get("updated", True)
+                    and merge_result.get("added_dependencies")
+                ):
                     if not quiet:
                         messages = merge_result.get("messages") or [
                             "merge_auto_deps_includes_from_cwd reported updated=False"
@@ -179,6 +188,17 @@ def auto_deps_main(
             # flow it resolves to the ``<basename>_<language>_with_deps``
             # derivative. Errors are surfaced as warnings and never mask a
             # successful auto-deps result.
+            #
+            # ``_skip_finalization=True`` is set by ``pdd sync`` because it
+            # invokes auto-deps with a temp ``<basename>_<language>_with_deps``
+            # output that it then ``shutil.move``s onto the canonical prompt;
+            # writing a fingerprint for that temp identity here would leave
+            # ``.pdd/meta/*_with_deps.json`` orphaned after the move, and the
+            # derivative's identity is the wrong target for run-report clears
+            # (sync owns the canonical fingerprint write and the canonical
+            # run-report clear on its side).
+            if _skip_finalization:
+                return cleaned_prompt, total_cost, model_name
             try:
                 basename, language = infer_module_identity(Path(output_path))
                 if basename is None or language is None:

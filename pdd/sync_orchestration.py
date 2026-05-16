@@ -2189,13 +2189,31 @@ def sync_orchestration(
                                     auto_deps_csv_path="project_dependencies.csv",
                                     output=str(temp_output),
                                     force_scan=False,
-                                    progress_callback=progress_callback_ref[0]
+                                    progress_callback=progress_callback_ref[0],
+                                    # Sync owns canonical fingerprint/run-report
+                                    # bookkeeping (the _save_fingerprint_atomic
+                                    # call below and the clear_run_report after
+                                    # the move). Suppress auto_deps_main's own
+                                    # finalization to avoid orphan
+                                    # ``.pdd/meta/*_with_deps.json`` files for
+                                    # the temp output (issue #989 follow-up).
+                                    _skip_finalization=True,
                                 )
                                 if temp_output.exists():
                                     import shutil
                                     new_content = temp_output.read_text(encoding='utf-8')
                                     if new_content != original_content:
                                         shutil.move(str(temp_output), str(pdd_files['prompt']))
+                                        # Issue #989: clear the canonical stale
+                                        # ``_run.json`` because the prompt
+                                        # content just changed. Mirrors the
+                                        # clear after generate (line 2272).
+                                        try:
+                                            clear_run_report(basename, language)
+                                        except Exception:
+                                            # Never mask a successful auto-deps
+                                            # result on metadata cleanup errors.
+                                            pass
                                     else:
                                         temp_output.unlink()
                                         result = (new_content, 0.0, 'no-changes')

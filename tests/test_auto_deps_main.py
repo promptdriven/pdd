@@ -1077,6 +1077,84 @@ def test_auto_deps_finalization_writes_include_deps_and_clears_run_report(
 
 
 # ---------------------------------------------------------------------------
+# Regression: ``pdd sync`` invokes ``auto_deps_main`` with
+# ``_skip_finalization=True`` and a temp ``<basename>_<language>_with_deps``
+# output that it then moves onto the canonical prompt. ``auto_deps_main`` must
+# NOT write its own ``.pdd/meta/*_with_deps.json`` fingerprint in that flow —
+# otherwise the move leaves orphan metadata for a file that no longer exists.
+# Sync owns the canonical fingerprint write and the canonical run-report
+# clear; the auto-deps finalizer must stay out of the way.
+# ---------------------------------------------------------------------------
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_skip_finalization_writes_no_metadata(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_path: Path,
+    monkeypatch,
+    use_real_finalization,
+):
+    meta_dir = use_real_finalization
+    work_dir = tmp_path.resolve()
+    monkeypatch.chdir(work_dir)
+
+    prompt_file = work_dir / "child_python.prompt"
+    prompt_file.write_text("original prompt body\n", encoding="utf-8")
+    temp_output = work_dir / "child_python_with_deps.prompt"
+    csv_path = work_dir / "deps.csv"
+
+    mock_construct_paths.return_value = (
+        {},
+        {"prompt_file": prompt_file.read_text(encoding="utf-8")},
+        {"output": str(temp_output), "csv": str(csv_path)},
+        None,
+    )
+    mock_insert_includes.return_value = (
+        "original prompt body\n<include>parent.py</include>\n",
+        "",
+        0.01,
+        "test-model",
+    )
+
+    # Pre-existing canonical run report — sync clears this itself after the
+    # ``shutil.move``; auto_deps_main must NOT touch it under
+    # ``_skip_finalization=True``.
+    canonical_run_report = meta_dir / "child_python_run.json"
+    canonical_run_report.write_text(json.dumps({"stale": True}), encoding="utf-8")
+
+    auto_deps_main(
+        ctx=mock_ctx,
+        prompt_file=str(prompt_file),
+        directory_path=str(work_dir),
+        auto_deps_csv_path=str(csv_path),
+        output=str(temp_output),  # different from prompt_file
+        force_scan=False,
+        _skip_finalization=True,
+    )
+
+    # No fingerprint should have been written for either the derivative or
+    # the canonical identity.
+    derivative_fp = meta_dir / "child_python_with_deps.json"
+    canonical_fp = meta_dir / "child_python.json"
+    assert not derivative_fp.exists(), (
+        f"_skip_finalization=True must not write derivative metadata; "
+        f"found {derivative_fp}"
+    )
+    assert not canonical_fp.exists(), (
+        f"_skip_finalization=True must not write canonical metadata; "
+        f"found {canonical_fp}"
+    )
+
+    # Canonical run-report must still exist — sync owns that clear after the
+    # move, not auto_deps_main.
+    assert canonical_run_report.exists(), (
+        "_skip_finalization=True must not clear canonical _run.json; "
+        "that is sync's responsibility post-move."
+    )
+
+
+# ---------------------------------------------------------------------------
 # Regression: auto_include emits attributed ``<include select="...">`` and
 # ``<include query="...">`` directives (pdd/auto_include.py:148). The
 # finalization path persists include dep hashes via ``save_fingerprint``,
