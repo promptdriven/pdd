@@ -2446,7 +2446,18 @@ def run_agentic_e2e_fix_orchestrator(
                     # Current-cycle start snapshot (Issue #1034 codex P2 follow-up):
                     # persisted so the resume-time cycle-waste-breaker can prove
                     # no in-cycle progress before authorizing terminal success.
-                    "cycle_start_hashes": dict(cycle_start_hashes) if cycle_start_hashes else None,
+                    # NOTE: distinguish `{}` (clean-tree baseline; any file
+                    # present later in the cycle is in-cycle progress) from
+                    # `None` (truly missing / post-rollover sentinel). The
+                    # truthy check `if cycle_start_hashes else None` would
+                    # collapse `{}` to `None` and trick resume into thinking
+                    # the baseline is missing, recapturing the post-edit tree
+                    # and mis-reporting no progress.
+                    "cycle_start_hashes": (
+                        dict(cycle_start_hashes)
+                        if isinstance(cycle_start_hashes, dict)
+                        else None
+                    ),
                 }
                 
                 new_gh_id = save_workflow_state(

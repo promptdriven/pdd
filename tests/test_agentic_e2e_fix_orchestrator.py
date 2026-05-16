@@ -8848,3 +8848,86 @@ class TestNotABugSuppressedOnResume:
                 "the post-rollover recapture path failed to seed a fresh "
                 "cycle_start_hashes after Finding B's None snapshot."
             )
+
+    def test_main_save_preserves_empty_cycle_start_hashes_dict(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (iteration 5): the main-loop save site at
+        line ~2238 originally used a truthy check
+        (``dict(cycle_start_hashes) if cycle_start_hashes else None``),
+        which collapses an empty dict ``{}`` to ``None``. ``{}`` is a
+        valid baseline (cycle started from a clean tree — any file written
+        later is in-cycle progress); persisting it as ``None`` makes
+        resume treat the snapshot as missing and re-capture the
+        already-edited tree, mis-detecting no progress.
+
+        Fix: use ``isinstance(cycle_start_hashes, dict)`` so ``{}`` is
+        preserved as ``{}`` and only ``None`` (truly missing /
+        post-rollover sentinel) serializes as null.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        saved_states = []
+
+        def capture_save(cwd, issue_number, workflow_name, state_data,
+                         state_dir, repo_owner, repo_name, use_github_state,
+                         github_comment_id):
+            snapshot = state_data.get("cycle_start_hashes")
+            if isinstance(snapshot, dict):
+                snapshot = dict(snapshot)
+            saved_states.append({
+                "current_cycle": state_data.get("current_cycle"),
+                "last_completed_step": state_data.get("last_completed_step"),
+                "cycle_start_hashes": snapshot,
+            })
+            return None
+
+        # _get_file_hashes returns {} for both the workflow-start snapshot
+        # and the cycle-1 start snapshot — simulating a clean tree.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value={},
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step9" in label:
+                    return (True, "Tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # At least one main-loop save fired before the workflow exited.
+        # The persisted cycle_start_hashes MUST be {} (the clean-tree
+        # baseline), NOT None.
+        main_loop_saves = [
+            s for s in saved_states
+            if s["last_completed_step"] is not None
+            and s["last_completed_step"] > 0
+        ]
+        assert main_loop_saves, (
+            f"No main-loop save was captured; saved_states={saved_states}. "
+            "The test setup needs adjustment."
+        )
+        for save in main_loop_saves:
+            assert save["cycle_start_hashes"] == {}, (
+                f"Main-loop save collapsed empty cycle_start_hashes to "
+                f"{save['cycle_start_hashes']!r}; expected the empty dict "
+                f"baseline to survive serialization. Full save: {save}"
+            )
