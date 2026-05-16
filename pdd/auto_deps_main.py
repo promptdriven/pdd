@@ -115,7 +115,15 @@ def auto_deps_main(
             # Sanitize prompt output before persisting (removes invalid <include>
             # selectors so a later `pdd sync` does not trip on them).
             output_path = output_file_paths["output"]
-            cleaned_prompt, _removed = sanitize_prompt_output(modified_prompt, output_path)
+            cleaned_prompt, invalid_includes = sanitize_prompt_output(
+                modified_prompt, output_path
+            )
+            if invalid_includes and not quiet:
+                console.print(
+                    f"[yellow]Warning: Cleaned {len(invalid_includes)} invalid "
+                    f"<include> tag(s) before saving {output_path}: "
+                    f"{invalid_includes}[/yellow]"
+                )
 
             # Persist modified prompt
             Path(output_path).parent.mkdir(parents=True, exist_ok=True)
@@ -130,7 +138,7 @@ def auto_deps_main(
 
             # Merge architecture.json dependencies (if architecture.json exists in project root)
             try:
-                merge_auto_deps_includes_from_cwd(
+                merge_result = merge_auto_deps_includes_from_cwd(
                     Path(output_path),
                     old_prompt_text=input_strings["prompt_file"],
                     new_prompt_text=cleaned_prompt,
@@ -140,6 +148,19 @@ def auto_deps_main(
                     console.print(
                         f"[yellow]Warning: architecture.json merge failed: {merge_exc}[/yellow]"
                     )
+            else:
+                # Non-exception failures (e.g. patcher returns updated=False with a
+                # `messages` list) must still reach the user; otherwise the CLI
+                # prints success while architecture.json was silently left unchanged.
+                if isinstance(merge_result, dict) and not merge_result.get("updated", True):
+                    if not quiet:
+                        messages = merge_result.get("messages") or [
+                            "merge_auto_deps_includes_from_cwd reported updated=False"
+                        ]
+                        for msg in messages:
+                            console.print(
+                                f"[yellow]Warning: architecture.json not updated: {msg}[/yellow]"
+                            )
 
             # Console reporting
             if not quiet:
