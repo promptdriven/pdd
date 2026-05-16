@@ -750,17 +750,18 @@ def test_auto_deps_main_updates_architecture_json_after_write(
 
 # ---------------------------------------------------------------------------
 # 18a. Metadata finalization: when the default output is a separate
-#      ``*_with_deps.prompt`` file, the canonical prompt is untouched and
-#      finalization must be SKIPPED — otherwise ``.pdd/meta/<module>.json``
-#      would record the hash of a non-canonical file under the canonical
-#      module identity.
+#      ``*_with_deps.prompt`` file, finalization must still run (issue #989
+#      requires every mutated prompt file to have an up-to-date fingerprint),
+#      keyed off the *output* file's identity rather than the canonical
+#      prompt's. The fingerprint records the derivative under its own
+#      ``(basename, language)`` so canonical metadata stays untouched.
 # ---------------------------------------------------------------------------
 @patch("pdd.auto_deps_main.save_fingerprint")
 @patch("pdd.auto_deps_main.clear_run_report")
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
-def test_auto_deps_metadata_skipped_when_output_differs_from_prompt(
+def test_auto_deps_metadata_finalizes_with_output_identity_in_default_mode(
     mock_insert_includes,
     mock_construct_paths,
     mock_infer_identity,
@@ -769,11 +770,6 @@ def test_auto_deps_metadata_skipped_when_output_differs_from_prompt(
     mock_ctx,
     tmp_path: Path,
 ):
-    """
-    Default CLI auto-deps writes to ``<basename>_<language>_with_deps.prompt``.
-    The original canonical prompt is unchanged, so neither the fingerprint
-    nor the run report must be touched.
-    """
     prompt_file = str(tmp_path / "child_python.prompt")
     output_path = str(tmp_path / "child_python_with_deps.prompt")
     csv_path = str(tmp_path / "deps.csv")
@@ -783,7 +779,9 @@ def test_auto_deps_metadata_skipped_when_output_differs_from_prompt(
         output_path, csv_path
     )
     mock_insert_includes.return_value = _make_insert_includes_return()
-    mock_infer_identity.return_value = ("child", "python")
+    # The output file is the *with_deps* derivative; identity is derived from
+    # *its* name (issue #989).
+    mock_infer_identity.return_value = ("child_python_with", "deps")
 
     auto_deps_main(
         ctx=mock_ctx,
@@ -794,26 +792,32 @@ def test_auto_deps_metadata_skipped_when_output_differs_from_prompt(
         force_scan=False,
     )
 
-    # Output is a different file than the input prompt → finalization is
-    # skipped entirely; identity inference is also unnecessary.
-    mock_infer_identity.assert_not_called()
-    mock_clear_run_report.assert_not_called()
-    mock_save_fingerprint.assert_not_called()
+    # Identity is inferred from the *output* path, not the input prompt.
+    mock_infer_identity.assert_called_once_with(Path(output_path))
+    mock_clear_run_report.assert_called_once_with("child_python_with", "deps")
+
+    mock_save_fingerprint.assert_called_once()
+    fp_kwargs = mock_save_fingerprint.call_args.kwargs
+    assert fp_kwargs["basename"] == "child_python_with"
+    assert fp_kwargs["language"] == "deps"
+    assert fp_kwargs["operation"] == "auto-deps"
+    assert fp_kwargs["paths"] == {"prompt": Path(output_path)}
 
 
 # ---------------------------------------------------------------------------
 # 18b. Metadata finalization: when the output path resolves to the *same*
-#      file as the input prompt (the in-place ``pdd sync`` write-back case),
-#      identity must come from the original ``prompt_file`` and both
-#      ``clear_run_report`` and ``save_fingerprint`` must run with the
-#      canonical identity and the output path.
+#      file as the input prompt (the in-place ``pdd sync`` write-back case
+#      or an explicit ``--output PROMPT_FILE``), identity is inferred from
+#      the output path — which is canonical here — and both
+#      ``clear_run_report`` and ``save_fingerprint`` run with that canonical
+#      identity.
 # ---------------------------------------------------------------------------
 @patch("pdd.auto_deps_main.save_fingerprint")
 @patch("pdd.auto_deps_main.clear_run_report")
 @patch("pdd.auto_deps_main.infer_module_identity")
 @patch("pdd.auto_deps_main.construct_paths")
 @patch("pdd.auto_deps_main.insert_includes")
-def test_auto_deps_metadata_uses_original_prompt_identity_inplace(
+def test_auto_deps_metadata_finalizes_with_canonical_identity_inplace(
     mock_insert_includes,
     mock_construct_paths,
     mock_infer_identity,
@@ -822,11 +826,6 @@ def test_auto_deps_metadata_uses_original_prompt_identity_inplace(
     mock_ctx,
     tmp_path: Path,
 ):
-    """
-    In-place overwrite (``output == prompt_file``): identity is inferred
-    from the original prompt and the fingerprint is saved with that
-    canonical identity.
-    """
     prompt_file = str(tmp_path / "child_python.prompt")
     Path(prompt_file).write_text("orig", encoding="utf-8")
     output_path = prompt_file  # in-place overwrite (sync mode)
@@ -847,8 +846,10 @@ def test_auto_deps_metadata_uses_original_prompt_identity_inplace(
         force_scan=False,
     )
 
-    # Identity must be inferred from the *input* prompt, not the output.
-    mock_infer_identity.assert_called_once_with(Path(prompt_file))
+    # Identity is inferred from the output path. In in-place mode the
+    # output path equals ``prompt_file``, so this resolves to the canonical
+    # ``(basename, language)``.
+    mock_infer_identity.assert_called_once_with(Path(output_path))
 
     # Stale per-module run report cleared with the canonical identity.
     mock_clear_run_report.assert_called_once_with("child", "python")

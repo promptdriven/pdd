@@ -172,71 +172,63 @@ def auto_deps_main(
                 console.print(f"[bold]Modified prompt saved to:[/bold] {output_path}")
                 console.print(f"[bold]Dependency information saved to:[/bold] {csv_path}")
 
-            # Metadata finalization (only on in-place overwrite of the canonical prompt)
+            # Metadata finalization for every successful auto-deps mutation
+            # (issue #989). Identity comes from the file that was actually
+            # written (``output_path``); in in-place mode this resolves to the
+            # canonical ``<basename>_<language>`` module, in the default CLI
+            # flow it resolves to the ``<basename>_<language>_with_deps``
+            # derivative. Errors are surfaced as warnings and never mask a
+            # successful auto-deps result.
             try:
-                same_file = False
-                try:
-                    same_file = Path(output_path).resolve() == Path(prompt_file).resolve()
-                except OSError:
-                    same_file = str(output_path) == str(prompt_file)
-
-                if same_file:
-                    basename, language = infer_module_identity(Path(prompt_file))
-                    if basename is None or language is None:
-                        if not quiet:
-                            console.print(
-                                f"[yellow]Warning: Could not infer module identity for "
-                                f"{prompt_file}; skipping fingerprint finalization.[/yellow]"
-                            )
-                    else:
-                        # Clear stale run report; do not let its failure block fingerprint save
-                        try:
-                            clear_run_report(basename, language)
-                        except Exception as cr_exc:
-                            if not quiet:
-                                console.print(
-                                    f"[yellow]Warning: Failed to clear run report for "
-                                    f"{basename}_{language}: {cr_exc}[/yellow]"
-                                )
-                        # Defensive: clear_run_report() in pdd.operation_log silently swallows
-                        # OSError on the actual unlink, so verify the report is really gone.
-                        try:
-                            _stale_report_path = get_run_report_path(basename, language)
-                            if _stale_report_path.exists():
-                                if not quiet:
-                                    console.print(
-                                        f"[yellow]Warning: clear_run_report did not remove "
-                                        f"{_stale_report_path}; downstream sync may still see "
-                                        f"stale results.[/yellow]"
-                                    )
-                        except Exception as _vrf_exc:
-                            if not quiet:
-                                console.print(
-                                    f"[yellow]Warning: could not verify run-report removal: "
-                                    f"{_vrf_exc}[/yellow]"
-                                )
-                        try:
-                            save_fingerprint(
-                                basename=basename,
-                                language=language,
-                                operation="auto-deps",
-                                paths={"prompt": Path(output_path)},
-                                cost=total_cost,
-                                model=model_name,
-                            )
-                        except Exception as fp_exc:
-                            if not quiet:
-                                console.print(
-                                    f"[yellow]Warning: Failed to save fingerprint for "
-                                    f"{basename}_{language}: {fp_exc}[/yellow]"
-                                )
-                else:
+                basename, language = infer_module_identity(Path(output_path))
+                if basename is None or language is None:
                     if not quiet:
                         console.print(
-                            f"[yellow]Note: Output file ({output_path}) differs from input "
-                            f"prompt ({prompt_file}); skipping fingerprint finalization to "
-                            f"avoid recording a non-canonical hash under the module identity.[/yellow]"
+                            f"[yellow]Warning: Could not infer module identity for "
+                            f"{output_path}; skipping fingerprint finalization.[/yellow]"
                         )
+                else:
+                    # Clear stale run report; do not let its failure block fingerprint save
+                    try:
+                        clear_run_report(basename, language)
+                    except Exception as cr_exc:
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: Failed to clear run report for "
+                                f"{basename}_{language}: {cr_exc}[/yellow]"
+                            )
+                    # Defensive: clear_run_report() in pdd.operation_log silently swallows
+                    # OSError on the actual unlink, so verify the report is really gone.
+                    try:
+                        _stale_report_path = get_run_report_path(basename, language)
+                        if _stale_report_path.exists():
+                            if not quiet:
+                                console.print(
+                                    f"[yellow]Warning: clear_run_report did not remove "
+                                    f"{_stale_report_path}; downstream sync may still see "
+                                    f"stale results.[/yellow]"
+                                )
+                    except Exception as _vrf_exc:
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: could not verify run-report removal: "
+                                f"{_vrf_exc}[/yellow]"
+                            )
+                    try:
+                        save_fingerprint(
+                            basename=basename,
+                            language=language,
+                            operation="auto-deps",
+                            paths={"prompt": Path(output_path)},
+                            cost=total_cost,
+                            model=model_name,
+                        )
+                    except Exception as fp_exc:
+                        if not quiet:
+                            console.print(
+                                f"[yellow]Warning: Failed to save fingerprint for "
+                                f"{basename}_{language}: {fp_exc}[/yellow]"
+                            )
             except Exception as meta_exc:
                 # Never mask a successful auto-deps result on metadata errors
                 if not quiet:
