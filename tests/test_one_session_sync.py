@@ -2528,3 +2528,93 @@ class TestOneSessionSurfaceRetryBudget:
             f"(={_MAX_TEST_CHURN_ATTEMPTS}); got {mock_task.call_count}. "
             f"The split-budget refactor must NOT widen the churn cap."
         )
+
+
+class TestOneSessionRollback:
+    """External review (PR #1015): the ``except TestChurnError`` handler in
+    ``run_one_session_sync`` used to restore only the test file; the code
+    file mutated by the same attempt was left on disk. Subsequent
+    ``pdd sync`` invocations would then treat the mutated code as the
+    baseline. Mirror the ``PublicSurfaceRegressionError`` handler's
+    restore-both-files pattern so a rejected attempt leaves disk in the
+    pre-attempt state.
+    """
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch(
+        "pdd.one_session_sync.build_one_session_prompt",
+        return_value="mega prompt",
+    )
+    def test_test_churn_restores_code_and_test(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """A failed one-session attempt that rewrites BOTH the code file
+        and the test file (where the test rewrite trips the churn gate)
+        MUST leave both files at their pre-session bytes after the
+        ``TestChurnError`` propagates."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = "def hello():\n    return 'world'\n"
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        # Mutated bytes for THIS attempt — the rewrite trips the churn gate
+        # (wholesale test replacement at >0.40 ratio) AND the code file is
+        # silently overwritten. Pre-fix, only the test file was restored;
+        # ``code_path`` retained the mutated bytes after rejection.
+        mutated_code = "def hello():\n    return 'mutated'\n"
+        mutated_tests = (
+            "def test_x(): pass\n"
+            "def test_y(): pass\n"
+            "def test_z(): pass\n"
+        )
+        # A different distinct rewrite per attempt so the
+        # identical-signature short-circuit does NOT cut the loop short
+        # before the churn budget is fully exhausted (and we still see
+        # the final ``TestChurnError``).
+        per_attempt_test_rewrites = [
+            mutated_tests,
+            "def test_alt(): pass\nx = 1\n",
+        ]
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def rewrite_both(*args, **kwargs):
+            # Both the code AND the test are mutated by the agentic
+            # session. The code mutation by itself is benign (no public
+            # surface regression), so only the churn gate fires.
+            pdd_files["code"].write_text(mutated_code, encoding="utf-8")
+            idx = mock_task.call_count - 1
+            pdd_files["test"].write_text(
+                per_attempt_test_rewrites[
+                    min(idx, len(per_attempt_test_rewrites) - 1)
+                ],
+                encoding="utf-8",
+            )
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite_both
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # Both files restored to pre-session bytes. Pre-fix, only the
+        # test file would be restored; the code file would retain
+        # ``mutated_code``.
+        assert (
+            pdd_files["code"].read_text(encoding="utf-8") == original_code
+        ), "code file must be rolled back when TestChurnError fires"
+        assert (
+            pdd_files["test"].read_text(encoding="utf-8") == original_tests
+        ), "test file must be rolled back when TestChurnError fires"
