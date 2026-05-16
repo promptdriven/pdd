@@ -8958,11 +8958,15 @@ class TestPublicSurfaceBindingKind:
 
         assert "User" in excinfo.value.changed_signatures
 
-    def test_dataclass_multiple_inheritance_left_to_right(self):
-        # ``class C(A, B)`` should yield the synth ``(a, b, c)`` — A's
-        # field first, then B's, then C's own. Reordering bases to
-        # ``class C(B, A)`` changes the synth to ``(b, a, c)`` so a
-        # base-order swap is observed as a constructor regression.
+    def test_dataclass_multiple_inheritance_mro_order(self):
+        # ``class C(A, B)`` synth must follow Python's @dataclass
+        # field-collection semantics: ``__dataclass_fields__`` is
+        # populated in REVERSE-MRO order so later bases override
+        # earlier ones in dict-insertion order. Concretely the synth
+        # is ``(b, a, c)`` — B's fields, then A's, then C's own.
+        # Reordering bases to ``class C(B, A)`` flips the synth to
+        # ``(a, b, c)`` so a base-order swap is observed as a
+        # constructor regression.
         from pdd.code_generator_main import (
             PublicSurfaceRegressionError,
             _verify_public_surface_regression,
@@ -8994,9 +8998,10 @@ class TestPublicSurfaceBindingKind:
             "    c: int\n"
         )
 
-        # Sanity: snapshot reflects left-to-right merge.
+        # Sanity: snapshot follows reverse-MRO (matching Python's
+        # ``@dataclass`` __dataclass_fields__ ordering).
         sig = _snapshot_public_signatures(before, "python")
-        assert "(a: int, b: int, c: int)" in sig["C"]
+        assert "(b: int, a: int, c: int)" in sig["C"]
 
         with pytest.raises(PublicSurfaceRegressionError) as excinfo:
             _verify_public_surface_regression(
@@ -9009,6 +9014,139 @@ class TestPublicSurfaceBindingKind:
             )
 
         assert "C" in excinfo.value.changed_signatures
+
+    def test_dataclass_single_inheritance_still_matches_runtime(self):
+        # Regression check that single inheritance (the common case)
+        # still produces ``base_fields ++ derived_fields`` — the
+        # reverse-MRO refactor must not regress this. Reverse iteration
+        # over a single-element base list is a no-op, so the derived
+        # synth remains ``(base, name)``.
+        from pdd.code_generator_main import _snapshot_public_signatures
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class Derived(Base):\n"
+            "    name: str\n"
+        )
+
+        sig = _snapshot_public_signatures(source, "python")
+        assert "(base: str, name: str)" in sig["Derived"]
+
+    def test_dataclass_diamond_inheritance_dedupes_by_name(self):
+        # Diamond: ``class C(A, B)`` where both ``A`` and ``B`` inherit
+        # from a shared ``X`` (X has field ``x``). The synth must
+        # include ``x`` exactly once — Python's @dataclass merges
+        # fields by name via ``__dataclass_fields__``'s dict semantics.
+        #
+        # In our walk order: reversed(bases) processes B first, then A.
+        # Each branch contributes its inherited ``x`` (from X). Under
+        # the outer dict-merge in ``_synthesize_dataclass_init_signature``,
+        # the LAST write wins — which is A's contribution (A is
+        # processed after B in walk order). Either branch carries the
+        # same field text, so the resulting position is X's original
+        # slot at the front of the field list.
+        from pdd.code_generator_main import _snapshot_public_signatures
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass\n"
+            "class X:\n"
+            "    x: int\n"
+            "@dataclass\n"
+            "class A(X):\n"
+            "    a: int\n"
+            "@dataclass\n"
+            "class B(X):\n"
+            "    b: int\n"
+            "@dataclass\n"
+            "class C(A, B):\n"
+            "    c: int\n"
+        )
+
+        sig = _snapshot_public_signatures(source, "python")
+        rendered = sig["C"]
+        # ``x`` appears once; reverse-MRO walk order yields
+        # ``(x, b, a, c)`` after dedup by field name. Top-level
+        # classes carry the ``[class]`` binding-kind prefix.
+        assert rendered.count("x: int") == 1
+        assert rendered == "[class] (x: int, b: int, a: int, c: int)"
+
+    def test_dataclass_init_false_base_contributes_inherited_fields(self):
+        # External reviewer's exact repro: a base decorated with
+        # ``@dataclass(init=False)`` STILL contributes its fields to a
+        # derived ``@dataclass``'s synthesised ``__init__``. The
+        # ``init=False`` flag only suppresses the BASE's own
+        # ``__init__`` synthesis — Python still records its fields in
+        # ``__dataclass_fields__`` and the derived class merges them
+        # when synthesising its own init. Adding a required field to
+        # the base must therefore change the derived's snapshot and
+        # trip the gate.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class Child(_Base):\n"
+            "    name: str\n"
+        )
+        after = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "    token: str\n"
+            "@dataclass\n"
+            "class Child(_Base):\n"
+            "    name: str\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Child" in excinfo.value.changed_signatures
+
+    def test_dataclass_init_false_base_unchanged_inheritance_is_allowed(self):
+        # Companion to the regression test: no field changes anywhere
+        # in the inheritance chain. The snapshot must be stable —
+        # including a ``@dataclass(init=False)`` base in the walker
+        # must not introduce churn for unchanged modules.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "from dataclasses import dataclass\n"
+            "@dataclass(init=False)\n"
+            "class _Base:\n"
+            "    base: str\n"
+            "@dataclass\n"
+            "class Child(_Base):\n"
+            "    name: str\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
 
     def test_dataclass_explicit_init_still_takes_precedence_with_inheritance(self):
         # When the derived class has an explicit ``__init__``,
