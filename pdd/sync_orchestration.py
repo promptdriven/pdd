@@ -334,13 +334,22 @@ def _verify_code_surface_after_write(
     block and record an appropriate error), or ``None`` when the
     surface is preserved.
 
-    On detection the helper ALSO restores ``pre_code`` to disk so the
-    regression does NOT persist between operations or across sync
-    runs. Unlike the generate-op repair loop, no retry is triggered:
-    each of these operations already has its own internal iterative
-    fix loop (``loop=True``, ``max_attempts=N``); wrapping them in an
-    outer retry would compound retries (N×M). The user sees the
-    structured hard-failure block and a clear "operation failed" exit.
+    **Contract: crash/fix/verify surface failures are HARD failures.**
+    On detection this helper restores ``pre_code`` to disk and returns
+    the typed error WITHOUT triggering any retry. The
+    ``PDD_REPAIR_DIRECTIVE`` repair loop is intentionally NOT applied
+    here — it only governs the ``generate`` and ``one-session`` paths.
+    Each crash/fix/verify operation already has its own internal
+    iterative fix loop (``loop=True``, ``max_attempts=N``); wrapping
+    them in an outer surface-repair retry would compound retries
+    (``N × M``) and burn budget while rarely converging. The caller
+    surfaces the structured hard-failure block plus a clear
+    "operation failed" exit, and the user fixes the regression
+    (either by adjusting the prompt or adding a
+    ``BREAKING-CHANGE: remove <symbol>`` opt-out) before re-running.
+
+    The contract is mirrored in ``README.md`` so docs and behavior
+    cannot drift; do not introduce a retry here without updating both.
     """
     try:
         post_code = code_path.read_text(encoding="utf-8")
