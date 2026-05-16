@@ -1157,32 +1157,43 @@ def _collect_dataclass_inherited_parts(
 ) -> List[str]:
     """Return synth tokens from this class's ``@dataclass`` base classes.
 
-    Walks base classes left-to-right (matching the order ``@dataclass``
-    uses for ``__init__`` parameter merging). For each ``Name`` base
-    that resolves to a same-module ``ClassDef`` with a dataclass
-    decorator that synthesises ``__init__``, recursively gather ITS
-    inherited parts first and then ITS own parts. Bases that don't
-    resolve locally (cross-module imports, attribute-form references
-    like ``pkg.Base``) emit a single ``"[inherited_unresolved]"``
-    token so the final signature is annotated as uncertain — local
-    field changes still diff, but we don't claim authoritative
-    knowledge of the imported base's fields.
+    Walks base classes in REVERSE order (matching Python's
+    ``@dataclass`` runtime: ``__dataclass_fields__`` is populated in
+    reverse-MRO so later bases override earlier ones in the field-dict
+    insertion order, and the synthesised ``__init__`` parameter order
+    reflects that walk). For ``class C(A, B)`` we therefore yield
+    ``B``'s contributions first, then ``A``'s, and the outer merge in
+    :func:`_synthesize_dataclass_init_signature` appends ``C``'s own
+    fields last to produce ``(b, a, c)``.
+
+    For each ``Name`` base that resolves to a same-module ``ClassDef``
+    with a dataclass decorator, recursively gather ITS inherited parts
+    first and then ITS own parts. Bases that don't resolve locally
+    (cross-module imports, attribute-form references like ``pkg.Base``)
+    emit a single ``"[inherited_unresolved]"`` token so the final
+    signature is annotated as uncertain — local field changes still
+    diff, but we don't claim authoritative knowledge of the imported
+    base's fields.
 
     The ``visited`` set guards against accidental self-reference cycles
     (``class A(A): ...`` is illegal at runtime but the AST permits it).
 
-    Known limitations (documented for future iteration, not fixed in
-    V1): a base decorated with ``@dataclass(init=False)`` still
-    contributes its annotated fields to a derived ``@dataclass``'s
-    synth at runtime, but we treat ``init=False`` bases the same as
-    non-dataclass bases (skip their fields). Same goes for
-    ``KW_ONLY`` sentinel propagation across the inheritance boundary —
-    the derived class re-emits its own marker.
+    A base decorated with ``@dataclass(init=False)`` STILL contributes
+    its annotated fields to a derived ``@dataclass``'s synth: the
+    ``init=False`` flag only suppresses the BASE's own ``__init__``
+    synthesis, while Python's dataclass machinery still records the
+    fields in ``__dataclass_fields__`` and the derived class picks
+    them up. We therefore walk a base's fields whenever it carries
+    ANY ``@dataclass`` decorator, regardless of the ``init`` flag.
+
+    Known limitation (documented for future iteration): ``KW_ONLY``
+    sentinel propagation across the inheritance boundary is not
+    modelled — the derived class re-emits its own marker.
     """
     if class_defs is None:
         return []
     inherited: List[str] = []
-    for base in class_node.bases:
+    for base in reversed(class_node.bases):
         if not isinstance(base, ast.Name):
             # Attribute-form base (``pkg.Base``) or other expression —
             # we can't see the source from here.
@@ -1213,16 +1224,12 @@ def _collect_dataclass_inherited_parts(
             # Non-dataclass base contributes no fields to the
             # synthesised init.
             continue
-        if not all(
-            _dataclass_decorator_synthesizes_init(dec)
-            for dec in base_dataclass_decorators
-        ):
-            # ``@dataclass(init=False)`` base: V1 limitation — runtime
-            # would still merge its declared fields, but treating that
-            # case requires distinguishing "declared dataclass fields"
-            # from "synthesised init params". Skip for now; documented
-            # in the helper docstring.
-            continue
+        # NOTE: We intentionally do NOT skip bases decorated with
+        # ``@dataclass(init=False)``. Their fields still live in
+        # ``__dataclass_fields__`` and the derived dataclass merges
+        # them when synthesising ITS own ``__init__``. The
+        # ``init=False`` flag only matters to the BASE class's own
+        # init synthesis (handled in pass-3, not here).
         new_visited = visited | {base_name}
         inherited.extend(
             _collect_dataclass_inherited_parts(
@@ -1285,7 +1292,7 @@ def _synthesize_dataclass_init_signature(
       regular ``int`` annotation surfaces as a diff naturally because
       the snapshot prints the verbatim annotation text.
 
-    Inheritance handling (added for PR #1015, iter-6):
+    Inheritance handling (added for PR #1015, iter-6; refined iter-7):
 
     * When ``class_defs`` is provided, base classes named directly
       (``class User(_Base)``) are resolved against the same-module
@@ -1293,20 +1300,33 @@ def _synthesize_dataclass_init_signature(
       ``@dataclass``-decorated contribute their fields FIRST, matching
       the runtime constructor ordering (``base_fields ++
       derived_own_fields``).
+    * Multiple inheritance follows REVERSE-MRO order, matching the
+      stdlib ``@dataclass`` rule that ``__dataclass_fields__`` is
+      populated by walking bases right-to-left so later bases overwrite
+      earlier ones in dict-insertion order. For ``class C(A, B)`` the
+      synth is therefore ``(b, a, c)`` — B's fields, then A's, then C's
+      own. Implemented by iterating ``reversed(class_node.bases)`` in
+      :func:`_collect_dataclass_inherited_parts`.
+    * Diamond inheritance dedupes by field name via the outer dict
+      merge: when both ``A`` and ``B`` inherit ``X`` (with field ``x``),
+      the synth contains ``x`` exactly once. In walk order the LAST
+      contribution wins, which under reverse-base iteration is the
+      LEFTMOST base's branch.
+    * ``@dataclass(init=False)`` bases STILL contribute their fields:
+      ``init=False`` only suppresses the BASE's own ``__init__`` synth;
+      derived dataclasses still merge those fields per
+      ``__dataclass_fields__`` semantics.
     * Override semantics: if a base and the derived class declare the
       same field name, the derived class's annotation/default text
       replaces the base's WHILE PRESERVING the base's position. This
-      mirrors what ``@dataclass`` actually synthesises and follows the
-      C3-equivalent rule for the common single-inheritance case.
+      mirrors what ``@dataclass`` actually synthesises — Python's
+      insertion-order dict keeps the original slot when a key is
+      reassigned.
     * Unresolved bases (cross-module imports, attribute-form
       references) annotate the signature with an
       ``[inherited_unresolved]`` token. Local field changes still
       shift the snapshot; invisible upstream field changes do not — the
       gate is intentionally conservative for cases it cannot see.
-    * Multiple inheritance: bases walked left-to-right, depth-first,
-      matching dataclass's own field ordering for simple cases. C3 MRO
-      diamond cases beyond left-to-right depth-first are not handled
-      in V1.
 
     Default values are emitted verbatim via ``ast.unparse``. This
     includes ``field(default_factory=...)`` and
