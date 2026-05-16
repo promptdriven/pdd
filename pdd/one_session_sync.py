@@ -361,8 +361,31 @@ def run_one_session_sync(
     last_surface_exc: Optional[PublicSurfaceRegressionError] = None
     surface_gate_passed = True
     last_surface_signature: Optional[tuple] = None
-    # Test-churn retries are unlikely to converge — cap at one extra attempt.
-    max_churn_attempts = min(MAX_CONFORMANCE_ATTEMPTS, _MAX_TEST_CHURN_ATTEMPTS)
+    # Split retry budgets per gate (Codex review #1015 iter-1, Important 2).
+    # Previously, a single ``max_churn_attempts = min(MAX_CONFORMANCE_ATTEMPTS,
+    # _MAX_TEST_CHURN_ATTEMPTS)`` capped BOTH gates at ``_MAX_TEST_CHURN_ATTEMPTS``
+    # (=2). That mis-applied the churn cap to public-surface repair, which
+    # should get the same retry budget the generate path uses — ``MAX_CONFORMANCE_ATTEMPTS``.
+    # The outer loop now runs for the union budget (``MAX_CONFORMANCE_ATTEMPTS``),
+    # and each gate enforces its own counter:
+    #   - ``surface_attempts_used`` caps at ``MAX_CONFORMANCE_ATTEMPTS`` (parity
+    #     with the generate-op repair loop).
+    #   - ``churn_attempts_used`` caps at ``_MAX_TEST_CHURN_ATTEMPTS`` (=2)
+    #     because rewriting tests on repeated prompts rarely converges and
+    #     just burns budget.
+    # The identical-signature short-circuit and cost-budget checks fire per
+    # gate as before. The outer loop budget is the larger of the two so a
+    # surface failure that follows an earlier churn failure (or vice versa)
+    # still has retry headroom; per-gate counters prevent either gate from
+    # leaking attempts to the other.
+    max_outer_attempts = max(MAX_CONFORMANCE_ATTEMPTS, _MAX_TEST_CHURN_ATTEMPTS)
+    max_surface_attempts = MAX_CONFORMANCE_ATTEMPTS
+    max_churn_attempts_for_churn = _MAX_TEST_CHURN_ATTEMPTS
+    # Per-gate counters incremented when the gate actually FAILS (the loop
+    # has not yet decided to retry). Each gate breaks the outer loop when
+    # its own counter exhausts.
+    surface_attempts_used = 0
+    churn_attempts_used = 0
 
     prev_repair_directive = os.environ.get("PDD_REPAIR_DIRECTIVE")
     # Pop the env var BEFORE attempt 1 (#1012, F-I) so the subprocess
@@ -391,7 +414,7 @@ def run_one_session_sync(
     # instruction rewrite.
     pending_repair_directive: Optional[str] = None
     try:
-        for churn_attempt in range(max_churn_attempts):
+        for churn_attempt in range(max_outer_attempts):
             # Per-attempt instruction: `run_agentic_task` does NOT read
             # `PDD_REPAIR_DIRECTIVE` itself, so we must append the
             # directive to the instruction string ourselves for the
@@ -534,6 +557,7 @@ def run_one_session_sync(
                 last_surface_exc = surface_err
                 surface_gate_passed = False
                 churn_gate_passed = True  # Surface failure overrides — churn not evaluated.
+                surface_attempts_used += 1
                 # Identical-signature short-circuit (mirror the
                 # churn-gate behavior).
                 if (
@@ -542,7 +566,10 @@ def run_one_session_sync(
                 ):
                     break
                 last_surface_signature = signature
-                if churn_attempt + 1 >= max_churn_attempts:
+                # Public-surface repair gets the FULL ``MAX_CONFORMANCE_ATTEMPTS``
+                # budget (#1015 iter-1, Important 2) — independent of the
+                # churn cap. Stop when this gate's per-counter is exhausted.
+                if surface_attempts_used >= max_surface_attempts:
                     break
                 # Record the directive for the next attempt's
                 # instruction rewrite and set the env var so any
@@ -632,6 +659,7 @@ def run_one_session_sync(
                 )
                 last_churn_exc = churn_err
                 churn_gate_passed = False
+                churn_attempts_used += 1
                 # Stop early when the retry produced the identical churn
                 # signature (no progress is being made) — mirrors the
                 # orchestration helper's short-circuit.
@@ -641,7 +669,11 @@ def run_one_session_sync(
                 ):
                     break
                 last_churn_signature = signature
-                if churn_attempt + 1 >= max_churn_attempts:
+                # Test-churn keeps its tighter ``_MAX_TEST_CHURN_ATTEMPTS`` cap
+                # (#1015 iter-1, Important 2). Surface repair uses a separate
+                # counter so a single surface failure cannot eat the churn
+                # budget and vice versa.
+                if churn_attempts_used >= max_churn_attempts_for_churn:
                     break
                 # Record the directive for the next attempt's instruction
                 # rewrite (loop-local source of truth) AND set the env var

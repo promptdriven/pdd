@@ -8748,3 +8748,86 @@ def test_sync_extracts_error_from_crash_fix_result_tuple(orchestration_fixture):
         f"got only: {result.get('errors', [])}. "
         f"sync_orchestration never extracts error messages from crash/fix result[1]."
     )
+
+
+# ---------------------------------------------------------------------------
+# Codex review #1015 iter-1, Important 1
+# ---------------------------------------------------------------------------
+class TestVerifyCodeSurfaceAfterWriteIsHardFailure:
+    """``_verify_code_surface_after_write`` is the post-write surface check
+    invoked by the crash/fix/verify paths. By design it does NOT retry —
+    each underlying operation already runs its own iterative fix loop, so
+    wrapping these in an outer surface-repair retry would compound retries
+    (N x M). This test pins the contract: on surface regression, the
+    helper returns the typed error WITHOUT calling any repair loop, and it
+    restores the pre-operation code on disk so the regression does not
+    persist.
+    """
+
+    def test_returns_typed_error_with_no_retry_attempted(self, tmp_path):
+        from pdd.sync_orchestration import _verify_code_surface_after_write
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        import pdd.code_generator_main as _cgm
+
+        prompt_path = tmp_path / "module_python.prompt"
+        prompt_path.write_text("Regenerate module.\n", encoding="utf-8")
+
+        code_path = tmp_path / "module.py"
+        pre_code = (
+            "def helper_a():\n"
+            "    return 1\n"
+            "\n"
+            "def helper_b():\n"
+            "    return 2\n"
+        )
+        # Post-state has helper_a removed (no opt-out in the prompt body).
+        code_path.write_text("def helper_b():\n    return 2\n", encoding="utf-8")
+
+        # Spy on the underlying gate so we can assert call_count == 1
+        # (no outer retry means exactly one invocation).
+        with patch(
+            "pdd.sync_orchestration._verify_public_surface_regression",
+            wraps=_cgm._verify_public_surface_regression,
+        ) as gate_spy:
+            result = _verify_code_surface_after_write(
+                code_path=code_path,
+                pre_code=pre_code,
+                basename="module",
+                language="python",
+                prompt_path=prompt_path,
+                operation="crash",
+            )
+
+        # Helper returns (not raises) the typed error.
+        assert isinstance(result, PublicSurfaceRegressionError)
+        assert "helper_a" in result.removed_symbols
+        # Crucially: no retry attempted — the gate ran exactly ONCE.
+        # This pins the contract that crash/fix/verify surface failures
+        # are hard failures (Important 1, iter-1 review).
+        assert gate_spy.call_count == 1
+        # Disk state must be restored to pre_code so the regression does
+        # not persist across the operation boundary.
+        assert code_path.read_text(encoding="utf-8") == pre_code
+
+    def test_returns_none_when_surface_preserved(self, tmp_path):
+        from pdd.sync_orchestration import _verify_code_surface_after_write
+
+        prompt_path = tmp_path / "module_python.prompt"
+        prompt_path.write_text("Regenerate module.\n", encoding="utf-8")
+
+        code_path = tmp_path / "module.py"
+        pre_code = "def helper_a():\n    return 1\n"
+        code_path.write_text(pre_code, encoding="utf-8")
+
+        result = _verify_code_surface_after_write(
+            code_path=code_path,
+            pre_code=pre_code,
+            basename="module",
+            language="python",
+            prompt_path=prompt_path,
+            operation="fix",
+        )
+
+        assert result is None
+        # Disk state unchanged.
+        assert code_path.read_text(encoding="utf-8") == pre_code

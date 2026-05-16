@@ -7634,3 +7634,249 @@ class TestPddInterfaceSignatureConformance:
         # Missing entry is the bare function name, not a dotted param.
         assert "update_main" in excinfo.value.missing_symbols
         assert all("." not in s for s in excinfo.value.missing_symbols if s == "update_main")
+
+
+# ---------------------------------------------------------------------------
+# Codex review #1015 iter-1 follow-ups
+# ---------------------------------------------------------------------------
+class TestPublicSurfaceBindingKind:
+    """Blocker 1: changing a method's binding (instance ↔ staticmethod ↔
+    classmethod ↔ property) breaks ``Class.method(arg)`` callers even when
+    the receiver-stripped parameter list is identical. The signature gate
+    must catch this — previously the snapshot normalized them away.
+    """
+
+    def test_instance_to_staticmethod_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # Same receiver-stripped param list: `(value)`. Without the binding
+        # discriminator the gate compared "(value)" == "(value)" and missed
+        # the flip even though `MyClass.f(1)` callers now break.
+        before = (
+            "class MyClass:\n"
+            "    def f(self, value):\n"
+            "        return value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @staticmethod\n"
+            "    def f(value):\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.f" in excinfo.value.changed_signatures
+
+    def test_instance_to_classmethod_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    def f(self, value):\n"
+            "        return value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @classmethod\n"
+            "    def f(cls, value):\n"
+            "        return value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.f" in excinfo.value.changed_signatures
+
+    def test_method_to_property_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    def value(self):\n"
+            "        return 1\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def value(self):\n"
+            "        return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.value" in excinfo.value.changed_signatures
+
+    def test_unchanged_classmethod_is_allowed(self):
+        # Sanity check: same binding kind, same signature → no failure.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "class MyClass:\n"
+            "    @classmethod\n"
+            "    def f(cls, value):\n"
+            "        return value\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+
+class TestFrontMatterStripping:
+    """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front
+    matter must NOT opt the prompt out of the gates. Opt-outs come from
+    the prompt BODY only. Defensive hardening — no shipped prompt
+    currently uses YAML front matter, but a future convention must not
+    silently disable conformance gates.
+    """
+
+    def test_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # Directive is INSIDE the front matter block — it must be ignored.
+        prompt_with_front_matter = (
+            "---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+            "title: My Module\n"
+            "---\n"
+            "Generate a module without `old_helper`.\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
+
+    def test_body_breaking_change_still_opts_out_removal_gate(self):
+        # Sanity: the same directive in the BODY must still opt out.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        prompt_in_body = (
+            "---\n"
+            "title: My Module\n"
+            "---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        # Should NOT raise: opt-out lives in the body after the front matter.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            prompt_in_body,
+        )
+
+    def test_front_matter_breaking_change_does_not_opt_out_churn_gate(self, tmp_path):
+        from pdd.code_generator_main import (
+            TestChurnError,
+            _verify_test_churn,
+        )
+
+        prompt_with_front_matter = (
+            "---\n"
+            "BREAKING-CHANGE: rewrite tests\n"
+            "owner: someone\n"
+            "---\n"
+            "Add a small helper.\n"
+        )
+        existing_tests = "\n".join(
+            f"def test_case_{i}():\n    assert True" for i in range(40)
+        )
+        new_tests = "def test_new():\n    assert True\n"
+        test_path = tmp_path / "test_module.py"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                existing_code=existing_tests,
+                generated_code=new_tests,
+                prompt_name="module_Python.prompt",
+                output_path=str(test_path),
+                prompt_content=prompt_with_front_matter,
+            )
+
+    def test_unterminated_front_matter_is_not_stripped(self):
+        # An opening `---\n` without a closing `---\n` must NOT swallow the
+        # entire prompt. Defensive against a malformed prompt.
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\nBREAKING-CHANGE: remove foo\nno closing fence ever\n"
+        assert _strip_yaml_front_matter(prompt) == prompt
+
+    def test_strip_helper_returns_body_after_fence(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\nfoo: bar\n---\nbody line\n"
+        assert _strip_yaml_front_matter(prompt) == "body line\n"
+
+    def test_strip_helper_handles_empty_prompt(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        assert _strip_yaml_front_matter(None) == ""
+        assert _strip_yaml_front_matter("") == ""
+        assert _strip_yaml_front_matter("plain prompt") == "plain prompt"
