@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.236-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.238-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -39,6 +39,8 @@ For prompt-based workflows, the **`sync`** command automates the complete develo
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.
 
 [Read the Full Whitepaper with Benchmarks](docs/whitepaper_with_benchmarks/whitepaper_w_benchmarks.md)
+
+For a case study on specification drift in AI-assisted coding workflows, read [Why AI Code Falls Apart](docs/whitepaper_specification_drift/whitepaper.md).
 
 Also see the Prompt‑Driven Development Doctrine for core principles and practices: [docs/prompt-driven-development-doctrine.md](docs/prompt-driven-development-doctrine.md)
 
@@ -360,7 +362,7 @@ For proper model identifiers to use in your custom configuration, refer to the [
 
 ## Version
 
-Current version: 0.0.236
+Current version: 0.0.238
 
 To check your installed version, run:
 ```
@@ -862,7 +864,7 @@ Options:
 - `--skip-verify`: Skip the functional verification step
 - `--skip-tests`: Skip unit test generation and fixing
 - `--target-coverage FLOAT`: Desired code coverage percentage (default is 90.0)
-- `--dry-run`: Display real-time sync analysis instead of running sync operations. For no-argument project-wide sync, this prints the dependency-ordered module list and estimated cost without executing any module syncs. For single-module sync, it performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing operations.
+- `--dry-run`: Display real-time sync analysis instead of running sync operations. For no-argument project-wide sync, this prints the dependency-ordered module list and estimated cost without executing any module syncs, plus a single compact roll-up of modules outside the Tier 1 (`generate` / `auto-deps`) scope — bucketed by reason (e.g. `Out of Tier 1 scope: 42 example, 31 test, 18 verify, 12 update, 74 no-prompt fixture`) instead of one warning line per skipped entry. When zero modules are stale, the `0 stale module(s)` fragment is rendered in green so the success signal is visually unambiguous. Actionable architecture-graph warnings (ambiguous or unresolved cross-arch dependencies) are still printed individually in yellow. For single-module sync, it performs the same state analysis as a normal sync run but without acquiring exclusive locks or executing operations. Passing the top-level `pdd --verbose` flag (see above) restores the legacy per-module enumeration after the compact roll-up — one yellow warning line per module outside the Tier 1 scope — for debugging.
 - `--one-session / --no-one-session`: Run sync in a single agentic session instead of separate sessions for each step. Cannot be combined with `--skip-tests` or `--skip-verify`.
 - `--no-steer`: Disable interactive steering of sync operations.
 - `--steer-timeout FLOAT`: Timeout in seconds for steering prompts (default: 8.0).
@@ -2410,7 +2412,7 @@ Options:
 - `--git`: Use git history to find the original code file, eliminating the need for the `INPUT_CODE_FILE` argument.
 - `--extensions EXTENSIONS`: In repository-wide mode, filter the update to only include files with the specified comma-separated extensions (e.g., `py,js,ts`).
 - `--simple`: Use the legacy 2-stage LLM update process instead of the default agentic mode. Useful when agentic CLIs are not available or for faster updates.
-- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt PDD tags, `architecture.json` entries, run reports, and fingerprint state are reconciled in one step. Works in single-file, regeneration, and repo modes. Without this flag, behavior is unchanged and metadata layers must be reconciled with separate commands. **Scope note:** the `tags` stage currently *preserves* existing PDD tags and only *seeds* tags from the matching `architecture.json` entry when a prompt has none — LLM-first **refresh** of stale-but-present tags is tracked at issue [#870](https://github.com/promptdriven/pdd/issues/870) and is not invoked by this orchestrator. When a prompt has zero PDD tags AND no architecture entry, the `tags` stage reports `skipped` (never `ok`) so operators see honest status. On any stage `failed`, `pdd update --sync-metadata` exits non-zero so CI auto-heal does not treat a half-finalized update as healed.
+- `--sync-metadata`: After the prompt update, run the shared metadata-sync orchestrator so prompt PDD tags, `architecture.json` entries, run reports, and fingerprint state are reconciled in one step. Works in single-file, regeneration, and repo modes. **Fingerprint note:** default single-file/regeneration `pdd update <code>` already finalizes the per-target fingerprint (`.pdd/meta/<basename>_<language>.json`) on success, and logs a skip reason when finalization is intentionally bypassed; `--sync-metadata` does not gate that behavior. Without this flag, the broader prompt-tag/architecture/run-report orchestrator is not run and those layers must be reconciled with separate commands. **Scope note:** the `tags` stage currently *preserves* existing PDD tags and only *seeds* tags from the matching `architecture.json` entry when a prompt has none — LLM-first **refresh** of stale-but-present tags is tracked at issue [#870](https://github.com/promptdriven/pdd/issues/870) and is not invoked by this orchestrator. When a prompt has zero PDD tags AND no architecture entry, the `tags` stage reports `skipped` (never `ok`) so operators see honest status. On any stage `failed`, `pdd update --sync-metadata` exits non-zero so CI auto-heal does not treat a half-finalized update as healed.
 
 Example (Metadata Sync):
 ```bash
@@ -2575,21 +2577,23 @@ pdd [GLOBAL OPTIONS] bug --manual PROMPT_FILE CODE_FILE PROGRAM_FILE CURRENT_OUT
 
 3. **Triage** - Assess if enough information is provided to proceed. If the issue already contains a detailed root cause analysis with file paths, line numbers, and causal explanation, fast-tracks to root cause analysis (skipping API research and reproduction). Posts comment requesting more info if needed.
 
-4. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
+4. **API research** - Research external APIs, provider behavior, protocol constraints, and dependency contracts that could affect reproduction or the expected fix. Posts comment with relevant constraints. Skipped when Step 3 fast-tracks.
 
-5. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
+5. **Reproduce** - Attempt to reproduce the issue locally. Posts comment confirming reproduction (or failure to reproduce). Skipped when Step 3 fast-tracks.
 
-5.5. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
+6. **Root cause analysis** - Run experiments to identify the root cause. Assesses whether the fix is localized or cross-cutting. Performs a variable reference audit to find sibling bugs in parallel code paths and a state symmetry check to detect save/restore asymmetries. Posts comment explaining the root cause.
 
-6. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels and all distinct code paths (first-run, resume, retry, error recovery) to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
+7. **Prompt classification** - Determine if the bug is in the code implementation or in the prompt specification itself. If the prompt is defective, auto-fix the prompt file. Posts comment with classification and any prompt changes. Defaults to "code bug" when uncertain.
 
-7. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
+8. **Test plan** - Design a plan for creating tests to detect the problem. Enumerates all affected output channels and all distinct code paths (first-run, resume, retry, error recovery) to ensure complete coverage. Prefers appending tests to existing test files over creating new ones. Posts comment with the test plan.
 
-8. **Verify detection** - Confirm the unit test successfully detects the bug. Classifies whether an E2E test is needed (`E2E_NEEDED: yes|no`) based on bug scope. Posts comment confirming verification.
+9. **Generate test** - Create the failing unit test. Posts comment with the generated test code.
 
-9. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Skipped deterministically when Step 8 outputs `E2E_NEEDED: no`, avoiding unnecessary LLM calls for purely internal bugs. Posts comment with E2E test results or skip reason.
+10. **Verify detection** - Confirm the unit test successfully detects the bug. Classifies whether an E2E test is needed (`E2E_NEEDED: yes|no`) based on bug scope. Posts comment confirming verification.
 
-10. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
+11. **E2E test** - Generate and run end-to-end tests to verify the bug at integration level. Skipped deterministically when Step 10 outputs `E2E_NEEDED: no`, avoiding unnecessary LLM calls for purely internal bugs. Posts comment with E2E test results when run; skipped Step 11 is recorded in workflow state without an extra visible comment.
+
+12. **Create draft PR** - Create a draft pull request with the failing tests and link it to the issue. Posts comment with PR link.
 
 Arguments:
 - `ISSUE_URL`: GitHub issue URL (e.g., https://github.com/owner/repo/issues/123)
@@ -2747,8 +2751,9 @@ Options:
 - `--fixer ROLE`: Fixer role for `--review-loop` (for example, `claude`). The fixer must be different from the reviewer unless `--review-only` is used.
 - `--reviewers ROLES`: Legacy comma-separated review-loop role order, interpreted as `reviewer,fixer` (default: `codex,claude`).
 - `--reviewer-fallback ROLE`: Optional secondary reviewer role to invoke once if the primary reviewer cannot complete (for example, because of auth, network, sandbox, or CLI failures). The fallback must resolve to a role different from the reviewer and fixer; if it succeeds, it becomes the active reviewer for the remaining loop and the superseded primary's row in the final report is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters drop the failed primary from the required-reviewer set and resolve to `ship_degraded` instead of `unknown`.
+- `--fixer-fallback ROLE`: Optional secondary fixer role to invoke once if the primary fixer cannot complete (for example, Claude Code subscription-tier `credential-limit` failures). Role aliases are normalized so `claude` and `anthropic` resolve to the same identity; the fallback must resolve to a role different from the active fixer, the active reviewer, AND the originally configured reviewer (so `--reviewer codex --reviewer-fallback gemini --fixer-fallback codex` is skipped even after gemini takes over reviewing). Before the fallback runs the worktree is reset so the primary fixer's partial edits do not leak; on success the fallback takes over as the active fixer for the remaining rounds.
 - `--max-review-rounds INT`: Maximum primary-reviewer/fixer rounds (default: 5).
-- `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 10.0).
+- `--max-review-cost FLOAT`: Maximum review-loop LLM cost in USD (default: 50.0).
 - `--max-review-minutes FLOAT`: Maximum review-loop wall-clock minutes (default: 90.0).
 - `--blocking-severities LIST`: Comma-separated severity names used for review-loop reporting and prompt guidance (default: `blocker,critical,medium`). The fixer still receives every valid reviewer finding.
 - `--continue-on-reviewer-limit`: Report provider, rate, context-window, timeout, auth, network, sandbox, permission, and non-zero-exit reviewer failures as `degraded` instead of `failed`. Degraded reviewers are still not clean unless a configured fallback reviewer completes successfully and takes over as the active reviewer.
@@ -3514,7 +3519,7 @@ PDD can be integrated into various development workflows. Here are the conceptua
 4. Stage and commit healed files with a descriptive message — partial metadata state (any stage reporting `failed`) blocks the commit/checkpoint in PR mode. `skipped` is permitted for legitimate cases (no `architecture.json`, unregistered modules, LLM-first tag generation pending #870) and does not block.
 5. Push changes to the current branch
 
-**Metadata Finalization**: The CI auto-heal `update` branch and the preflight drift-heal path both call the same `run_metadata_sync` orchestrator that `pdd update --sync-metadata` uses, so all three workflows share one finalization surface. The orchestrator runs in a fixed order — prompt → tags → architecture → run-report cleanup → fingerprint last. **Within `run_metadata_sync`** a `failed` upstream stage gates every later write-bearing stage (architecture, run_report, fingerprint), so a tags failure cannot drag architecture or fingerprint state out of sync. `skipped` upstream (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) is acceptable and does not gate later stages. **The orchestrator is not transactional across stages**: if e.g. tags + architecture succeed and fingerprint then fails, the prompt and `architecture.json` writes have already landed on disk and `run_metadata_sync` itself does not roll them back. End-to-end rollback for a failing module is handled by the CI auto-heal layer — on a sync failure, `pdd.ci_drift_heal` calls `_revert_prompt_file` and the module-scoped `_snapshot_metadata_state_for(drift)` / `_restore_metadata_state_for(snapshot)` pair (which captures this module's `architecture.json` bytes + `.pdd/meta/<basename>_<language>.json` pre-sync and writes them back on failure, never touching other modules' state). A repo-scoped `git restore -- .pdd` / `git restore -- architecture.json` is explicitly NOT used because in a multi-module push-to-main heal it would wipe earlier successful modules' writes from the same run; the legacy `_cleanup_metadata_artifacts` symbol is kept only as a no-op import shim. The combined invariant: `git add -A` on push-to-main cannot publish a failed module's partial metadata alongside another module's successful heal. The combined invariant: auto-heal never commits a half-synced state, and preflight never leaves stale fingerprints after a successful update.
+**Metadata Finalization**: The CI auto-heal `update` branch and the preflight drift-heal path both call the same `run_metadata_sync` orchestrator that `pdd update --sync-metadata` uses, so all three workflows share one finalization surface. The orchestrator runs in a fixed order — prompt → tags → architecture → run-report cleanup → fingerprint last. **Within `run_metadata_sync`** a `failed` upstream stage gates every later write-bearing stage (architecture, run_report, fingerprint), so a tags failure cannot drag architecture or fingerprint state out of sync. `skipped` upstream (no `architecture.json`, unregistered modules, LLM-first tag refresh pending #870) is acceptable and does not gate later stages. **The orchestrator is not transactional across stages**: if e.g. tags + architecture succeed and fingerprint then fails, the prompt and `architecture.json` writes have already landed on disk and `run_metadata_sync` itself does not roll them back. End-to-end rollback for a failing module is handled by the CI auto-heal layer — on a sync failure, `pdd.ci_drift_heal` calls `_revert_prompt_file` and the module-scoped `_snapshot_metadata_state_for(drift)` / `_restore_metadata_state_for(snapshot)` pair (which captures this module's `architecture.json` bytes + `.pdd/meta/<basename>_<language>.json` pre-sync and writes them back on failure, never touching other modules' state). A repo-scoped `git restore -- .pdd` / `git restore -- architecture.json` is explicitly NOT used because in a multi-module push-to-main heal it would wipe earlier successful modules' writes from the same run; the legacy `_cleanup_metadata_artifacts` symbol is kept only as a no-op import shim. **Staging is scoped, not blanket** — `commit_and_push` runs `git add -u` for tracked updates plus explicit per-module pathspecs (computed from each `DriftInfo`'s `prompt_path`/`code_path`/`example_path`/`test_path` and `_operation_log_metadata_relpaths(basename, language)`), filters out gitignored paths via `git check-ignore`, and adds `project_dependencies.csv` only when a healed module ran `auto-deps`; `git add -A` is explicitly rejected because it sweeps unrelated `.pdd/meta/*.json` fingerprints from out-of-scope modules into the heal commit (issue #1021) and could publish a failed module's partial metadata alongside another module's successful heal. The combined invariant: auto-heal never commits a half-synced state, and preflight never leaves stale fingerprints after a successful update.
 
 **Usage:**
 ```bash
@@ -3562,6 +3567,11 @@ For detailed command examples for each workflow, see the respective command docu
 **Triggers**:
 - `pull_request_target` (opened / synchronize / reopened / ready_for_review): heals only modules changed by the PR and pushes a `chore: auto-heal …` commit back to the PR branch.
 - `issue_comment` with a `/heal` command on a PR by an authorized collaborator: same as above, on demand.
+
+Generated internal PRs authored by `prompt-driven-github[bot]` are trusted as
+the autonomous pdd-issue App identity for the `pull_request_target` heal path.
+Other PR authors and all `/heal` comment requesters must pass the `pdd_cloud`
+collaborator check before Cloud Build is dispatched.
 
 There is no push-to-main trigger. Drift on `main` is healed by the next PR that touches the affected modules.
 
