@@ -2670,17 +2670,22 @@ def run_agentic_e2e_fix_orchestrator(
             if final_message:
                 break
             
-            # Prepare for next cycle
+            # Prepare for next cycle.
+            # Issue #1034 (codex P2 follow-up): null the local snapshot
+            # BEFORE mutating cycle counters. An interrupt that lands
+            # after current_cycle/last_completed_step are advanced but
+            # before this assignment would otherwise be saved by the
+            # KeyboardInterrupt/Exception handlers (which read locals())
+            # as the new cycle's snapshot — stale, and the resume-time
+            # rollover guard (which only discards when
+            # last_completed_step >= 9) would not catch it because
+            # last_completed_step is already 0 by then. The next
+            # iteration's recapture (line ~1905) is the authoritative
+            # source for the new cycle.
+            cycle_start_hashes = None
             current_cycle += 1
             last_completed_step = 0
             step_outputs = {} # Clear outputs for next cycle
-            # Issue #1034 (codex P2 follow-up): null the local snapshot so a
-            # KeyboardInterrupt/Exception in the window between rollover and
-            # the next iteration's recapture (line ~1905) does NOT persist
-            # the stale prior cycle's snapshot via locals().get(...) in the
-            # handlers below. The next iteration's recapture (or a fresh
-            # resume) is the authoritative source for the new cycle.
-            cycle_start_hashes = None
 
             state_data["current_cycle"] = current_cycle
             state_data["last_completed_step"] = 0
