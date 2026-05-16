@@ -7276,6 +7276,152 @@ class TestPostStep9ResumeRoutesToCleanupNotStep1:
         )
 
 
+class TestPostStep9ResumeAlreadyPushedFixCommit:
+    """Regression for Greg's #1002 review: Step 9 resume after fix commit push."""
+
+    @staticmethod
+    def _init_repo_with_already_pushed_fix(tmp_path):
+        """Create main -> feature where the feature fix commit is already pushed."""
+        from pdd.agentic_e2e_fix_orchestrator import _get_file_hashes
+
+        bare = tmp_path / "bare.git"
+        worktree = tmp_path / "worktree"
+
+        subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
+        subprocess.run(["git", "clone", str(bare), str(worktree)], check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@test.com"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        module = worktree / "module.py"
+        module.write_text("x = 1\n")
+        subprocess.run(["git", "add", "module.py"], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "init"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        base_branch = subprocess.run(
+            ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "push", "-u", "origin", base_branch],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        initial_hashes = _get_file_hashes(worktree)
+        initial_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+
+        subprocess.run(
+            ["git", "checkout", "-b", "feature"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        module.write_text("x = 2  # fixed before resume\n")
+        subprocess.run(["git", "add", "module.py"], cwd=worktree, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "commit", "-m", "fix: already pushed"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "push", "-u", "origin", "feature"],
+            cwd=worktree, check=True, capture_output=True,
+        )
+
+        pushed_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert status == ""
+
+        return worktree, initial_hashes, initial_sha, pushed_sha
+
+    def test_resume_step9_all_tests_pass_continues_when_fix_commit_already_pushed(self, tmp_path):
+        """last_completed_step=9 + cached ALL_TESTS_PASS must not fail on commit no-op."""
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        worktree, initial_hashes, initial_sha, pushed_sha = (
+            self._init_repo_with_already_pushed_fix(tmp_path)
+        )
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1001,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {"9": "ALL_TESTS_PASS — verification succeeded"},
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": ["module.py"],
+            "dev_unit_states": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": initial_sha,
+        }
+        executed_labels = []
+
+        def fail_if_step_runs(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            raise AssertionError(f"Steps 1-9 must not run on post-Step-9 resume: {executed_labels}")
+
+        with (
+            patch(
+                "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+                return_value=(resumed_state, None),
+            ),
+            patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state"),
+            patch("pdd.agentic_e2e_fix_orchestrator.clear_workflow_state"),
+            patch("pdd.agentic_e2e_fix_orchestrator.console"),
+            patch(
+                "pdd.agentic_e2e_fix_orchestrator.run_agentic_task",
+                side_effect=fail_if_step_runs,
+            ),
+            patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files", return_value=[]),
+            patch("pdd.agentic_e2e_fix_orchestrator.classify_step_output", return_value=None),
+        ):
+            success, final_message, _, _, changed_files = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1001",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1001,
+                issue_author="user",
+                issue_title="Resume after already pushed fix",
+                cwd=worktree,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        assert success is True, final_message
+        assert "module.py" in changed_files
+        assert executed_labels == []
+
+        head_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree, capture_output=True, text=True, check=True,
+        ).stdout.strip()
+        assert head_sha == pushed_sha
+        assert status == ""
+
+
 # ============================================================================
 # Issue #1001 round 8: _commit_and_push must filter .gh-wrapper/* in BOTH
 # staging paths (hash-diff and fallback). The unit-level filter test
