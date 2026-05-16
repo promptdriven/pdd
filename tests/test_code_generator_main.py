@@ -7759,6 +7759,226 @@ class TestPublicSurfaceBindingKind:
             "",
         )
 
+    # ------------------------------------------------------------------
+    # Iter-2 Blocker 2: property descriptors with setters must NOT
+    # collide with plain methods of the same name. Last-write-wins on
+    # the signature dict previously let ``@x.setter`` overwrite the
+    # ``@property`` getter as ``[instance] (self, value)``; a plain
+    # ``def x(self, value)`` rewrite then produced the same snapshot
+    # and bypassed the gate.
+    # ------------------------------------------------------------------
+    def test_property_to_plain_method_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return 1\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    def x(self):\n"
+            "        return 1\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.x" in excinfo.value.changed_signatures
+
+    def test_property_with_setter_to_plain_method_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+        # The receiver-stripped param list of the setter is ``(value)`` —
+        # identical to a plain ``def x(self, value)`` after stripping
+        # ``self``. Without the merged property tag the snapshot dict
+        # would resolve both sides to ``[instance] (value)`` and the
+        # gate would miss the regression.
+        after = (
+            "class MyClass:\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.x" in excinfo.value.changed_signatures
+
+    def test_property_with_setter_unchanged_is_allowed(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+
+        # Same descriptor on both sides → merged snapshot must match.
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
+    def test_property_loses_setter_is_detected(self):
+        # Dropping write-capability is a real breaking change for callers
+        # doing ``instance.x = value``; the accessor-set in the snapshot
+        # tag (``getter+setter`` → ``getter``) makes the diff visible.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+            "    @x.setter\n"
+            "    def x(self, value):\n"
+            "        self._x = value\n"
+        )
+        after = (
+            "class MyClass:\n"
+            "    @property\n"
+            "    def x(self):\n"
+            "        return self._x\n"
+        )
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "MyClass.x" in excinfo.value.changed_signatures
+
+    # ------------------------------------------------------------------
+    # Iter-2 Blocker 3: top-level kind flips (class ↔ function /
+    # function ↔ async function) preserve name and normalized signature
+    # but break callers that instantiate, subclass, or ``await``.
+    # ------------------------------------------------------------------
+    def test_class_to_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "class Service:\n    pass\n"
+        # Same bare ``()`` signature on both sides — only the symbol
+        # kind tag (``[class]`` vs ``[function]``) distinguishes them.
+        after = "def Service():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Service" in excinfo.value.changed_signatures
+
+    def test_function_to_class_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def Service():\n    return None\n"
+        after = "class Service:\n    pass\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Service" in excinfo.value.changed_signatures
+
+    def test_function_to_async_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "def run(x):\n    return x\n"
+        after = "async def run(x):\n    return x\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "run" in excinfo.value.changed_signatures
+
+    def test_unchanged_class_is_allowed(self):
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = "class Service:\n    def run(self):\n        return 1\n"
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
 
 class TestFrontMatterStripping:
     """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front
@@ -7880,3 +8100,151 @@ class TestFrontMatterStripping:
         assert _strip_yaml_front_matter(None) == ""
         assert _strip_yaml_front_matter("") == ""
         assert _strip_yaml_front_matter("plain prompt") == "plain prompt"
+
+    # ------------------------------------------------------------------
+    # Iter-2 Blocker 1: front matter stripping must tolerate CRLF line
+    # endings, a leading UTF-8 BOM, and a closing fence at EOF (no
+    # trailing newline). Windows editors hand us all three, so a missed
+    # fence variant leaves ``BREAKING-CHANGE:`` metadata visible to the
+    # directive parser and silently opts the prompt out of the gates.
+    # ------------------------------------------------------------------
+    def test_strip_helper_handles_crlf_front_matter(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\r\nfoo: bar\r\n---\r\nbody line\r\n"
+        assert _strip_yaml_front_matter(prompt) == "body line\r\n"
+
+    def test_strip_helper_handles_bom_front_matter(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "﻿---\nfoo: bar\n---\nbody line\n"
+        assert _strip_yaml_front_matter(prompt) == "body line\n"
+
+    def test_strip_helper_handles_eof_terminated_front_matter(self):
+        # Closing ``---`` is the last line of the file (no trailing
+        # newline). Must still be recognized so a buried
+        # BREAKING-CHANGE inside the block does not leak into the body.
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---\nfoo: bar\n---"
+        assert _strip_yaml_front_matter(prompt) == ""
+
+    def test_strip_helper_handles_trailing_whitespace_on_fence(self):
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "---  \nfoo: bar\n---  \nbody\n"
+        assert _strip_yaml_front_matter(prompt) == "body\n"
+
+    def test_strip_helper_strips_lone_bom_without_front_matter(self):
+        # A leading BOM with no front matter still needs stripping so a
+        # subsequent first-line BREAKING-CHANGE directive scan sees a
+        # clean body.
+        from pdd.code_generator_main import _strip_yaml_front_matter
+
+        prompt = "﻿BREAKING-CHANGE: remove old_helper\n"
+        assert _strip_yaml_front_matter(prompt) == "BREAKING-CHANGE: remove old_helper\n"
+
+    def test_crlf_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        # CRLF-ended front matter — previous regex only matched ``\n``
+        # variants, so the directive leaked into the body scan.
+        prompt_with_front_matter = (
+            "---\r\n"
+            "BREAKING-CHANGE: remove old_helper\r\n"
+            "title: My Module\r\n"
+            "---\r\n"
+            "Generate a module without `old_helper`.\r\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
+
+    def test_bom_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        prompt_with_front_matter = (
+            "﻿---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+            "title: My Module\n"
+            "---\n"
+            "Generate a module without `old_helper`.\n"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
+
+    def test_eof_front_matter_breaking_change_does_not_opt_out_removal_gate(self):
+        # Closing ``---`` is the final line of the file (no trailing
+        # newline). Directive must still be ignored.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        prompt_with_front_matter = (
+            "---\n"
+            "BREAKING-CHANGE: remove old_helper\n"
+            "title: My Module\n"
+            "---"
+        )
+        before = (
+            "def old_helper():\n"
+            "    return 1\n"
+            "\n"
+            "def new_helper():\n"
+            "    return 2\n"
+        )
+        after = "def new_helper():\n    return 2\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                prompt_with_front_matter,
+            )
+
+        assert "old_helper" in excinfo.value.removed_symbols
