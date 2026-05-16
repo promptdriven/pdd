@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "Job", "signature": "(id, command, args, options, status, result, error, cost, ...)", "returns": "Job"},
+      {"name": "Job", "signature": "(id: str = field(default_factory=lambda: str(uuid4())), command: str = '', args: Dict[str, Any] = field(default_factory=dict), options: Dict[str, Any] = field(default_factory=dict), status: JobStatus = JobStatus.QUEUED, result: Optional[Any] = None, error: Optional[str] = None, cost: float = 0.0, created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc)), started_at: Optional[datetime] = None, completed_at: Optional[datetime] = None, live_stdout: str = '', live_stderr: str = '') -> Job", "returns": "Job"},
       {"name": "JobCallbacks", "signature": "()", "returns": "JobCallbacks"},
       {"name": "JobManager", "signature": "(max_concurrent: int = 1, executor=None, project_root=None)", "returns": "JobManager"},
       {"name": "JobManager.submit", "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job", "returns": "Job"},
