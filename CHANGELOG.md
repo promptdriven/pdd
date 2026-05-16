@@ -74,6 +74,7 @@
 
 ### Feat
 
+- **sync**: add public-surface and test-churn gates to `pdd sync` to stop silent over-regeneration of mature modules and tests; gates honor anchored `BREAKING-CHANGE:` opt-outs and route failures through the existing `PDD_REPAIR_DIRECTIVE` retry plumbing across the in-process generate, per-op orchestration (`crash`/`verify`/`fix`), `cmd_test_main`, and one-session agentic paths. Configurable via `PDD_TEST_CHURN_THRESHOLD` (default `0.40`, trailing `%` accepted), `PDD_SKIP_PUBLIC_SURFACE_GATE`, `PDD_SKIP_TEST_CHURN_GATE`, or the umbrella `PDD_SKIP_CONFORMANCE` (#1015, closes #1012, #1030).
 - **ci auto-heal**: require successful metadata finalization before CI/preflight drift heals are treated as complete, routing healed updates through the shared metadata-sync orchestrator and blocking checkpoint commits when prompt tags, architecture, run reports, or fingerprints fail to finalize (#1006).
 
 ### CI
@@ -94,14 +95,6 @@
 
 - Bump package metadata, README/PyPI version references, and shell completions from 0.0.237 to 0.0.238.
 - Tighten `.pdd/meta` ignore rules while retaining the required run reports for long-running metadata/auto-heal modules.
-
-### Chore
-
-- Refresh Cloud Batch test-duration data and synchronize prompt, example, architecture, and `.pdd/meta` artifacts for the updated modules.
-
-### Test
-
-- Add regression coverage for generated-PR auto-heal authorization, metadata finalization/staging failures, default update fingerprinting, redirected-output skips, scoped global sync dependency handling, duplicate dry-run guard behavior, and skipped workflow completion.
 
 ## v0.0.237 (2026-05-13)
 

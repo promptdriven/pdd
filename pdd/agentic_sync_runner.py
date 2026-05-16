@@ -198,6 +198,8 @@ _MISSING_PDD_INTERFACE_FUNCS_MARKER = (
 _PDD_INTERFACE_DRIFT_MARKER = (
     "declares parameter(s) whose signature drifted in the generated code"
 )
+_PUBLIC_SURFACE_PREFIX = "Public surface regression for "
+_TEST_CHURN_PREFIX = "Test churn threshold exceeded for "
 
 
 def _parse_conformance_failure(
@@ -491,6 +493,162 @@ def build_conformance_hard_failure_from_error(
         f"expected: {', '.join(expected) if expected else '<unknown>'}",
         f"found: {', '.join(found) if found else '<unknown>'}",
         f"missing: {', '.join(missing) if missing else '<none>'}",
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
+
+
+def _parse_public_surface_failure_fields(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...], Tuple[str, ...]]]:
+    """Detect a public-surface regression and keep removals/signatures separate."""
+    combined = (stdout or "") + "\n" + (stderr or "")
+    if _PUBLIC_SURFACE_PREFIX not in combined:
+        return None
+    match = re.search(r"^removed:\s*(.+)$", combined, re.MULTILINE)
+    if not match:
+        match = re.search(
+            r"removed public symbols:\s*(.+?)"
+            r"(?=\.\s+(?:Output|Pre surface size|Post surface size)\b|\.\s*$|\n|$)",
+            combined,
+            re.MULTILINE,
+        )
+    removed_text = match.group(1) if match else ""
+    removed = tuple(
+        sorted(
+            {
+                token.strip().strip("`'\"").rstrip(".")
+                for token in removed_text.split(",")
+                if token.strip() and token.strip() != "<none>"
+            }
+        )
+    )
+    changed_match = re.search(r"^signature_changed:\s*(.+)$", combined, re.MULTILINE)
+    changed_text = changed_match.group(1) if changed_match else ""
+    changed = tuple(
+        sorted(
+            {
+                token.strip().strip("`'\"").rstrip(".")
+                for token in changed_text.split(",")
+                if token.strip() and token.strip() != "<none>"
+            }
+        )
+    )
+    if not removed and not changed:
+        return None
+    lines = ["Public surface regression repair required."]
+    if removed:
+        lines.append("Restore these public symbols from the existing module:")
+        for sym in removed:
+            lines.append(f"- {sym}")
+    if changed:
+        lines.append("Restore compatible signatures for these public symbols:")
+        for sym in changed:
+            lines.append(f"- {sym}")
+    lines.append(
+        "Preserve backward-compatible public helpers unless the prompt lists "
+        "the intended changes with scoped BREAKING-CHANGE: remove <symbol> "
+        "or BREAKING-CHANGE: change signature <symbol> markers."
+    )
+    return "\n".join(lines), removed, changed
+
+
+def _parse_public_surface_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """Detect a public-surface regression in subprocess output."""
+    parsed = _parse_public_surface_failure_fields(stdout, stderr)
+    if parsed is None:
+        return None
+    directive, removed, changed = parsed
+    signature = tuple(
+        [f"removed:{symbol}" for symbol in removed]
+        + [f"signature_changed:{symbol}" for symbol in changed]
+    )
+    return directive, signature
+
+
+def _parse_test_churn_failure(
+    stdout: str, stderr: str
+) -> Optional[Tuple[str, Tuple[str, ...]]]:
+    """Detect a test-churn failure in subprocess output."""
+    combined = (stdout or "") + "\n" + (stderr or "")
+    if _TEST_CHURN_PREFIX not in combined:
+        return None
+    ratio = "unknown"
+    threshold = "unknown"
+    match = re.search(r"^ratio:\s*([0-9.]+)", combined, re.MULTILINE)
+    threshold_match = re.search(r"^threshold:\s*([0-9.]+)", combined, re.MULTILINE)
+    if match and threshold_match:
+        ratio, threshold = match.group(1), threshold_match.group(1)
+    else:
+        match = re.search(
+        r"churn ratio\s+([0-9.]+)\s+exceeds threshold\s+([0-9.]+)",
+        combined,
+        )
+        if match:
+            ratio, threshold = match.group(1), match.group(2)
+    pre_lines = "unknown"
+    pre_match = re.search(
+        r"(?:^|[.\n]\s*)(?:Pre lines|pre_line_count):\s*(\d+)",
+        combined,
+        re.MULTILINE,
+    )
+    if pre_match:
+        pre_lines = pre_match.group(1)
+    signature = (f"ratio={ratio}", f"pre_lines={pre_lines}")
+    directive = (
+        "Test churn repair required.\n"
+        "- Keep the existing broad test coverage and avoid unrelated rewrites.\n"
+        f"- Reduce churn below threshold {threshold}; current churn is {ratio}.\n"
+        "- Add or update only tests needed for the prompt change."
+    )
+    return directive, signature
+
+
+def build_public_surface_hard_failure_from_error(
+    exc: Any,
+    basename: str,
+) -> str:
+    """Format a structured public-surface hard-failure block."""
+    removed = list(getattr(exc, "removed_symbols", []) or [])
+    changed = list(getattr(exc, "changed_signatures", []) or [])
+    block_lines = [
+        str(exc),
+        "",
+        "=== public surface regression ===",
+        f"prompt: {getattr(exc, 'prompt_name', '') or '<unknown>'}",
+        f"output: {getattr(exc, 'output_path', '') or '<unknown>'}",
+        "removed: " + (", ".join(removed) if removed else "<none>"),
+        "signature_changed: " + (", ".join(changed) if changed else "<none>"),
+        f"pre surface size: {getattr(exc, 'pre_surface_size', '<unknown>')}",
+        f"post surface size: {getattr(exc, 'post_surface_size', '<unknown>')}",
+        "",
+        f"Reproduce locally: pdd sync {basename}",
+        "",
+        _env_fingerprint(),
+    ]
+    return "\n".join(block_lines)
+
+
+def build_test_churn_hard_failure_from_error(
+    exc: Any,
+    basename: str,
+) -> str:
+    """Format a structured test-churn hard-failure block."""
+    block_lines = [
+        str(exc),
+        "",
+        "=== test churn threshold exceeded ===",
+        f"prompt: {getattr(exc, 'prompt_name', '') or '<unknown>'}",
+        f"output: {getattr(exc, 'output_path', '') or '<unknown>'}",
+        f"churn ratio: {getattr(exc, 'churn_ratio', '<unknown>')}",
+        f"threshold: {getattr(exc, 'threshold', '<unknown>')}",
+        f"pre lines: {getattr(exc, 'pre_line_count', '<unknown>')}",
+        f"post lines: {getattr(exc, 'post_line_count', '<unknown>')}",
         "",
         f"Reproduce locally: pdd sync {basename}",
         "",
@@ -1704,6 +1862,15 @@ class AsyncSyncRunner:
 
         if self.sync_options.get("local"):
             cmd.append("--local")
+        context_override = self.sync_options.get("context")
+        if context_override:
+            cmd.extend(["--context", str(context_override)])
+        strength = self.sync_options.get("strength")
+        if strength is not None:
+            cmd.extend(["--strength", str(strength)])
+        temperature = self.sync_options.get("temperature")
+        if temperature is not None:
+            cmd.extend(["--temperature", str(temperature)])
         cmd.append("sync")
 
         # Module-specific flags
@@ -1763,7 +1930,8 @@ class AsyncSyncRunner:
             Tuple of (success, total_cost_across_attempts, error_message).
         """
         total_cost = 0.0
-        last_missing: Optional[Tuple[str, ...]] = None
+        last_signature: Optional[Tuple[str, ...]] = None
+        last_failure_kind: Optional[str] = None
         last_error = ""
         last_stdout = ""
         last_stderr = ""
@@ -1784,31 +1952,63 @@ class AsyncSyncRunner:
                 return True, total_cost, ""
 
             conformance = _parse_conformance_failure(stdout, stderr)
-            if conformance is None:
+            public_surface = _parse_public_surface_failure(stdout, stderr)
+            test_churn = _parse_test_churn_failure(stdout, stderr)
+            failure_kind = "architecture"
+            parsed_failure = conformance
+            if parsed_failure is None and public_surface is not None:
+                failure_kind = "public_surface"
+                parsed_failure = public_surface
+            if parsed_failure is None and test_churn is not None:
+                failure_kind = "test_churn"
+                parsed_failure = test_churn
+
+            if parsed_failure is None:
                 # Not a conformance failure: do not retry
                 return False, total_cost, error
 
-            new_directive, new_missing = conformance
-            if last_missing is not None and new_missing == last_missing:
+            new_directive, new_signature = parsed_failure
+            if (
+                last_signature is not None
+                and new_signature == last_signature
+                and failure_kind == last_failure_kind
+            ):
                 # Stuck on identical symbol set — abort and emit hard-failure block
                 break
-            last_missing = new_missing
+            last_signature = new_signature
+            last_failure_kind = failure_kind
             repair_directive = new_directive
 
             if attempt + 1 >= MAX_CONFORMANCE_ATTEMPTS:
                 break
+            if failure_kind == "test_churn" and attempt >= 1:
+                break
             remaining_budget = self._remaining_total_budget(total_cost)
             if remaining_budget is not None and remaining_budget <= 0.0:
+                failure_label = (
+                    "architecture conformance"
+                    if failure_kind == "architecture"
+                    else failure_kind
+                )
                 last_error = (
-                    f"Budget exhausted during architecture conformance repair "
+                    f"Budget exhausted during {failure_label} repair "
                     f"(${total_cost:.2f} spent in {basename})."
                 )
                 break
 
         # Hard-failure path: include structured conformance block
-        hard_block = self._build_conformance_hard_failure(
-            basename, last_error, last_stdout, last_stderr
-        )
+        if last_failure_kind == "public_surface":
+            hard_block = self._build_public_surface_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
+        elif last_failure_kind == "test_churn":
+            hard_block = self._build_test_churn_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
+        else:
+            hard_block = self._build_conformance_hard_failure(
+                basename, last_error, last_stdout, last_stderr
+            )
         return False, total_cost, hard_block
 
     def _build_conformance_hard_failure(
@@ -1865,6 +2065,146 @@ class AsyncSyncRunner:
             _env_fingerprint(),
         ]
         return "\n".join(block_lines)
+
+    def _build_public_surface_hard_failure(
+        self,
+        basename: str,
+        failure_summary: str,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        """Build the structured public-surface hard-failure error string."""
+        parsed = _parse_public_surface_failure_fields(stdout, stderr)
+        removed = parsed[1] if parsed else tuple()
+        changed = parsed[2] if parsed else tuple()
+        combined = (stdout or "") + "\n" + (stderr or "")
+
+        prompt_field = "<unknown>"
+        for line in combined.splitlines():
+            if _PUBLIC_SURFACE_PREFIX in line:
+                tail = line.split(_PUBLIC_SURFACE_PREFIX, 1)[1].strip()
+                prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
+                break
+
+        field_boundary = (
+            r"(?=\.\s+(?:Output|Pre surface size|Post surface size)\b"
+            r"|\.\s*$|\n|$)"
+        )
+
+        def _extract_field(label: str, default: str = "<unknown>") -> str:
+            normalized = label.lower().replace(" ", "_")
+            aliases = {
+                "pre_lines": ("pre_lines", "pre_line_count"),
+                "post_lines": ("post_lines", "post_line_count"),
+            }.get(normalized, (normalized,))
+            for alias in aliases:
+                line_match = re.search(
+                    rf"^{re.escape(alias)}:\s*(.+)$",
+                    combined,
+                    re.MULTILINE,
+                )
+                if line_match:
+                    return line_match.group(1).strip() or default
+            pattern = re.compile(
+                rf"{re.escape(label)}:\s*(.*?){field_boundary}",
+                re.DOTALL,
+            )
+            match = pattern.search(combined)
+            if not match:
+                return default
+            return match.group(1).strip().rstrip(".").strip() or default
+
+        return "\n".join(
+            [
+                failure_summary or "Public surface regression",
+                "",
+                "=== public surface regression ===",
+                f"prompt: {prompt_field}",
+                f"output: {_extract_field('Output')}",
+                "removed: " + (", ".join(removed) if removed else "<none>"),
+                "signature_changed: "
+                + (", ".join(changed) if changed else "<none>"),
+                f"pre surface size: {_extract_field('Pre surface size')}",
+                f"post surface size: {_extract_field('Post surface size')}",
+                "",
+                f"Reproduce locally: pdd sync {basename}",
+                "",
+                _env_fingerprint(),
+            ]
+        )
+
+    def _build_test_churn_hard_failure(
+        self,
+        basename: str,
+        failure_summary: str,
+        stdout: str,
+        stderr: str,
+    ) -> str:
+        """Build the structured test-churn hard-failure error string."""
+        combined = (stdout or "") + "\n" + (stderr or "")
+
+        prompt_field = "<unknown>"
+        for line in combined.splitlines():
+            if _TEST_CHURN_PREFIX in line:
+                tail = line.split(_TEST_CHURN_PREFIX, 1)[1].strip()
+                prompt_field = tail.split(":", 1)[0].strip() if ":" in tail else tail
+                break
+
+        field_boundary = r"(?=\.\s+(?:Output|Pre lines|Post lines)\b|\.\s*$|\n|$)"
+
+        def _extract_field(label: str, default: str = "<unknown>") -> str:
+            normalized = label.lower().replace(" ", "_")
+            aliases = {
+                "pre_lines": ("pre_lines", "pre_line_count"),
+                "post_lines": ("post_lines", "post_line_count"),
+            }.get(normalized, (normalized,))
+            for alias in aliases:
+                line_match = re.search(
+                    rf"^{re.escape(alias)}:\s*(.+)$",
+                    combined,
+                    re.MULTILINE,
+                )
+                if line_match:
+                    return line_match.group(1).strip() or default
+            pattern = re.compile(
+                rf"{re.escape(label)}:\s*(.*?){field_boundary}",
+                re.DOTALL,
+            )
+            match = pattern.search(combined)
+            if not match:
+                return default
+            return match.group(1).strip().rstrip(".").strip() or default
+
+        ratio = threshold = "<unknown>"
+        ratio_match = re.search(r"^ratio:\s*([0-9.]+)", combined, re.MULTILINE)
+        threshold_match = re.search(r"^threshold:\s*([0-9.]+)", combined, re.MULTILINE)
+        if ratio_match and threshold_match:
+            ratio, threshold = ratio_match.group(1), threshold_match.group(1)
+        else:
+            match = re.search(
+                r"churn ratio\s+([0-9.]+)\s+exceeds threshold\s+([0-9.]+)",
+                combined,
+            )
+            if match:
+                ratio, threshold = match.group(1), match.group(2)
+
+        return "\n".join(
+            [
+                failure_summary or "Test churn threshold exceeded",
+                "",
+                "=== test churn threshold exceeded ===",
+                f"prompt: {prompt_field}",
+                f"output: {_extract_field('Output')}",
+                f"churn ratio: {ratio}",
+                f"threshold: {threshold}",
+                f"pre lines: {_extract_field('Pre lines')}",
+                f"post lines: {_extract_field('Post lines')}",
+                "",
+                f"Reproduce locally: pdd sync {basename}",
+                "",
+                _env_fingerprint(),
+            ]
+        )
 
     def _run_attempt(
         self,
