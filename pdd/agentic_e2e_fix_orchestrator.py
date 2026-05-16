@@ -1800,6 +1800,16 @@ def run_agentic_e2e_fix_orchestrator(
     # Set by the resume-time Step 3 re-evaluation if the cycle-waste-breaker
     # terminal-success condition holds (Issue #1034). Skips the inner workflow.
     resume_terminal_success = False
+    # Issue #1034 follow-up: True when the resumed cycle was mid-flight
+    # (last_completed_step > 0, current_cycle > 1) but no cycle_start_hashes
+    # was persisted (legacy state file or pre-snapshot interrupt). The outer
+    # loop will capture a fresh post-edit snapshot at the cycle-entry point,
+    # which would make `_detect_meaningful_changes(cwd, cycle_start_hashes)`
+    # falsely report "no in-cycle progress" and let the inline cycle-waste-
+    # breaker terminal-success on a baseline it cannot verify. This flag is
+    # consulted in the inline cycle-waste-breaker and cleared at the next
+    # legitimate cycle rollover.
+    cycle_baseline_unverified = False
 
     # Resume Logic
     if resume:
@@ -1846,6 +1856,14 @@ def run_agentic_e2e_fix_orchestrator(
                 resumed_cycle_start_hashes = saved_cycle_start_hashes
             else:
                 resumed_cycle_start_hashes = None
+                # Legacy state file or pre-snapshot-save interrupt: we have
+                # no proof of where the cycle started. If we're mid-cycle
+                # (last_completed_step > 0) past cycle 1, the inline
+                # cycle-waste-breaker MUST be blocked from terminal-success
+                # because the fresh capture it gets at outer-loop entry will
+                # be post-edits and falsely report "no in-cycle progress".
+                if last_completed_step > 0 and current_cycle > 1:
+                    cycle_baseline_unverified = True
 
             # Issue #1034: Re-evaluate cached Step 3 NOT_A_BUG before trusting
             # last_completed_step. If guards (direct edits or FIXED dev_unit_states)
@@ -2525,7 +2543,13 @@ def run_agentic_e2e_fix_orchestrator(
                         has_cycle_progress = bool(
                             _detect_meaningful_changes(cwd, cycle_start_hashes)
                         )
-                        if has_direct_edits and not has_fixed_units and not has_cycle_progress and current_cycle > 1:
+                        if (
+                            has_direct_edits
+                            and not has_fixed_units
+                            and not has_cycle_progress
+                            and current_cycle > 1
+                            and not cycle_baseline_unverified
+                        ):
                             console.print(
                                 "[yellow]NOT_A_BUG with prior direct edits and no new progress "
                                 "this cycle — treating prior fix as terminal.[/yellow]"
@@ -2533,6 +2557,11 @@ def run_agentic_e2e_fix_orchestrator(
                             success = True
                             final_message = "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining state as not a bug."
                             break
+                        if cycle_baseline_unverified:
+                            console.print(
+                                "[yellow]Resumed cycle baseline unverified (no saved cycle_start_hashes); "
+                                "refusing terminal-success and falling through to continue the cycle.[/yellow]"
+                            )
                         console.print("[yellow]NOT_A_BUG ignored — fixes were already applied in prior cycles.[/yellow]")
                     else:
                         console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
@@ -2697,6 +2726,11 @@ def run_agentic_e2e_fix_orchestrator(
             current_cycle += 1
             last_completed_step = 0
             step_outputs = {} # Clear outputs for next cycle
+            # The next cycle's body recaptures cycle_start_hashes fresh
+            # at outer-loop entry, giving the inline cycle-waste-breaker
+            # a verifiable baseline. The resume-time legacy-state flag
+            # can be cleared here.
+            cycle_baseline_unverified = False
 
             state_data["current_cycle"] = current_cycle
             state_data["last_completed_step"] = 0
