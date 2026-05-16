@@ -632,6 +632,1251 @@ class TestRunOneSessionSync:
         assert len(result["errors"]) == 1
         assert "failed" in result["errors"][0].lower()
 
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_success_rejects_broad_test_rewrite_and_restores_file(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        mock_task.return_value = (True, "done", 1.0, "claude-code")
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def rewrite_tests(*args, **kwargs):
+            pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = rewrite_tests
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        assert pdd_files["test"].read_text(encoding="utf-8") == original_tests
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Finding 2 (iter-2): the one-session test
+    # churn path must route through the PDD_REPAIR_DIRECTIVE retry loop
+    # rather than fail immediately. Mirror the `_run_test_op_with_churn_retry`
+    # contract in `sync_orchestration.py`: retry once, surface the
+    # structured hard-failure block on exhaustion, and restore the
+    # previous `PDD_REPAIR_DIRECTIVE` value in `finally`.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_test_churn_round_trips_repair_directive_and_retries_once(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """One-session test churn must set `PDD_REPAIR_DIRECTIVE` from the
+        exception and rerun the agentic session once. On the retry the env
+        var MUST be visible. After the loop the prior env value MUST be
+        restored. Codex review #1015 Finding 2 (iter-2)."""
+        import os
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        # Seed a pre-existing repair directive so we can verify the restore
+        # semantics: after the loop ends the prior value MUST be back.
+        monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "pre-existing-directive")
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        # An additive growth that does NOT trip the churn gate, so the
+        # retry attempt's churn check passes and the loop exits cleanly.
+        additive_tests = original_tests + "def test_d(): pass\n"
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        captured_env = {"first_directive": None, "second_directive": None}
+
+        def fake_task(*args, **kwargs):
+            call_count = mock_task.call_count  # already incremented for THIS call
+            current_directive = os.environ.get("PDD_REPAIR_DIRECTIVE")
+            if call_count == 1:
+                captured_env["first_directive"] = current_directive
+                # First session: rewrite tests heavily — trips the churn gate.
+                pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+                return True, "done", 1.0, "claude-code"
+            captured_env["second_directive"] = current_directive
+            # Second session: additive growth — passes the churn gate.
+            pdd_files["test"].write_text(additive_tests, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        # Two attempts: original + one retry.
+        assert mock_task.call_count == 2
+        # First attempt: the stale outer directive was POPPED before the
+        # loop (#1012, F-I), so the subprocess sees a CLEAN env. This
+        # protects nested PDD CLI invocations the agent might launch
+        # from inheriting the stale outer value.
+        assert captured_env["first_directive"] is None
+        # Second attempt saw the test-churn repair directive (set by the loop).
+        assert captured_env["second_directive"] is not None
+        assert "Test churn" in captured_env["second_directive"]
+        # After the loop, the prior env value is restored.
+        assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "pre-existing-directive"
+        # The retry succeeded — the result reflects success and accumulated cost.
+        assert result["success"] is True
+        assert result["total_cost"] == pytest.approx(1.5)
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) F-E (iter-8): the test-churn retry must
+    # actually deliver the repair directive to the agent prompt, not
+    # just set PDD_REPAIR_DIRECTIVE in the environment. The previous
+    # implementation called `run_agentic_task(instruction=prompt, ...)`
+    # with the SAME static `prompt` on every iteration; `run_agentic_task`
+    # does NOT read `PDD_REPAIR_DIRECTIVE`. So although the env var was
+    # set between attempts, the agent received the IDENTICAL instruction
+    # and the repair loop could not actually repair.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_test_churn_retry_injects_repair_directive_into_instruction(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """The retry attempt MUST receive an instruction that contains
+        a `<test_repair_directive>` block carrying the prior churn
+        error's repair_directive. The first attempt sees the unmodified
+        base prompt."""
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        additive_tests = original_tests + "def test_d(): pass\n"
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        captured_instructions = []
+
+        def fake_task(*args, **kwargs):
+            captured_instructions.append(kwargs.get("instruction"))
+            if mock_task.call_count == 1:
+                # First session: rewrite tests heavily — trips the churn gate.
+                pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+                return True, "done", 1.0, "claude-code"
+            # Second session: additive growth — passes the churn gate.
+            pdd_files["test"].write_text(additive_tests, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert len(captured_instructions) == 2
+        # First attempt: instruction is exactly the base prompt — no
+        # repair directive was set yet.
+        assert captured_instructions[0] == "mega prompt"
+        assert "<test_repair_directive>" not in captured_instructions[0]
+        # Second attempt: the instruction contains the directive block
+        # carrying the prior churn error's repair_directive text.
+        assert "<test_repair_directive>" in captured_instructions[1]
+        assert "</test_repair_directive>" in captured_instructions[1]
+        # The base prompt is still preserved in the retry instruction
+        # (we append to it, we don't replace it).
+        assert "mega prompt" in captured_instructions[1]
+        # The TestChurnError.repair_directive default starts with
+        # "Test churn repair required." — verify that text reached the
+        # agent prompt rather than just the environment.
+        assert "Test churn repair required" in captured_instructions[1]
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) F-E follow-up (iter-9): the instruction
+    # rewrite MUST NOT read `PDD_REPAIR_DIRECTIVE` from the environment.
+    # A stale outer value (set by the caller's shell, a parent
+    # orchestration layer, or a prior PDD command) would otherwise
+    # contaminate attempt 1's instruction with a `<test_repair_directive>`
+    # block even though no one-session churn failure has occurred yet.
+    # The retry contract is: directive appears on attempt 2+ only,
+    # populated by THIS loop's TestChurnError.repair_directive.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_first_attempt_instruction_ignores_stale_outer_env_directive(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """When `PDD_REPAIR_DIRECTIVE` is seeded by the caller before
+        `run_one_session_sync` is invoked, attempt 1's instruction MUST
+        equal the base prompt EXACTLY — no `<test_repair_directive>`
+        block, no leaked stale text. Only failures raised inside this
+        loop's churn-retry path populate the per-attempt directive."""
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER-DIRECTIVE")
+
+        pdd_files = _make_pdd_files(tmp_path)
+        # No pre-existing test file → churn gate does not run; we get a
+        # single clean attempt and can inspect its instruction.
+        captured_instructions = []
+
+        def fake_task(*args, **kwargs):
+            captured_instructions.append(kwargs.get("instruction"))
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert len(captured_instructions) == 1
+        # The stale outer directive must NOT contaminate attempt 1.
+        assert captured_instructions[0] == "mega prompt"
+        assert "<test_repair_directive>" not in captured_instructions[0]
+        assert "STALE-OUTER-DIRECTIVE" not in captured_instructions[0]
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_first_attempt_with_existing_file_ignores_stale_outer_env_directive(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Same guarantee even when a pre-existing test file exists and
+        the churn gate is active: attempt 1 sees the base prompt only.
+        Only the SECOND attempt (after a TestChurnError raised inside
+        this loop) carries a `<test_repair_directive>` block, and that
+        block contains THIS loop's churn-repair text — never the stale
+        outer value."""
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER-DIRECTIVE")
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        additive_tests = original_tests + "def test_d(): pass\n"
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        captured_instructions = []
+
+        def fake_task(*args, **kwargs):
+            captured_instructions.append(kwargs.get("instruction"))
+            if mock_task.call_count == 1:
+                pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+                return True, "done", 1.0, "claude-code"
+            pdd_files["test"].write_text(additive_tests, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert len(captured_instructions) == 2
+        # Attempt 1: base prompt only — no stale-outer leak.
+        assert captured_instructions[0] == "mega prompt"
+        assert "STALE-OUTER-DIRECTIVE" not in captured_instructions[0]
+        # Attempt 2: carries THIS loop's churn repair directive, NOT
+        # the stale outer value.
+        assert "<test_repair_directive>" in captured_instructions[1]
+        assert "Test churn repair required" in captured_instructions[1]
+        assert "STALE-OUTER-DIRECTIVE" not in captured_instructions[1]
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) F-I (iter-11): the one-session helper MUST
+    # also pop `PDD_REPAIR_DIRECTIVE` from `os.environ` BEFORE attempt 1
+    # so the subprocess spawned by `run_agentic_task` AND any
+    # re-entrant PDD CLI process the agent launches inherit a CLEAN
+    # env. Without this, the env-var-via-subprocess inheritance path
+    # leaks a stale outer directive into nested `pdd test` / `pdd
+    # generate` calls even though the in-process instruction is clean.
+    # The prior outer env value MUST still be restored in `finally`.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_first_attempt_pops_stale_env_for_subprocess_inheritance(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """When `PDD_REPAIR_DIRECTIVE` is seeded by the caller, attempt 1
+        MUST run with the env var POPPED — so the subprocess spawned by
+        `run_agentic_task` (and any nested PDD CLI invocations the
+        agent launches) sees no stale value. The prior outer env value
+        is restored in `finally` after the helper returns."""
+        import os
+        monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER")
+
+        pdd_files = _make_pdd_files(tmp_path)
+        # No pre-existing test file → single clean attempt; we can
+        # inspect the env state the subprocess would have inherited.
+        captured_env_during_call = {"value": "sentinel"}
+
+        def fake_task(*args, **kwargs):
+            captured_env_during_call["value"] = os.environ.get(
+                "PDD_REPAIR_DIRECTIVE"
+            )
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        # During attempt 1 the env was clean — subprocess inheritance
+        # cannot leak the stale outer value.
+        assert captured_env_during_call["value"] is None
+        # After the helper returns, the prior outer value is restored
+        # exactly so we don't leak across operations.
+        assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_second_attempt_env_carries_in_loop_directive_not_stale(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Attempt 2 MUST have the env var set to THIS loop's
+        TestChurnError.repair_directive (NOT the stale outer value), so
+        any nested PDD CLI subprocess inherits the correct directive."""
+        import os
+        monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER")
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        additive_tests = original_tests + "def test_d(): pass\n"
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        captured_envs = []
+
+        def fake_task(*args, **kwargs):
+            captured_envs.append(os.environ.get("PDD_REPAIR_DIRECTIVE"))
+            if mock_task.call_count == 1:
+                pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+                return True, "done", 1.0, "claude-code"
+            pdd_files["test"].write_text(additive_tests, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert len(captured_envs) == 2
+        # Attempt 1: env was popped — clean.
+        assert captured_envs[0] is None
+        # Attempt 2: env carries THIS loop's churn-repair directive,
+        # not the stale outer value (so nested subprocesses inherit
+        # the correct directive).
+        assert captured_envs[1] is not None
+        assert "STALE-OUTER" not in captured_envs[1]
+        assert "Test churn repair required" in captured_envs[1]
+        # After the helper returns, the prior outer value is restored.
+        assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_test_churn_exhaustion_emits_structured_block_once(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """When the retry attempt ALSO trips the churn gate, the one-session
+        path MUST emit the `=== test churn threshold exceeded ===` block
+        exactly once and re-raise. Codex review #1015 Finding 2 (iter-2)."""
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        # Ensure no seeded directive remains afterwards.
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        # Two different rewrites so the churn-signature short-circuit does
+        # NOT fire — we want to verify the loop actually retries once and
+        # then surfaces the hard-failure block on exhaustion.
+        rewrite_one = (
+            "def test_one(): pass\n"
+            "def test_two(): pass\n"
+            "def test_three(): pass\n"
+        )
+        rewrite_two = (
+            "def test_alpha(): pass\n"
+            "def test_beta(): pass\n"
+            "def test_gamma(): pass\n"
+            "def test_delta(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            call_count = mock_task.call_count
+            if call_count == 1:
+                pdd_files["test"].write_text(rewrite_one, encoding="utf-8")
+                return True, "done", 1.0, "claude-code"
+            pdd_files["test"].write_text(rewrite_two, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(TestChurnError) as excinfo:
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        captured = capsys.readouterr()
+
+        # Retry happened (single retry per the documented semantics).
+        assert mock_task.call_count == 2
+        # Hard-failure diagnostic appears exactly once in stderr.
+        assert captured.err.count("=== test churn threshold exceeded ===") == 1
+        assert "Reproduce locally: pdd sync my_module" in captured.err
+        # The pre-existing test file is restored (no high-churn rewrite left
+        # on disk).
+        assert pdd_files["test"].read_text(encoding="utf-8") == original_tests
+        # Cost is accumulated across both failed attempts.
+        assert excinfo.value.total_cost == pytest.approx(1.5)
+        # PDD_REPAIR_DIRECTIVE is popped (it was unset originally).
+        import os
+        assert "PDD_REPAIR_DIRECTIVE" not in os.environ
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) Medium 1 (iter-3): the one-session helper
+    # MUST short-circuit when the retry attempt produces the identical
+    # ``(churn_ratio, pre_line_count)`` signature — no progress is
+    # being made and an extra session would just burn cost. After the
+    # short-circuit fires, the helper still has to restore the
+    # original test file, restore the prior ``PDD_REPAIR_DIRECTIVE``,
+    # raise ``TestChurnError`` with accumulated cost, and emit the
+    # structured hard-failure block exactly once.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_test_churn_short_circuits_on_identical_signature(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """Identical ``(churn_ratio, pre_line_count)`` on the retry MUST trip
+        the short-circuit branch — i.e. the helper stops at exactly 2
+        attempts even when the configured cap allows many more.
+
+        To make the short-circuit observably distinct from the natural
+        max-attempt exhaustion path (where ``min(MAX_CONFORMANCE_ATTEMPTS,
+        _MAX_TEST_CHURN_ATTEMPTS) == 2``), we lift BOTH constants to 5
+        and feed the helper five consecutive identical-signature churn
+        failures. With the short-circuit alive: 2 calls. Without the
+        short-circuit (i.e. if the branch were deleted): 5 calls. The
+        helper must still restore the test file, restore the prior
+        ``PDD_REPAIR_DIRECTIVE``, accumulate cost across attempts, and
+        emit the structured hard-failure block exactly once.
+        """
+        import os
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        # Seed a prior repair directive so we can verify restore behavior
+        # under the short-circuit branch (separate from the natural
+        # exhaustion exit path covered above).
+        monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "pre-existing-directive")
+
+        # Lift BOTH retry caps so natural exhaustion would yield 5 calls.
+        # The short-circuit, if alive, still trips at 2 — which is what
+        # the call-count assertion below verifies. ``MAX_CONFORMANCE_ATTEMPTS``
+        # is imported inside the function from ``agentic_sync_runner``, so we
+        # patch the canonical module-level binding.
+        monkeypatch.setattr(
+            "pdd.agentic_sync_runner.MAX_CONFORMANCE_ATTEMPTS", 5
+        )
+        monkeypatch.setattr(
+            "pdd.one_session_sync._MAX_TEST_CHURN_ATTEMPTS", 5
+        )
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        # Five DIFFERENT rewrites of the SAME total line count. Because
+        # `_compute_test_churn_ratio` keys on `max(added, removed) /
+        # max(len(before_lines), 1)`, same-size complete rewrites
+        # against the same `original_tests` yield identical churn
+        # ratios — which, paired with the unchanged `pre_line_count`,
+        # produces the identical signature the helper short-circuits on.
+        rewrites = [
+            "def test_one(): pass\ndef test_two(): pass\ndef test_three(): pass\n",
+            "def test_alpha(): pass\ndef test_beta(): pass\ndef test_gamma(): pass\n",
+            "def test_x(): pass\ndef test_y(): pass\ndef test_z(): pass\n",
+            "def test_p(): pass\ndef test_q(): pass\ndef test_r(): pass\n",
+            "def test_m(): pass\ndef test_n(): pass\ndef test_o(): pass\n",
+        ]
+        # Each attempt charges a distinct cost so the accumulated total
+        # uniquely identifies how many attempts actually ran.
+        costs = [1.0, 0.5, 0.25, 0.125, 0.0625]
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            # mock_task.call_count is 1-indexed for the in-progress call.
+            idx = mock_task.call_count - 1
+            pdd_files["test"].write_text(rewrites[idx], encoding="utf-8")
+            return True, "done", costs[idx], "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(TestChurnError) as excinfo:
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        captured = capsys.readouterr()
+
+        # Sanity: rewrites have the same line count vs the same
+        # pre-existing file, so their churn signatures match.
+        assert excinfo.value.pre_line_count == len(original_tests.splitlines())
+
+        # The crux of the test: with the retry cap lifted to 5, only the
+        # identical-signature short-circuit can stop the loop at 2. If the
+        # short-circuit branch were removed, this assertion would observe 5.
+        assert mock_task.call_count == 2
+        # Hard-failure block emitted exactly once.
+        assert captured.err.count("=== test churn threshold exceeded ===") == 1
+        assert "Reproduce locally: pdd sync my_module" in captured.err
+        # Original test file is restored — no high-churn rewrite is
+        # left on disk.
+        assert pdd_files["test"].read_text(encoding="utf-8") == original_tests
+        # Cost from BOTH failed attempts is folded onto the raised
+        # exception (1.0 + 0.5 = 1.5). If the short-circuit were absent
+        # and all 5 attempts ran, this would be 1.9375.
+        assert excinfo.value.total_cost == pytest.approx(1.5)
+        # Prior PDD_REPAIR_DIRECTIVE is restored exactly to its seeded
+        # value — the helper neither leaks the test-churn directive nor
+        # drops the original.
+        assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "pre-existing-directive"
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) High 2 (iter-4): when the agent DELETES the
+    # pre-existing test file mid-session, the churn gate must NOT
+    # silently accept the deletion as a no-op. Deletion is the most
+    # extreme form of coverage loss — treat it as maximal churn so the
+    # repair-loop retry that handles wholesale rewrites also handles
+    # deletions: restore the pre-existing file, set PDD_REPAIR_DIRECTIVE
+    # from the deletion-specific directive, and rerun. On exhaustion
+    # surface the structured hard-failure block exactly once.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_test_file_deletion_treated_as_maximal_churn(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """If the agent deletes the pre-existing test file, the churn gate
+        must restore the file and route through the same repair-loop retry
+        that high-churn rewrites use. Codex review #1015 High 2 (iter-4)."""
+        import os
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        # An additive growth that does NOT trip the churn gate on retry,
+        # so the loop exits cleanly after the deletion-driven retry runs.
+        additive_tests = original_tests + "def test_d(): pass\n"
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        captured_env = {"first_directive": None, "second_directive": None}
+
+        def fake_task(*args, **kwargs):
+            call_count = mock_task.call_count
+            captured_env_key = f"{'first' if call_count == 1 else 'second'}_directive"
+            captured_env[captured_env_key] = os.environ.get("PDD_REPAIR_DIRECTIVE")
+            if call_count == 1:
+                # First session: DELETE the pre-existing test file.
+                pdd_files["test"].unlink()
+                return True, "done", 1.0, "claude-code"
+            # Second session: additive growth — passes the churn gate.
+            pdd_files["test"].write_text(additive_tests, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        # Two attempts: deletion-detected + repair retry that succeeded.
+        assert mock_task.call_count == 2
+        # First attempt saw no directive (no churn signaled yet).
+        assert captured_env["first_directive"] is None
+        # Second attempt saw the deletion-specific repair directive.
+        assert captured_env["second_directive"] is not None
+        assert "DELETED" in captured_env["second_directive"]
+        # After deletion was detected, the file was restored before retry.
+        # The retry's additive write then sticks, so the final on-disk
+        # content reflects the successful retry.
+        assert pdd_files["test"].read_text(encoding="utf-8") == additive_tests
+        # Retry succeeded — result reflects success and accumulated cost.
+        assert result["success"] is True
+        assert result["total_cost"] == pytest.approx(1.5)
+        # PDD_REPAIR_DIRECTIVE was unset originally; should be popped.
+        assert "PDD_REPAIR_DIRECTIVE" not in os.environ
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_test_file_deletion_exhausts_to_hard_failure(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """If the agent keeps deleting the test file across attempts, the
+        loop must exhaust to the structured hard-failure block (emitted
+        once) and the pre-existing test file must be restored on disk."""
+        import os
+        from pdd.code_generator_main import TestChurnError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            # Both sessions: delete the pre-existing test file. The first
+            # deletion produces signature (1.00, 3); the second deletion
+            # after the restore produces the SAME signature, which trips
+            # the identical-signature short-circuit at exactly 2 attempts.
+            if pdd_files["test"].exists():
+                pdd_files["test"].unlink()
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(TestChurnError) as excinfo:
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        captured = capsys.readouterr()
+
+        # Two attempts (identical signature short-circuit fires).
+        assert mock_task.call_count == 2
+        # The raised exception reports maximal churn.
+        assert excinfo.value.churn_ratio == pytest.approx(1.0)
+        assert excinfo.value.pre_line_count == len(original_tests.splitlines())
+        # Structured hard-failure diagnostic emitted exactly once.
+        assert captured.err.count("=== test churn threshold exceeded ===") == 1
+        # The pre-existing test file is restored — deletion is not allowed
+        # to persist on disk.
+        assert pdd_files["test"].read_text(encoding="utf-8") == original_tests
+        # PDD_REPAIR_DIRECTIVE was unset originally; should be popped.
+        assert "PDD_REPAIR_DIRECTIVE" not in os.environ
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) P1.A (iter-13): `pdd sync --one-session`
+    # bypasses the public-surface gate because sync_main skips
+    # `code_generator_main` when the code file already exists, then
+    # hands off to `run_one_session_sync` which previously only
+    # verified test churn. Add the same gate to run_one_session_sync
+    # so a mature module's API surface is protected through the
+    # one-session path too.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_catches_public_surface_regression_in_code(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """When the one-session agent rewrites the code file removing a
+        top-level public function, run_one_session_sync MUST raise
+        `PublicSurfaceRegressionError`, restore the pre-session code
+        file, and emit the structured hard-failure block."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        # Two different rewrites so the identical-signature short-circuit
+        # fires at exactly 2 attempts (each rewrite removes a different
+        # subset of the original symbols).
+        rewrite_one = "def public_one():\n    return 1\n"
+        rewrite_two = "def public_two():\n    return 2\n"
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            if mock_task.call_count == 1:
+                pdd_files["code"].write_text(rewrite_one, encoding="utf-8")
+            else:
+                pdd_files["code"].write_text(rewrite_two, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # The pre-session code file is restored — broken code does not
+        # persist on disk.
+        assert pdd_files["code"].read_text(encoding="utf-8") == original_code
+        # A removed symbol surfaces in the exception. The raised
+        # exception is the LAST attempt's, so it reflects what the
+        # final rewrite dropped (in this test, attempt 2's rewrite
+        # keeps `public_two` but drops `public_one`).
+        assert "public_one" in excinfo.value.removed_symbols
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_surface_regression_emits_structured_block(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """On exhaustion the public-surface hard-failure block is
+        emitted to stderr exactly once."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        rewrite_one = "def public_one():\n    return 1\n"
+        rewrite_two = "def public_two():\n    return 2\n"
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            if mock_task.call_count == 1:
+                pdd_files["code"].write_text(rewrite_one, encoding="utf-8")
+            else:
+                pdd_files["code"].write_text(rewrite_two, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(PublicSurfaceRegressionError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        captured = capsys.readouterr()
+        # The public-surface hard-failure block is emitted exactly once.
+        assert captured.err.count("=== public surface regression ===") == 1
+        # And the test-churn block is NOT emitted (the surface gate
+        # short-circuits before the churn gate runs).
+        assert "=== test churn threshold exceeded ===" not in captured.err
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_surface_regression_retries_with_directive(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """When attempt 1 trips the public-surface gate but attempt 2
+        produces a valid surface, the loop succeeds. Attempt 2's
+        instruction must contain `<test_repair_directive>` carrying
+        the prior PublicSurfaceRegressionError's repair_directive."""
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        # Attempt 1: drops `public_two`. Attempt 2: restores the full
+        # surface (no churn either since the test file isn't touched).
+        rewrite_bad = "def public_one():\n    return 1\n"
+        rewrite_good = original_code  # restores public_two
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+
+        captured_instructions = []
+
+        def fake_task(*args, **kwargs):
+            captured_instructions.append(kwargs.get("instruction"))
+            if mock_task.call_count == 1:
+                pdd_files["code"].write_text(rewrite_bad, encoding="utf-8")
+            else:
+                pdd_files["code"].write_text(rewrite_good, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        # Two attempts: first failed surface gate, second restored
+        # the full surface and succeeded.
+        assert mock_task.call_count == 2
+        # Attempt 1: base prompt (no directive).
+        assert captured_instructions[0] == "mega prompt"
+        assert "<test_repair_directive>" not in captured_instructions[0]
+        # Attempt 2: carries the public-surface repair directive.
+        assert "<test_repair_directive>" in captured_instructions[1]
+        assert "Public surface regression repair required" in captured_instructions[1]
+        assert "public_two" in captured_instructions[1]
+        # Result reflects success and accumulated cost across attempts.
+        assert result["success"] is True
+        assert result["total_cost"] == pytest.approx(1.0)
+        # Final on-disk code matches the good rewrite.
+        assert pdd_files["code"].read_text(encoding="utf-8") == rewrite_good
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_surface_regression_allowed_by_breaking_change(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """An anchored `BREAKING-CHANGE: remove public_two` directive in
+        the prompt opts the removal out — no PublicSurfaceRegressionError
+        is raised."""
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        # Append BREAKING-CHANGE to the prompt body so the gate's
+        # opt-out parser whitelists `public_two`.
+        pdd_files["prompt"].write_text(
+            pdd_files["prompt"].read_text(encoding="utf-8")
+            + "\n\nBREAKING-CHANGE: remove public_two\n",
+            encoding="utf-8",
+        )
+
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        rewrite = "def public_one():\n    return 1\n"
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            pdd_files["code"].write_text(rewrite, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        # Must NOT raise — BREAKING-CHANGE opt-out is honored.
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        # The agent's rewrite is preserved on disk (not restored).
+        assert pdd_files["code"].read_text(encoding="utf-8") == rewrite
+
+    # Codex review (#1015) F-K (iter-16): `PDD_SKIP_CONFORMANCE=1`
+    # must disable BOTH the surface gate AND the test-churn gate
+    # inside `run_one_session_sync`. Test each independently below.
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_surface_gate_honors_skip_conformance(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """`PDD_SKIP_CONFORMANCE=1` MUST disable the public-surface gate
+        in `run_one_session_sync` — the agent may drop a public symbol
+        without raising."""
+        monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        rewrite = "def public_one():\n    return 1\n"  # drops public_two
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            pdd_files["code"].write_text(rewrite, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        # Must NOT raise — umbrella flag disables the gate.
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        # Agent's rewrite is preserved on disk (not restored).
+        assert pdd_files["code"].read_text(encoding="utf-8") == rewrite
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_churn_gate_honors_skip_conformance(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """`PDD_SKIP_CONFORMANCE=1` MUST disable the test-churn gate
+        in `run_one_session_sync` — covers both the wholesale-rewrite
+        path (via `_verify_test_churn`) AND the deletion-as-churn
+        shortcut that raises `TestChurnError` directly. Use a high-
+        churn rewrite so without the flag the gate would fire."""
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        rewritten_tests = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            pdd_files["test"].write_text(rewritten_tests, encoding="utf-8")
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        # Without the umbrella flag this would raise TestChurnError;
+        # with the flag, the call must complete successfully.
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        # Test file holds the agent's rewrite (NOT restored).
+        assert pdd_files["test"].read_text(encoding="utf-8") == rewritten_tests
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_deletion_gate_honors_skip_conformance(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """`PDD_SKIP_CONFORMANCE=1` MUST also disable the deletion-as-
+        churn shortcut (the direct `raise TestChurnError` path that
+        bypasses `_verify_test_churn`)."""
+        monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            # Simulate agent deleting the test file mid-session.
+            if pdd_files["test"].exists():
+                pdd_files["test"].unlink()
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        # Without the umbrella flag this would raise TestChurnError
+        # with ratio=1.0; with the flag, the call must complete
+        # successfully and the deletion is accepted.
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        # Test file remains deleted (NOT restored — umbrella flag
+        # opted out of the gate entirely).
+        assert not pdd_files["test"].exists()
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_surface_gate_runs_before_churn_gate(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """If BOTH gates would fire (code surface broken AND test file
+        heavily churned), the surface gate wins because the surface
+        check runs FIRST inside the try block. The churn check is
+        skipped via `continue` so the agent's broken state is restored
+        for the retry."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+
+        monkeypatch.setenv("PDD_TEST_CHURN_THRESHOLD", "0.40")
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        # Both rewrites: drop a code symbol AND rewrite the test file
+        # heavily. Two different rewrites so the surface short-circuit
+        # fires at exactly 2 attempts.
+        code_rewrite_one = "def public_one():\n    return 1\n"
+        code_rewrite_two = "def public_two():\n    return 2\n"
+        test_rewrite = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            if mock_task.call_count == 1:
+                pdd_files["code"].write_text(code_rewrite_one, encoding="utf-8")
+            else:
+                pdd_files["code"].write_text(code_rewrite_two, encoding="utf-8")
+            pdd_files["test"].write_text(test_rewrite, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        # Surface gate wins.
+        with pytest.raises(PublicSurfaceRegressionError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # Pre-session code is restored (surface gate's restore).
+        assert pdd_files["code"].read_text(encoding="utf-8") == original_code
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) P2.B (iter-14): when the surface gate fires
+    # and the agent had ALSO rewritten the test file in the same
+    # session, the test file from the failed attempt was left dirty on
+    # disk (the surface except-branch `continue`s before the churn
+    # gate runs, and the churn gate is the one that normally restores
+    # the test file). The surface except branch must ALSO restore the
+    # pre-session test file when one exists.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_surface_failure_also_restores_test_file(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """On surface failure with retry exhaustion, BOTH the code file
+        AND the test file MUST be restored to their pre-session
+        content. Without P2.B, the test file from the failed attempt
+        sat on disk."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+            "def test_c(): pass\n"
+        )
+        # Two different code rewrites so the identical-signature
+        # short-circuit fires at exactly 2 attempts (each drops a
+        # different public symbol).
+        code_bad_one = "def public_one():\n    return 1\n"  # drops public_two
+        code_bad_two = "def public_two():\n    return 2\n"  # drops public_one
+        # The agent also rewrites the test file heavily on each attempt.
+        test_rewrite = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+            "def test_new_c(): pass\n"
+        )
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            if mock_task.call_count == 1:
+                pdd_files["code"].write_text(code_bad_one, encoding="utf-8")
+            else:
+                pdd_files["code"].write_text(code_bad_two, encoding="utf-8")
+            pdd_files["test"].write_text(test_rewrite, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(PublicSurfaceRegressionError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # Both pre-session files must be restored on disk — even though
+        # the surface block is what surfaces, the disk state is clean.
+        assert pdd_files["code"].read_text(encoding="utf-8") == original_code
+        assert pdd_files["test"].read_text(encoding="utf-8") == original_tests
+
+    # -----------------------------------------------------------------
+    # Codex review (#1015) P3.B (iter-15): the P2.B restore branch
+    # previously used `if existing_test_content:` (truthiness). An
+    # empty pre-session test file would be skipped because empty
+    # string is falsy. Use `is not None` instead so the empty
+    # zero-byte state is also restored when the agent
+    # rewrote/deleted the file.
+    # -----------------------------------------------------------------
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_surface_failure_restores_empty_pre_session_test_file(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """If the pre-session test file exists but is empty, the surface
+        gate's restore branch MUST still write the empty content back
+        (so the agent's rewrite is removed). Using truthiness instead
+        of `is not None` would skip this case."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+        )
+        # Empty pre-session test file (zero bytes).
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+        pdd_files["test"].write_text("", encoding="utf-8")
+
+        # Two different bad rewrites so the identical-signature
+        # short-circuit fires at 2 attempts (each drops a different
+        # public symbol).
+        code_bad_one = "def public_one():\n    return 1\n"
+        code_bad_two = "def public_two():\n    return 2\n"
+        # Agent also fills the empty test file with content on each
+        # attempt — restoration should wipe it back to empty.
+        agent_test_rewrite = (
+            "def test_new_a(): pass\n"
+            "def test_new_b(): pass\n"
+        )
+
+        def fake_task(*args, **kwargs):
+            if mock_task.call_count == 1:
+                pdd_files["code"].write_text(code_bad_one, encoding="utf-8")
+            else:
+                pdd_files["code"].write_text(code_bad_two, encoding="utf-8")
+            pdd_files["test"].write_text(agent_test_rewrite, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(PublicSurfaceRegressionError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # The empty pre-session test file is restored to its empty
+        # state — NOT left holding the agent's rewrite.
+        assert pdd_files["test"].read_text(encoding="utf-8") == ""
+
 
 # ---------------------------------------------------------------------------
 # CLI integration — --one-session flag

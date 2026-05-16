@@ -40,6 +40,7 @@ Template placeholders:
 4. If expected output file doesn't exist, check changed_files for any new test/spec files
 5. Parse JSON from agent output to get success/message metadata
 6. Return empty string for content if no test file was generated
+7. **Repair-directive injection via explicit kwarg** (#1012, F-A / F-H): `run_agentic_test_generate` accepts a `repair_directive: str | None = None` keyword-only parameter. After reading `prompt_content` from the prompt file on disk and BEFORE passing it into the agent instruction template format, if `repair_directive` is non-empty (after stripping) append a `<test_repair_directive>...</test_repair_directive>` block to `prompt_content` containing the stripped directive. This mirrors the `<architecture_repair_directive>` injection in `code_generator_main` and the native-path injection in `cmd_test_main`, so test-op retries from `sync_orchestration._run_test_op_with_churn_retry` actually see a different prompt on the second attempt. **`run_agentic_test_generate` MUST NOT read `PDD_REPAIR_DIRECTIVE` from `os.environ`**: a stale outer value would otherwise contaminate direct invocations that have no active retry context. The retry helpers source the directive from their loop-local state and pass it explicitly through `cmd_test_main(..., repair_directive=...)` which forwards it here. Do NOT mutate the on-disk prompt file — only the in-process `prompt_content` flowing into `template.format(...)` is augmented.
 
 % Helper Functions
 

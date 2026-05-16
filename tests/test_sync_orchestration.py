@@ -222,6 +222,485 @@ def test_generate_conformance_retry_cost_is_counted(orchestration_fixture):
     )
 
 
+# ---------------------------------------------------------------------------
+# Codex review (#1015) F-J (iter-12): the in-process generate repair
+# loop in `sync_orchestration` MUST pop `PDD_REPAIR_DIRECTIVE` from
+# `os.environ` BEFORE attempt 1 so `code_generator_main` reads a CLEAN
+# env on the first try. Without this, a stale outer value would leak
+# into the first generation attempt's prompt via the
+# `<architecture_repair_directive>` block. The prior outer env value
+# MUST be restored in `finally`.
+# ---------------------------------------------------------------------------
+def test_generate_loop_pops_stale_env_before_attempt_1(orchestration_fixture, monkeypatch):
+    """Seed `PDD_REPAIR_DIRECTIVE="STALE-OUTER"` BEFORE calling
+    sync_orchestration; assert attempt 1's `code_generator_main` saw
+    the env POPPED (None), and the outer value is restored after."""
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+
+    captured_envs = []
+
+    def fake_codegen(*_args, **_kwargs):
+        captured_envs.append(os.environ.get("PDD_REPAIR_DIRECTIVE"))
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text("class Calculator:\n    pass\n")
+        return ("class Calculator:\n    pass\n", False, 0.10, "model")
+
+    orchestration_fixture['code_generator_main'].side_effect = fake_codegen
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    # Attempt 1 saw the env POPPED — no stale-outer leak into the
+    # generation prompt.
+    assert captured_envs[0] is None
+    # After the loop, the prior outer value is restored.
+    assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
+
+
+def test_generate_loop_attempt2_env_carries_in_loop_directive_not_stale(
+    orchestration_fixture, monkeypatch
+):
+    """When a conformance failure forces a retry, attempt 2's
+    `code_generator_main` MUST see THIS loop's repair directive (NOT
+    the stale outer value)."""
+    from pdd.code_generator_main import ArchitectureConformanceError
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='generate', reason='New unit'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+
+    captured_envs = []
+
+    def fake_codegen(*_args, **_kwargs):
+        captured_envs.append(os.environ.get("PDD_REPAIR_DIRECTIVE"))
+        if orchestration_fixture['code_generator_main'].call_count == 1:
+            raise ArchitectureConformanceError(
+                prompt_name="calculator_python.prompt",
+                output_path=str(code_path),
+                architecture_entry={"filename": "calculator_python.prompt"},
+                expected_symbols=["Calculator.run"],
+                found_symbols=["Calculator"],
+                missing_symbols=["Calculator.run"],
+                total_cost=0.10,
+                model_name="failed-model",
+            )
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text("class Calculator:\n    def run(self):\n        return None\n")
+        return ("class Calculator:\n    pass\n", False, 0.10, "model")
+
+    orchestration_fixture['code_generator_main'].side_effect = fake_codegen
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    assert len(captured_envs) == 2
+    # Attempt 1: stale-outer was POPPED.
+    assert captured_envs[0] is None
+    # Attempt 2: THIS loop's repair directive (not the stale outer).
+    assert captured_envs[1] is not None
+    assert "STALE-OUTER" not in captured_envs[1]
+    assert "Calculator.run" in captured_envs[1]
+    # After the loop, the prior outer value is restored.
+    assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
+
+
+# ---------------------------------------------------------------------------
+# Codex review (#1015) P2.A (iter-14): crash_main / fix_verification_main /
+# fix_main write `pdd_files['code']` AFTER the generate-op repair loop has
+# accepted the surface. Without the post-write public-surface gate, those
+# operations can silently regress the surface that the generate gate
+# protected. The gate runs after each helper, restores the pre-operation
+# code on detection, emits the structured hard-failure block, and records
+# the failure in `errors`/`skipped_operations` so the orchestration chain
+# stops cleanly. No retry is triggered — each helper already has its own
+# internal iterative-fix loop, so an outer retry would compound N×M.
+# ---------------------------------------------------------------------------
+def test_crash_main_surface_regression_restores_code_and_emits_block(
+    orchestration_fixture, capsys
+):
+    """When crash_main rewrites the code file dropping a public helper,
+    the gate MUST raise the public-surface block to stderr, restore the
+    pre-operation code on disk, and mark the operation as skipped/failed."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Runtime error'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    example_path = pdd_files['example']
+    # Set up pre-operation state: code has TWO public functions, the
+    # example file exists (so crash detection runs), and an example run
+    # is needed to exercise the crash branch.
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def public_one():\n    return 1\n"
+        "def public_two():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Module spec.")
+    example_path.parent.mkdir(parents=True, exist_ok=True)
+    example_path.write_text("import sys\nsys.exit(1)\n")  # forces a crash
+
+    # crash_main rewrites the code dropping `public_two`.
+    def crash_rewrite(*_args, **_kwargs):
+        code_path.write_text("def public_one():\n    return 1\n", encoding="utf-8")
+        return (True, "def public_one():\n    return 1\n", "", 1, 0.1, "mock-model")
+
+    orchestration_fixture['crash_main'].side_effect = crash_rewrite
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    captured = capsys.readouterr()
+    # Structured hard-failure block was emitted to stderr.
+    assert "=== public surface regression ===" in captured.err
+    # The pre-operation code is restored — broken code does not persist
+    # on disk.
+    assert code_path.read_text(encoding="utf-8") == pre_code
+    # The error chain records the surface regression.
+    assert any(
+        "crash operation regressed public surface" in err for err in result['errors']
+    )
+    assert 'crash' in result['skipped_operations']
+
+
+def test_fix_verification_main_surface_regression_restores_code(
+    orchestration_fixture, capsys
+):
+    """fix_verification_main rewriting the code with a public-surface
+    regression MUST be caught the same way."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='verify', reason='Verify example'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    example_path = pdd_files['example']
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def keep_a():\n    return 1\n"
+        "def drop_b():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Module spec.")
+    example_path.parent.mkdir(parents=True, exist_ok=True)
+    example_path.write_text("# example\n")
+
+    def verify_rewrite(*_args, **_kwargs):
+        code_path.write_text("def keep_a():\n    return 1\n", encoding="utf-8")
+        return (True, "", "def keep_a():\n    return 1\n", 1, 0.1, "mock-model")
+
+    orchestration_fixture['fix_verification_main'].side_effect = verify_rewrite
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    captured = capsys.readouterr()
+    assert "=== public surface regression ===" in captured.err
+    assert code_path.read_text(encoding="utf-8") == pre_code
+    assert any(
+        "verify operation regressed public surface" in err for err in result['errors']
+    )
+    assert 'verify' in result['skipped_operations']
+
+
+def test_fix_main_surface_regression_restores_code(orchestration_fixture, capsys):
+    """fix_main rewriting the code with a public-surface regression
+    MUST be caught the same way."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='fix', reason='Test failures'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    test_path = pdd_files['test']
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def keep_a():\n    return 1\n"
+        "def drop_b():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Module spec.")
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.write_text("def test_a(): pass\n")
+
+    def fix_rewrite(*_args, **_kwargs):
+        code_path.write_text("def keep_a():\n    return 1\n", encoding="utf-8")
+        return (True, "", "def keep_a():\n    return 1\n", 1, 0.1, "mock-model")
+
+    orchestration_fixture['fix_main'].side_effect = fix_rewrite
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    captured = capsys.readouterr()
+    assert "=== public surface regression ===" in captured.err
+    assert code_path.read_text(encoding="utf-8") == pre_code
+    assert any(
+        "fix operation regressed public surface" in err for err in result['errors']
+    )
+    assert 'fix' in result['skipped_operations']
+
+
+def test_crash_main_preserved_surface_does_not_fire(
+    orchestration_fixture, capsys
+):
+    """When crash_main rewrites the code preserving all public symbols
+    (additive change or internal fix), the gate must NOT fire."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Runtime error'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    example_path = pdd_files['example']
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def public_one():\n    return 1\n"
+        "def public_two():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Module spec.")
+    example_path.parent.mkdir(parents=True, exist_ok=True)
+    example_path.write_text("import sys\nsys.exit(1)\n")
+
+    # crash_main rewrites with an internal-only fix (return values
+    # changed but public surface preserved).
+    fixed_code = (
+        "def public_one():\n    return 'fixed'\n"
+        "def public_two():\n    return 'fixed'\n"
+    )
+
+    def crash_internal_fix(*_args, **_kwargs):
+        code_path.write_text(fixed_code, encoding="utf-8")
+        return (True, fixed_code, "", 1, 0.1, "mock-model")
+
+    orchestration_fixture['crash_main'].side_effect = crash_internal_fix
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    captured = capsys.readouterr()
+    # Gate did NOT fire — no surface block emitted.
+    assert "=== public surface regression ===" not in captured.err
+    # The internal fix is preserved on disk.
+    assert code_path.read_text(encoding="utf-8") == fixed_code
+
+
+def test_crash_main_surface_breaking_change_opt_out(
+    orchestration_fixture, capsys
+):
+    """An anchored `BREAKING-CHANGE: remove drop_b` directive in the
+    prompt opts out the gate — crash_main may drop the symbol without
+    raising."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Runtime error'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    example_path = pdd_files['example']
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def keep_a():\n    return 1\n"
+        "def drop_b():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text(
+        "Module spec.\n\nBREAKING-CHANGE: remove drop_b\n"
+    )
+    example_path.parent.mkdir(parents=True, exist_ok=True)
+    example_path.write_text("import sys\nsys.exit(1)\n")
+
+    rewritten = "def keep_a():\n    return 1\n"
+
+    def crash_with_optout(*_args, **_kwargs):
+        code_path.write_text(rewritten, encoding="utf-8")
+        return (True, rewritten, "", 1, 0.1, "mock-model")
+
+    orchestration_fixture['crash_main'].side_effect = crash_with_optout
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    captured = capsys.readouterr()
+    # Opt-out honored — no surface block emitted.
+    assert "=== public surface regression ===" not in captured.err
+    # The rewrite is preserved on disk (not restored).
+    assert code_path.read_text(encoding="utf-8") == rewritten
+
+
+# Codex review (#1015) F-K (iter-16): `PDD_SKIP_CONFORMANCE=1` must
+# also short-circuit the crash/verify/fix post-write surface check.
+# The umbrella flag goes through `_verify_public_surface_regression`'s
+# early-exit, so `_verify_code_surface_after_write` transparently
+# inherits the bypass.
+def test_crash_main_surface_check_honors_skip_conformance(
+    orchestration_fixture, capsys, monkeypatch
+):
+    """When `PDD_SKIP_CONFORMANCE=1`, crash_main's rewrite that would
+    normally trip the surface gate is accepted; the regression
+    diagnostic is NOT emitted and the rewrite is preserved on disk."""
+    monkeypatch.setenv("PDD_SKIP_CONFORMANCE", "1")
+
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='crash', reason='Runtime error'),
+        SyncDecision(operation='all_synced', reason='Done'),
+    ]
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    example_path = pdd_files['example']
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def public_one():\n    return 1\n"
+        "def public_two():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Module spec.")
+    example_path.parent.mkdir(parents=True, exist_ok=True)
+    example_path.write_text("import sys\nsys.exit(1)\n")
+
+    rewritten = "def public_one():\n    return 1\n"  # drops public_two
+
+    def crash_drops(*_args, **_kwargs):
+        code_path.write_text(rewritten, encoding="utf-8")
+        return (True, rewritten, "", 1, 0.1, "mock-model")
+
+    orchestration_fixture['crash_main'].side_effect = crash_drops
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    captured = capsys.readouterr()
+    # Umbrella flag disables the gate — no surface block emitted.
+    assert "=== public surface regression ===" not in captured.err
+    # The rewrite is preserved on disk (not restored).
+    assert code_path.read_text(encoding="utf-8") == rewritten
+
+
+# ---------------------------------------------------------------------------
+# Codex review (#1015) P3.A (iter-15): on public-surface regression the
+# operation loop MUST terminate cleanly — `continue` would let
+# `sync_determine_operation` re-select the same op (verify in
+# particular has no consecutive-op guard) and spin indefinitely on
+# deterministic bad output. The failure ALSO charges the helper's
+# cost against the budget so expensive crash/fix/verify spend is not
+# silently uncharged. The user-facing error message names the
+# `BREAKING-CHANGE:` opt-out path.
+# ---------------------------------------------------------------------------
+def test_verify_surface_regression_breaks_loop_no_spin(
+    orchestration_fixture, capsys
+):
+    """Mock `sync_determine_operation` to keep returning `"verify"`.
+    `fix_verification_main` consistently drops a public symbol. The
+    loop MUST call the helper EXACTLY ONCE — not spin — and the
+    surface diagnostic MUST be in `errors`."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    # Repeatedly return verify; if the loop spun, we'd call
+    # fix_verification_main more than once. (Use itertools.cycle so the
+    # iterator never exhausts and would let the loop run forever.)
+    import itertools
+    mock_determine.side_effect = itertools.cycle([
+        SyncDecision(operation='verify', reason='Verify example'),
+    ])
+
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    example_path = pdd_files['example']
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def keep_a():\n    return 1\n"
+        "def drop_b():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Module spec.")
+    example_path.parent.mkdir(parents=True, exist_ok=True)
+    example_path.write_text("# example\n")
+
+    def verify_rewrite(*_args, **_kwargs):
+        code_path.write_text("def keep_a():\n    return 1\n", encoding="utf-8")
+        return (True, "", "def keep_a():\n    return 1\n", 1, 0.10, "mock-model")
+
+    orchestration_fixture['fix_verification_main'].side_effect = verify_rewrite
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    captured = capsys.readouterr()
+    # Loop terminated after ONE attempt — would-be-infinite cycle did NOT spin.
+    assert orchestration_fixture['fix_verification_main'].call_count == 1
+    # Surface diagnostic was emitted to stderr.
+    assert "=== public surface regression ===" in captured.err
+    # The error message names the opt-out path so users know how to
+    # recover.
+    surface_errors = [e for e in result['errors'] if "public surface" in e]
+    assert len(surface_errors) == 1
+    assert "BREAKING-CHANGE" in surface_errors[0]
+    # The pre-operation code is restored.
+    assert code_path.read_text(encoding="utf-8") == pre_code
+    # Sync exits as a failure (broken contract — manual intervention).
+    assert result['success'] is False
+
+
+def test_verify_surface_regression_charges_helper_cost(orchestration_fixture):
+    """Cost from the failed verify helper attempt MUST be added to the
+    budget total so expensive failed spend is not silently uncharged."""
+    mock_determine = orchestration_fixture['sync_determine_operation']
+    mock_determine.side_effect = [
+        SyncDecision(operation='verify', reason='Verify example'),
+    ]
+    pdd_files = orchestration_fixture['get_pdd_file_paths'].return_value
+    code_path = pdd_files['code']
+    prompt_path = pdd_files['prompt']
+    example_path = pdd_files['example']
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    pre_code = (
+        "def keep_a():\n    return 1\n"
+        "def drop_b():\n    return 2\n"
+    )
+    code_path.write_text(pre_code, encoding="utf-8")
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Module spec.")
+    example_path.parent.mkdir(parents=True, exist_ok=True)
+    example_path.write_text("# example\n")
+
+    HELPER_COST = 0.42
+
+    def verify_rewrite(*_args, **_kwargs):
+        code_path.write_text("def keep_a():\n    return 1\n", encoding="utf-8")
+        return (True, "", "def keep_a():\n    return 1\n", 1, HELPER_COST, "mock-model")
+
+    orchestration_fixture['fix_verification_main'].side_effect = verify_rewrite
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    # The helper's cost is charged even though the operation failed.
+    assert result['total_cost'] == pytest.approx(HELPER_COST)
+
+
 def test_generate_conformance_hard_failure_cost_is_counted(orchestration_fixture):
     """Even a final conformance failure should report incurred generation cost."""
     from pdd.code_generator_main import ArchitectureConformanceError
@@ -259,6 +738,365 @@ def test_generate_conformance_hard_failure_cost_is_counted(orchestration_fixture
         if entry.get("operation") == "generate"
     ]
     assert generate_entries[-1]["actual_cost"] == pytest.approx(0.50)
+
+
+def test_test_churn_failure_emits_structured_block(orchestration_fixture, capsys):
+    """Test operation TestChurnError should surface the documented diagnostic."""
+    from pdd.code_generator_main import TestChurnError
+
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='test', reason='Tests need regeneration'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    test_path = orchestration_fixture['get_pdd_file_paths'].return_value['test']
+    prompt_path = orchestration_fixture['get_pdd_file_paths'].return_value['prompt']
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Create a calculator.")
+    code_path.write_text("def add(a, b):\n    return a + b\n")
+    test_path.write_text("def test_old():\n    assert True\n")
+
+    orchestration_fixture['cmd_test_main'].side_effect = TestChurnError(
+        prompt_name="calculator_python.prompt",
+        output_path=str(test_path),
+        churn_ratio=1.0,
+        threshold=0.4,
+        pre_line_count=2,
+        post_line_count=2,
+        total_cost=0.12,
+        model_name="failed-model",
+    )
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+    captured = capsys.readouterr()
+
+    assert result['success'] is False
+    assert orchestration_fixture['cmd_test_main'].called, result
+    assert "=== test churn threshold exceeded ===" in captured.err
+    assert "Reproduce locally: pdd sync calculator" in captured.err
+    # Diagnostic must appear exactly once — duplicate prints would happen if
+    # both `_run_test_op_with_churn_retry` and the generic operation `except`
+    # emitted it. Codex review (#1015) Finding 1.
+    assert captured.err.count("=== test churn threshold exceeded ===") == 1
+
+
+def test_test_churn_triggers_repair_directive_retry(orchestration_fixture, monkeypatch, capsys):
+    """`TestChurnError` from the in-process test op must round-trip through
+    `PDD_REPAIR_DIRECTIVE` before falling through to the hard-failure block
+    (Codex review #1015 Finding 1). The retry receives the directive in the
+    environment; on success the directive is restored to its prior value.
+    """
+    from pdd.code_generator_main import TestChurnError
+
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='test', reason='Tests need regeneration'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    test_path = orchestration_fixture['get_pdd_file_paths'].return_value['test']
+    prompt_path = orchestration_fixture['get_pdd_file_paths'].return_value['prompt']
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Create a calculator.")
+    code_path.write_text("def add(a, b):\n    return a + b\n")
+    test_path.write_text("def test_old():\n    assert True\n")
+
+    # Seed an existing PDD_REPAIR_DIRECTIVE so the helper's restore semantics
+    # are exercised: after the retry loop ends the prior value MUST be back.
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "pre-existing-directive")
+
+    captured_env = {"retry_directive": None}
+
+    def fake_cmd_test_main(*_args, **_kwargs):
+        if orchestration_fixture['cmd_test_main'].call_count == 1:
+            raise TestChurnError(
+                prompt_name="calculator_python.prompt",
+                output_path=str(test_path),
+                churn_ratio=0.95,
+                threshold=0.4,
+                pre_line_count=2,
+                post_line_count=20,
+                total_cost=0.11,
+                model_name="failed-model",
+            )
+        # Second attempt must see the repair directive set by the helper.
+        captured_env["retry_directive"] = os.environ.get("PDD_REPAIR_DIRECTIVE")
+        # Write the file so downstream `_execute_tests_and_create_run_report`
+        # path does not blow up; the helper's role is only the retry loop.
+        test_path.write_text("def test_kept():\n    assert True\n")
+        return {'success': True, 'cost': 0.07, 'model': 'mock-model'}
+
+    orchestration_fixture['cmd_test_main'].side_effect = fake_cmd_test_main
+
+    sync_orchestration(basename="calculator", language="python", budget=1.0)
+
+    # The first call failed; the second call received the repair directive.
+    assert orchestration_fixture['cmd_test_main'].call_count == 2
+    assert captured_env["retry_directive"], "retry attempt did not see PDD_REPAIR_DIRECTIVE"
+    assert "Test churn" in captured_env["retry_directive"]
+    # The previous env value is restored after the loop exits.
+    assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "pre-existing-directive"
+
+
+def test_test_churn_retry_exhaustion_still_surfaces_hard_block(orchestration_fixture, capsys):
+    """When the retry attempt ALSO raises `TestChurnError`, the helper must
+    emit the hard-failure block exactly once and re-raise (Codex Finding 1).
+    """
+    from pdd.code_generator_main import TestChurnError
+
+    orchestration_fixture['sync_determine_operation'].side_effect = [
+        SyncDecision(operation='test', reason='Tests need regeneration'),
+        SyncDecision(operation='all_synced', reason='All artifacts are up to date'),
+    ]
+    test_path = orchestration_fixture['get_pdd_file_paths'].return_value['test']
+    prompt_path = orchestration_fixture['get_pdd_file_paths'].return_value['prompt']
+    code_path = orchestration_fixture['get_pdd_file_paths'].return_value['code']
+    prompt_path.parent.mkdir(parents=True, exist_ok=True)
+    code_path.parent.mkdir(parents=True, exist_ok=True)
+    test_path.parent.mkdir(parents=True, exist_ok=True)
+    prompt_path.write_text("Create a calculator.")
+    code_path.write_text("def add(a, b):\n    return a + b\n")
+    test_path.write_text("def test_old():\n    assert True\n")
+
+    def fake_cmd_test_main(*_args, **_kwargs):
+        # Return a fresh exception each attempt so the retry sees a
+        # second distinct (but still over-threshold) churn ratio rather
+        # than the helper's identical-signature short-circuit.
+        attempt = orchestration_fixture['cmd_test_main'].call_count
+        raise TestChurnError(
+            prompt_name="calculator_python.prompt",
+            output_path=str(test_path),
+            churn_ratio=0.95 - 0.01 * attempt,
+            threshold=0.4,
+            pre_line_count=2,
+            post_line_count=20,
+            total_cost=0.10,
+            model_name="failed-model",
+        )
+
+    orchestration_fixture['cmd_test_main'].side_effect = fake_cmd_test_main
+
+    result = sync_orchestration(basename="calculator", language="python", budget=1.0)
+    captured = capsys.readouterr()
+
+    assert result['success'] is False
+    # Retry was attempted (single retry per the documented semantics).
+    assert orchestration_fixture['cmd_test_main'].call_count == 2
+    # The hard-failure diagnostic appears exactly once.
+    assert captured.err.count("=== test churn threshold exceeded ===") == 1
+
+
+def test_test_churn_retry_folds_failed_cost_into_success(monkeypatch):
+    """When the retry succeeds, the returned ``TestResult`` MUST include the
+    prior failed attempt's cost so the sync budget charges all attempts
+    (Codex review #1015 high finding). The successful retry's model is
+    preserved; if the success response leaves model blank, the helper
+    falls back to the last failed attempt's model.
+    """
+    from pdd.code_generator_main import TestChurnError
+    from pdd.test_result import TestResult
+    from pdd.sync_orchestration import _run_test_op_with_churn_retry
+
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    calls = {"n": 0}
+
+    def fake_call(_repair_directive):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TestChurnError(
+                prompt_name="x_python.prompt",
+                output_path="x_test.py",
+                churn_ratio=0.95,
+                threshold=0.4,
+                pre_line_count=2,
+                post_line_count=20,
+                total_cost=0.12,
+                model_name="x",
+            )
+        return TestResult(
+            content="def test_kept():\n    assert True\n",
+            cost=0.05,
+            model="y",
+            agentic_success=None,
+            error_message="",
+        )
+
+    result = _run_test_op_with_churn_retry(
+        fake_call,
+        basename="x",
+        budget_remaining=1.0,
+    )
+
+    assert calls["n"] == 2
+    assert isinstance(result, TestResult)
+    # 0.12 (failed) + 0.05 (succeeded) = 0.17 charged against the budget.
+    assert result.cost == pytest.approx(0.17)
+    # Successful retry's model is preserved when present.
+    assert result.model == "y"
+
+
+def test_test_churn_retry_falls_back_to_failed_model_when_success_blank(monkeypatch):
+    """If the successful retry leaves the model field empty, the helper
+    falls back to the last failed attempt's model so run-report
+    attribution survives.
+    """
+    from pdd.code_generator_main import TestChurnError
+    from pdd.test_result import TestResult
+    from pdd.sync_orchestration import _run_test_op_with_churn_retry
+
+    monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+    calls = {"n": 0}
+
+    def fake_call(_repair_directive):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise TestChurnError(
+                prompt_name="x_python.prompt",
+                output_path="x_test.py",
+                churn_ratio=0.95,
+                threshold=0.4,
+                pre_line_count=2,
+                post_line_count=20,
+                total_cost=0.20,
+                model_name="failed-model",
+            )
+        return TestResult(
+            content="def test_kept():\n    assert True\n",
+            cost=0.03,
+            model="",
+            agentic_success=None,
+            error_message="",
+        )
+
+    result = _run_test_op_with_churn_retry(
+        fake_call,
+        basename="x",
+        budget_remaining=1.0,
+    )
+
+    assert calls["n"] == 2
+    assert result.cost == pytest.approx(0.23)
+    assert result.model == "failed-model"
+
+
+# ---------------------------------------------------------------------------
+# Codex review (#1015) F-G (iter-10): the test-op retry helper MUST use
+# loop-local state as the source of truth for the repair directive. A
+# stale outer `PDD_REPAIR_DIRECTIVE` in `os.environ` must NOT leak
+# into attempt 1's `call(...)` argument, and the env var must be
+# cleared before attempt 1 so nested PDD CLI subprocesses spawned by
+# agentic test generation during the first attempt see a clean env.
+# The prior outer env value is restored in `finally`.
+# ---------------------------------------------------------------------------
+def test_test_churn_retry_attempt1_receives_none_directive_even_with_stale_env(monkeypatch):
+    """When `PDD_REPAIR_DIRECTIVE` is seeded by the caller before the
+    helper runs, attempt 1 MUST receive None — the stale outer value
+    must not contaminate the call's repair_directive argument. The env
+    var must also be popped during attempt 1 so nested subprocesses
+    inherit a clean env."""
+    import os as _os
+    from pdd.test_result import TestResult
+    from pdd.sync_orchestration import _run_test_op_with_churn_retry
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER")
+
+    captured = {"directive_arg": "sentinel", "env_during_call": "sentinel"}
+
+    def fake_call(repair_directive):
+        captured["directive_arg"] = repair_directive
+        captured["env_during_call"] = _os.environ.get("PDD_REPAIR_DIRECTIVE")
+        return TestResult(
+            content="ok",
+            cost=0.0,
+            model="m",
+            agentic_success=None,
+            error_message="",
+        )
+
+    _run_test_op_with_churn_retry(
+        fake_call,
+        basename="x",
+        budget_remaining=1.0,
+    )
+
+    # Attempt 1's call argument is None — stale outer env did NOT leak.
+    assert captured["directive_arg"] is None
+    # And the env var was popped while attempt 1 ran, so any nested PDD
+    # CLI subprocess would also have seen a clean env.
+    assert captured["env_during_call"] is None
+    # After the helper returns, the prior outer value is restored.
+    assert _os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
+
+
+def test_test_churn_retry_attempt2_receives_in_loop_directive_not_outer(monkeypatch):
+    """Attempt 2 MUST receive THIS loop's churn-error directive (NOT
+    the stale outer value). The env var must also reflect THIS loop's
+    directive during attempt 2 so any nested PDD CLI subprocess sees
+    the correct value."""
+    import os as _os
+    from pdd.code_generator_main import TestChurnError
+    from pdd.test_result import TestResult
+    from pdd.sync_orchestration import _run_test_op_with_churn_retry
+
+    monkeypatch.setenv("PDD_REPAIR_DIRECTIVE", "STALE-OUTER")
+
+    captured = {
+        "first_directive_arg": "sentinel",
+        "second_directive_arg": "sentinel",
+        "second_env": "sentinel",
+    }
+    calls = {"n": 0}
+
+    def fake_call(repair_directive):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            captured["first_directive_arg"] = repair_directive
+            raise TestChurnError(
+                prompt_name="x_python.prompt",
+                output_path="x_test.py",
+                churn_ratio=0.95,
+                threshold=0.4,
+                pre_line_count=2,
+                post_line_count=20,
+                total_cost=0.10,
+                model_name="m",
+            )
+        captured["second_directive_arg"] = repair_directive
+        captured["second_env"] = _os.environ.get("PDD_REPAIR_DIRECTIVE")
+        return TestResult(
+            content="ok",
+            cost=0.05,
+            model="m",
+            agentic_success=None,
+            error_message="",
+        )
+
+    _run_test_op_with_churn_retry(
+        fake_call,
+        basename="x",
+        budget_remaining=1.0,
+    )
+
+    assert calls["n"] == 2
+    # Attempt 1: no stale leak.
+    assert captured["first_directive_arg"] is None
+    # Attempt 2: this loop's churn-repair directive, NOT the stale outer.
+    assert captured["second_directive_arg"] is not None
+    assert "STALE-OUTER" not in captured["second_directive_arg"]
+    assert "Test churn repair required" in captured["second_directive_arg"]
+    # Env during attempt 2 reflects THIS loop's directive (for nested
+    # subprocesses) — also NOT the stale outer.
+    assert captured["second_env"] is not None
+    assert "STALE-OUTER" not in captured["second_env"]
+    assert "Test churn repair required" in captured["second_env"]
+    # After the helper returns, the prior outer value is restored.
+    assert _os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
+
 
 def test_sync_stops_on_operation_failure(orchestration_fixture):
     """

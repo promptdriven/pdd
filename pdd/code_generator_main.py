@@ -1,4 +1,5 @@
 import ast
+import difflib
 import glob
 import logging
 import os
@@ -10,7 +11,7 @@ import subprocess
 import requests
 import tempfile
 import sys
-from typing import Optional, Tuple, Dict, Any, List
+from typing import Optional, Tuple, Dict, Any, List, Set
 
 import click
 from rich.console import Console
@@ -112,6 +113,108 @@ class ArchitectureConformanceError(click.UsageError):
         return "\n".join(lines)
 
 
+class PublicSurfaceRegressionError(click.UsageError):
+    """Raised when generation removes public symbols from an existing module."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        removed_symbols: List[str],
+        pre_surface_size: int,
+        post_surface_size: int,
+        changed_signatures: Optional[List[str]] = None,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+        repair_directive: Optional[str] = None,
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.removed_symbols = list(removed_symbols)
+        self.changed_signatures = list(changed_signatures or [])
+        self.pre_surface_size = int(pre_surface_size)
+        self.post_surface_size = int(post_surface_size)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        self._repair_directive_override = repair_directive
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Public surface regression for {prompt_name}:\n"
+            f"removed: {', '.join(self.removed_symbols) if self.removed_symbols else '<none>'}\n"
+            f"signature_changed: {', '.join(self.changed_signatures) if self.changed_signatures else '<none>'}\n"
+            f"output: {output_display}\n"
+            f"pre_surface_size: {self.pre_surface_size}\n"
+            f"post_surface_size: {self.post_surface_size}"
+        )
+
+    @property
+    def repair_directive(self) -> str:
+        if self._repair_directive_override:
+            return self._repair_directive_override
+        lines = ["Public surface regression repair required."]
+        if self.removed_symbols:
+            lines.append("Restore these public symbols from the existing module:")
+            for sym in self.removed_symbols:
+                lines.append(f"- {sym}")
+        if self.changed_signatures:
+            lines.append("Restore compatible signatures for these public symbols:")
+            for sym in self.changed_signatures:
+                lines.append(f"- {sym}")
+        lines.append(
+            "Preserve backward-compatible public helpers unless the prompt lists "
+            "the intended removals with BREAKING-CHANGE: remove <symbol>."
+        )
+        return "\n".join(lines)
+
+
+class TestChurnError(click.UsageError):
+    """Raised when generation rewrites too much of an existing test file."""
+
+    def __init__(
+        self,
+        prompt_name: str,
+        output_path: str,
+        churn_ratio: float,
+        threshold: float,
+        pre_line_count: int,
+        post_line_count: int,
+        total_cost: float = 0.0,
+        model_name: str = "unknown",
+        repair_directive: Optional[str] = None,
+    ) -> None:
+        self.prompt_name = prompt_name
+        self.output_path = output_path or ""
+        self.churn_ratio = float(churn_ratio)
+        self.threshold = float(threshold)
+        self.pre_line_count = int(pre_line_count)
+        self.post_line_count = int(post_line_count)
+        self.total_cost = float(total_cost or 0.0)
+        self.model_name = model_name or "unknown"
+        self._repair_directive_override = repair_directive
+        output_display = self.output_path or "<unknown>"
+        super().__init__(
+            f"Test churn threshold exceeded for {prompt_name}:\n"
+            f"ratio: {self.churn_ratio:.2f}\n"
+            f"threshold: {self.threshold:.2f}\n"
+            f"output: {output_display}\n"
+            f"pre_line_count: {self.pre_line_count}\n"
+            f"post_line_count: {self.post_line_count}"
+        )
+
+    @property
+    def repair_directive(self) -> str:
+        if self._repair_directive_override:
+            return self._repair_directive_override
+        return (
+            "Test churn repair required.\n"
+            f"- Keep the existing broad test coverage in "
+            f"{self.output_path or '<unknown>'}.\n"
+            f"- Reduce unrelated rewrites below the configured churn threshold "
+            f"({self.threshold:.2f}); current churn is {self.churn_ratio:.2f}.\n"
+            "- Add or update only tests needed for the prompt change."
+        )
+
+
 # --- Helper Functions ---
 def _parse_llm_bool(value: str) -> bool:
     """Parse LLM boolean value from string."""
@@ -129,6 +232,801 @@ def _env_flag_enabled(name: str) -> bool:
     if value is None:
         return False
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _prompt_has_breaking_change_marker(prompt_content: Optional[str]) -> bool:
+    """Return True when the prompt explicitly opts into breaking changes."""
+    return bool(prompt_content and "BREAKING-CHANGE:" in prompt_content)
+
+
+# Match a BREAKING-CHANGE: directive only when it starts a line (optionally
+# indented). Buried prose like "see the BREAKING-CHANGE: marker doc" must NOT
+# trip the opt-out parsers, so the marker must be the first non-whitespace
+# token on its line.
+_BREAKING_CHANGE_DIRECTIVE_RE = re.compile(
+    r"^[ \t]*BREAKING-CHANGE:[ \t]*(?P<directive>.*)$",
+    re.MULTILINE,
+)
+
+# A symbol token in a BREAKING-CHANGE directive is a bare or wrapped
+# identifier (optionally dotted for `Class.method`). Wrappers may be a
+# backtick, single quote, or double quote — they MUST match on both sides
+# (no `"old_helper'`). Prose words with embedded whitespace cannot match —
+# the directive accepts a delimited symbol list, not arbitrary prose. We
+# allow a leading verb (the action) to be stripped before this regex runs
+# over the tail.
+_DIRECTIVE_SYMBOL_RE = re.compile(
+    r"^[ \t]*"
+    r"(?P<wrap>[`'\"])?"
+    r"(?P<symbol>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)"
+    r"(?(wrap)(?P=wrap))"
+    r"[ \t]*$"
+)
+
+
+def _iter_breaking_change_directives(prompt_content: Optional[str]) -> List[str]:
+    """Return the directive tails of anchored BREAKING-CHANGE: lines.
+
+    Only lines whose first non-whitespace tokens are ``BREAKING-CHANGE:`` are
+    treated as directives — buried mid-line markers (e.g. instructional prose
+    naming the marker by example) are intentionally ignored so a line like
+    ``Use BREAKING-CHANGE: remove old_helper to opt out`` does NOT register as
+    a real directive.
+    """
+    if not prompt_content:
+        return []
+    return [
+        match.group("directive").strip()
+        for match in _BREAKING_CHANGE_DIRECTIVE_RE.finditer(prompt_content)
+    ]
+
+
+def _parse_breaking_change_symbols(directive_tail: str) -> Set[str]:
+    """Parse a comma-separated list of identifier symbols from a directive tail.
+
+    The tail is the text AFTER the action verb (e.g. after ``remove`` /
+    ``rename`` / ``change signature``). We only accept tokens that look like
+    bare or backticked Python identifiers (optionally dotted). Tokens with
+    embedded whitespace are rejected so prose like ``to opt out`` does not
+    leak in as a whitelist.
+    """
+    if not directive_tail:
+        return set()
+    # Drop a trailing sentence-terminator so "remove old_helper." parses cleanly.
+    cleaned = directive_tail.strip()
+    cleaned = cleaned.rstrip(".;:")
+    if not cleaned:
+        return set()
+    symbols: Set[str] = set()
+    for piece in cleaned.split(","):
+        match = _DIRECTIVE_SYMBOL_RE.match(piece)
+        if match:
+            symbols.add(match.group("symbol"))
+    return symbols
+
+
+def _prompt_breaking_change_removed_symbols(prompt_content: Optional[str]) -> Set[str]:
+    """Return public symbols explicitly listed for removal in BREAKING-CHANGE lines.
+
+    Only anchored ``BREAKING-CHANGE:`` lines (first non-whitespace tokens on
+    the line) participate. After the action verb (``remove``/``delete``/
+    ``drop``/``rename``, including the gerund/plural variants) the remainder
+    must be a comma-separated symbol list — prose tokens are rejected.
+    """
+    verb_re = re.compile(
+        r"^(?:remov(?:e|es|ed|ing)|delet(?:e|es|ed|ing)|"
+        r"drop(?:s|ped|ping)?|"
+        r"renam(?:e|es|ed|ing))\b[ \t]*",
+        re.IGNORECASE,
+    )
+    allowed: Set[str] = set()
+    for directive in _iter_breaking_change_directives(prompt_content):
+        match = verb_re.match(directive)
+        if not match:
+            continue
+        tail = directive[match.end():]
+        allowed.update(_parse_breaking_change_symbols(tail))
+    return allowed
+
+
+def _prompt_breaking_change_signature_symbols(prompt_content: Optional[str]) -> Set[str]:
+    """Return public symbols explicitly listed for signature changes.
+
+    Only anchored ``BREAKING-CHANGE:`` lines participate. The directive must
+    start with a ``change`` verb followed by ``signature``/``signatures``/
+    ``api``/``contract`` (e.g. ``change signature calculate``); we accept
+    common verb tenses (``change``/``changes``/``changed``/``changing``).
+    After the verb pair the remainder must be a comma-separated symbol list.
+    """
+    head_re = re.compile(
+        r"^chang(?:e|es|ed|ing)\b[ \t]+"
+        r"(?:signature|signatures|api|contract)\b[ \t]*",
+        re.IGNORECASE,
+    )
+    allowed: Set[str] = set()
+    for directive in _iter_breaking_change_directives(prompt_content):
+        match = head_re.match(directive)
+        if not match:
+            continue
+        tail = directive[match.end():]
+        allowed.update(_parse_breaking_change_symbols(tail))
+    return allowed
+
+
+# Test-churn opt-out verbs. The marker doc and prompt body advertise both
+# imperative ("rewrite tests") and gerund ("rewriting tests") wording, so the
+# parser must accept both — anything documented in the directive emitted by
+# `TestChurnError.repair_directive` must opt out the gate when echoed back.
+_TEST_CHURN_OPT_OUT_RE = re.compile(
+    r"\b("
+    r"rewrit(?:e|es|ed|ing)|"
+    r"replac(?:e|es|ed|ing)|"
+    r"regenerat(?:e|es|ed|ing)|"
+    r"overwrit(?:e|es|ing|ten)|"
+    r"churn|"
+    r"remov(?:e|es|ed|ing)|"
+    r"drop(?:s|ped|ping)?"
+    r")\b",
+    re.IGNORECASE,
+)
+_TEST_CHURN_TARGET_RE = re.compile(r"\btests?\b", re.IGNORECASE)
+# Separators that break the verb-object phrase. If any of these appears
+# between the opt-out verb and `tests?`, the verb's nearest object is
+# something OTHER than tests, so the directive must NOT opt out the gate.
+# Examples: `rewrite docs and update tests` (the verb's object is "docs",
+# not "tests"); `rewrite calculator, update tests` (comma breaks the phrase).
+_TEST_CHURN_BRIDGE_BREAK_RE = re.compile(
+    r"[,;]|\b(?:and|but|then|or|plus|also)\b",
+    re.IGNORECASE,
+)
+
+
+def _prompt_allows_test_churn(prompt_content: Optional[str]) -> bool:
+    """Return True only for explicit test rewrite/churn breaking-change directives.
+
+    Only anchored ``BREAKING-CHANGE:`` directive lines count: prose that
+    mentions the marker mid-line (e.g. instructional text referring to it)
+    must NOT silently disable the test-churn gate. The directive must also
+    pair an opt-out verb (imperative or gerund — ``rewrite``/``rewriting``/
+    ``replace``/``replacing`` etc.) with the ``test``/``tests`` object: the
+    parser scans every opt-out verb match, and requires that ``tests?``
+    appear in the SAME verb-object phrase (no comma, semicolon, or
+    conjunction like ``and``/``but``/``then``/``or`` between the verb
+    and ``tests?``). That way:
+
+    - ``BREAKING-CHANGE: rewriting the failing tests`` opts out (verb's
+      object IS tests).
+    - ``BREAKING-CHANGE: rewrite the test suite for new helper`` opts out
+      (verb's object IS tests; trailing prose after a noun phrase is fine).
+    - ``BREAKING-CHANGE: rewrite docs and update tests`` does NOT opt out
+      (``rewrite``'s object is ``docs``; ``and`` breaks the phrase before
+      ``tests``, and ``update`` is not in the opt-out verb list).
+    - ``BREAKING-CHANGE: drop foo and rewrite tests`` DOES opt out (the
+      second verb ``rewrite`` directly governs ``tests``).
+    """
+    for directive in _iter_breaking_change_directives(prompt_content):
+        for verb_match in _TEST_CHURN_OPT_OUT_RE.finditer(directive):
+            tail = directive[verb_match.end():]
+            target_match = _TEST_CHURN_TARGET_RE.search(tail)
+            if not target_match:
+                continue
+            bridge = tail[: target_match.start()]
+            if _TEST_CHURN_BRIDGE_BREAK_RE.search(bridge):
+                # A separator/conjunction breaks the verb-object phrase, so
+                # `tests?` belongs to a DIFFERENT verb than the opt-out one.
+                continue
+            return True
+    return False
+
+
+def _is_python_generation(language: Optional[str], output_path: Optional[str]) -> bool:
+    detected = (language or "").lower()
+    return detected in {"python", "py"} or bool(
+        output_path and str(output_path).lower().endswith(".py")
+    )
+
+
+def _is_test_output_path(output_path: Optional[str]) -> bool:
+    if not output_path:
+        return False
+    path = pathlib.Path(str(output_path))
+    name = path.name
+    lower_name = name.lower()
+    js_like_test_suffixes = (
+        ".test.ts",
+        ".test.tsx",
+        ".test.js",
+        ".test.jsx",
+        ".spec.ts",
+        ".spec.tsx",
+        ".spec.js",
+        ".spec.jsx",
+    )
+    return (
+        name.startswith("test_")
+        or name.endswith("_test.py")
+        or lower_name.endswith(js_like_test_suffixes)
+        or any(part in {"tests", "__tests__"} for part in path.parts)
+    )
+
+
+def _collect_bound_module_names(tree: ast.Module) -> Set[str]:
+    """Return the set of all module-level names bound by ``tree``.
+
+    Captures every name a ``from X import *`` would see, regardless of
+    underscore prefix — used to filter ``__all__`` entries down to ones
+    that are actually defined. The same kinds of bindings as
+    :func:`_snapshot_public_surface` (functions, classes, Assign,
+    AnnAssign-with-value, Import, ImportFrom) but without the
+    underscore-prefix filter.
+    """
+    bound: Set[str] = set()
+
+    def _walk_target(target: ast.AST) -> None:
+        if isinstance(target, ast.Name):
+            bound.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _walk_target(elt)
+        elif isinstance(target, ast.Starred):
+            _walk_target(target.value)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            bound.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            bound.add(node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                _walk_target(target)
+        elif isinstance(node, ast.AnnAssign):
+            if node.value is not None:
+                _walk_target(node.target)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                bound.add(alias.asname or alias.name.split(".", 1)[0])
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                bound.add(alias.asname or alias.name)
+    return bound
+
+
+def _extract_dunder_all(tree: ast.Module) -> Optional[Set[str]]:
+    """Return module-level ``__all__`` names if declared as a clean literal list.
+
+    Walks every top-level assignment to ``__all__`` in source order and
+    tracks a "current parse" state matching Python runtime semantics
+    (subsequent assignments override earlier ones — the LAST assignment
+    wins):
+
+    - ``__all__ = [...]`` / ``__all__ = (...)`` whose elements are all
+      ``ast.Constant`` string literals → set state to that set of
+      strings.
+    - ``__all__ = sorted(...)`` / ``__all__ = X + Y`` / any other
+      non-literal RHS → set state to ``None``. The value is computed at
+      runtime so a static parser cannot trust it, and the heuristic
+      ("non-underscore") falls back.
+    - ``__all__ += [...]`` (``ast.AugAssign``) → set state to ``None``.
+      AugAssign mutates the previous list in place; even when the RHS
+      is a clean literal we cannot statically be sure what's in the
+      target object at that point (it could have been computed earlier).
+      The safest correct rule is "any AugAssign to __all__ → fall back".
+    - Bound ``ast.AnnAssign`` (``__all__: list[str] = [...]``) →
+      treated the same as a plain assignment.
+
+    Returns ``None`` when no clean ``__all__`` literal survives to the
+    end of the module, OR when ``__all__`` is never assigned at module
+    scope. In either case the fallback "non-underscore" heuristic
+    applies.
+    """
+    state: Optional[Set[str]] = None
+    for node in tree.body:
+        if isinstance(node, ast.AugAssign):
+            target = node.target
+            if isinstance(target, ast.Name) and target.id == "__all__":
+                # AugAssign is opaque: fall back to heuristic.
+                state = None
+            continue
+
+        targets: List[ast.AST] = []
+        value: Optional[ast.AST] = None
+        if isinstance(node, ast.Assign):
+            targets = list(node.targets)
+            value = node.value
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            targets = [node.target]
+            value = node.value
+        else:
+            continue
+        # Look for a target that is a plain `__all__` Name.
+        is_dunder_all_target = any(
+            isinstance(t, ast.Name) and t.id == "__all__" for t in targets
+        )
+        if not is_dunder_all_target or value is None:
+            continue
+        if not isinstance(value, (ast.List, ast.Tuple)):
+            # Computed __all__ (e.g. sorted(...), X + Y, name reference).
+            # The last assignment wins per Python runtime semantics, so
+            # this OVERRIDES any prior clean literal — reset to None so
+            # the heuristic falls back.
+            state = None
+            continue
+        names: Set[str] = set()
+        clean = True
+        for elt in value.elts:
+            if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                names.add(elt.value)
+            else:
+                clean = False
+                break
+        # Whether clean or dirty, this assignment overrides any prior
+        # state. Clean literals replace state with the new set; dirty
+        # literals (non-string elements like a Name reference inside the
+        # list) reset to None because we cannot trust the runtime value.
+        state = names if clean else None
+    return state
+
+
+def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
+    """Collect public top-level functions/classes plus public class methods.
+
+    Recurses into public nested classes so a method on ``Outer.Inner`` is
+    recorded as ``Outer.Inner.method``; removing it would otherwise escape
+    both the removed-symbol diff and the signature-change diff because the
+    enclosing class ``Outer.Inner`` is unchanged.
+
+    Module-level ``ast.Assign`` / ``ast.AnnAssign`` targets, ``ast.Import``
+    aliases, and ``ast.ImportFrom`` aliases are ALSO captured as public
+    surface — removing a re-export like ``import git`` or a public constant
+    like ``PUBLIC_SETTING = ...`` is a real downstream-breaking change.
+
+    When the module declares ``__all__`` as a clean list/tuple of string
+    constants, that list is AUTHORITATIVE per Python semantics: a name is
+    public if and only if it appears in ``__all__``, even if the name is
+    underscore-prefixed (e.g. ``__all__ = ["_public_helper"]``). Symbols
+    not in ``__all__`` are NOT considered part of the public surface when
+    ``__all__`` is declared. If ``__all__`` is missing or malformed
+    (computed expression, non-string elements), the fallback heuristic
+    applies: capture top-level non-underscore names, skip private/dunder.
+    ``from X import *`` contributes no fixed name and is ignored.
+    """
+    if (language or "").lower() not in {"python", "py"}:
+        return set()
+    try:
+        tree = ast.parse(code_text or "")
+    except SyntaxError:
+        return set()
+
+    dunder_all = _extract_dunder_all(tree)
+
+    names: set[str] = set()
+
+    def _walk_class(
+        class_node: ast.ClassDef,
+        qualname: str,
+        include_underscore: bool = False,
+    ) -> None:
+        """Recursively add dotted names for class members.
+
+        ``include_underscore=True`` is used when the enclosing top-level
+        class was explicitly opted into the public surface via
+        ``__all__``: in that case the user's intent is that the class
+        and its members ARE the public API, so underscore-prefixed
+        methods/nested classes are NOT silently excluded (consistent
+        with the existing ``__all__`` semantics where listing an
+        underscore-prefixed top-level name like ``_helper`` makes it
+        public). Outside of ``__all__`` scope the previous heuristic
+        applies and underscores filter out.
+        """
+        for child in class_node.body:
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            if not include_underscore and child.name.startswith("_"):
+                continue
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                names.add(f"{qualname}.{child.name}")
+            else:  # ast.ClassDef
+                nested_qualname = f"{qualname}.{child.name}"
+                names.add(nested_qualname)
+                _walk_class(child, nested_qualname, include_underscore)
+
+    if dunder_all is not None:
+        # __all__ is authoritative. Names declared in __all__ that are
+        # actually bound at module scope (anything in __all__ that isn't
+        # defined would be a runtime ImportError on `from X import *`,
+        # which is the module author's bug, not this gate's concern)
+        # form the public surface — INCLUDING the recursively-walked
+        # members of any class entry in __all__. Without that recursion
+        # a removal like `Service.run` would slip past the gate even
+        # though it's clearly part of the declared public class.
+        class_defs: Dict[str, ast.ClassDef] = {
+            node.name: node
+            for node in tree.body
+            if isinstance(node, ast.ClassDef)
+        }
+        bound = _collect_bound_module_names(tree)
+        for name in dunder_all:
+            if name not in bound:
+                continue
+            names.add(name)
+            if name in class_defs:
+                # User opted the whole class into __all__; treat its
+                # members (including underscore-prefixed) as public.
+                _walk_class(class_defs[name], name, include_underscore=True)
+        return names
+
+    def _add_assign_targets(target: ast.AST) -> None:
+        """Walk an assignment target, adding public bare-name identifiers.
+
+        Handles tuple/list unpacking (``a, b = foo()`` and ``[a, b] = foo()``)
+        by recursing into element lists. Attribute/subscript targets are
+        ignored — those mutate existing objects, they don't create a new
+        module-level name.
+        """
+        if isinstance(target, ast.Name):
+            if not target.id.startswith("_"):
+                names.add(target.id)
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _add_assign_targets(elt)
+        elif isinstance(target, ast.Starred):
+            _add_assign_targets(target.value)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            if not node.name.startswith("_"):
+                names.add(node.name)
+        elif isinstance(node, ast.ClassDef):
+            if not node.name.startswith("_"):
+                names.add(node.name)
+                _walk_class(node, node.name)
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                _add_assign_targets(target)
+        elif isinstance(node, ast.AnnAssign):
+            # Only bound annotations bind a runtime module attribute: a bare
+            # `PUBLIC_NAME: int` declaration is a type hint, not an export,
+            # so it would create false-positive regressions when removed.
+            # `PUBLIC_NAME: int = None` (explicit None value) still binds and
+            # is captured because `node.value` is the `ast.Constant(None)`
+            # node, not Python `None`.
+            if node.value is not None:
+                _add_assign_targets(node.target)
+        elif isinstance(node, ast.Import):
+            for alias in node.names:
+                # ``import foo.bar`` binds the top-level package name ``foo``;
+                # ``import foo.bar as baz`` binds ``baz``.
+                exposed = alias.asname or alias.name.split(".", 1)[0]
+                if exposed and not exposed.startswith("_"):
+                    names.add(exposed)
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                # ``from X import *`` has alias.name == "*"; no fixed
+                # identifier is bound, so it does not contribute.
+                if alias.name == "*":
+                    continue
+                exposed = alias.asname or alias.name
+                if exposed and not exposed.startswith("_"):
+                    names.add(exposed)
+
+    return names
+
+
+def _diff_public_surface(pre: Set[str], post: Set[str]) -> List[str]:
+    """Return public symbols present before generation but absent after it."""
+    return sorted(set(pre) - set(post))
+
+
+def _format_python_signature(node: ast.AST, *, skip_first: bool = False) -> str:
+    """Return a stable public-call signature string for a function-like AST node."""
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return ""
+    args = node.args
+    parts: List[str] = []
+
+    def add_arg(arg: ast.arg, default: Optional[ast.AST] = None) -> None:
+        text = arg.arg
+        if arg.annotation is not None:
+            text += f": {ast.unparse(arg.annotation)}"
+        if default is not None:
+            text += f"={ast.unparse(default)}"
+        parts.append(text)
+
+    positional = list(args.posonlyargs) + list(args.args)
+    if skip_first and positional:
+        positional = positional[1:]
+    defaults: List[Optional[ast.AST]] = [None] * (
+        len(positional) - len(args.defaults)
+    ) + list(args.defaults)
+    for arg, default in zip(positional, defaults):
+        add_arg(arg, default)
+    if args.vararg:
+        text = "*" + args.vararg.arg
+        if args.vararg.annotation is not None:
+            text += f": {ast.unparse(args.vararg.annotation)}"
+        parts.append(text)
+    elif args.kwonlyargs:
+        parts.append("*")
+    for arg, default in zip(args.kwonlyargs, args.kw_defaults):
+        add_arg(arg, default)
+    if args.kwarg:
+        text = "**" + args.kwarg.arg
+        if args.kwarg.annotation is not None:
+            text += f": {ast.unparse(args.kwarg.annotation)}"
+        parts.append(text)
+    returns = ""
+    if node.returns is not None:
+        returns = f" -> {ast.unparse(node.returns)}"
+    prefix = "async " if isinstance(node, ast.AsyncFunctionDef) else ""
+    return f"{prefix}({', '.join(parts)}){returns}"
+
+
+def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
+    """Collect signatures for public top-level functions, classes, and class methods.
+
+    Recurses into public nested classes so a method like ``Outer.Inner.method``
+    has its signature snapshot keyed by the same fully qualified name used in
+    :func:`_snapshot_public_surface`. Without this the removed-symbol diff and
+    the signature diff disagree on nested methods.
+
+    When the module declares ``__all__`` as a clean list/tuple of string
+    constants, that list is authoritative (same rule as
+    :func:`_snapshot_public_surface`): a top-level function/class is
+    captured only if it appears in ``__all__``, even when underscore-
+    prefixed. Without that mirror the removed-symbol diff and the
+    signature-drift diff would disagree on what is "public".
+    """
+    if (language or "").lower() not in {"python", "py"}:
+        return {}
+    try:
+        tree = ast.parse(code_text or "")
+    except SyntaxError:
+        return {}
+
+    dunder_all = _extract_dunder_all(tree)
+    # When __all__ is authoritative, a top-level name is "public" iff it's
+    # in __all__. Build a predicate that captures this.
+    if dunder_all is not None:
+        def _is_public_top_level(name: str) -> bool:
+            return name in dunder_all
+        # Classes opted into __all__ have their members treated as
+        # public regardless of underscore prefix, consistent with the
+        # __all__-authoritative branch in `_snapshot_public_surface`.
+        include_methods_underscore_for_top_class = True
+    else:
+        def _is_public_top_level(name: str) -> bool:
+            return not name.startswith("_")
+        include_methods_underscore_for_top_class = False
+
+    signatures: Dict[str, str] = {}
+
+    def _walk_class(
+        class_node: ast.ClassDef,
+        qualname: str,
+        include_underscore: bool = False,
+    ) -> None:
+        # Record the class itself with its constructor signature so that
+        # ADDING a required `__init__` parameter is caught (#1012, P1.B).
+        # Previously, a class without an explicit `__init__` got NO entry
+        # in `signatures` at all, which meant ``before_signatures`` had
+        # no key for ``Service``; the diff loop iterates
+        # ``before_signatures`` items so an added required constructor
+        # (``def __init__(self, required): ...``) silently slipped past
+        # the gate even though callers doing ``Service()`` would now
+        # ``TypeError`` at runtime. Always record an entry: when the
+        # class has an explicit ``__init__``, use its signature
+        # (``skip_first=True`` mirroring instance-method handling); when
+        # it doesn't, use the implicit ``"()"`` which equals what
+        # ``_format_python_signature`` produces for ``def __init__(self): ...``
+        # after ``skip_first=True``. This makes pre/post comparisons
+        # apples-to-apples regardless of whether either side declares an
+        # explicit constructor.
+        explicit_init: Optional[ast.AST] = None
+        for child in class_node.body:
+            if (
+                isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+                and child.name == "__init__"
+            ):
+                explicit_init = child
+                break
+        if explicit_init is not None:
+            signatures[qualname] = _format_python_signature(
+                explicit_init, skip_first=True
+            )
+        else:
+            signatures[qualname] = "()"
+
+        for child in class_node.body:
+            if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                # __init__ already recorded above against ``qualname``;
+                # do not re-add as ``qualname.__init__``.
+                if child.name == "__init__":
+                    continue
+                is_staticmethod = any(
+                    (isinstance(d, ast.Name) and d.id == "staticmethod")
+                    or (isinstance(d, ast.Attribute) and d.attr == "staticmethod")
+                    for d in getattr(child, "decorator_list", [])
+                )
+                skip_first = not is_staticmethod
+                if include_underscore or not child.name.startswith("_"):
+                    signatures[f"{qualname}.{child.name}"] = _format_python_signature(
+                        child, skip_first=skip_first
+                    )
+            elif isinstance(child, ast.ClassDef) and (
+                include_underscore or not child.name.startswith("_")
+            ):
+                _walk_class(child, f"{qualname}.{child.name}", include_underscore)
+
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public_top_level(node.name):
+            signatures[node.name] = _format_python_signature(node)
+        elif isinstance(node, ast.ClassDef) and _is_public_top_level(node.name):
+            _walk_class(
+                node,
+                node.name,
+                include_underscore=include_methods_underscore_for_top_class,
+            )
+    return signatures
+
+
+def _collect_python_public_surface(source: str) -> List[str]:
+    """Backward-compatible wrapper for older tests and local imports."""
+    return sorted(_snapshot_public_surface(source, "python"))
+
+
+def _prompt_allows_breaking_change(prompt_content: Optional[str]) -> bool:
+    """Backward-compatible wrapper for the public marker helper."""
+    return _prompt_has_breaking_change_marker(prompt_content)
+
+
+def _verify_public_surface_regression(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    language: Optional[str],
+    prompt_content: Optional[str],
+) -> None:
+    """Fail when a mature Python module generation removes public symbols."""
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or _env_flag_enabled("PDD_SKIP_PUBLIC_SURFACE_GATE")
+        or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+        or _is_test_output_path(output_path)
+        or not _is_python_generation(language, output_path)
+    ):
+        return
+
+    before = _snapshot_public_surface(existing_code, language or "python")
+    after = _snapshot_public_surface(generated_code, language or "python")
+    if not before:
+        return
+    allowed_removed = _prompt_breaking_change_removed_symbols(prompt_content)
+    removed = [
+        symbol
+        for symbol in _diff_public_surface(before, after)
+        if symbol not in allowed_removed
+    ]
+    before_signatures = _snapshot_public_signatures(existing_code, language or "python")
+    after_signatures = _snapshot_public_signatures(generated_code, language or "python")
+    allowed_signature_changes = _prompt_breaking_change_signature_symbols(prompt_content)
+    changed_set = {
+        symbol
+        for symbol, signature in before_signatures.items()
+        if (
+            symbol in after_signatures
+            and after_signatures[symbol] != signature
+            and symbol not in allowed_signature_changes
+        )
+    }
+    for symbol in before_signatures:
+        if symbol in after_signatures or symbol in changed_set:
+            continue
+        if "." in symbol:
+            continue
+        if symbol in after and symbol not in allowed_signature_changes:
+            changed_set.add(symbol)
+    changed_signatures = sorted(changed_set)
+    if removed or changed_signatures:
+        raise PublicSurfaceRegressionError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            removed_symbols=removed,
+            changed_signatures=changed_signatures,
+            pre_surface_size=len(before),
+            post_surface_size=len(after),
+        )
+
+
+def _get_test_churn_threshold() -> float:
+    """Return the PDD_TEST_CHURN_THRESHOLD as a clamped 0..1 ratio.
+
+    Accepts either a decimal ratio (``"0.40"``) or a percent string
+    (``"40%"`` / ``"100%"``). The percent suffix is stripped and the value
+    is divided by 100 before clamping. Unparseable values (``"invalid"``)
+    log a warning and fall back to the documented default of ``0.40`` so
+    a typo doesn't silently disable the gate.
+    """
+    raw = os.environ.get("PDD_TEST_CHURN_THRESHOLD", "0.40")
+    text = (raw or "").strip()
+    if not text:
+        return 0.40
+    is_percent = text.endswith("%")
+    if is_percent:
+        text = text[:-1].rstrip()
+    try:
+        value = float(text)
+    except (TypeError, ValueError):
+        logger.warning(
+            "PDD_TEST_CHURN_THRESHOLD=%r is not a number; "
+            "falling back to default 0.40.",
+            raw,
+        )
+        return 0.40
+    if is_percent:
+        value /= 100.0
+    if value < 0:
+        return 0.0
+    if value > 1:
+        return 1.0
+    return value
+
+
+def _compute_test_churn_ratio(pre_text: str, post_text: str) -> float:
+    before_lines = (pre_text or "").splitlines()
+    after_lines = (post_text or "").splitlines()
+    diff = difflib.unified_diff(before_lines, after_lines, lineterm="")
+    added = 0
+    removed = 0
+    for line in diff:
+        if line.startswith(("+++", "---", "@@")):
+            continue
+        if line.startswith("+"):
+            added += 1
+        elif line.startswith("-"):
+            removed += 1
+    if removed == 0:
+        return 0.0
+    return min(max(added, removed) / max(len(before_lines), 1), 1.0)
+
+
+def _calculate_test_churn_ratio(before: str, after: str) -> float:
+    """Backward-compatible wrapper for the prompt-named churn helper."""
+    return _compute_test_churn_ratio(before, after)
+
+
+def _verify_test_churn(
+    existing_code: Optional[str],
+    generated_code: str,
+    prompt_name: str,
+    output_path: Optional[str],
+    prompt_content: Optional[str],
+) -> None:
+    """Fail when rewriting an existing test file exceeds the churn threshold."""
+    if (
+        not existing_code
+        or not existing_code.strip()
+        or _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
+        or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+        or not _is_test_output_path(output_path)
+        or _prompt_allows_test_churn(prompt_content)
+    ):
+        return
+
+    threshold = _get_test_churn_threshold()
+    ratio = _compute_test_churn_ratio(existing_code, generated_code)
+    if ratio > threshold:
+        raise TestChurnError(
+            prompt_name=prompt_name,
+            output_path=output_path or "",
+            churn_ratio=ratio,
+            threshold=threshold,
+            pre_line_count=len(existing_code.splitlines()),
+            post_line_count=len(generated_code.splitlines()),
+        )
 
 def _should_wire_generated_exports(output_path: str) -> bool:
     """Return True when generated Python exports should be wired to __init__.py.
@@ -2012,17 +2910,12 @@ def code_generator_main(
                             temp_input_path = str(pathlib.Path(output_path).resolve())
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         else:
-                            # Write payload to a temp file for scripts expecting a file path input
+                            # Write payload to a temp file for scripts expecting a file path input.
+                            # LLM output must not touch output_path until conformance gates pass.
                             suffix = '.json' if (isinstance(language, str) and str(language).lower().strip() == 'json') or (output_path and str(output_path).lower().endswith('.json')) else '.txt'
-                            if output_path and llm_enabled:
-                                temp_input_path = str(pathlib.Path(output_path).resolve())
-                                pathlib.Path(temp_input_path).parent.mkdir(parents=True, exist_ok=True)
-                                with open(temp_input_path, 'w', encoding='utf-8') as f:
-                                    f.write(stdin_payload or '')
-                            else:
-                                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
-                                    tf.write(stdin_payload or '')
-                                    temp_input_path = tf.name
+                            with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix=suffix, encoding='utf-8') as tf:
+                                tf.write(stdin_payload or '')
+                                temp_input_path = tf.name
                             env['PDD_POSTPROCESS_INPUT_FILE'] = temp_input_path
                         # Compute placeholder values
                         app_name_val = (env_vars or {}).get('APP_NAME') if env_vars else None
@@ -2071,8 +2964,22 @@ def code_generator_main(
                 finally:
                     if temp_input_path:
                         try:
-                            # Only delete temp files, not the actual output file when llm=false
-                            if llm_enabled or not (output_path and pathlib.Path(output_path).exists() and temp_input_path == str(pathlib.Path(output_path).resolve())):
+                            # Only delete temp files, not the actual output file when llm=false.
+                            is_resolved_output = bool(
+                                output_path
+                                and temp_input_path == str(pathlib.Path(output_path).resolve())
+                            )
+                            if (
+                                proc
+                                and proc.returncode == 0
+                                and llm_enabled
+                                and generated_code_content is not None
+                                and not is_resolved_output
+                            ):
+                                generated_code_content = pathlib.Path(temp_input_path).read_text(
+                                    encoding="utf-8"
+                                )
+                            if not is_resolved_output:
                                 os.unlink(temp_input_path)
                         except Exception:
                             pass
@@ -2165,6 +3072,45 @@ def code_generator_main(
                 except Exception as conform_err:
                     if verbose and not quiet:
                         console.print(f"[yellow]Warning: Architecture conformance check failed: {conform_err}[/yellow]")
+
+            if (
+                not _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+                and generated_code_content
+                and existing_code_content is not None
+            ):
+                try:
+                    prompt_name = pathlib.Path(prompt_file).name
+                    _verify_public_surface_regression(
+                        existing_code=existing_code_content,
+                        generated_code=generated_code_content,
+                        prompt_name=prompt_name,
+                        output_path=output_path,
+                        language=language,
+                        prompt_content=prompt_content,
+                    )
+                    _verify_test_churn(
+                        existing_code=existing_code_content,
+                        generated_code=generated_code_content,
+                        prompt_name=prompt_name,
+                        output_path=output_path,
+                        prompt_content=prompt_content,
+                    )
+                except (PublicSurfaceRegressionError, TestChurnError) as compat_err:
+                    if output_path and existing_code_content is not None:
+                        try:
+                            pathlib.Path(output_path).write_text(
+                                existing_code_content,
+                                encoding="utf-8",
+                            )
+                        except Exception as restore_err:
+                            if verbose and not quiet:
+                                console.print(
+                                    f"[yellow]Warning: Could not restore {output_path} "
+                                    f"after compatibility gate failure: {restore_err}[/yellow]"
+                                )
+                    compat_err.total_cost = float(total_cost or 0.0)
+                    compat_err.model_name = model_name or "unknown"
+                    raise
 
             if output_path:
                 p_output = pathlib.Path(output_path)
