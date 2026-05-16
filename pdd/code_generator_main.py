@@ -238,9 +238,14 @@ def _env_flag_enabled(name: str) -> bool:
 # content, then a closing ``---`` on its own line. We anchor to the start
 # of the string and require both fences to terminate with a newline so a
 # stray ``---`` that never closes does NOT eat the entire prompt body.
-# ``re.DOTALL`` so ``.`` matches newlines inside the block.
+# ``re.DOTALL`` so ``.`` matches newlines inside the block. Tolerates LF
+# or CRLF line endings, a leading UTF-8 BOM, trailing whitespace on the
+# fence lines, and a closing fence that is the final line of the file
+# (``\Z``). This mirrors ``_parse_front_matter`` so both helpers agree on
+# what counts as front matter — otherwise a CRLF or BOM prompt could
+# leave ``BREAKING-CHANGE:`` metadata visible to the directive parser.
 _YAML_FRONT_MATTER_RE = re.compile(
-    r"\A---\n.*?\n---\n",
+    r"\A﻿?---[ \t]*\r?\n.*?\r?\n---[ \t]*(?:\r?\n|\Z)",
     re.DOTALL,
 )
 
@@ -249,21 +254,28 @@ def _strip_yaml_front_matter(prompt_content: Optional[str]) -> str:
     """Return ``prompt_content`` with a leading YAML front matter block stripped.
 
     Per the PR #1012 contract, BREAKING-CHANGE: opt-outs must come from the
-    prompt BODY — not from metadata. Currently no shipped prompt uses YAML
-    front matter (verified by scanning ``pdd/prompts/``), so this is
-    defensive hardening against a future convention rather than a current
-    exploit. The stripped form is what every BREAKING-CHANGE parser must
-    see so that an indented directive inside front matter cannot whitelist
-    surface removals or test-churn rewrites.
+    prompt BODY — not from metadata. The stripped form is what every
+    BREAKING-CHANGE parser must see so that an indented directive inside
+    front matter cannot whitelist surface removals or test-churn rewrites.
 
-    The block must begin with ``---\\n`` on line 1 and close with a line
-    that is exactly ``---``. An unterminated opening fence is left alone
-    so we never silently swallow the entire prompt.
+    The block must begin with ``---`` on line 1 (after an optional UTF-8
+    BOM) and close with a ``---`` line. CRLF line endings, mixed line
+    endings, trailing whitespace on the fence line, and a closing fence
+    that is the final line of the file (no trailing newline) are all
+    accepted — these match what ``_parse_front_matter`` already handles.
+    An unterminated opening fence is left alone so we never silently
+    swallow the entire prompt body.
     """
     if not prompt_content:
         return ""
     match = _YAML_FRONT_MATTER_RE.match(prompt_content)
     if match is None:
+        # A leading UTF-8 BOM with NO front matter still needs stripping so
+        # downstream BREAKING-CHANGE: scans see a clean body — otherwise a
+        # BOM-only prompt would skip the fence but retain the BOM ahead of
+        # the first directive line.
+        if prompt_content.startswith("﻿"):
+            return prompt_content[1:]
         return prompt_content
     return prompt_content[match.end():]
 
@@ -806,7 +818,8 @@ def _format_python_signature(node: ast.AST, *, skip_first: bool = False) -> str:
 
 def _python_method_binding_kind(node: ast.AST) -> str:
     """Return the binding kind ('instance', 'staticmethod', 'classmethod',
-    'property') for a class-body function-like node based on its decorators.
+    'property', 'property_accessor') for a class-body function-like node
+    based on its decorators.
 
     Used by :func:`_snapshot_public_signatures` to prefix the captured
     signature string so that a binding-kind flip (e.g. ``def f(self, x)``
@@ -814,10 +827,27 @@ def _python_method_binding_kind(node: ast.AST) -> str:
     even though the receiver-stripped parameter list is identical. Without
     this prefix, callers doing ``Class.f(1)`` would silently break across
     generations because the gate compared only normalized params.
+
+    The ``property_accessor`` kind covers ``@x.setter`` / ``@x.getter`` /
+    ``@x.deleter`` Attribute decorators — the caller is expected to merge
+    these with the matching ``@property`` getter into a single combined
+    snapshot per property name (see ``_walk_class``). Returning a
+    dedicated kind for accessors prevents the last-write-wins overwrite
+    that previously let a setter-decorated function be classified as a
+    plain ``[instance]`` method.
     """
     if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
         return "instance"
     for decorator in getattr(node, "decorator_list", []):
+        # Recognize property accessor decorators FIRST so ``@x.setter``
+        # (an Attribute node with ``attr in {"setter","getter","deleter"}``)
+        # is not silently flattened to ``instance`` by the generic
+        # Attribute fallthrough below.
+        if (
+            isinstance(decorator, ast.Attribute)
+            and decorator.attr in {"setter", "getter", "deleter"}
+        ):
+            return "property_accessor"
         name: Optional[str] = None
         if isinstance(decorator, ast.Name):
             name = decorator.id
@@ -838,6 +868,31 @@ def _python_method_binding_kind(node: ast.AST) -> str:
     return "instance"
 
 
+def _python_property_accessor_role(node: ast.AST) -> Optional[str]:
+    """Return ``'getter'`` / ``'setter'`` / ``'deleter'`` when ``node`` is a
+    property accessor — that is, decorated with ``@property`` (getter),
+    ``@<name>.setter``, ``@<name>.getter``, or ``@<name>.deleter``.
+
+    Returns ``None`` otherwise. Used by ``_walk_class`` to accumulate
+    accessor roles per property name so the final snapshot reflects ALL
+    accessors that exist (e.g. ``getter+setter``). Without this merge the
+    setter would overwrite the getter entry and a rewrite that replaced
+    the descriptor with a plain ``def x(self, value)`` could produce an
+    identical snapshot string.
+    """
+    if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        return None
+    for decorator in getattr(node, "decorator_list", []):
+        if isinstance(decorator, ast.Name) and decorator.id == "property":
+            return "getter"
+        if (
+            isinstance(decorator, ast.Attribute)
+            and decorator.attr in {"setter", "getter", "deleter"}
+        ):
+            return decorator.attr
+    return None
+
+
 def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]:
     """Collect signatures for public top-level functions, classes, and class methods.
 
@@ -854,12 +909,22 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
     signature-drift diff would disagree on what is "public".
 
     Class methods are stored with a leading ``[<kind>]`` binding prefix
-    (``[instance]``, ``[staticmethod]``, ``[classmethod]``, ``[property]``)
+    (``[instance]``, ``[staticmethod]``, ``[classmethod]``, ``[property:...]``)
     so that a binding flip — e.g. ``def f(self, v)`` → ``@staticmethod def
     f(v)`` — produces a snapshot diff even when the receiver-stripped
-    parameter list matches. Without this discriminator, ``Class.f(1)``
-    callers would silently break after a rewrite that preserved the
-    parameter shape but changed how the method binds at call time.
+    parameter list matches. Property descriptors carry a sorted accessor
+    list (``[property:getter]``, ``[property:getter+setter]``, ...) so a
+    rewrite that drops the descriptor in favor of a plain ``def x(self,
+    value)`` cannot collide with the original snapshot.
+
+    Top-level functions / async functions / classes carry a symbol-kind
+    prefix (``[function]`` / ``[async_function]`` / ``[class]``) so a
+    replacement that swaps a public class with a same-named function (or
+    vice versa) is detected even when the receiver-stripped parameter
+    list happens to match. Callers that ``Service()`` against a class and
+    a function may both succeed on construction, but ``isinstance`` and
+    subclass checks break — the kind prefix surfaces the regression
+    before generation completes.
     """
     if (language or "").lower() not in {"python", "py"}:
         return {}
@@ -892,20 +957,10 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
     ) -> None:
         # Record the class itself with its constructor signature so that
         # ADDING a required `__init__` parameter is caught (#1012, P1.B).
-        # Previously, a class without an explicit `__init__` got NO entry
-        # in `signatures` at all, which meant ``before_signatures`` had
-        # no key for ``Service``; the diff loop iterates
-        # ``before_signatures`` items so an added required constructor
-        # (``def __init__(self, required): ...``) silently slipped past
-        # the gate even though callers doing ``Service()`` would now
-        # ``TypeError`` at runtime. Always record an entry: when the
-        # class has an explicit ``__init__``, use its signature
-        # (``skip_first=True`` mirroring instance-method handling); when
-        # it doesn't, use the implicit ``"()"`` which equals what
-        # ``_format_python_signature`` produces for ``def __init__(self): ...``
-        # after ``skip_first=True``. This makes pre/post comparisons
-        # apples-to-apples regardless of whether either side declares an
-        # explicit constructor.
+        # The ``[class]`` kind prefix mirrors the top-level
+        # function/async-function/class kind tagging so a replacement
+        # that swaps the class for a function with a matching constructor
+        # signature is still flagged.
         explicit_init: Optional[ast.AST] = None
         for child in class_node.body:
             if (
@@ -915,17 +970,67 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                 explicit_init = child
                 break
         if explicit_init is not None:
-            signatures[qualname] = _format_python_signature(
+            class_signature = _format_python_signature(
                 explicit_init, skip_first=True
             )
         else:
-            signatures[qualname] = "()"
+            class_signature = "()"
+        signatures[qualname] = f"[class] {class_signature}"
+
+        # First pass: accumulate property accessor roles per name so a
+        # getter + setter combination collapses into ONE merged
+        # ``[property:getter+setter]`` snapshot. Last-write-wins on the
+        # dict (the previous behaviour) let ``@x.setter`` overwrite
+        # ``@property`` and then misclassify the setter as ``[instance]``,
+        # which let a real rewrite to ``def x(self, value)`` produce the
+        # same snapshot string.
+        property_accessors: Dict[str, Set[str]] = {}
+        property_getter_nodes: Dict[str, ast.AST] = {}
+        for child in class_node.body:
+            if not isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            role = _python_property_accessor_role(child)
+            if role is None:
+                continue
+            if not (include_underscore or not child.name.startswith("_")):
+                continue
+            property_accessors.setdefault(child.name, set()).add(role)
+            # Remember the getter node so we can capture its parameter
+            # signature in the final snapshot (the setter's ``(self,
+            # value)`` shape is intentionally NOT used as the canonical
+            # signature — accessors share the property identity but not
+            # the param list).
+            if role == "getter" and child.name not in property_getter_nodes:
+                property_getter_nodes[child.name] = child
+
+        for name, roles in property_accessors.items():
+            sorted_roles = "+".join(sorted(roles))
+            getter_node = property_getter_nodes.get(name)
+            if getter_node is not None:
+                getter_signature = _format_python_signature(
+                    getter_node, skip_first=True
+                )
+            else:
+                # ``@x.setter`` without an accompanying ``@property`` is
+                # syntactically valid but unusual; fall back to ``()`` so
+                # the entry still has a stable shape.
+                getter_signature = "()"
+            signatures[f"{qualname}.{name}"] = (
+                f"[property:{sorted_roles}] {getter_signature}"
+            )
 
         for child in class_node.body:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 # __init__ already recorded above against ``qualname``;
                 # do not re-add as ``qualname.__init__``.
                 if child.name == "__init__":
+                    continue
+                # Property-decorated functions are handled in the
+                # accumulator pass above — skip them here so a
+                # last-write-wins overwrite cannot bury the merged
+                # ``[property:...]`` entry under an ``[instance]``
+                # snapshot from the setter.
+                if _python_property_accessor_role(child) is not None:
                     continue
                 binding_kind = _python_method_binding_kind(child)
                 # ``staticmethod`` does NOT receive an implicit first arg
@@ -950,7 +1055,16 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
 
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public_top_level(node.name):
-            signatures[node.name] = _format_python_signature(node)
+            # Top-level kind prefix so swapping a public class with a
+            # same-named function (or vice versa) is detected even when
+            # the normalized parameter list matches. ``[function]`` vs
+            # ``[async_function]`` keeps an ``async def`` flip
+            # observable too — callers awaiting the result of a former
+            # sync function would otherwise silently see a coroutine.
+            kind = "async_function" if isinstance(node, ast.AsyncFunctionDef) else "function"
+            signatures[node.name] = (
+                f"[{kind}] {_format_python_signature(node)}"
+            )
         elif isinstance(node, ast.ClassDef) and _is_public_top_level(node.name):
             _walk_class(
                 node,
