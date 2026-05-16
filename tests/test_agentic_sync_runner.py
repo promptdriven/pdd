@@ -1696,6 +1696,56 @@ class TestSyncOneModule:
         assert "Reduce churn below threshold 0.40" in directive
         assert "current churn is 0.82" in directive
 
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_public_surface_hard_failure_includes_breaking_change_note(
+        self, _mock_env
+    ):
+        """The structured hard-failure block MUST tell reviewers how to
+        opt the prompt out of the gate — ``agentic_sync_runner_python.prompt``
+        item 9d requires the ``BREAKING-CHANGE:`` directive instruction
+        to ride along with the diagnostics block."""
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        from pdd.agentic_sync_runner import (
+            build_public_surface_hard_failure_from_error,
+        )
+
+        exc = PublicSurfaceRegressionError(
+            prompt_name="update_main_Python.prompt",
+            output_path="pdd/update_main.py",
+            removed_symbols=["calculate_sha256"],
+            changed_signatures=[],
+            pre_surface_size=10,
+            post_surface_size=9,
+        )
+
+        block = build_public_surface_hard_failure_from_error(exc, "update_main")
+        assert "BREAKING-CHANGE:" in block
+
+    @patch("pdd.agentic_sync_runner._env_fingerprint", return_value="--- env ---")
+    def test_test_churn_hard_failure_includes_breaking_change_note(
+        self, _mock_env
+    ):
+        """The structured test-churn hard-failure block MUST include the
+        ``BREAKING-CHANGE: rewrite tests`` directive instruction so the
+        reviewer learns how to opt out of the gate from the failure
+        diagnostics alone."""
+        from pdd.code_generator_main import TestChurnError
+        from pdd.agentic_sync_runner import (
+            build_test_churn_hard_failure_from_error,
+        )
+
+        exc = TestChurnError(
+            prompt_name="test_update_main_Python.prompt",
+            output_path="tests/test_update_main.py",
+            churn_ratio=0.75,
+            threshold=0.40,
+            pre_line_count=120,
+            post_line_count=80,
+        )
+
+        block = build_test_churn_hard_failure_from_error(exc, "update_main")
+        assert "BREAKING-CHANGE:" in block
+
     def test_conformance_hard_failure_includes_structured_fields(self):
         runner = AsyncSyncRunner(
             basenames=["foo"],
