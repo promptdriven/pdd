@@ -975,6 +975,44 @@ def _dataclass_decorator_is_kw_only(decorator: ast.AST) -> bool:
     return False
 
 
+def _dataclass_decorator_synthesizes_init(decorator: ast.AST) -> bool:
+    """Return True when this dataclass decorator synthesises ``__init__``.
+
+    The stdlib ``@dataclass`` decorator synthesises an ``__init__`` by
+    default. Callers that opt out via ``@dataclass(init=False)`` keep
+    the class's natural ``__init__`` (typically ``object.__init__`` —
+    zero positional args). The reviewer reproduced both directions of
+    the resulting regression:
+
+    * Flipping ``@dataclass(init=False)`` → ``@dataclass`` adds a
+      synthesised constructor; the gate must trip.
+    * Adding fields under ``@dataclass(init=False)`` leaves the runtime
+      ``__init__`` untouched; the gate must NOT trip.
+
+    Returns ``True`` for the bare ``@dataclass`` Name form (no Call
+    wrapper), the ``@dataclasses.dataclass`` Attribute form, and any
+    ``Call`` form whose keywords either omit ``init`` or set
+    ``init=True``. Returns ``False`` ONLY when an explicit
+    ``init=False`` keyword is present.
+
+    Companion to :func:`_is_dataclass_decorator`. Callers are expected
+    to invoke this on a decorator that ALREADY passed the dataclass
+    check.
+    """
+    if not isinstance(decorator, ast.Call):
+        # Bare ``@dataclass`` / ``@dataclasses.dataclass`` — default
+        # ``init=True``.
+        return True
+    for keyword in decorator.keywords:
+        if (
+            keyword.arg == "init"
+            and isinstance(keyword.value, ast.Constant)
+            and keyword.value.value is False
+        ):
+            return False
+    return True
+
+
 def _is_kw_only_sentinel(annotation: Optional[ast.AST]) -> bool:
     """Return True when ``annotation`` is the stdlib ``KW_ONLY`` sentinel.
 
@@ -1031,60 +1069,18 @@ def _dataclass_field_call_is_init_false(value: Optional[ast.AST]) -> bool:
     return False
 
 
-def _synthesize_dataclass_init_signature(class_node: ast.ClassDef) -> str:
-    """Build a constructor signature for an ``@dataclass`` class with no explicit init.
+def _collect_dataclass_own_parts(class_node: ast.ClassDef) -> List[str]:
+    """Return the per-field signature tokens for a single dataclass's body.
 
-    Walks the class body in source order, treating each top-level
-    ``ast.AnnAssign`` (annotated assignment) whose target is a bare
-    ``ast.Name`` as a constructor field — matching the stdlib
-    ``dataclasses`` runtime behaviour (field order in the synthesised
-    ``__init__`` is the source order of the annotated attributes).
+    Returns a list of strings that mix actual field tokens (``name:
+    annotation = default``) with the kw-only marker ``"*"`` inserted at
+    the correct positions. The caller stitches base-class tokens in
+    front of this list and post-processes the combined sequence.
 
-    Keyword-only handling:
-
-    * ``@dataclass(kw_only=True)`` on the class decorator: ALL fields
-      go after a single ``*`` marker. Detected by
-      :func:`_dataclass_decorator_is_kw_only`.
-    * ``_: KW_ONLY`` sentinel inside the class body (``KW_ONLY`` or
-      ``dataclasses.KW_ONLY``): fields BEFORE the sentinel are
-      positional; fields AFTER are kw-only. Detected by
-      :func:`_is_kw_only_sentinel`. The sentinel itself contributes no
-      param. When the decorator already opts the whole class into
-      kw-only mode, the sentinel is redundant — emit only one ``*``.
-
-    Excluded from the synth:
-
-    * Underscore-prefixed field names: dataclass DOES synthesise an
-      init param for them at runtime, but they are NOT part of the
-      *public* API surface this snapshot tracks. The ``KW_ONLY``
-      sentinel check runs BEFORE this skip so the canonical ``_:
-      KW_ONLY`` marker still splits the signature.
-    * ``ClassVar[...]`` annotations: dataclasses skip these per PEP
-      557. Substring match on the unparsed annotation handles both
-      bare ``ClassVar`` and the ``typing.ClassVar`` / ``t.ClassVar``
-      forms.
-    * ``field(init=False, ...)`` defaults: the stdlib excludes these
-      from the synthesised ``__init__``. Detected by
-      :func:`_dataclass_field_call_is_init_false`.
-    * Plain ``ast.Assign`` without annotation: ``x = 5`` is a class-
-      level constant, NOT a dataclass field.
-
-    Included (vs. the previous iteration):
-
-    * ``InitVar[...]`` annotations: dataclasses DO pass these to
-      ``__init__`` (and ``__post_init__``) — they ARE constructor
-      parameters even though they are not stored as instance
-      attributes. Treating them as fields keeps ``inspect.signature``
-      and the snapshot in sync. Flipping an ``InitVar[int]`` to a
-      regular ``int`` annotation surfaces as a diff naturally because
-      the snapshot prints the verbatim annotation text.
-
-    Default values are emitted verbatim via ``ast.unparse``. This
-    includes ``field(default_factory=...)`` and
-    ``field(default=sentinel)`` expressions — the snapshot diff
-    therefore reflects ANY change to the literal default text, even if
-    runtime semantics are equivalent. That is the conservative
-    behaviour callers expect from the public-surface gate.
+    Field-extraction rules mirror :func:`_synthesize_dataclass_init_signature`'s
+    historical body (kw-only decorator, ``KW_ONLY`` sentinel,
+    underscore skip, ``ClassVar`` skip, ``field(init=False)`` skip,
+    annotation/default verbatim text, ``InitVar`` left in).
     """
     decorator_kw_only = any(
         _dataclass_decorator_is_kw_only(dec)
@@ -1134,6 +1130,239 @@ def _synthesize_dataclass_init_signature(class_node: ast.ClassDef) -> str:
         if child.value is not None:
             part += f" = {ast.unparse(child.value)}"
         parts.append(part)
+    return parts
+
+
+def _part_field_name(part: str) -> Optional[str]:
+    """Extract the field name from a single synth token.
+
+    Tokens look like ``name: annotation = default`` or ``name`` — the
+    name is the substring up to the first ``:`` / ``=``. The kw-only
+    marker ``"*"`` and the ``[inherited_unresolved]`` sentinel return
+    ``None`` so callers know to leave them in place rather than dedupe.
+    """
+    if not part or part in {"*", "[inherited_unresolved]"}:
+        return None
+    head = part.split(":", 1)[0]
+    head = head.split("=", 1)[0]
+    head = head.strip()
+    return head or None
+
+
+def _collect_dataclass_inherited_parts(
+    class_node: ast.ClassDef,
+    class_defs: Optional[Dict[str, ast.ClassDef]],
+    imported_names: Optional[Set[str]],
+    visited: frozenset,
+) -> List[str]:
+    """Return synth tokens from this class's ``@dataclass`` base classes.
+
+    Walks base classes left-to-right (matching the order ``@dataclass``
+    uses for ``__init__`` parameter merging). For each ``Name`` base
+    that resolves to a same-module ``ClassDef`` with a dataclass
+    decorator that synthesises ``__init__``, recursively gather ITS
+    inherited parts first and then ITS own parts. Bases that don't
+    resolve locally (cross-module imports, attribute-form references
+    like ``pkg.Base``) emit a single ``"[inherited_unresolved]"``
+    token so the final signature is annotated as uncertain — local
+    field changes still diff, but we don't claim authoritative
+    knowledge of the imported base's fields.
+
+    The ``visited`` set guards against accidental self-reference cycles
+    (``class A(A): ...`` is illegal at runtime but the AST permits it).
+
+    Known limitations (documented for future iteration, not fixed in
+    V1): a base decorated with ``@dataclass(init=False)`` still
+    contributes its annotated fields to a derived ``@dataclass``'s
+    synth at runtime, but we treat ``init=False`` bases the same as
+    non-dataclass bases (skip their fields). Same goes for
+    ``KW_ONLY`` sentinel propagation across the inheritance boundary —
+    the derived class re-emits its own marker.
+    """
+    if class_defs is None:
+        return []
+    inherited: List[str] = []
+    for base in class_node.bases:
+        if not isinstance(base, ast.Name):
+            # Attribute-form base (``pkg.Base``) or other expression —
+            # we can't see the source from here.
+            inherited.append("[inherited_unresolved]")
+            continue
+        base_name = base.id
+        if base_name in visited:
+            # Cycle guard. Real Python would raise ``TypeError`` at
+            # class creation; bail out gracefully so the snapshot stays
+            # well-formed.
+            continue
+        base_def = class_defs.get(base_name)
+        if base_def is None:
+            # Base is an imported name or otherwise not declared in
+            # this module — mark uncertain.
+            if imported_names is None or base_name in imported_names:
+                inherited.append("[inherited_unresolved]")
+            else:
+                # Base is a free name that's not a same-module class
+                # and not imported (e.g. ``object`` builtin) — no
+                # dataclass fields to merge.
+                continue
+            continue
+        base_dataclass_decorators = [
+            dec for dec in base_def.decorator_list if _is_dataclass_decorator(dec)
+        ]
+        if not base_dataclass_decorators:
+            # Non-dataclass base contributes no fields to the
+            # synthesised init.
+            continue
+        if not all(
+            _dataclass_decorator_synthesizes_init(dec)
+            for dec in base_dataclass_decorators
+        ):
+            # ``@dataclass(init=False)`` base: V1 limitation — runtime
+            # would still merge its declared fields, but treating that
+            # case requires distinguishing "declared dataclass fields"
+            # from "synthesised init params". Skip for now; documented
+            # in the helper docstring.
+            continue
+        new_visited = visited | {base_name}
+        inherited.extend(
+            _collect_dataclass_inherited_parts(
+                base_def, class_defs, imported_names, new_visited
+            )
+        )
+        inherited.extend(_collect_dataclass_own_parts(base_def))
+    return inherited
+
+
+def _synthesize_dataclass_init_signature(
+    class_node: ast.ClassDef,
+    class_defs: Optional[Dict[str, ast.ClassDef]] = None,
+    imported_names: Optional[Set[str]] = None,
+) -> str:
+    """Build a constructor signature for an ``@dataclass`` class with no explicit init.
+
+    Walks the class body in source order, treating each top-level
+    ``ast.AnnAssign`` (annotated assignment) whose target is a bare
+    ``ast.Name`` as a constructor field — matching the stdlib
+    ``dataclasses`` runtime behaviour (field order in the synthesised
+    ``__init__`` is the source order of the annotated attributes).
+
+    Keyword-only handling:
+
+    * ``@dataclass(kw_only=True)`` on the class decorator: ALL fields
+      go after a single ``*`` marker. Detected by
+      :func:`_dataclass_decorator_is_kw_only`.
+    * ``_: KW_ONLY`` sentinel inside the class body (``KW_ONLY`` or
+      ``dataclasses.KW_ONLY``): fields BEFORE the sentinel are
+      positional; fields AFTER are kw-only. Detected by
+      :func:`_is_kw_only_sentinel`. The sentinel itself contributes no
+      param. When the decorator already opts the whole class into
+      kw-only mode, the sentinel is redundant — emit only one ``*``.
+
+    Excluded from the synth:
+
+    * Underscore-prefixed field names: dataclass DOES synthesise an
+      init param for them at runtime, but they are NOT part of the
+      *public* API surface this snapshot tracks. The ``KW_ONLY``
+      sentinel check runs BEFORE this skip so the canonical ``_:
+      KW_ONLY`` marker still splits the signature.
+    * ``ClassVar[...]`` annotations: dataclasses skip these per PEP
+      557. Substring match on the unparsed annotation handles both
+      bare ``ClassVar`` and the ``typing.ClassVar`` / ``t.ClassVar``
+      forms.
+    * ``field(init=False, ...)`` defaults: the stdlib excludes these
+      from the synthesised ``__init__``. Detected by
+      :func:`_dataclass_field_call_is_init_false`.
+    * Plain ``ast.Assign`` without annotation: ``x = 5`` is a class-
+      level constant, NOT a dataclass field.
+
+    Included (vs. the previous iteration):
+
+    * ``InitVar[...]`` annotations: dataclasses DO pass these to
+      ``__init__`` (and ``__post_init__``) — they ARE constructor
+      parameters even though they are not stored as instance
+      attributes. Treating them as fields keeps ``inspect.signature``
+      and the snapshot in sync. Flipping an ``InitVar[int]`` to a
+      regular ``int`` annotation surfaces as a diff naturally because
+      the snapshot prints the verbatim annotation text.
+
+    Inheritance handling (added for PR #1015, iter-6):
+
+    * When ``class_defs`` is provided, base classes named directly
+      (``class User(_Base)``) are resolved against the same-module
+      ``ClassDef`` map. Resolved bases that are themselves
+      ``@dataclass``-decorated contribute their fields FIRST, matching
+      the runtime constructor ordering (``base_fields ++
+      derived_own_fields``).
+    * Override semantics: if a base and the derived class declare the
+      same field name, the derived class's annotation/default text
+      replaces the base's WHILE PRESERVING the base's position. This
+      mirrors what ``@dataclass`` actually synthesises and follows the
+      C3-equivalent rule for the common single-inheritance case.
+    * Unresolved bases (cross-module imports, attribute-form
+      references) annotate the signature with an
+      ``[inherited_unresolved]`` token. Local field changes still
+      shift the snapshot; invisible upstream field changes do not — the
+      gate is intentionally conservative for cases it cannot see.
+    * Multiple inheritance: bases walked left-to-right, depth-first,
+      matching dataclass's own field ordering for simple cases. C3 MRO
+      diamond cases beyond left-to-right depth-first are not handled
+      in V1.
+
+    Default values are emitted verbatim via ``ast.unparse``. This
+    includes ``field(default_factory=...)`` and
+    ``field(default=sentinel)`` expressions — the snapshot diff
+    therefore reflects ANY change to the literal default text, even if
+    runtime semantics are equivalent. That is the conservative
+    behaviour callers expect from the public-surface gate.
+    """
+    own_parts = _collect_dataclass_own_parts(class_node)
+    inherited_parts = _collect_dataclass_inherited_parts(
+        class_node,
+        class_defs,
+        imported_names,
+        frozenset({class_node.name}),
+    )
+
+    # Merge inherited and own parts. Preserve the inherited slot for
+    # an override (derived class re-declares a base field): the
+    # position is the base's, but the annotation/default come from the
+    # derived class. ``dict[str, str]`` insertion order is stable on
+    # Python 3.7+ and update-in-place is positionally idempotent so
+    # this matches what ``@dataclass`` actually does.
+    merged_named: Dict[str, str] = {}
+    leading_markers: List[str] = []
+    seen_field = False
+    for part in inherited_parts:
+        field_name = _part_field_name(part)
+        if field_name is None:
+            if not seen_field:
+                # Leading kw-only / unresolved markers from inherited
+                # walk land in front of all fields.
+                leading_markers.append(part)
+            else:
+                # ``*`` inside an inherited sequence preserves
+                # positioning by encoding the marker as a synthetic
+                # entry whose key is unique (so dict lookups don't
+                # collide).
+                marker_key = f"__marker_{len(merged_named)}__"
+                merged_named[marker_key] = part
+            continue
+        seen_field = True
+        merged_named[field_name] = part
+    for part in own_parts:
+        field_name = _part_field_name(part)
+        if field_name is None:
+            marker_key = f"__marker_{len(merged_named)}__"
+            merged_named[marker_key] = part
+            continue
+        if field_name in merged_named:
+            # Override: keep base's slot, replace text with derived's.
+            merged_named[field_name] = part
+        else:
+            merged_named[field_name] = part
+
+    parts: List[str] = list(leading_markers) + list(merged_named.values())
+
     # Strip a trailing ``*`` if no kw-only fields followed the sentinel
     # — ``(*)`` is not a valid signature and would falsely diff against
     # an empty ``()`` synth.
@@ -1199,6 +1428,32 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
 
     signatures: Dict[str, str] = {}
 
+    # Build a top-level ``name -> ClassDef`` map and the set of names
+    # introduced by imports. The synthesised-dataclass-init helper uses
+    # both to resolve same-module base classes (for inherited fields)
+    # and to mark cross-module bases as ``[inherited_unresolved]``.
+    # Nested classes are NOT registered: dataclass inheritance from a
+    # nested class is rare and the snapshot already tracks nested
+    # classes via their qualified name, so a regression in a nested
+    # base is caught by its own entry.
+    class_defs: Dict[str, ast.ClassDef] = {
+        node.name: node for node in tree.body if isinstance(node, ast.ClassDef)
+    }
+    imported_names: Set[str] = set()
+    for node in tree.body:
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                exposed = alias.asname or alias.name.split(".", 1)[0]
+                if exposed:
+                    imported_names.add(exposed)
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "*":
+                    continue
+                exposed = alias.asname or alias.name
+                if exposed:
+                    imported_names.add(exposed)
+
     def _walk_class(
         class_node: ast.ClassDef,
         qualname: str,
@@ -1231,11 +1486,31 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
             # back to the previous bare ``()`` for non-dataclass classes
             # and for unsupported decorator forms (``@attr.s``,
             # ``@pydantic.dataclasses.dataclass``, etc).
-            is_dataclass = any(
-                _is_dataclass_decorator(dec) for dec in class_node.decorator_list
+            dataclass_decorators = [
+                dec
+                for dec in class_node.decorator_list
+                if _is_dataclass_decorator(dec)
+            ]
+            is_dataclass = bool(dataclass_decorators)
+            # ``@dataclass(init=False)`` keeps the class's natural
+            # ``__init__`` (typically ``object.__init__`` — no fields
+            # injected). When ANY dataclass decorator opts out, do NOT
+            # synthesise from the class body: adding fields under
+            # ``init=False`` does not change the runtime constructor and
+            # must not falsely trip the gate; flipping ``init=False`` →
+            # default DOES change the constructor and SHOULD trip it
+            # (the ``()`` snapshot here vs the synth signature on the
+            # default branch).
+            init_synthesized = all(
+                _dataclass_decorator_synthesizes_init(dec)
+                for dec in dataclass_decorators
             )
-            if is_dataclass:
-                class_signature = _synthesize_dataclass_init_signature(class_node)
+            if is_dataclass and init_synthesized:
+                class_signature = _synthesize_dataclass_init_signature(
+                    class_node,
+                    class_defs=class_defs,
+                    imported_names=imported_names,
+                )
             else:
                 class_signature = "()"
         signatures[qualname] = f"[class] {class_signature}"
