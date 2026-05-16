@@ -1,3 +1,41 @@
+## v0.0.239 (2026-05-15)
+
+### Feat
+
+- reduce no-argument global sync dry-run noise for non-Tier-1 states (#1016)
+
+### Fix
+
+- **checkup**: sync original_reviewer to context example + agentic_checkup prompt
+- **checkup**: preserve original_reviewer and enforce fixer_fallback exclusion
+- **checkup**: defang failed-fixer summaries before rendering audit rows
+- **checkup**: record failed fallback fixer attempts in state.fixes
+- **checkup**: sync fixer_fallback semantics to prompt/architecture/example contracts
+- **checkup**: surface --fixer-fallback in README/completions/architecture + drop unused primary_fix param
+- **checkup**: exclude active_fixer/active_reviewer from cross-fallback promotion
+- **checkup**: move active_fixer to end of ReviewLoopState field list
+- **checkup**: use canonical fallback role for _run_fix and active_fixer promotion
+- **checkup**: make fixer_fallback one-shot with active_fixer takeover + reset to pre-fix SHA
+- **checkup**: reset worktree before fixer fallback to prevent partial primary edits leaking (codex iter-04)
+- **checkup**: document credential-limit stable token in agentic_common prompt (codex iter-03)
+- **checkup**: align fixer_fallback prompt with alias-normalized equality (codex iter-02)
+- **checkup**: move fixer_fallback to end of ReviewLoopConfig (codex iter-01)
+- **checkup**: address code-reviewer findings on fixer-fallback + credential-limit regex
+- **checkup**: add fixer_fallback so credential-exhausted fixer no longer dead-stops loop
+- **agentic**: classify Claude Code subscription weekly-limit as credential-limit
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+- **checkup**: raise review loop cost budget
+- **ci-heal**: scope auto-heal staging (fixes #1021)
+- address codex review-loop findings
+- address codex review-loop findings
+- address codex review-loop findings
+
 ## v0.0.238 (2026-05-14)
 
 ### Feat
