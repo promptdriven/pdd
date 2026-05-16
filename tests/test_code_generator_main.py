@@ -7979,6 +7979,113 @@ class TestPublicSurfaceBindingKind:
             "",
         )
 
+    # ------------------------------------------------------------------
+    # Iter-3 Important: top-level assignment ↔ def/class kind flips must
+    # be detected in BOTH directions. The iter-2 fallback at the bottom
+    # of ``_verify_public_surface_regression`` only caught the
+    # ``def/class → assignment`` direction (because the after-side
+    # dropped the signatures entry while keeping the surface entry).
+    # The reverse ``assignment → def/class`` left the before-side
+    # without a signatures entry, so the new function/class looked like
+    # an ADDED symbol — no diff fired. Recording assignments as
+    # ``[assignment]`` in the signatures dict closes that gap.
+    # ------------------------------------------------------------------
+    def test_assignment_to_function_flip_is_detected(self):
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "Foo = lambda: None\n"
+        after = "def Foo():\n    return None\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
+
+    def test_assignment_to_class_flip_is_detected(self):
+        # The class-valued assignment example from the codex finding —
+        # ``Foo = type("Foo", (), {})`` previously slipped past the gate
+        # because the surface helper kept ``Foo`` while the signatures
+        # helper had no record of it, so ``def Foo()`` looked like a
+        # brand-new symbol rather than a kind flip.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = 'Foo = type("Foo", (), {})\n'
+        after = "class Foo:\n    pass\n"
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
+
+    def test_class_to_assignment_flip_still_detected(self):
+        # Regression guard: this direction was already caught before
+        # iter-3 via the surface-helper fallback at line ~1128 (after
+        # signatures drops ``Foo`` but the surface keeps it). Now that
+        # the signatures dict also records assignments, this case
+        # should hit the primary ``changed_set`` path (``[class] ()``
+        # → ``[assignment]``) instead. Either path is acceptable, but
+        # the failure MUST still surface.
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            _verify_public_surface_regression,
+        )
+
+        before = "class Foo:\n    pass\n"
+        after = 'Foo = type("Foo", (), {})\n'
+
+        with pytest.raises(PublicSurfaceRegressionError) as excinfo:
+            _verify_public_surface_regression(
+                before,
+                after,
+                "module_Python.prompt",
+                "pdd/module.py",
+                "python",
+                "",
+            )
+
+        assert "Foo" in excinfo.value.changed_signatures
+
+    def test_unchanged_top_level_assignment_is_allowed(self):
+        # Sanity check: identical module-level assignments on both
+        # sides must NOT produce a snapshot diff. Otherwise every
+        # regenerated module that ships a public constant would
+        # falsely trip the gate.
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        source = (
+            "PUBLIC_SETTING = 42\n"
+            "ANOTHER: int = 7\n"
+        )
+
+        _verify_public_surface_regression(
+            source,
+            source,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "",
+        )
+
 
 class TestFrontMatterStripping:
     """Blocker 2: BREAKING-CHANGE: directives buried inside YAML front

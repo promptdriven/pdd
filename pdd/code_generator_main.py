@@ -1019,6 +1019,13 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                 f"[property:{sorted_roles}] {getter_signature}"
             )
 
+        # Note: when a class body redefines the same name with mixed
+        # binding kinds (e.g. plain ``def x`` followed by
+        # ``@property def x``), the snapshot reflects the last *plain*
+        # def encountered, not Python's runtime last-binding-wins
+        # semantics. This is a rare source pattern; the gate may emit a
+        # benign no-op diff in such cases. Documented for future
+        # tightening.
         for child in class_node.body:
             if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)):
                 # __init__ already recorded above against ``qualname``;
@@ -1053,6 +1060,31 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
             ):
                 _walk_class(child, f"{qualname}.{child.name}", include_underscore)
 
+    def _record_assignment_target(target: ast.AST) -> None:
+        """Walk an assignment target, recording bare-name targets as ``[assignment]``.
+
+        Mirrors :func:`_snapshot_public_surface`'s ``_add_assign_targets`` so
+        an ``assignment ↔ def`` / ``assignment ↔ class`` kind flip becomes
+        a snapshot diff in BOTH directions (``Foo = type(...)`` → ``def
+        Foo()`` was previously invisible: surface kept ``Foo`` and the
+        signatures dict had no ``Foo`` entry, so the new ``def Foo()``
+        looked like an ADDED symbol, not a kind flip). Tuple/list/starred
+        unpacking recurses; subscript/attribute targets are ignored
+        (consistent with the surface helper — they mutate an existing
+        object rather than binding a module attribute).
+        """
+        if isinstance(target, ast.Name):
+            if _is_public_top_level(target.id):
+                # Source order in the outer loop means a later ``def``/
+                # ``class`` of the same name will overwrite this entry,
+                # matching Python's last-binding-wins runtime semantics.
+                signatures[target.id] = "[assignment]"
+        elif isinstance(target, (ast.Tuple, ast.List)):
+            for elt in target.elts:
+                _record_assignment_target(elt)
+        elif isinstance(target, ast.Starred):
+            _record_assignment_target(target.value)
+
     for node in tree.body:
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and _is_public_top_level(node.name):
             # Top-level kind prefix so swapping a public class with a
@@ -1071,6 +1103,25 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
                 node.name,
                 include_underscore=include_methods_underscore_for_top_class,
             )
+        elif isinstance(node, ast.Assign):
+            # Record module-level assignments as ``[assignment]`` so a
+            # rewrite that flips an ``assignment → def/class`` (e.g.
+            # ``Foo = type("Foo", (), {})`` → ``def Foo(): pass``) shows
+            # up as a snapshot diff. Without this entry the surface
+            # helper keeps ``Foo`` in the public set unchanged and the
+            # signatures dict sees ``Foo`` as a NEW symbol, missing the
+            # kind flip. The reverse direction (``def`` → assignment)
+            # was already covered by the line-1128 fallback before this
+            # change; with this entry both directions now hit the
+            # primary ``changed_set`` path.
+            for target in node.targets:
+                _record_assignment_target(target)
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            # Only annotated assignments with a bound value bind a
+            # runtime module attribute; a bare ``PUBLIC_NAME: int``
+            # declaration is a type hint, not an export. Mirrors the
+            # corresponding branch in ``_snapshot_public_surface``.
+            _record_assignment_target(node.target)
     return signatures
 
 
