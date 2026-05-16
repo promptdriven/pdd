@@ -2366,3 +2366,165 @@ class TestOneSessionResultErrorKey:
                 f"and falls back to 'No details.' when this key is missing."
             )
             assert result["error"], "Error message should not be empty"
+
+
+# ---------------------------------------------------------------------------
+# Codex review #1015 iter-1, Important 2
+# ---------------------------------------------------------------------------
+class TestOneSessionSurfaceRetryBudget:
+    """Split retry budgets: public-surface repair gets the FULL
+    ``MAX_CONFORMANCE_ATTEMPTS`` budget while test-churn keeps its tighter
+    ``_MAX_TEST_CHURN_ATTEMPTS`` cap. Before this fix, both gates shared
+    ``min(MAX_CONFORMANCE_ATTEMPTS, _MAX_TEST_CHURN_ATTEMPTS)`` so a
+    surface failure was capped at 2 attempts even though the generate
+    path got the full 3.
+    """
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch(
+        "pdd.one_session_sync.build_one_session_prompt",
+        return_value="mega prompt",
+    )
+    def test_surface_failures_use_max_conformance_attempts(
+        self, mock_build, mock_task, tmp_path, monkeypatch, capsys
+    ):
+        """Three DISTINCT surface failures (different removed symbol each
+        time) must each get an attempt — the surface counter caps at
+        ``MAX_CONFORMANCE_ATTEMPTS`` (=3), not ``_MAX_TEST_CHURN_ATTEMPTS`` (=2).
+        Distinct signatures defeat the identical-signature short-circuit
+        so the loop actually exhausts the surface budget instead of
+        bailing on attempt 2.
+        """
+        from pdd.code_generator_main import PublicSurfaceRegressionError
+        from pdd.agentic_sync_runner import MAX_CONFORMANCE_ATTEMPTS
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        # Pre-session code defines THREE public helpers. Each attempt
+        # below drops a different one to keep the surface-error
+        # signature unique across attempts (avoiding the
+        # identical-signature short-circuit).
+        original_code = (
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n"
+            "def public_three():\n    return 3\n"
+        )
+        pdd_files["code"].write_text(original_code, encoding="utf-8")
+
+        # Each attempt drops a different symbol → distinct surface
+        # signatures so the identical-signature short-circuit does NOT
+        # cut the loop short.
+        per_attempt_rewrites = [
+            # Attempt 1: drop public_three.
+            "def public_one():\n    return 1\n"
+            "def public_two():\n    return 2\n",
+            # Attempt 2: drop public_two (different signature).
+            "def public_one():\n    return 1\n"
+            "def public_three():\n    return 3\n",
+            # Attempt 3: drop public_one (different signature again).
+            "def public_two():\n    return 2\n"
+            "def public_three():\n    return 3\n",
+        ]
+
+        def fake_task(*args, **kwargs):
+            idx = mock_task.call_count - 1
+            rewrite = per_attempt_rewrites[idx]
+            pdd_files["code"].write_text(rewrite, encoding="utf-8")
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(PublicSurfaceRegressionError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # The full MAX_CONFORMANCE_ATTEMPTS budget was used (NOT capped
+        # at 2 by the old shared ``_MAX_TEST_CHURN_ATTEMPTS`` limit).
+        # This is the Important-2 regression: pre-fix the loop bailed
+        # after 2 attempts even when the surface gate had budget left.
+        assert mock_task.call_count == MAX_CONFORMANCE_ATTEMPTS, (
+            f"Expected surface repair to use full MAX_CONFORMANCE_ATTEMPTS "
+            f"(={MAX_CONFORMANCE_ATTEMPTS}) budget; got {mock_task.call_count}. "
+            f"The churn cap (=2) must NOT apply to public-surface repair."
+        )
+
+        captured = capsys.readouterr()
+        # Hard-failure block emitted once after exhaustion.
+        assert captured.err.count("=== public surface regression ===") == 1
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch(
+        "pdd.one_session_sync.build_one_session_prompt",
+        return_value="mega prompt",
+    )
+    def test_churn_failures_still_cap_at_two_attempts(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """Test-churn keeps its tighter ``_MAX_TEST_CHURN_ATTEMPTS`` cap.
+        Two DISTINCT churn failures (different ratio each time) must NOT
+        exceed the churn budget even though the outer loop runs for
+        ``MAX_CONFORMANCE_ATTEMPTS`` iterations.
+        """
+        from pdd.code_generator_main import TestChurnError
+        from pdd.one_session_sync import _MAX_TEST_CHURN_ATTEMPTS
+
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+        # Drive the churn threshold low and ensure the churn gate sees
+        # rewrites as high-churn. Existing test file is several lines so
+        # a wholesale rewrite registers > 0.40 ratio.
+        pdd_files = _make_pdd_files(tmp_path)
+        # Code stays untouched across attempts so the surface gate
+        # never fires; only churn fires.
+        pdd_files["code"].write_text(
+            "def public_one():\n    return 1\n", encoding="utf-8"
+        )
+        # Pre-existing test file with several real test cases — a
+        # wholesale single-test rewrite trips the > 0.40 churn ratio.
+        existing_tests = "\n".join(
+            f"def test_case_{i}():\n    assert True" for i in range(40)
+        )
+        pdd_files["test"].write_text(existing_tests, encoding="utf-8")
+
+        # Each attempt writes a DIFFERENT wholesale rewrite so the churn
+        # signature stays distinct (different post-line-count avoids the
+        # identical-signature short-circuit).
+        per_attempt_test_rewrites = [
+            "def test_new_one():\n    assert True\n",
+            "def test_new_two():\n    assert True\nx = 1\n",
+            "def test_new_three():\n    pass\ny = 2\nz = 3\n",
+        ]
+
+        def fake_task(*args, **kwargs):
+            idx = mock_task.call_count - 1
+            # Always write a high-churn test rewrite for this attempt.
+            pdd_files["test"].write_text(
+                per_attempt_test_rewrites[
+                    min(idx, len(per_attempt_test_rewrites) - 1)
+                ],
+                encoding="utf-8",
+            )
+            return True, "done", 1.0, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        with pytest.raises(TestChurnError):
+            run_one_session_sync(
+                basename="my_module",
+                language="python",
+                pdd_files=pdd_files,
+                project_root=tmp_path,
+            )
+
+        # Churn budget = 2 (pre-fix behavior preserved). The outer loop
+        # still has headroom for MAX_CONFORMANCE_ATTEMPTS iterations but
+        # the churn-specific counter caps at _MAX_TEST_CHURN_ATTEMPTS.
+        assert mock_task.call_count == _MAX_TEST_CHURN_ATTEMPTS, (
+            f"Expected churn repair to cap at _MAX_TEST_CHURN_ATTEMPTS "
+            f"(={_MAX_TEST_CHURN_ATTEMPTS}); got {mock_task.call_count}. "
+            f"The split-budget refactor must NOT widen the churn cap."
+        )
