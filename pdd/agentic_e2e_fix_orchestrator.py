@@ -1830,15 +1830,19 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Issue #1034 (codex P2 follow-up): restore the current cycle's
             # start snapshot so the resume-time cycle-waste-breaker can prove
-            # no in-cycle progress before authorizing terminal success. Only
-            # trust the saved snapshot when last_completed_step < 9: after
-            # Step 9 the orchestrator bumps current_cycle, so any persisted
-            # cycle_start_hashes from the prior cycle is stale and MUST be
-            # discarded (the next cycle recaptures fresh hashes).
+            # no in-cycle progress before authorizing terminal success.
+            #
+            # Restore the snapshot UNCONDITIONALLY here — the cached Step 3
+            # NOT_A_BUG demotion below depends on the in-cycle-progress proof,
+            # and a stale-snapshot guard cannot run until AFTER
+            # ``validate_cached_state`` has had a chance to rewind
+            # ``last_completed_step`` (FAILED-rewind from 9 → 2 keeps us in
+            # the same cycle). The cycle-rollover branch below
+            # (``if last_completed_step >= 9: ...``) is the only place that
+            # legitimately invalidates the restored snapshot — when it fires
+            # we null the local so the next cycle's body recaptures.
             saved_cycle_start_hashes = loaded_state.get("cycle_start_hashes")
-            if last_completed_step < 9 and isinstance(
-                saved_cycle_start_hashes, dict
-            ):
+            if isinstance(saved_cycle_start_hashes, dict):
                 resumed_cycle_start_hashes = saved_cycle_start_hashes
             else:
                 resumed_cycle_start_hashes = None
@@ -1898,6 +1902,10 @@ def run_agentic_e2e_fix_orchestrator(
                     current_cycle += 1
                     last_completed_step = 0
                     step_outputs = {}  # Clear outputs for new cycle
+                    # Cycle rollover invalidates the restored snapshot; it
+                    # belongs to the just-completed cycle. Null it so the new
+                    # cycle body recaptures fresh hashes.
+                    resumed_cycle_start_hashes = None
                 elif resume_action == "MAX_CYCLES_REACHED":
                     # Defer surfacing the failure until after `success` and
                     # `final_message` are initialized below — mirrors the
@@ -2666,6 +2674,13 @@ def run_agentic_e2e_fix_orchestrator(
             current_cycle += 1
             last_completed_step = 0
             step_outputs = {} # Clear outputs for next cycle
+            # Issue #1034 (codex P2 follow-up): null the local snapshot so a
+            # KeyboardInterrupt/Exception in the window between rollover and
+            # the next iteration's recapture (line ~1905) does NOT persist
+            # the stale prior cycle's snapshot via locals().get(...) in the
+            # handlers below. The next iteration's recapture (or a fresh
+            # resume) is the authoritative source for the new cycle.
+            cycle_start_hashes = None
 
             state_data["current_cycle"] = current_cycle
             state_data["last_completed_step"] = 0

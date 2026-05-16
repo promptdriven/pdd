@@ -8464,3 +8464,387 @@ class TestNotABugSuppressedOnResume:
             "Prompt must document the FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME "
             "demotion token used by the resume-time guard."
         )
+
+    def test_resume_after_step9_interrupt_with_cached_not_a_bug_uses_restored_snapshot(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (Finding A on PR #1035 iteration 3):
+
+        Resume from a state interrupted mid-Step-9: ``last_completed_step=9``,
+        ``current_cycle=2``, cached ``step_outputs["3"]=NOT_A_BUG``, with a
+        saved ``cycle_start_hashes`` that proves the cycle DID make in-cycle
+        progress (direct edits exist relative to BOTH the workflow-start
+        snapshot AND the cycle-start snapshot).
+
+        Previous behavior: ``saved_cycle_start_hashes`` was discarded eagerly
+        because ``last_completed_step >= 9``. The cached NOT_A_BUG demotion
+        then ran with ``cycle_start_hashes=None`` and demoted via the
+        legacy/conservative branch, ``validate_cached_state`` rewound to 2,
+        but the rollover (``if last_completed_step >= 9``) did NOT fire — so
+        we stayed in the SAME cycle, but the outer loop captured a FRESH
+        ``cycle_start_hashes = _get_file_hashes(cwd)`` AFTER all the edits.
+        The inline cycle-waste-breaker at line ~2293 then saw no in-cycle
+        progress (cycle_start matched current state) and falsely triggered
+        terminal-success.
+
+        Fix: restore the snapshot UNCONDITIONALLY at resume time and only
+        null it inside the cycle-rollover branch. With the restored
+        snapshot in scope, the in-cycle progress check sees the real prior
+        edits and the cycle-waste-breaker correctly refuses to terminal-
+        success.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # initial_file_hashes captured at workflow start (pre-cycle 2).
+        initial_hashes = {"src/module.py": "originalhash"}
+        # cycle_start_hashes captured at the start of cycle 2, BEFORE the
+        # in-cycle progress that was made during cycle 2's Steps 1-8.
+        # This is the RESTORED snapshot the bug throws away.
+        restored_cycle_hashes = {"src/module.py": "cycle2starthash"}
+        # If the fresh capture path runs (the buggy path), it would diff
+        # against this — which matches the CURRENT state (post-edits), so
+        # `_detect_meaningful_changes(cwd, fresh_hashes)` returns [] and the
+        # cycle-waste-breaker falsely terminal-successes.
+        fresh_cycle_hashes = {"src/module.py": "currenthash"}
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 9,  # interrupted in Step 9
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "Step 7 output",
+                "8": "Step 8 output",
+                "9": "Step 9 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},  # no FIXED units — direct-edit path only
+            "skipped_steps": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": "deadbeef",
+            "cycle_start_hashes": restored_cycle_hashes,
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def detect_side_effect(cwd, hashes):
+            # The whole point of Fix A: which snapshot reaches the in-cycle
+            # progress check at line 2293 of the orchestrator decides the
+            # cycle-waste-breaker outcome.
+            #
+            # - vs initial_hashes → direct edits exist (relative to
+            #   workflow start, the prior cycle wrote files).
+            # - vs restored_cycle_hashes → in-cycle progress EXISTS (cycle
+            #   2 ran Steps 1-8 and wrote files). The cycle-waste-breaker
+            #   MUST see this to refuse terminal-success. This is what
+            #   Fix A enables.
+            # - vs fresh_cycle_hashes (the buggy path) → NO progress
+            #   (snapshot equals current state). The bug uses this and
+            #   falsely terminal-successes.
+            # - vs anything else (e.g. an empty dict from the default
+            #   _get_file_hashes mock used elsewhere) → treat as no diff.
+            if hashes is initial_hashes or hashes == initial_hashes:
+                return ["src/module.py"]
+            if hashes is restored_cycle_hashes or hashes == restored_cycle_hashes:
+                return ["src/module.py"]
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            # The fresh capture at line 1905 returns the post-edits state.
+            # The buggy path uses this as the cycle_start_hashes baseline
+            # for the in-cycle progress check, which silently passes.
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value=fresh_cycle_hashes,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    # The rerun must also produce NOT_A_BUG so we exercise
+                    # the cycle-waste-breaker branch at line 2285+ which is
+                    # where the bug fires. (If rerun returned CODE_BUG, the
+                    # workflow would continue past the NOT_A_BUG guard and
+                    # the bug would not manifest in this scenario.)
+                    return (True, "Root cause: NOT_A_BUG — expected behavior.", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # The workflow MUST NOT have exited with the inline cycle-waste-
+        # breaker terminal-success message. That is the false-positive
+        # regression: with the snapshot discarded eagerly, the rerun Step 3
+        # NOT_A_BUG branch saw `has_cycle_progress=False` (fresh capture
+        # matched current state) and fired terminal-success.
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        success, final_message = result[0], result[1]
+        assert final_message != (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        ), (
+            "Codex P2 Finding A: resume from Step-9-interrupt falsely "
+            "terminal-successed via the inline cycle-waste-breaker — the "
+            "restored cycle_start_hashes was discarded before the rerun "
+            "Step 3 NOT_A_BUG path could prove in-cycle progress. "
+            f"final_message={final_message!r}"
+        )
+
+        # And Step 3 MUST have been re-executed (proving demotion + rewind
+        # happened and the workflow did NOT short-circuit on the cached
+        # NOT_A_BUG token).
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume from a Step-9-interrupt state — "
+            "the cached NOT_A_BUG token must be demoted by the in-cycle "
+            "progress check. Called labels: "
+            f"{called_labels}"
+        )
+
+    def test_keyboardinterrupt_after_cycle_rollover_does_not_persist_stale_cycle_start_hashes(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (Finding B on PR #1035 iteration 3):
+
+        After cycle rollover (``current_cycle += 1``, ``last_completed_step=0``,
+        ``step_outputs={}``), the local ``cycle_start_hashes`` variable
+        still held the just-completed cycle's snapshot. If a
+        ``KeyboardInterrupt`` fired in the window between rollover and the
+        next iteration's recapture at line ~1905, the handler at line ~2592
+        read ``locals().get("cycle_start_hashes")`` and persisted that stale
+        snapshot. A subsequent resume then trusted it as the NEW cycle's
+        start snapshot, breaking the cycle-waste-breaker baseline.
+
+        Fix: null the local ``cycle_start_hashes`` right after the rollover
+        block so the interrupt handler records ``None`` rather than the
+        stale prior snapshot. The next iteration's recapture (or a fresh
+        resume) is the authoritative source.
+
+        We simulate the rollover-then-interrupt window by patching
+        ``_get_file_hashes`` to raise ``KeyboardInterrupt`` on its SECOND
+        call: the first call is the cycle-1 recapture at line ~1905, then
+        cycle 1 completes its inner loop (LOOP_BACK on Step 9), rollover
+        fires, the next iteration calls ``_get_file_hashes`` again — which
+        now raises. The handler then saves state. We assert the persisted
+        ``cycle_start_hashes`` is ``None``, NOT the stale cycle-1 snapshot.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Capture saved state for inspection.
+        saved_states = []
+
+        def capture_save(cwd, issue_number, workflow_name, state_data,
+                         state_dir, repo_owner, repo_name, use_github_state,
+                         github_comment_id):
+            # Deep-copy the snapshot dict (if any) so later mutations of the
+            # in-memory state_data don't retroactively change what we
+            # captured.
+            snapshot = state_data.get("cycle_start_hashes")
+            if isinstance(snapshot, dict):
+                snapshot = dict(snapshot)
+            saved_states.append({
+                "current_cycle": state_data.get("current_cycle"),
+                "last_completed_step": state_data.get("last_completed_step"),
+                "cycle_start_hashes": snapshot,
+            })
+            return None
+
+        # _get_file_hashes is called once at workflow start to seed
+        # initial_file_hashes, then once per cycle's outer-loop body for
+        # cycle_start_hashes. We want the SECOND cycle's recapture to raise
+        # — that is: call 1 = initial_file_hashes, call 2 = cycle-1
+        # cycle_start_hashes, call 3 = cycle-2 cycle_start_hashes (raise).
+        call_counter = {"n": 0}
+        cycle1_snapshot = {"src/module.py": "cycle1starthash"}
+
+        def hashes_side_effect(cwd):
+            call_counter["n"] += 1
+            if call_counter["n"] == 1:
+                # Workflow-start snapshot (initial_file_hashes).
+                return {"src/module.py": "initialhash"}
+            if call_counter["n"] == 2:
+                # Cycle 1's cycle_start_hashes recapture at line ~1905.
+                return cycle1_snapshot
+            # Cycle 2's recapture — fires AFTER the rollover that should
+            # have nulled the local. Raise here to simulate the interrupt
+            # window the bug exposed.
+            raise KeyboardInterrupt("simulated interrupt in cycle-2 recapture")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            side_effect=hashes_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    # LOOP_BACK so cycle 1 completes its inner loop and the
+                    # outer loop enters the rollover branch.
+                    return (True, "Tests still failing. LOOP_BACK", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            with pytest.raises(KeyboardInterrupt):
+                run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # The interrupt-handler save MUST be present — it is the last entry
+        # if the orchestrator also saves intermediate state.
+        assert saved_states, (
+            "Interrupt handler did not persist any state. Check that "
+            "save_workflow_state mock is wired correctly."
+        )
+        interrupt_save = saved_states[-1]
+
+        # current_cycle should have advanced to 2 (rollover succeeded
+        # before the interrupt).
+        assert interrupt_save["current_cycle"] == 2, (
+            f"Expected rollover to have advanced current_cycle to 2 before "
+            f"the interrupt; saved state shows current_cycle="
+            f"{interrupt_save['current_cycle']}, saved_states={saved_states}"
+        )
+        assert interrupt_save["last_completed_step"] == 0, (
+            f"Expected last_completed_step=0 after rollover; got "
+            f"{interrupt_save['last_completed_step']}"
+        )
+
+        # THE FIX: cycle_start_hashes saved by the interrupt handler must
+        # NOT be the stale cycle-1 snapshot. It must be None (or missing).
+        assert interrupt_save["cycle_start_hashes"] != cycle1_snapshot, (
+            "Codex P2 Finding B: interrupt handler persisted the stale "
+            "prior-cycle's cycle_start_hashes after rollover. Resume from "
+            "this state would trust the wrong baseline as the new cycle's "
+            f"start snapshot. saved cycle_start_hashes={interrupt_save['cycle_start_hashes']!r}"
+        )
+        assert interrupt_save["cycle_start_hashes"] is None, (
+            "After cycle rollover, the local cycle_start_hashes should be "
+            "nulled so the interrupt handler persists None (the next "
+            "iteration's recapture is the authoritative source). Got: "
+            f"{interrupt_save['cycle_start_hashes']!r}"
+        )
+
+    def test_resume_from_post_rollover_null_snapshot_recaptures_fresh(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Bonus regression for Finding B: simulate a resume from the state
+        saved by the prior test (``cycle_start_hashes=None``, mid-cycle).
+        The orchestrator MUST treat the missing snapshot as "no restored
+        snapshot" and recapture fresh hashes at the outer-loop top — NOT
+        crash on the ``None`` value.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # State exactly as Finding B's interrupt-handler would save: post-
+        # rollover, with cycle_start_hashes=None.
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 0,
+            "step_outputs": {},
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "initialhash"},
+            "initial_sha": "deadbeef",
+            "cycle_start_hashes": None,  # explicit None — Finding B output
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        # Track which hashes the inner-loop's cycle-waste-breaker uses by
+        # capturing the value of _detect_meaningful_changes' second arg
+        # (cycle_start_hashes for the in-cycle progress check at line 2294).
+        observed_calls = []
+
+        def detect_side_effect(cwd, hashes):
+            observed_calls.append(hashes)
+            return ["src/module.py"]
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            # Must not crash on None snapshot — the recapture path handles it.
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert result is not None
+        # The orchestrator should have proceeded normally — Step 3 reruns
+        # (last_completed_step=0 means we start from Step 1) and the
+        # workflow continues. None of the cycle-waste-breaker baselines
+        # should have been the stale prior-cycle snapshot.
+        # Specifically, observed_calls should never include a hashes dict
+        # that wasn't either the restored initial_file_hashes or a freshly
+        # captured snapshot from this cycle.
+        restored_initial = resumed_state["initial_file_hashes"]
+        for h in observed_calls:
+            # Either it's the restored initial snapshot (workflow-start
+            # diff) or a fresh capture (cycle_start_hashes baseline). The
+            # one thing it must NOT be is None — that would mean the
+            # recapture didn't fire.
+            assert h is not None, (
+                "_detect_meaningful_changes was invoked with hashes=None — "
+                "the post-rollover recapture path failed to seed a fresh "
+                "cycle_start_hashes after Finding B's None snapshot."
+            )
