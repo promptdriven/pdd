@@ -5330,6 +5330,86 @@ class TestReasoningParameters:
         assert "reasoning_effort" in captured_kwargs
         assert captured_kwargs["reasoning_effort"] == "high"
 
+    def test_adaptive_reasoning_anthropic(self, llm_mod, tmp_path, monkeypatch):
+        """`reasoning_type=adaptive` on an Anthropic row must send the new
+        thinking shape (`type: "adaptive"`, `display: "summarized"`) plus
+        `reasoning_effort` so LiteLLM populates `output_config.effort`."""
+        csv_path = self._make_csv_with_reasoning(tmp_path, "adaptive", "anthropic", "claude-opus-4-7")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-opus-4-7")
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,  # -> "medium"
+                use_cloud=False,
+            )
+
+        assert "thinking" in captured_kwargs, (
+            "adaptive branch must set thinking; got kwargs=" f"{sorted(captured_kwargs)}"
+        )
+        assert captured_kwargs["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert captured_kwargs.get("reasoning_effort") == "medium"
+        # Legacy budget_tokens must not leak through
+        assert "budget_tokens" not in captured_kwargs.get("thinking", {})
+
+    def test_adaptive_reasoning_non_anthropic_provider_skipped(self, llm_mod, tmp_path, monkeypatch):
+        """`reasoning_type=adaptive` on a non-Anthropic provider must warn and
+        skip the reasoning payload — adaptive thinking is currently an
+        Anthropic-only API and we don't want to silently misroute."""
+        csv_path = self._make_csv_with_reasoning(tmp_path, "adaptive", "openai", "gpt-4")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "gpt-4")
+
+        mock_message = MagicMock()
+        mock_message.content = "result"
+        mock_choice = MagicMock()
+        mock_choice.message = mock_message
+        mock_choice.finish_reason = "stop"
+        mock_response = MagicMock()
+        mock_response.choices = [mock_choice]
+        mock_response._hidden_params = {}
+
+        captured_kwargs = {}
+
+        def capture_completion(**kwargs):
+            captured_kwargs.update(kwargs)
+            return mock_response
+
+        with patch.object(llm_mod.litellm, "completion", side_effect=capture_completion):
+            llm_mod.llm_invoke(
+                prompt="Think about {topic}",
+                input_json={"topic": "math"},
+                strength=0.5,
+                time=0.5,
+                use_cloud=False,
+            )
+
+        # Neither `thinking` nor `reasoning_effort` should be sent for non-Anthropic.
+        assert "thinking" not in captured_kwargs
+        assert "reasoning_effort" not in captured_kwargs
+
     def test_no_reasoning_when_time_zero(self, llm_mod, tmp_path, monkeypatch):
         csv_path = self._make_csv_with_reasoning(tmp_path, "budget", "anthropic", "claude-3")
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
