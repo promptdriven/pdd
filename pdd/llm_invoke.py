@@ -3433,6 +3433,33 @@ def llm_invoke(
                         if verbose:
                             logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
 
+                elif reasoning_type == 'adaptive':
+                    # Anthropic Claude Opus 4.7 (and onward) removed the legacy
+                    # `thinking={"type":"enabled","budget_tokens":N}` shape and
+                    # only accepts the new adaptive thinking API:
+                    # `thinking={"type":"adaptive"}` + `output_config.effort`.
+                    # We send `thinking` explicitly (with summarized display so
+                    # any future structured thinking blocks surface in logs)
+                    # and pass `reasoning_effort` so LiteLLM 1.80+ maps it to
+                    # `output_config.effort` server-side (gated by
+                    # AnthropicConfig._is_claude_opus_4_5 on its side; callers
+                    # that ship a newer Opus may need to monkey-patch that
+                    # helper until LiteLLM ships native matching).
+                    from .reasoning import time_to_effort_level
+                    effort = time_to_effort_level(time)
+                    provider_lower = str(provider).lower()
+                    if provider_lower == 'anthropic':
+                        thinking_param = {"type": "adaptive", "display": "summarized"}
+                        litellm_kwargs["thinking"] = thinking_param
+                        time_kwargs["thinking"] = thinking_param
+                        litellm_kwargs["reasoning_effort"] = effort
+                        time_kwargs["reasoning_effort"] = effort
+                        if verbose:
+                            logger.info(f"[INFO] Requesting Anthropic adaptive thinking with effort='{effort}' for {model_name_litellm}")
+                    else:
+                        if verbose:
+                            logger.warning(f"[WARN] reasoning_type='adaptive' but provider '{provider}' is not Anthropic; reasoning parameter not sent for {model_name_litellm}.")
+
                 elif reasoning_type == 'none':
                     if verbose:
                         logger.info(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
