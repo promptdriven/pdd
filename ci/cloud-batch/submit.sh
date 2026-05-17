@@ -33,21 +33,21 @@ trap 'cleanup_leaked_gcloud_workers' EXIT
 # Sweep gcloud's leaked multiprocessing workers (re-parented to init) that this script spawned.
 cleanup_leaked_gcloud_workers() {
     [ -z "${_pre_gcloud_workers+x}" ] && return 0
-    local now_workers new_workers ppid pid term_pids=""
+    local now_workers new_workers ppid pid
+    local -a term_pids=()
     now_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
     [ -z "${now_workers}" ] && return 0
     new_workers="$(comm -13 <(printf '%s\n' "${_pre_gcloud_workers}") <(printf '%s\n' "${now_workers}") 2>/dev/null || true)"
     [ -z "${new_workers}" ] && return 0
-    for pid in ${new_workers}; do
+    while IFS= read -r pid; do
+        [ -z "${pid}" ] && continue
         ppid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
-        [ "${ppid}" = "1" ] && term_pids="${term_pids} ${pid}"
-    done
-    [ -z "${term_pids}" ] && return 0
-    # shellcheck disable=SC2086 # intentional word-splitting of PID list
-    kill -TERM ${term_pids} 2>/dev/null || true
+        [ "${ppid}" = "1" ] && term_pids+=("${pid}")
+    done < <(printf '%s\n' "${new_workers}")
+    [ "${#term_pids[@]}" -eq 0 ] && return 0
+    kill -TERM "${term_pids[@]}" 2>/dev/null || true
     sleep 1
-    # shellcheck disable=SC2086 # intentional word-splitting of PID list
-    kill -KILL ${term_pids} 2>/dev/null || true
+    kill -KILL "${term_pids[@]}" 2>/dev/null || true
 }
 
 # ── Prepare source path allowlist ─────────────────────────────────────────
