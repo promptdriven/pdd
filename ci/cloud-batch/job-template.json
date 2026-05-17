@@ -42,7 +42,7 @@
                         "mountPath": "/mnt/disks/source"
                     }
                 ],
-                "maxRetryCount": 2,
+                "maxRetryCount": 3,
                 "maxRunDuration": "5400s",
                 "lifecyclePolicies": [
                     {
