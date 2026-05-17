@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
 # PDD CLI Bash Completion Script
-# Version: 0.0.239
+# Version: 0.0.240
 # Supports all PDD commands and options with filename completion
 
 _pdd() {

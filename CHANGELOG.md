@@ -1,9 +1,37 @@
-## Unreleased
+## v0.0.240 (2026-05-16)
+
+### Feat
+
+- fix post-Step-9 resume and filter .gh-wrapper artifacts (#1001)
+- finalize fingerprint/include-dep state after successful auto-deps (#989)
 
 ### Fix
 
-- **agentic_e2e_fix_orchestrator**: resume from `last_completed_step=9` with `ALL_TESTS_PASS` now routes into post-Step-9 cleanup/CI validation instead of restarting a new fix cycle from Step 1 (#1001)
-- **agentic_e2e_fix_orchestrator**: `_commit_and_push` filters `.gh-wrapper/**` executor wrapper artifacts in both hash-diff and fallback staging paths (#1001)
+- **cloud-batch**: pre-create result file so SIGKILLed tasks report preempted (#1045)
+- **cloud-batch/submit.sh**: clean up gcloud's leaked multiprocessing workers (#1043)
+- **auto-deps**: cooperate with sync's metadata bookkeeping
+- **auto-deps**: finalize metadata for every successful run, not just in-place
+- **auto-deps**: surface architecture-merge messages and sanitized-include warnings
+- make post-step-9 resume commit idempotent
+- **orchestrator**: persist VERIFICATION_FAILED_ON_RESUME marker before clearing on cycle advance (#1001)
+- **orchestrator**: re-verify on resume to close save-before-verify race (#1001)
+- **prompt**: document Step 9 retry-key precedence in % Resume & State (#1001)
+- **orchestrator**: prefer Step 9 retry output when resolving cached resume token (#1001)
+- **metadata**: sync <pdd-interface> + architecture.json signature for run_agentic_e2e_fix_orchestrator (skip_cleanup, reasoning_time)
+- **orchestrator**: respect explicit MAX_CYCLES_REACHED token in post-Step-9 resume action (#1001)
+- **orchestrator**: filter .gh-wrapper artifacts and branch post-Step-9 resume on cached token (#1001)
+- **prompt**: include push_with_retry sideEffects in <pdd-interface>; test: assert interface mirrors architecture.json
+- **prompt**: tighten resume branching, sync push_with_retry interface; test: tighten regression tests for #1001
+- **prompt**: use 'file' sentinel in include examples to satisfy validator
+- **prompt**: spec attributed <include> parsing in sync_determine_operation
+- **prompt**: declare auto_deps_architecture dependency and interface
+- **sync**: extract include deps from attributed <include> directives
+- **prompt**: include get_run_report_path in operation_log interface
+- **readme**: bump version markers to 0.0.239 to resolve merge conflict with main
+- **auto-deps**: verify run-report actually removed after clear_run_report
+- address codex review-loop findings
+- skip auto-deps metadata finalization for non-canonical outputs
+- address codex review-loop findings
 
 ## v0.0.239 (2026-05-15)
 
