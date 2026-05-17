@@ -30,10 +30,16 @@ _with_timeout() {
 _pre_gcloud_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
 trap 'cleanup_leaked_gcloud_workers' EXIT
 
-# Sweep gcloud's leaked multiprocessing workers (re-parented to init) that this script spawned.
+# Sweep gcloud's leaked multiprocessing workers that this script spawned.
+# Scope is bounded by the pre-script snapshot: only workers that didn't exist before
+# the script started are killed. The PPID==1 filter was dropped because gcloud's
+# workers don't always re-parent to init by the time the EXIT trap fires — some
+# parents in gcloud's pool stay alive past the gcloud-cli command exit and only
+# die later. Snapshot-and-diff alone is narrow enough to avoid killing unrelated
+# workers from other processes that pre-existed this script.
 cleanup_leaked_gcloud_workers() {
     [ -z "${_pre_gcloud_workers+x}" ] && return 0
-    local now_workers new_workers ppid pid
+    local now_workers new_workers pid
     local -a term_pids=()
     now_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
     [ -z "${now_workers}" ] && return 0
@@ -41,8 +47,7 @@ cleanup_leaked_gcloud_workers() {
     [ -z "${new_workers}" ] && return 0
     while IFS= read -r pid; do
         [ -z "${pid}" ] && continue
-        ppid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
-        [ "${ppid}" = "1" ] && term_pids+=("${pid}")
+        term_pids+=("${pid}")
     done < <(printf '%s\n' "${new_workers}")
     [ "${#term_pids[@]}" -eq 0 ] && return 0
     kill -TERM "${term_pids[@]}" 2>/dev/null || true
