@@ -26,6 +26,35 @@ _with_timeout() {
     return "$rc"
 }
 
+# Snapshot pre-existing multiprocessing PIDs so we can later identify gcloud-leaked workers.
+_pre_gcloud_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
+trap 'cleanup_leaked_gcloud_workers' EXIT
+
+# Sweep gcloud's leaked multiprocessing workers that this script spawned.
+# Scope is bounded by the pre-script snapshot: only workers that didn't exist before
+# the script started are killed. The PPID==1 filter was dropped because gcloud's
+# workers don't always re-parent to init by the time the EXIT trap fires — some
+# parents in gcloud's pool stay alive past the gcloud-cli command exit and only
+# die later. Snapshot-and-diff alone is narrow enough to avoid killing unrelated
+# workers from other processes that pre-existed this script.
+cleanup_leaked_gcloud_workers() {
+    [ -z "${_pre_gcloud_workers+x}" ] && return 0
+    local now_workers new_workers pid
+    local -a term_pids=()
+    now_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
+    [ -z "${now_workers}" ] && return 0
+    new_workers="$(comm -13 <(printf '%s\n' "${_pre_gcloud_workers}") <(printf '%s\n' "${now_workers}") 2>/dev/null || true)"
+    [ -z "${new_workers}" ] && return 0
+    while IFS= read -r pid; do
+        [ -z "${pid}" ] && continue
+        term_pids+=("${pid}")
+    done < <(printf '%s\n' "${new_workers}")
+    [ "${#term_pids[@]}" -eq 0 ] && return 0
+    kill -TERM "${term_pids[@]}" 2>/dev/null || true
+    sleep 1
+    kill -KILL "${term_pids[@]}" 2>/dev/null || true
+}
+
 # ── Prepare source path allowlist ─────────────────────────────────────────
 cd "${REPO_ROOT}"
 SOURCE_PATHS=(
@@ -135,7 +164,7 @@ rm /tmp/pdd-batch-job-spot.json /tmp/pdd-batch-job-std.json
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
-trap 'rm -rf "${STREAMING_DIR}"' EXIT
+trap 'rm -rf "${STREAMING_DIR}"; cleanup_leaked_gcloud_workers' EXIT
 
 TOTAL=77  # 76 (spot) + 1 (standard)
 STREAM_FAILURES=0
