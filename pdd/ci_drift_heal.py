@@ -989,6 +989,13 @@ def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> 
             f"{sorted(ignored)}[/dim]"
         )
 
+    # Invariant: when `_git_relative_path_candidates` emits a path whose
+    # ancestor is a symlink, it also emits the canonical (resolved) form
+    # for the same source — both for absolute inputs (branches 4 + 5) and
+    # for relative inputs (branches 1 + 2). Dropping the symlinked form
+    # here is therefore safe: the canonical form is in `existing` too and
+    # will get staged. If that invariant ever breaks, this filter would
+    # become a silent miss — adjust the helper, don't drop this filter.
     symlinked = {rel for rel in existing if _has_symlinked_ancestor(rel, repo_root)}
     if symlinked:
         console.print(
