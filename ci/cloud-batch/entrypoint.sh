@@ -23,6 +23,31 @@ WORK_DIR="/workspace"
 RESULT_JSON="${RESULTS_DIR}/task_${TASK_INDEX}.json"
 RESULT_LOG="${RESULTS_DIR}/task_${TASK_INDEX}.log"
 
+# ── Pre-create result file so SPOT preemption is visible ──────────────────
+# Cloud Batch SPOT VMs receive SIGTERM then SIGKILL ~30s later when preempted.
+# SIGKILL bypasses traps, so if the test is mid-execution when SIGKILL fires
+# no task_N.json is ever written and the aggregator reports an opaque
+# "ERR / no result file" — indistinguishable from a real crash. Pre-creating
+# the file with status="preempted" means SIGKILL leaves a diagnosable artifact
+# behind: write_result overwrites on normal completion, term_handler
+# overwrites on SIGTERM, and only true preemption leaves the preempted marker.
+# Single heredoc keeps the write to one syscall (the streaming reader in
+# submit.sh skips files <10 bytes, so a partial pre-create won't poison
+# the aggregator if preempted mid-write).
+mkdir -p "${RESULTS_DIR}"
+WROTE_FINAL_RESULT=0
+cat > "${RESULT_JSON}" <<JSON
+{
+    "task_index": ${TASK_INDEX},
+    "suite": "unknown",
+    "detail": "task killed before completion (likely SPOT preemption)",
+    "status": "preempted",
+    "duration_seconds": 0,
+    "setup_seconds": 0,
+    "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+JSON
+
 # Task ranges
 PYTEST_START=0
 PYTEST_END=31
@@ -64,7 +89,42 @@ write_result() {
     "timestamp": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 JSONEOF
+    # Mark that the real result has been written so trap handlers don't
+    # clobber it. We can't use `[ ! -f "${RESULT_JSON}" ]` as a guard now
+    # that the file is pre-created at startup — the file always exists.
+    WROTE_FINAL_RESULT=1
 }
+
+# ── Trap handler: ensure result file on forced termination ────────────────
+# Installed early — BEFORE source extract, pip install, preflight, and JWT
+# setup — so any `set -e` failure in those phases triggers the trap and
+# overwrites the pre-create with the actual exit info. Without early
+# installation a corrupt tarball or transient pip failure would leave the
+# pre-create as status="preempted" and be mis-reported as preemption.
+# Guards use WROTE_FINAL_RESULT (set by write_result) instead of `[ ! -f ]`
+# because the pre-create makes the file always exist.
+trap_handler() {
+    local rc=$?
+    local end_time=$(date +%s)
+    local duration=$((end_time - START_TIME))
+    if [ "${rc}" -eq 124 ]; then
+        return 0
+    fi
+    if [ "${WROTE_FINAL_RESULT}" -eq 0 ]; then
+        write_result "error" "${duration}" "unknown" "exit_code_${rc}"
+    fi
+}
+term_handler() {
+    local end_time=$(date +%s)
+    local duration=$((end_time - START_TIME))
+    if [ "${WROTE_FINAL_RESULT}" -eq 0 ]; then
+        write_result "error" "${duration}" "unknown" "terminated"
+    fi
+    exit 143
+}
+START_TIME=$(date +%s)
+trap term_handler TERM INT
+trap trap_handler EXIT
 
 # ── Extract source code ───────────────────────────────────────────────────
 SETUP_START=$(date +%s)
@@ -241,30 +301,8 @@ fi
 # failures when non-agentic tests try to use it for direct API calls.
 
 # ── Dispatch by task index ────────────────────────────────────────────────
-START_TIME=$(date +%s)
-
-# ── Trap handler: ensure result file on forced termination ────────────────
-trap_handler() {
-    local rc=$?
-    local end_time=$(date +%s)
-    local duration=$((end_time - START_TIME))
-    if [ "${rc}" -eq 124 ]; then
-        return 0
-    fi
-    if [ ! -f "${RESULT_JSON}" ]; then
-        write_result "error" "${duration}" "unknown" "exit_code_${rc}"
-    fi
-}
-term_handler() {
-    local end_time=$(date +%s)
-    local duration=$((end_time - START_TIME))
-    if [ ! -f "${RESULT_JSON}" ]; then
-        write_result "error" "${duration}" "unknown" "terminated"
-    fi
-    exit 143
-}
-trap term_handler TERM INT
-trap trap_handler EXIT
+# START_TIME and trap installations moved above (right after write_result
+# definition) so setup failures are captured.
 
 run_with_timeout() {
     local seconds="$1"

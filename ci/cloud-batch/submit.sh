@@ -182,8 +182,20 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
 
     # ── Stream completed task results ─────────────────────────────────
     _with_timeout 15 gcloud storage cp --quiet "gs://${BUCKET}/${JOB_RUN_ID}/results/task_*.json" "${STREAMING_DIR}/" 2>/dev/null || true
-    COMPLETED=$(find "${STREAMING_DIR}" -maxdepth 1 -name "task_*.json" | wc -l | tr -d ' ')
-    COMPLETED=${COMPLETED:-0}
+
+    # Count completed tasks. Tasks pre-create task_N.json with
+    # status="preempted" at startup so SIGKILL leaves a diagnosable marker;
+    # those provisional files must NOT count as completed and must NOT trigger
+    # the failure-reporting loop until the job is in a terminal state (because
+    # write_result will overwrite them with the real result on normal exit).
+    COMPLETED=0
+    for json_file in "${STREAMING_DIR}"/task_*.json; do
+        [ -f "${json_file}" ] || continue
+        [ "$(wc -c < "${json_file}")" -lt 10 ] && continue
+        _stream_status=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('status','error'))" 2>/dev/null || echo "unknown")
+        [ "${_stream_status}" = "preempted" ] && continue
+        COMPLETED=$((COMPLETED + 1))
+    done
 
     # Check for new failures
     for json_file in "${STREAMING_DIR}"/task_*.json; do
@@ -193,9 +205,14 @@ while [ "${ELAPSED}" -lt "${POLL_TIMEOUT}" ]; do
         basename_file=$(basename "${json_file}")
         # Skip if already seen
         [ -f "${STREAMING_DIR}/seen_${basename_file}" ] && continue
-        touch "${STREAMING_DIR}/seen_${basename_file}"
 
         TASK_STATUS=$(python3 -c "import json; d=json.load(open('${json_file}')); print(d.get('status','error'))" 2>/dev/null || echo "unknown")
+        # Skip provisional preempted markers — write_result will overwrite
+        # them with the real result if/when the task completes. Don't mark
+        # them seen, so a later pass picks up the real status.
+        [ "${TASK_STATUS}" = "preempted" ] && continue
+        touch "${STREAMING_DIR}/seen_${basename_file}"
+
         if [ "${TASK_STATUS}" != "passed" ]; then
             STREAM_FAILURES=$((STREAM_FAILURES + 1))
             TASK_NUM=$(echo "${basename_file}" | sed 's/task_\([0-9]*\)\.json/\1/')
