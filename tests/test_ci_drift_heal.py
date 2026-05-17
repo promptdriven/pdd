@@ -14,7 +14,9 @@ from pdd.ci_drift_heal import (
     PromptRevertError,
     _AUTO_HEAL_SUCCESS_TRAILER,
     _capture_rollback_state,
+    _git_add_pathspecs,
     _git_relative_path_candidates,
+    _has_symlinked_ancestor,
     _run_pdd_command,
     _get_git_changed_files,
     detect_drift,
@@ -283,6 +285,95 @@ class TestGetGitChangedFiles:
 
         assert "prompts/auth_python.prompt" in candidates
         assert "pdd/prompts/auth_python.prompt" in candidates
+
+
+# ---------------------------------------------------------------------------
+# _has_symlinked_ancestor / _git_add_pathspecs symlink-staging tests
+# ---------------------------------------------------------------------------
+
+
+class TestSymlinkStaging:
+    """Regression: auto-heal must not pass symlink-traversal pathspecs to git add.
+
+    `_git_relative_path_candidates` returns both the symlinked form
+    (e.g. ``prompts/foo.prompt`` via a tracked ``prompts -> pdd/prompts`` shim)
+    and the canonical form (``pdd/prompts/foo.prompt``) for the same source.
+    Newer Git refuses the symlinked form with
+    ``pathspec 'prompts/foo.prompt' is beyond a symbolic link``, which kills
+    the whole heal commit. The fix drops symlink-traversal paths at the
+    staging boundary so the canonical form (always also in the list) wins.
+    """
+
+    def _make_symlink_repo(self, tmp_path: Path) -> Path:
+        """Set up a fake repo where ``prompts -> pdd/prompts``."""
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "prompts").symlink_to("pdd/prompts")
+        (tmp_path / "pdd" / "prompts" / "foo.prompt").write_text("% prompt", encoding="utf-8")
+        return tmp_path
+
+    def test_has_symlinked_ancestor_detects_symlinked_dir(self, tmp_path):
+        self._make_symlink_repo(tmp_path)
+        assert _has_symlinked_ancestor("prompts/foo.prompt", tmp_path) is True
+        assert _has_symlinked_ancestor("pdd/prompts/foo.prompt", tmp_path) is False
+        # Trivial top-level files have no ancestor to traverse.
+        assert _has_symlinked_ancestor("foo.prompt", tmp_path) is False
+
+    def test_git_add_pathspecs_drops_symlinked_form(self, tmp_path):
+        """When both forms of a symlinked path are passed, only the canonical
+        form reaches `git add`; the symlinked form is dropped."""
+        self._make_symlink_repo(tmp_path)
+
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.setdefault("calls", []).append(list(cmd))
+            # check-ignore: pretend none are ignored
+            if cmd[:2] == ["git", "check-ignore"]:
+                return MagicMock(returncode=1, stdout="", stderr="")
+            # git add: succeed
+            if cmd[:2] == ["git", "add"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=fake_run):
+            ok = _git_add_pathspecs(
+                ["prompts/foo.prompt", "pdd/prompts/foo.prompt"],
+                cwd=tmp_path,
+            )
+
+        assert ok is True
+        add_calls = [c for c in captured["calls"] if c[:2] == ["git", "add"]]
+        assert len(add_calls) == 1, f"expected one git add call, got {add_calls}"
+        staged = add_calls[0][add_calls[0].index("--") + 1 :]
+        assert "pdd/prompts/foo.prompt" in staged
+        assert "prompts/foo.prompt" not in staged, (
+            "symlinked-ancestor path must be filtered before git add"
+        )
+
+    def test_git_add_pathspecs_unchanged_without_symlink(self, tmp_path):
+        """No symlinks in the repo → no filtering, behaviour matches the
+        original (gitignore-only) filter path."""
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "foo.py").write_text("# foo", encoding="utf-8")
+
+        captured: dict = {}
+
+        def fake_run(cmd, **kwargs):
+            captured.setdefault("calls", []).append(list(cmd))
+            if cmd[:2] == ["git", "check-ignore"]:
+                return MagicMock(returncode=1, stdout="", stderr="")
+            if cmd[:2] == ["git", "add"]:
+                return MagicMock(returncode=0, stdout="", stderr="")
+            return MagicMock(returncode=0, stdout="", stderr="")
+
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=fake_run):
+            ok = _git_add_pathspecs(["pdd/foo.py"], cwd=tmp_path)
+
+        assert ok is True
+        add_calls = [c for c in captured["calls"] if c[:2] == ["git", "add"]]
+        assert len(add_calls) == 1
+        staged = add_calls[0][add_calls[0].index("--") + 1 :]
+        assert staged == ["pdd/foo.py"]
 
 
 # ---------------------------------------------------------------------------

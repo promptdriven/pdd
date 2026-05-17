@@ -18,7 +18,7 @@ import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
@@ -918,6 +918,30 @@ def _healed_module_file_relpaths(module: Any, repo_root: Path) -> List[str]:
     return relpaths
 
 
+def _has_symlinked_ancestor(rel: str, repo_root: Path) -> bool:
+    """Return True if any directory ancestor of ``rel`` under ``repo_root`` is a symlink.
+
+    ``git add`` refuses pathspecs whose ancestor directory is a symlink ("pathspec
+    'X' is beyond a symbolic link"). When ``_git_relative_path_candidates`` returns
+    both the symlinked form (e.g. ``prompts/foo.prompt`` via ``prompts -> pdd/prompts``)
+    and the canonical form (``pdd/prompts/foo.prompt``) for the same source path,
+    the symlinked form will fail staging. Dropping it lets the canonical form get
+    staged instead.
+    """
+    parts = PurePosixPath(rel).parts
+    if len(parts) <= 1:
+        return False
+    cur = repo_root
+    for part in parts[:-1]:
+        cur = cur / part
+        try:
+            if cur.is_symlink():
+                return True
+        except OSError:
+            return False
+    return False
+
+
 def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> bool:
     """Stage existing pathspecs with an explicit git-add call.
 
@@ -926,7 +950,13 @@ def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> 
     an otherwise-successful heal commit. Examples include per-run reports
     under ``.pdd/meta/*_run.json``, which the repo intentionally ignores but
     which appear in the healed module's metadata pathspecs.
+
+    Also drops pathspecs whose ancestor directory is a symlink (e.g. the
+    repo-root ``prompts -> pdd/prompts`` shim). Git refuses such paths with
+    "beyond a symbolic link"; the canonical form is normally also present in
+    the list because ``_git_relative_path_candidates`` returns both shapes.
     """
+    repo_root = (cwd or Path.cwd()).resolve()
     existing = [rel for rel in pathspecs if (cwd or Path.cwd()).joinpath(rel).exists()]
     if not existing:
         return True
@@ -959,7 +989,14 @@ def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> 
             f"{sorted(ignored)}[/dim]"
         )
 
-    stageable = [rel for rel in existing if rel not in ignored]
+    symlinked = {rel for rel in existing if _has_symlinked_ancestor(rel, repo_root)}
+    if symlinked:
+        console.print(
+            f"[dim]ci-heal: skipping symlink-traversal paths during stage: "
+            f"{sorted(symlinked)}[/dim]"
+        )
+
+    stageable = [rel for rel in existing if rel not in ignored and rel not in symlinked]
     if not stageable:
         return True
 
