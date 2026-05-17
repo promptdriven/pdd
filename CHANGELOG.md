@@ -1,75 +1,59 @@
 ## v0.0.240 (2026-05-16)
 
-### Feat
-
-- fix post-Step-9 resume and filter .gh-wrapper artifacts (#1001)
-- finalize fingerprint/include-dep state after successful auto-deps (#989)
-
 ### Fix
 
-- **cloud-batch**: pre-create result file so SIGKILLed tasks report preempted (#1045)
-- **cloud-batch/submit.sh**: clean up gcloud's leaked multiprocessing workers (#1043)
-- **auto-deps**: cooperate with sync's metadata bookkeeping
-- **auto-deps**: finalize metadata for every successful run, not just in-place
-- **auto-deps**: surface architecture-merge messages and sanitized-include warnings
-- make post-step-9 resume commit idempotent
-- **orchestrator**: persist VERIFICATION_FAILED_ON_RESUME marker before clearing on cycle advance (#1001)
-- **orchestrator**: re-verify on resume to close save-before-verify race (#1001)
-- **prompt**: document Step 9 retry-key precedence in % Resume & State (#1001)
-- **orchestrator**: prefer Step 9 retry output when resolving cached resume token (#1001)
-- **metadata**: sync <pdd-interface> + architecture.json signature for run_agentic_e2e_fix_orchestrator (skip_cleanup, reasoning_time)
-- **orchestrator**: respect explicit MAX_CYCLES_REACHED token in post-Step-9 resume action (#1001)
-- **orchestrator**: filter .gh-wrapper artifacts and branch post-Step-9 resume on cached token (#1001)
-- **prompt**: include push_with_retry sideEffects in <pdd-interface>; test: assert interface mirrors architecture.json
-- **prompt**: tighten resume branching, sync push_with_retry interface; test: tighten regression tests for #1001
-- **prompt**: use 'file' sentinel in include examples to satisfy validator
-- **prompt**: spec attributed <include> parsing in sync_determine_operation
-- **prompt**: declare auto_deps_architecture dependency and interface
-- **sync**: extract include deps from attributed <include> directives
-- **prompt**: include get_run_report_path in operation_log interface
-- **readme**: bump version markers to 0.0.239 to resolve merge conflict with main
-- **auto-deps**: verify run-report actually removed after clear_run_report
-- address codex review-loop findings
-- skip auto-deps metadata finalization for non-canonical outputs
-- address codex review-loop findings
+- **auto-deps**: finalize metadata for every successful output by saving fingerprints and include-dependency hashes, clearing stale run reports, warning on sanitized includes and architecture merge failures, and using `filelock` for CSV cache locking (#989).
+- **sync**: let sync own canonical auto-deps metadata after moving temp outputs, clear canonical run reports, and include attributed `<include ...>` directives in dependency hashes.
+- **orchestrator**: fix post-Step-9 resume routing by honoring cached Step 9 retry output, falling through to cleanup/CI after verified success, respecting `MAX_CYCLES_REACHED`, and re-verifying cached success before resume completion (#1001).
+- **orchestrator**: persist `VERIFICATION_FAILED_ON_RESUME` before cycle advance, filter `.gh-wrapper/` executor artifacts from fix commits, and make post-resume commit/push handling idempotent (#1001).
+
+### CI
+
+- **cloud-batch**: pre-create task result files and install early traps so SPOT preemptions, setup failures, timeouts, and terminations produce explicit JSON outcomes; ignore provisional `preempted` results while streaming (#1045).
+- **cloud-batch**: clean up `gcloud`-leaked multiprocessing workers after submit and increase SPOT `maxRetryCount` from 2 to 3 (#1043, #1044).
+
+### Build
+
+- Bump package metadata, README/PyPI version references, and shell completions from 0.0.239 to 0.0.240; add `filelock>=3.12`.
+
+### Docs
+
+- Align README, prompt, and `architecture.json` contracts for auto-deps finalization, attributed includes, Step 9 resume behavior, `push_with_retry`, and orchestrator signature metadata.
+
+### Test
+
+- Add regression coverage for auto-deps metadata finalization, attributed includes, Step 9 resume/reverification/max-cycle routing, `.gh-wrapper` filtering, idempotent commit/push behavior, and prompt/architecture interface drift.
 
 ## v0.0.239 (2026-05-15)
 
 ### Feat
 
-- reduce no-argument global sync dry-run noise for non-Tier-1 states (#1016)
+- **checkup**: add `--fixer-fallback` for review-loop runs so a secondary fixer can take over once when the primary fixer fails, with alias-aware role checks, pre-fallback worktree reset, audit-trail preservation, and active-fixer promotion for later rounds.
+- **sync**: reduce no-argument global sync dry-run noise by replacing per-module non-Tier-1 warnings with a bucketed `Out of Tier 1 scope` roll-up, while keeping detailed entries under `--verbose` and rendering zero stale modules as a green success signal (#1016).
 
 ### Fix
 
-- **checkup**: sync original_reviewer to context example + agentic_checkup prompt
-- **checkup**: preserve original_reviewer and enforce fixer_fallback exclusion
-- **checkup**: defang failed-fixer summaries before rendering audit rows
-- **checkup**: record failed fallback fixer attempts in state.fixes
-- **checkup**: sync fixer_fallback semantics to prompt/architecture/example contracts
-- **checkup**: surface --fixer-fallback in README/completions/architecture + drop unused primary_fix param
-- **checkup**: exclude active_fixer/active_reviewer from cross-fallback promotion
-- **checkup**: move active_fixer to end of ReviewLoopState field list
-- **checkup**: use canonical fallback role for _run_fix and active_fixer promotion
-- **checkup**: make fixer_fallback one-shot with active_fixer takeover + reset to pre-fix SHA
-- **checkup**: reset worktree before fixer fallback to prevent partial primary edits leaking (codex iter-04)
-- **checkup**: document credential-limit stable token in agentic_common prompt (codex iter-03)
-- **checkup**: align fixer_fallback prompt with alias-normalized equality (codex iter-02)
-- **checkup**: move fixer_fallback to end of ReviewLoopConfig (codex iter-01)
-- **checkup**: address code-reviewer findings on fixer-fallback + credential-limit regex
-- **checkup**: add fixer_fallback so credential-exhausted fixer no longer dead-stops loop
-- **agentic**: classify Claude Code subscription weekly-limit as credential-limit
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
-- **checkup**: raise review loop cost budget
-- **ci-heal**: scope auto-heal staging (fixes #1021)
-- address codex review-loop findings
-- address codex review-loop findings
-- address codex review-loop findings
+- **agentic**: classify Claude Code subscription weekly-limit messages as permanent `credential-limit` failures so provider waterfalls can rotate credentials instead of burning rate-limit retries.
+- **checkup**: raise the default review-loop cost cap from $10 to $50, skip parse-repair once budget/time is exhausted, preserve the originally configured reviewer across fallback rotations, exclude active reviewer/fixer roles from cross-fallback promotion, and defang failed-fixer summaries before final report rendering.
+- **ci-heal**: replace blanket `git add -A` auto-heal staging with scoped tracked/per-module staging so unrelated `.pdd/meta` artifacts cannot leak into heal commits; stage generated files, new `project_dependencies.csv`, and required fingerprints while skipping gitignored run reports (#1021).
+- **checkup**: apply the same scoped staging discipline to review-loop fix commits so untracked metadata artifacts from other modules are not pushed with PR fixes (#1021).
+- **metadata-sync**: keep architecture and run-report stages gated after earlier hard failures so tracked metadata changes are not picked up by scoped staging during failed finalization.
+
+### Build
+
+- Bump package metadata, README/PyPI version references, and shell completions from 0.0.238 to 0.0.239; add `--fixer-fallback` to shell completions.
+
+### Docs
+
+- Align README, prompt, architecture, context example, and metadata contracts for fixer fallback semantics, credential-limit classification, scoped auto-heal staging, and compact global-sync dry-run output.
+
+### Chore
+
+- Refresh Cloud Batch test-duration data, project dependency CSV entries, and `.pdd/meta` provenance for the updated modules.
+
+### Test
+
+- Add regression coverage for credential-limit classification, fixer fallback success/failure/role guards, budget gates, compact global-sync dry-run output, and #1021 scoped staging cases.
 
 ## v0.0.238 (2026-05-14)
 
