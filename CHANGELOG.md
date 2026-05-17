@@ -1,3 +1,10 @@
+## v0.0.241 (2026-05-17)
+
+### Fix
+
+- **ci_drift_heal**: symlink filter must run before git check-ignore (#1050)
+- **ci_drift_heal**: skip symlink-traversal paths in git add (#1048)
+
 ## v0.0.240 (2026-05-16)
 
 ### Fix
