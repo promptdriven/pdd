@@ -1,13 +1,14 @@
 [build-system]
 requires = [
-    "setuptools>=43.0.0",
+    "setuptools>=64",
+    "setuptools-scm>=8",
     "wheel"
 ]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "pdd-cli"
-version = "0.0.241"
+dynamic = ["version"]
 description = "PDD (Prompt-Driven Development) Command Line Interface"
 readme = {file = "pypi_description.rst", content-type = "text/x-rst"}
 authors = [
@@ -95,7 +96,6 @@ packages = ["pdd", "pdd.commands", "pdd.core", "pdd.server", "pdd.server.routes"
 
 [project.optional-dependencies]
 dev = [
-    "commitizen",
     "pytest-cov",
     "pytest-testmon",
     "pytest-xdist",
@@ -130,17 +130,7 @@ filterwarnings = [
     "ignore:Support for class-based.*config.*is deprecated:DeprecationWarning",
 ]
 
-[tool.commitizen]
-name = "cz_conventional_commits"
-version = "0.0.241"
-tag_format = "v$version"
-version_files = [
-    "pyproject.toml:version",
-    "README.md:Current version: (.*?)$",
-    "README.md:https://img.shields.io/badge/pdd--cli-v(.*?)-blue",
-    "pdd/pdd_completion.sh:# Version: (.*?)",
-    "pypi_description.rst:.. image:: https://img.shields.io/badge/pdd--cli-v(.*?)-blue",
-    "pypi_description.rst:You'll see the current PDD version \\(e\\.g\\., (.*?)\\)\\."
-]
-changelog_file = "CHANGELOG.md"
-update_changelog_on_bump = true
+[tool.setuptools_scm]
+version_file = "pdd/_version.py"
+tag_regex = "^v(?P<version>\\d+\\.\\d+\\.\\d+)$"
+local_scheme = "no-local-version"

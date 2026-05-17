@@ -1,6 +1,6 @@
 # PDD (Prompt-Driven Development) Command Line Interface
 
-![PDD-CLI Version](https://img.shields.io/badge/pdd--cli-v0.0.241-blue) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
+![PyPI version](https://img.shields.io/pypi/v/pdd-cli.svg) [![Discord](https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white)](https://discord.gg/Yp4RTh8bG7)
 
 ## Introduction
 
@@ -361,8 +361,6 @@ For proper model identifiers to use in your custom configuration, refer to the [
    - **Python version conflicts**: If you have multiple Python versions, ensure `python3` points to Python 3.8+: `which python3 && python3 --version`
 
 ## Version
-
-Current version: 0.0.241
 
 To check your installed version, run:
 ```

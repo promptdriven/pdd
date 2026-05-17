@@ -514,8 +514,8 @@ pip install -e ".[dev]"
 - **pytest-mock**: Mocking utilities for unit tests
 - **pytest-asyncio**: Support for async test functions
 - **z3-solver**: Formal verification tools
-- **commitizen**: Conventional commits and versioning
 - **build, twine**: Package building and publishing tools
+- **setuptools-scm**: Derives package version from git tags (no static version in pyproject.toml)
 
 ### 2. Enable Test Caching and Smart Execution
 
@@ -643,7 +643,7 @@ rm -rf .testmondata
 rm -rf .coverage htmlcov/
 ```
 
-### 8. Git Workflow with Commitizen
+### 8. Git Workflow
 
 **Make commits following conventional commits:**
 
@@ -651,24 +651,23 @@ rm -rf .coverage htmlcov/
 # Stage your changes
 git add .
 
-# Use commitizen for structured commits
-cz commit
-
-# Or use git commit with conventional format
+# Use conventional commit format
 git commit -m "feat: add new feature"
 git commit -m "fix: resolve bug in module"
 git commit -m "docs: update documentation"
 ```
 
-**Bump version (maintainers only):**
+**Cut a release (maintainers only):**
+
+The version is derived from git tags via setuptools-scm. To release, on `main`:
 
 ```bash
-# Automatically bump version and update CHANGELOG
-cz bump
-
-# Push with tags
-git push --follow-tags
+make release              # patch bump (default)
+make release BUMP=minor   # minor bump
+make release BUMP=major   # major bump
 ```
+
+`make release` tags `HEAD` with the next `vX.Y.Z` and pushes the tag. GitHub Actions then builds the wheel, waits for the `gltanaka` approval on the `pypi-publish` environment, publishes to PyPI via OIDC, and creates a GitHub Release with auto-generated notes.
 
 ### 9. Troubleshooting Development Setup
 

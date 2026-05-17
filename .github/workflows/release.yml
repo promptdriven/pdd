@@ -23,6 +23,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -48,10 +50,12 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi-publish
     permissions:
-      contents: read
+      contents: write
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
@@ -70,3 +74,14 @@ jobs:
         with:
           skip-existing: true
           attestations: true
+
+      - name: Create GitHub Release with auto-notes (idempotent)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag="${{ github.ref_name }}"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "GitHub Release $tag already exists; skipping."
+          else
+            gh release create "$tag" --generate-notes --verify-tag --target main
+          fi

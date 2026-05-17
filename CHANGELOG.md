@@ -1,3 +1,5 @@
+> Historical record up to v0.0.241. See [GitHub Releases](https://github.com/promptdriven/pdd/releases) for current release notes.
+
 ## v0.0.241 (2026-05-17)
 
 ### Fix
