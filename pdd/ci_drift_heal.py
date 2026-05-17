@@ -945,26 +945,63 @@ def _has_symlinked_ancestor(rel: str, repo_root: Path) -> bool:
 def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> bool:
     """Stage existing pathspecs with an explicit git-add call.
 
-    Filters out paths that ``.gitignore`` excludes before invoking ``git add``
-    — otherwise Git refuses the whole batch with "paths are ignored", aborting
-    an otherwise-successful heal commit. Examples include per-run reports
-    under ``.pdd/meta/*_run.json``, which the repo intentionally ignores but
-    which appear in the healed module's metadata pathspecs.
+    Two filters run **before** ``git add`` and **before** ``git check-ignore``:
 
-    Also drops pathspecs whose ancestor directory is a symlink (e.g. the
-    repo-root ``prompts -> pdd/prompts`` shim). Git refuses such paths with
-    "beyond a symbolic link"; the canonical form is normally also present in
-    the list because ``_git_relative_path_candidates`` returns both shapes.
+    1. **Symlink-traversal filter.** Drops pathspecs whose ancestor directory is
+       a symlink (e.g. the repo-root ``prompts -> pdd/prompts`` shim). Recent
+       Git fatals on such paths with "pathspec 'X' is beyond a symbolic link" —
+       and that fatal hits ``git check-ignore`` first, not just ``git add``, so
+       the symlink filter MUST run before any git invocation. The canonical
+       form is normally also present in the list because
+       ``_git_relative_path_candidates`` returns both shapes.
+
+    2. **Gitignore filter.** Run ``git check-ignore`` on the symlink-free
+       survivors so we know which paths to skip — otherwise ``git add`` refuses
+       the whole batch with "paths are ignored" (e.g. per-run reports under
+       ``.pdd/meta/*_run.json``), aborting an otherwise-successful heal commit.
+
+    Returns True on success or on a "nothing to stage" no-op. Returns False
+    only if ``git add`` itself fails after filters have been applied. Emits a
+    warning (not a hard failure) if all input paths get filtered out, since
+    silent drops are observable here but would be invisible at the caller.
     """
     repo_root = (cwd or Path.cwd()).resolve()
     existing = [rel for rel in pathspecs if (cwd or Path.cwd()).joinpath(rel).exists()]
     if not existing:
         return True
 
+    # Filter 1: symlink-traversal. Must come BEFORE check-ignore — git's
+    # "beyond a symbolic link" fatal applies to check-ignore too, not just to
+    # `git add`. If the symlink filter ran after check-ignore, a mixed batch
+    # would lose its ignore information when check-ignore fatals on the
+    # symlinked entry, and ignored paths would then leak through to `git add`
+    # (which would refuse the whole batch). Invariant:
+    # `_git_relative_path_candidates` emits both the symlinked and the
+    # canonical form for any source that traverses a symlinked ancestor, so
+    # dropping the symlinked form here loses nothing.
+    symlinked = {rel for rel in existing if _has_symlinked_ancestor(rel, repo_root)}
+    if symlinked:
+        console.print(
+            f"[dim]ci-heal: skipping symlink-traversal paths during stage: "
+            f"{sorted(symlinked)}[/dim]"
+        )
+    survivors = [rel for rel in existing if rel not in symlinked]
+    if not survivors:
+        # Every input went through a symlinked ancestor and was dropped.
+        # That's almost certainly a caller bug (the canonical form was not
+        # supplied alongside), so make it observable.
+        console.print(
+            f"[yellow]ci-heal: every input pathspec was dropped as symlink-traversal "
+            f"({sorted(symlinked)}); nothing staged. Caller should also pass the "
+            f"canonical (resolved) form for these paths.[/yellow]"
+        )
+        return True
+
+    # Filter 2: gitignore.
     ignored: Set[str] = set()
     try:
         rc_check = subprocess.run(
-            ["git", "check-ignore", "--", *existing],
+            ["git", "check-ignore", "--", *survivors],
             cwd=cwd,
             capture_output=True,
             text=True,
@@ -989,21 +1026,7 @@ def _git_add_pathspecs(pathspecs: Sequence[str], cwd: Optional[Path] = None) -> 
             f"{sorted(ignored)}[/dim]"
         )
 
-    # Invariant: when `_git_relative_path_candidates` emits a path whose
-    # ancestor is a symlink, it also emits the canonical (resolved) form
-    # for the same source — both for absolute inputs (branches 4 + 5) and
-    # for relative inputs (branches 1 + 2). Dropping the symlinked form
-    # here is therefore safe: the canonical form is in `existing` too and
-    # will get staged. If that invariant ever breaks, this filter would
-    # become a silent miss — adjust the helper, don't drop this filter.
-    symlinked = {rel for rel in existing if _has_symlinked_ancestor(rel, repo_root)}
-    if symlinked:
-        console.print(
-            f"[dim]ci-heal: skipping symlink-traversal paths during stage: "
-            f"{sorted(symlinked)}[/dim]"
-        )
-
-    stageable = [rel for rel in existing if rel not in ignored and rel not in symlinked]
+    stageable = [rel for rel in survivors if rel not in ignored]
     if not stageable:
         return True
 

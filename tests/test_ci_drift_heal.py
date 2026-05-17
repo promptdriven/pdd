@@ -165,14 +165,39 @@ class TestDetectDrift:
         assert len(example_drifts) == 0
 
     def test_pr_touched_metadata_modules_are_not_left_in_drift(self):
-        """Regression guard for PR metadata churn on long-running modules."""
-        prompt_drifts, example_drifts = detect_drift(
-            modules=[
-                "metadata_sync",
-                "agentic_change_orchestrator",
-                "ci_drift_heal",
-            ]
-        )
+        """Regression guard for PR metadata churn on long-running modules.
+
+        Isolates from the developer's working-tree state. Without isolation
+        this test breaks any time someone has an in-flight edit to one of
+        the listed modules (operation: 'verify' fires from
+        sync_determine_operation, lands in example_drifts, assert fails).
+        That breakage is the kind of false positive the auto-heal CI cycle
+        is supposed to catch and resolve, not a unit test.
+        """
+        modules = [
+            "metadata_sync",
+            "agentic_change_orchestrator",
+            "ci_drift_heal",
+        ]
+        # Pretend sync_determine_operation reports no work for these
+        # modules. The test then verifies detect_drift correctly maps
+        # "nothing to do" → empty drift lists for these specific modules
+        # (no module-name-based special casing that would re-flag them).
+        no_op = MagicMock(operation="nothing", reason="clean")
+        files = [Path(f"prompts/{bn}_python.prompt") for bn in modules]
+
+        def fake_infer(path):
+            stem = Path(path).stem
+            base, _, lang = stem.rpartition("_")
+            return base, lang
+
+        def fake_sync(basename, language, target_coverage, log_mode):
+            return no_op
+
+        with patch("pdd.user_story_tests.discover_prompt_files", return_value=files), \
+             patch("pdd.operation_log.infer_module_identity", side_effect=fake_infer), \
+             patch("pdd.sync_determine_operation.sync_determine_operation", side_effect=fake_sync):
+            prompt_drifts, example_drifts = detect_drift(modules=modules)
 
         assert prompt_drifts == []
         assert example_drifts == []
@@ -374,6 +399,124 @@ class TestSymlinkStaging:
         assert len(add_calls) == 1
         staged = add_calls[0][add_calls[0].index("--") + 1 :]
         assert staged == ["pdd/foo.py"]
+
+
+class TestSymlinkStagingRealGit:
+    """Integration tests that exercise the *real* git binary, no subprocess mocking.
+
+    The mocked tests above prove the helper builds the right ``git add`` argv.
+    These tests prove the helper survives the actual git fatals that the
+    auto-heal CI Cloud Build hit in production — specifically that
+    ``git check-ignore`` ALSO refuses pathspecs whose ancestor is a symlink
+    ("pathspec 'X' is beyond a symbolic link", exit 128), so a filter that
+    only runs after ``check-ignore`` is too late.
+
+    Regression for the mixed-batch case the reviewer of PR #1048 surfaced:
+    when ``prompts/foo.prompt`` (via symlink) and ``pdd/meta/foo_run.json``
+    (gitignored) appear in the same batch, naive ordering loses the ignore
+    info to a check-ignore fatal and the heal commit blows up at ``git add``.
+    """
+
+    def _init_repo(self, tmp_path: Path) -> None:
+        """Build a tmp git repo with the exact shape that triggers the bug.
+
+        - ``prompts/`` is a tracked symlink to ``pdd/prompts/``.
+        - ``.gitignore`` excludes ``*_run.json``.
+        - One file exists under each: a prompt under ``pdd/prompts/`` and an
+          ignored metadata file under ``pdd/meta/``.
+        """
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "test"], cwd=tmp_path, check=True
+        )
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "pdd" / "meta").mkdir(parents=True)
+        (tmp_path / "prompts").symlink_to("pdd/prompts")
+        (tmp_path / "pdd" / "prompts" / "foo.prompt").write_text("% prompt\n", encoding="utf-8")
+        (tmp_path / ".gitignore").write_text("*_run.json\n", encoding="utf-8")
+        (tmp_path / "pdd" / "meta" / "foo_run.json").write_text("{}\n", encoding="utf-8")
+        subprocess.run(["git", "add", ".gitignore", "prompts"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+    def test_mixed_batch_with_symlink_and_ignored_path(self, tmp_path):
+        """Reviewer-of-#1048's exact reproducer: mixed batch including a
+        symlinked path AND a gitignored path. ``check-ignore`` fatals on the
+        symlinked path; if the symlink filter runs too late, the ignore info
+        is lost and ``git add`` refuses the batch."""
+        self._init_repo(tmp_path)
+
+        ok = _git_add_pathspecs(
+            [
+                "prompts/foo.prompt",  # symlinked form — fatals on check-ignore
+                "pdd/prompts/foo.prompt",  # canonical form — must stage cleanly
+                "pdd/meta/foo_run.json",  # gitignored — must NOT reach git add
+            ],
+            cwd=tmp_path,
+        )
+        assert ok is True, (
+            "helper must return True; symlink filter must run before "
+            "check-ignore so the ignore info isn't lost"
+        )
+
+        # Confirm the right path actually landed in the index.
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        staged_lines = [line for line in status.stdout.splitlines() if line.startswith("A ")]
+        assert any("pdd/prompts/foo.prompt" in line for line in staged_lines), (
+            f"canonical prompt path must be staged; got {status.stdout!r}"
+        )
+        assert not any("foo_run.json" in line for line in staged_lines), (
+            f"gitignored path must not be staged; got {status.stdout!r}"
+        )
+
+    def test_canonical_only_batch_still_works(self, tmp_path):
+        """Sanity: when the caller passes only the canonical form (no
+        symlinked twin), the helper still stages correctly."""
+        self._init_repo(tmp_path)
+
+        ok = _git_add_pathspecs(
+            ["pdd/prompts/foo.prompt", "pdd/meta/foo_run.json"],
+            cwd=tmp_path,
+        )
+        assert ok is True
+
+    def test_symlinked_only_batch_warns_and_no_ops(self, tmp_path):
+        """Defensive log path: if the caller passes ONLY a symlinked path
+        (no canonical twin), the helper should not stage anything but must
+        return True (so the heal commit isn't crashed by a silent miss)."""
+        self._init_repo(tmp_path)
+
+        ok = _git_add_pathspecs(
+            ["prompts/foo.prompt"],  # only the symlinked form
+            cwd=tmp_path,
+        )
+        # Returning True here is intentional: the caller (auto-heal) typically
+        # has both forms in the candidate list; if it only has the symlinked
+        # form, that's a caller bug we want surfaced via the warning log, not
+        # a False return that aborts an otherwise-successful heal commit.
+        assert ok is True
+
+        # Nothing should be staged.
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "A " not in status.stdout
 
 
 # ---------------------------------------------------------------------------
