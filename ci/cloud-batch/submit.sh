@@ -26,6 +26,30 @@ _with_timeout() {
     return "$rc"
 }
 
+# Snapshot pre-existing multiprocessing PIDs so we can later identify gcloud-leaked workers.
+_pre_gcloud_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
+trap 'cleanup_leaked_gcloud_workers' EXIT
+
+# Sweep gcloud's leaked multiprocessing workers (re-parented to init) that this script spawned.
+cleanup_leaked_gcloud_workers() {
+    [ -z "${_pre_gcloud_workers+x}" ] && return 0
+    local now_workers new_workers ppid pid term_pids=""
+    now_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
+    [ -z "${now_workers}" ] && return 0
+    new_workers="$(comm -13 <(printf '%s\n' "${_pre_gcloud_workers}") <(printf '%s\n' "${now_workers}") 2>/dev/null || true)"
+    [ -z "${new_workers}" ] && return 0
+    for pid in ${new_workers}; do
+        ppid="$(ps -o ppid= -p "${pid}" 2>/dev/null | tr -d ' ' || true)"
+        [ "${ppid}" = "1" ] && term_pids="${term_pids} ${pid}"
+    done
+    [ -z "${term_pids}" ] && return 0
+    # shellcheck disable=SC2086 # intentional word-splitting of PID list
+    kill -TERM ${term_pids} 2>/dev/null || true
+    sleep 1
+    # shellcheck disable=SC2086 # intentional word-splitting of PID list
+    kill -KILL ${term_pids} 2>/dev/null || true
+}
+
 # ── Prepare source path allowlist ─────────────────────────────────────────
 cd "${REPO_ROOT}"
 SOURCE_PATHS=(
@@ -135,7 +159,7 @@ rm /tmp/pdd-batch-job-spot.json /tmp/pdd-batch-job-std.json
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
-trap 'rm -rf "${STREAMING_DIR}"' EXIT
+trap 'rm -rf "${STREAMING_DIR}"; cleanup_leaked_gcloud_workers' EXIT
 
 TOTAL=77  # 76 (spot) + 1 (standard)
 STREAM_FAILURES=0
