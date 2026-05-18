@@ -323,6 +323,9 @@ def generate(
             output=output,
             original_prompt_file_path=original_prompt,
             force_incremental_flag=bool(incremental),
+            env_vars=env_vars,
+            unit_test_file=unit_test,
+            exclude_tests=bool(exclude_tests),
         )
 
         # ``code_generator_main`` returns ``(code, was_incremental, cost, model)``.
@@ -532,6 +535,7 @@ def test(
             merge=merge,
             strength=strength,
             temperature=temperature,
+            manual=manual,
         )
 
         # ``cmd_test_main`` returns a 3- or 4-tuple depending on language path.

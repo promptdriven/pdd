@@ -302,22 +302,68 @@ def test_generate_env_vars(runner, mock_code_gen):
     """Test environment variable parsing and setting."""
     with runner.isolated_filesystem():
         with open("p.txt", "w") as f: f.write("p")
-        
+
         # Set a host env var to test pass-through
         os.environ["HOST_VAR"] = "host_value"
-        
+
         # We invoke with one explicit KV pair and one pass-through key
         result = runner.invoke(generate_module.generate, ["p.txt", "-e", "NEW_VAR=new_val", "-e", "HOST_VAR"])
-        
+
         assert result.exit_code == 0
-        
+
         # Verify os.environ was updated (mock_code_gen runs inside the context where env is set)
         assert os.environ.get("NEW_VAR") == "new_val"
         assert os.environ.get("HOST_VAR") == "host_value"
-        
+
+        # Verify env_vars dict was also forwarded into code_generator_main so that
+        # template / front-matter variable resolution sees them (regression for
+        # the codex finding on pdd/commands/generate.py:320).
+        call_kwargs = mock_code_gen.call_args[1]
+        assert call_kwargs["env_vars"] == {
+            "NEW_VAR": "new_val",
+            "HOST_VAR": "host_value",
+        }
+
         # Cleanup
         if "NEW_VAR" in os.environ: del os.environ["NEW_VAR"]
         if "HOST_VAR" in os.environ: del os.environ["HOST_VAR"]
+
+
+def test_generate_unit_test_and_exclude_tests_forwarded(runner, mock_code_gen):
+    """Regression: ``--unit-test`` and ``--exclude-tests`` must reach code_generator_main.
+
+    The codex review for issue #1057 flagged that these flags were parsed by the
+    CLI but no longer forwarded into ``code_generator_main``, which still
+    consumes them. Without this propagation, test inclusion/exclusion behaviour
+    silently degrades to the function default.
+    """
+    with runner.isolated_filesystem():
+        with open("p.txt", "w") as f:
+            f.write("p")
+
+        result = runner.invoke(
+            generate_module.generate,
+            ["p.txt", "--unit-test", "tests/test_p.py", "--exclude-tests"],
+        )
+
+        assert result.exit_code == 0, result.output
+        kwargs = mock_code_gen.call_args[1]
+        assert kwargs["unit_test_file"] == "tests/test_p.py"
+        assert kwargs["exclude_tests"] is True
+
+
+def test_generate_exclude_tests_default_false(runner, mock_code_gen):
+    """Default for --exclude-tests is False and must propagate verbatim."""
+    with runner.isolated_filesystem():
+        with open("p.txt", "w") as f:
+            f.write("p")
+
+        result = runner.invoke(generate_module.generate, ["p.txt"])
+
+        assert result.exit_code == 0, result.output
+        kwargs = mock_code_gen.call_args[1]
+        assert kwargs["exclude_tests"] is False
+        assert kwargs["unit_test_file"] is None
 
 # --- Example Command Tests ---
 
@@ -438,22 +484,30 @@ def test_test_manual_mode_explicit(runner, mock_cmd_test):
     # Even if we pass a URL, --manual should force manual mode
     url = "https://github.com/user/repo/issues/1"
     result = runner.invoke(generate_module.test, ["--manual", url, "code.py"])
-    
+
     assert result.exit_code == 0
     mock_cmd_test.assert_called_once()
     kwargs = mock_cmd_test.call_args[1]
     assert kwargs["prompt_file"] == url
     assert kwargs["code_file"] == "code.py"
+    # Regression for the codex finding on pdd/commands/generate.py:523 — when
+    # the user supplies --manual we must forward manual=True so cmd_test_main
+    # does not silently fall back to agentic test generation for non-Python or
+    # API-enabled inputs.
+    assert kwargs["manual"] is True
 
 def test_test_manual_mode_implicit(runner, mock_cmd_test):
     """Test 'test' command in Manual mode implicitly (no URL)."""
     result = runner.invoke(generate_module.test, ["prompt.txt", "code.py"])
-    
+
     assert result.exit_code == 0
     mock_cmd_test.assert_called_once()
     kwargs = mock_cmd_test.call_args[1]
     assert kwargs["prompt_file"] == "prompt.txt"
     assert kwargs["code_file"] == "code.py"
+    # Without --manual the implicit manual-mode dispatch must forward
+    # manual=False so cmd_test_main can choose the right path.
+    assert kwargs["manual"] is False
 
 def test_test_manual_mode_arg_error(runner):
     """Test Manual mode fails if not exactly 2 arguments."""
