@@ -11,9 +11,8 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from rich.console import Console
 
@@ -90,35 +89,38 @@ def _extract_json_from_text(text: str) -> dict[str, Any] | None:
         return None
 
 
-def _read_prior_content_from_git(path: Path, project_root: Path) -> str:
-    """Return the HEAD-committed content of ``path`` from git, or empty.
+def _snapshot_pre_test_contents(
+    project_root: Path, candidate_paths: Iterable[Path]
+) -> dict[Path, str]:
+    """Read existing test-like files into memory for alt-path churn baseline.
 
-    Used to recover the pre-sync baseline of an alternate-path test
-    file before the agent overwrote it. When the file is untracked,
-    never committed, or git is unavailable, returns an empty string
-    (the caller treats that as "first-time generation" and skips the
-    churn check).
+    Captures the on-disk working-tree state — covering tracked-clean,
+    tracked-dirty, AND untracked files alike — so a later alt-path
+    churn check can compare the agent's rewrite against the actual
+    pre-run content the user had, not a stale HEAD revision.
+    Per-file size capped at ~1 MiB to keep snapshot memory bounded on
+    pathological codebases; files above the cap fall back to
+    first-time-generation behavior (no churn signal). Lazy-imports
+    `_is_test_output_path` to avoid a circular dependency with
+    `code_generator_main`.
     """
-    try:
-        rel = path.resolve().relative_to(project_root.resolve()).as_posix()
-    except ValueError:
-        # Path is outside the project root — git rev-parse will not
-        # resolve it via the project_root cwd.
-        return ""
-    try:
-        result = subprocess.run(
-            ["git", "show", f"HEAD:{rel}"],
-            cwd=str(project_root),
-            capture_output=True,
-            text=True,
-            check=False,
-            encoding="utf-8",
-        )
-    except (OSError, FileNotFoundError):
-        return ""
-    if result.returncode != 0:
-        return ""
-    return result.stdout or ""
+    from .code_generator_main import _is_test_output_path
+
+    snapshot: dict[Path, str] = {}
+    for path in candidate_paths:
+        try:
+            rel = path.relative_to(project_root).as_posix()
+        except ValueError:
+            continue
+        if not _is_test_output_path(rel):
+            continue
+        try:
+            if path.stat().st_size > 1_000_000:
+                continue
+            snapshot[path] = path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+    return snapshot
 
 
 def _read_generated_test_file(test_file: Path) -> str:
@@ -306,6 +308,17 @@ def run_agentic_test_generate(
     # Record mtimes before execution
     mtimes_before = _get_file_mtimes(project_root)
 
+    # Snapshot existing test-like file contents so the alt-path churn
+    # baseline reflects the actual working-tree state — tracked-clean,
+    # tracked-dirty, and untracked all included. Earlier iterations
+    # used `git show HEAD:<path>` here, but that missed untracked files
+    # (no churn signal at all) and clobbered local dirty edits on
+    # restore. The snapshot is taken BEFORE the agent runs and reused
+    # below when the agent writes to an alternate path
+    # (e.g. `__tests__/foo.test.ts` instead of the canonical
+    # `output_test_file`).
+    pre_test_contents = _snapshot_pre_test_contents(project_root, mtimes_before.keys())
+
     # Run agentic task
     agent_success, agent_output, cost, provider = run_agentic_task(
         instruction=instruction,
@@ -370,12 +383,13 @@ def run_agentic_test_generate(
     # `cmd_test_main` compares the alt-path content against the
     # CANONICAL path's pre-existing content (empty when canonical
     # didn't exist), which lets a 20-test alt file shrink to 1 test
-    # without tripping the gate. Recover the alt-path's prior content
-    # from git and re-run the churn check here so the gate fires before
-    # we return. Untracked/never-committed alt files fall through to
-    # the existing behavior — first-time generation is exempt anyway.
+    # without tripping the gate. Look up the alt-path's pre-run
+    # content from the working-tree snapshot taken before the agent
+    # ran and re-run the churn check here so the gate fires before we
+    # return. Files that did not exist before the run aren't in the
+    # snapshot and fall through — first-time generation is exempt.
     if alt_path_used is not None and generated_content:
-        prior = _read_prior_content_from_git(alt_path_used, project_root)
+        prior = pre_test_contents.get(alt_path_used, "")
         if prior:
             # Lazy import to avoid circular dependency.
             from .code_generator_main import (
@@ -396,11 +410,10 @@ def run_agentic_test_generate(
                 churn_err.model_name = (
                     f"agentic-{provider}" if provider else "agentic-cli"
                 )
-                # Restore the pre-existing alternate-file content so the
-                # repair loop sees the canonical pre-sync state on disk
-                # — without this the rewritten alt file becomes the new
-                # baseline for the next retry and the gate slowly
-                # accepts the regression.
+                # Restore the alt path to the user's pre-run
+                # working-tree content so the repair loop sees the
+                # actual pre-sync state — NOT HEAD, which would
+                # silently discard local dirty edits.
                 try:
                     alt_path_used.write_text(prior, encoding="utf-8")
                 except OSError:

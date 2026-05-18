@@ -781,38 +781,44 @@ def test_agentic_test_generate_ignores_stale_env_directive_without_kwarg(
 # `__tests__/foo.test.ts`). When that alt path existed before the run with
 # real coverage, the outer `cmd_test_main` churn check compares the alt
 # content against the CANONICAL path's pre-existing content (empty) and
-# misses the regression. `run_agentic_test_generate` now recovers the
-# alt-path's prior content via `git show HEAD:<rel>` and re-runs the
-# churn check, restoring the prior content on failure.
+# misses the regression. `run_agentic_test_generate` now snapshots
+# pre-existing test-like file contents from the working tree BEFORE the
+# agent runs (covering tracked-clean, tracked-dirty, AND untracked alt
+# tests uniformly) and re-runs the churn check against that snapshot,
+# restoring the pre-run content on failure.
 # -----------------------------------------------------------------------------
 
 
-@patch("pdd.agentic_test_generate._read_prior_content_from_git")
 @patch("pdd.agentic_test_generate.run_agentic_task")
 @patch("pdd.agentic_test_generate.load_prompt_template")
 @patch("pdd.agentic_test_generate.get_available_agents")
-def test_alt_path_rewrite_with_tracked_prior_raises_churn_error(
-    mock_agents, mock_load, mock_run, mock_git, mock_env
+def test_alt_path_rewrite_with_untracked_prior_raises_churn_error(
+    mock_agents, mock_load, mock_run, mock_env
 ):
-    """Agent rewrites a pre-existing alt-path test file (20 tests → 1)
-    when the canonical path is absent. The alt-path's prior content
-    (recovered from git) drives the churn check; the gate must fire
-    AND the alt-path content must be restored to its pre-existing
-    value so the repair loop sees the correct baseline."""
+    """Agent rewrites a pre-existing UNTRACKED alt-path test file
+    (20 tests → 1) when the canonical path is absent. Because the
+    baseline now comes from a working-tree snapshot (not `git show
+    HEAD`), the untracked prior content drives the churn check and
+    the gate fires. The alt path is restored to the snapshotted
+    pre-run content so the repair loop sees the actual pre-sync
+    state."""
     mock_agents.return_value = ["anthropic"]
     mock_load.return_value = "Template"
 
     alt_path = mock_env["root"] / "__tests__" / "foo.test.ts"
     alt_path.parent.mkdir(parents=True, exist_ok=True)
-    rewritten = "it('case 0', () => {});\n"
-
     pre_existing = (
         "\n".join(f"it('case {i}', () => {{}});" for i in range(20)) + "\n"
     )
-    mock_git.return_value = pre_existing
+    # Write the alt-path file on disk BEFORE the agent runs. No git
+    # commit — the file is untracked. The snapshot taken inside
+    # run_agentic_test_generate must still pick it up so the churn
+    # gate has the right baseline.
+    alt_path.write_text(pre_existing, encoding="utf-8")
+
+    rewritten = "it('case 0', () => {});\n"
 
     def side_effect(*args, **kwargs):
-        # Canonical path stays missing; agent writes to the alt path.
         alt_path.write_text(rewritten, encoding="utf-8")
         return (True, '{"success": true, "message": "Generated tests"}', 0.2, "anthropic")
 
@@ -825,7 +831,8 @@ def test_alt_path_rewrite_with_tracked_prior_raises_churn_error(
             mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
         )
 
-    # Repair-loop hand-off: alt path restored, cost/model attached.
+    # Repair-loop hand-off: alt path restored to the snapshotted
+    # pre-run content (untracked, never in git), cost/model attached.
     assert alt_path.read_text(encoding="utf-8") == pre_existing
     assert excinfo.value.total_cost == 0.2
     assert excinfo.value.model_name == "agentic-anthropic"
@@ -834,16 +841,62 @@ def test_alt_path_rewrite_with_tracked_prior_raises_churn_error(
     assert not mock_env["test"].exists()
 
 
-@patch("pdd.agentic_test_generate._read_prior_content_from_git")
 @patch("pdd.agentic_test_generate.run_agentic_task")
 @patch("pdd.agentic_test_generate.load_prompt_template")
 @patch("pdd.agentic_test_generate.get_available_agents")
-def test_alt_path_rewrite_with_untracked_prior_does_not_raise(
-    mock_agents, mock_load, mock_run, mock_git, mock_env
+def test_alt_path_restore_preserves_dirty_working_tree_edits(
+    mock_agents, mock_load, mock_run, mock_env
 ):
-    """When the alt-path file is not in git (`git show` returns empty),
-    the recovery downgrades to first-time-generation behavior — no
-    churn raise, and the previous return-value contract holds."""
+    """Tracked-but-dirty alt-path: the snapshot captures the
+    working-tree (dirty) content, NOT git HEAD. On `TestChurnError`
+    the restore writes the dirty content back, preserving local
+    edits that an HEAD-based restore would have silently discarded.
+    """
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    alt_path = mock_env["root"] / "__tests__" / "foo.test.ts"
+    alt_path.parent.mkdir(parents=True, exist_ok=True)
+    # The "dirty" working-tree content the user had on disk before
+    # `pdd sync` ran. In a real git repo HEAD would still hold the
+    # pristine 20-test version; we don't have a repo here, but the
+    # snapshot approach doesn't consult git at all, so the test
+    # exercises the same code path either way.
+    dirty_working_tree = (
+        "\n".join(f"it('dirty case {i}', () => {{}});" for i in range(25))
+        + "\n// uncommitted local edits\n"
+    )
+    alt_path.write_text(dirty_working_tree, encoding="utf-8")
+
+    rewritten = "it('case 0', () => {});\n"
+
+    def side_effect(*args, **kwargs):
+        alt_path.write_text(rewritten, encoding="utf-8")
+        return (True, '{"success": true, "message": "Generated tests"}', 0.15, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    from pdd.code_generator_main import TestChurnError
+
+    with pytest.raises(TestChurnError):
+        run_agentic_test_generate(
+            mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+        )
+
+    # Restore must produce the dirty working-tree content, not HEAD.
+    assert alt_path.read_text(encoding="utf-8") == dirty_working_tree
+
+
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_alt_path_first_time_generation_does_not_raise(
+    mock_agents, mock_load, mock_run, mock_env
+):
+    """When the alt-path file did NOT exist before the agent ran,
+    the snapshot has no entry for it; the alt-path branch falls
+    through (first-time generation is exempt) and the function
+    returns the alt-path content normally."""
     mock_agents.return_value = ["anthropic"]
     mock_load.return_value = "Template"
 
@@ -851,10 +904,8 @@ def test_alt_path_rewrite_with_untracked_prior_does_not_raise(
     alt_path.parent.mkdir(parents=True, exist_ok=True)
     rewritten = "it('case 0', () => {});\n"
 
-    # Git can't recover this file (untracked / first commit).
-    mock_git.return_value = ""
-
     def side_effect(*args, **kwargs):
+        # Brand-new alt path; no pre-existing content to snapshot.
         alt_path.write_text(rewritten, encoding="utf-8")
         return (True, '{"success": true, "message": "Generated tests"}', 0.1, "anthropic")
 
@@ -864,7 +915,6 @@ def test_alt_path_rewrite_with_untracked_prior_does_not_raise(
         mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
     )
 
-    # Returned alt-path content, success TRUE, no exception.
     assert content == rewritten
     assert cost == 0.1
     assert success is True

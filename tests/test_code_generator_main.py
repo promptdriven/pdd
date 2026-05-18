@@ -7103,6 +7103,124 @@ class TestSyncCompatibilityGates:
             )
 
     # -----------------------------------------------------------------
+    # External review (PR #1015) iter-12 follow-up: broaden test-suffix
+    # coverage to all `_test.<ext>` / `_spec.<ext>` extensions in
+    # `_LANGUAGE_TEST_FILE_EXTS` (Elixir/Dart/Clojure/Lua/PHP appear by
+    # data, not code) AND add Groovy PascalCase (Spock convention).
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_catches_groovy_spec(self):
+        """`FooSpec.groovy` (Spock framework) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  def 'case {i}'() {{}}" for i in range(20)) + "\n"
+        )
+        after = "  def 'case 0'() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooSpec_groovy.prompt",
+                "src/test/groovy/FooSpec.groovy",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_elixir_sibling_test(self):
+        """`widget_test.exs` (Elixir ExUnit) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f'  test "case {i}" do\n  end' for i in range(20))
+            + "\n"
+        )
+        after = '  test "case 0" do\n  end\n'
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_exs.prompt",
+                "lib/widget_test.exs",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_dart_sibling_test(self):
+        """`widget_test.dart` (Flutter / Dart test) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  test('case {i}', () {{}});" for i in range(20))
+            + "\n"
+        )
+        after = "  test('case 0', () {});\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_dart.prompt",
+                "lib/widget_test.dart",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_clojure_sibling_test(self):
+        """`widget_test.clj` (clojure.test) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"(deftest case-{i} (is true))" for i in range(20))
+            + "\n"
+        )
+        after = "(deftest case-0 (is true))\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_clj.prompt",
+                "src/widget_test.clj",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_lua_busted_spec(self):
+        """`widget_spec.lua` (Busted) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f'  it("case {i}", function() end)' for i in range(20))
+            + "\n"
+        )
+        after = '  it("case 0", function() end)\n'
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_spec_lua.prompt",
+                "src/widget_spec.lua",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_skips_groovy_false_positive(self):
+        """`Greatest.groovy` is NOT a test file; the PascalCase
+        `Spec.groovy`/`Test.groovy` match must remain case-sensitive
+        so generic names ending in `est.groovy` do not trip the gate."""
+        from pdd.code_generator_main import _verify_test_churn
+
+        before = "\n".join(f"def item{i} = {i}" for i in range(50)) + "\n"
+        after = "def item0 = 0\n"
+
+        # Must NOT raise — `Greatest.groovy` is regular code, not a test.
+        _verify_test_churn(
+            before,
+            after,
+            "Greatest_groovy.prompt",
+            "src/main/groovy/Greatest.groovy",
+            "Internal refactor.",
+        )
+
+    # -----------------------------------------------------------------
     # External review (PR #1015) follow-up: `from __future__ import …`
     # is a compiler directive, not a public attribute, so removing it
     # MUST NOT trip the public-surface gate.
