@@ -89,15 +89,17 @@ def _discover_test_files(
 
 def _compute_include_allowlist(
     prompt_path: Path,
-    *,
-    max_depth: int = 3,
 ) -> Set[Path]:
-    """Depth-bounded, cycle-safe BFS over <include> references from a prompt.
+    """Cycle-safe BFS over <include> references from a prompt.
 
     Reuses ``pdd.sync_order.extract_includes_from_file`` as the single include
     parser so this module cannot disagree with PDD preprocessing/fingerprinting
     on what counts as an include. Body-form ``<include path="X">Y</include>``
     resolves to ``X`` (attribute wins), matching the preprocessor.
+
+    Traversal is recursive (no depth cap) to mirror PDD preprocessing, which
+    expands nested includes until convergence. The ``visited`` set prevents
+    infinite loops on cyclic include graphs.
 
     Resolution order for each raw include string:
         1. ``PROJECT_ROOT / include_str``
@@ -112,20 +114,15 @@ def _compute_include_allowlist(
 
     allowed: Set[Path] = set()
     visited: Set[Path] = set()
-    queue: Deque[Tuple[Path, int]] = deque()
-    queue.append((prompt_resolved, 0))
+    queue: Deque[Path] = deque()
+    queue.append(prompt_resolved)
 
     while queue:
-        current_file, depth = queue.popleft()
+        current_file = queue.popleft()
 
         if current_file in visited:
             continue
         visited.add(current_file)
-
-        if depth >= max_depth:
-            # Don't descend further, but the file itself isn't an allowlist
-            # entry unless reached as an include (depth > 0).
-            continue
 
         try:
             includes = extract_includes_from_file(current_file)
@@ -166,7 +163,7 @@ def _compute_include_allowlist(
             if resolved_path not in allowed:
                 allowed.add(resolved_path)
             if resolved_path not in visited:
-                queue.append((resolved_path, depth + 1))
+                queue.append(resolved_path)
 
     return allowed
 
