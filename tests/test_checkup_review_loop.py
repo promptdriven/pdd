@@ -4574,6 +4574,188 @@ class TestPromptSourceGuardHelper:
 
         assert _check_prompt_source_guard(tmp_path, []) is None
 
+    def test_code_changed_with_prompt_deleted_in_same_change_set_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Module deletion is a legitimate, contract-respecting change.
+
+        When the fixer/user deletes both the registered code file AND
+        its owning prompt in the same change set, the source-of-truth
+        contract is explicitly satisfied — the bot is not silently
+        producing drift, it is retiring the module. The guard MUST
+        allow this rather than treat the missing prompt file as a
+        stale-registry skip (codex review pass #2 Finding B).
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        # Architecture still lists the module, but its prompt file is
+        # NOT on disk (the deletion just happened). Both the code path
+        # and the prompt path appear in the change set as deletions.
+        _write_arch_json(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        # Intentionally do NOT create the prompt file on disk - it has
+        # been deleted in this change set.
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            [
+                "pdd/agentic_update.py",
+                "pdd/prompts/agentic_update_python.prompt",
+            ],
+        )
+
+        # Allowed: the source-of-truth contract is satisfied because
+        # the prompt is part of the change set, regardless of whether
+        # it ends up present or absent on disk after the change.
+        assert reason is None
+
+
+class TestPromptSourceGuardChangedFilesParsing:
+    """``_git_changed_files`` must surface rename old+new paths.
+
+    Renames are reported by ``git status --porcelain`` as
+    ``R  old -> new``. The original parser collapsed that into the
+    literal ``"old -> new"`` string, which never matched any
+    architecture-registry code-path key — so a registered file could
+    be renamed out from under the registry without tripping the
+    prompt-source guard (codex review pass #2 Finding A).
+
+    These tests exercise the real ``git`` invocation against a tmp
+    git repo. Monkeypatching ``_git_changed_files`` would hide the
+    bug because the parsing is the thing being tested.
+    """
+
+    @staticmethod
+    def _init_repo(worktree: Path) -> None:
+        """Initialize a minimal git repo with a deterministic identity."""
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+        )
+
+    def test_changed_files_includes_both_paths_for_rename(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "foo.py").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Rename the registered code file.
+        subprocess.run(
+            ["git", "mv", "pdd/foo.py", "pdd/foo_v2.py"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+
+        # BOTH paths must appear so the guard can match the old path
+        # against the architecture registry.
+        assert "pdd/foo.py" in changed
+        assert "pdd/foo_v2.py" in changed
+        # And the literal "old -> new" collapsed string MUST NOT appear.
+        assert not any("->" in entry for entry in changed)
+
+    def test_guard_handles_renamed_registered_file(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end: a rename of a registered code file without its
+        prompt change MUST be refused by the guard.
+        """
+        from pdd.checkup_review_loop import (
+            _check_prompt_source_guard,
+            _git_changed_files,
+        )
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "code\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+        _write_arch_json(
+            tmp_path,
+            [
+                _prompt_module(
+                    "agentic_update_python.prompt", "pdd/agentic_update.py"
+                )
+            ],
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # The fixer renames the registered code file without touching
+        # the prompt - exactly the rename-handling drift case.
+        subprocess.run(
+            ["git", "mv", "pdd/agentic_update.py", "pdd/agentic_update_v2.py"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+        reason = _check_prompt_source_guard(tmp_path, changed)
+
+        assert reason is not None
+        # The refusal must name the registered (old) path that moved
+        # out from under its owning prompt.
+        assert "pdd/agentic_update.py" in reason
+        assert "pdd/prompts/agentic_update_python.prompt" in reason
+
+    def test_changed_files_excludes_collapsed_rename_literal(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression guard: the parser MUST NOT emit ``"a -> b"``
+        strings for any rename, even when the staged rename uses
+        unusual path characters.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "name with space.py").write_text(
+            "x\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "mv",
+                "pdd/name with space.py",
+                "pdd/renamed_no_space.py",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+
+        # Both paths surface as discrete entries (``-z`` preserves
+        # paths exactly without quoting, so the space is intact).
+        assert "pdd/name with space.py" in changed
+        assert "pdd/renamed_no_space.py" in changed
+        # And nothing collapsed with the arrow literal.
+        assert not any("->" in entry for entry in changed)
+
 
 class TestPromptSourceGuardIntegration:
     """Wires the guard into the main review loop.

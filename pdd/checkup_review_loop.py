@@ -1045,6 +1045,13 @@ def run_checkup_review_loop(
         # policy boundary, and DO NOT reset the worktree so the artifacts
         # remain available for debugging.
         #
+        # Scope: this guard catches drift introduced by the FIXER in the
+        # current loop iteration. Pre-existing PR-head drift (drift that
+        # landed before the review loop started) is structurally #1062's
+        # territory ("verify final PR head"); widening this guard to
+        # inspect the full PR diff would muddle the boundary #1063
+        # explicitly drew.
+        #
         # Ship-gate contract: this break leaves ``state.reviewer_status``
         # at ``findings`` (set at line ~925 before the fixer ran),
         # ``state.fresh_final_status`` at ``missing``, and the affected
@@ -3730,18 +3737,59 @@ def _redact_secret(text: str, secret: str) -> str:
 
 
 def _git_changed_files(worktree: Path) -> List[str]:
+    """Return the list of changed paths in ``worktree``.
+
+    Uses ``git status --porcelain=v1 -z`` so renames and copies report
+    BOTH the new path AND the old path as discrete entries. The earlier
+    ``--porcelain`` (non-``-z``) parser collapsed a rename into the
+    literal string ``"old -> new"``, which never matched any registered
+    code-path key (issue #1063 rename-handling gap). Tracking both paths
+    is the right answer for every existing caller:
+
+      - ``_check_prompt_source_guard`` MUST see the old path so a rename
+        of a registered code file without its prompt is treated as
+        drift.
+      - ``_run_fix`` records the change set in the FixResult artifact
+        for auditing; a rename's old + new paths is strictly more
+        informative than the ``"a -> b"`` literal.
+      - ``_commit_and_push_if_changed`` only uses the truthiness of the
+        list to decide whether to stage; semantics unchanged.
+
+    Untracked files are intentionally excluded here; the staging path
+    surfaces them via ``_git_untracked_files``.
+    """
     result = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain=v1", "-z"],
         cwd=worktree,
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         return []
+    # ``-z`` emits records joined by NUL with no trailing NUL on the
+    # last record. Splitting on NUL is correct; drop any empty tail.
+    raw_entries = [e for e in result.stdout.split("\0") if e]
     files: List[str] = []
-    for line in result.stdout.splitlines():
-        if len(line) > 3:
-            files.append(line[3:].strip())
+    i = 0
+    while i < len(raw_entries):
+        entry = raw_entries[i]
+        # Each record begins with a two-char status XY plus a space,
+        # followed by the path. ``-z`` preserves paths exactly (no
+        # quoting), so ``entry[3:]`` is the literal new-or-only path.
+        if len(entry) < 4:
+            i += 1
+            continue
+        status = entry[:2]
+        path = entry[3:]
+        files.append(path)
+        # Rename ('R') and copy ('C') in either column emit a SECOND
+        # record carrying the old path. Consume it as a separate changed
+        # path so callers see both sides of the rename.
+        if "R" in status or "C" in status:
+            i += 1
+            if i < len(raw_entries):
+                files.append(raw_entries[i])
+        i += 1
     return files
 
 
@@ -3830,20 +3878,31 @@ def _check_prompt_source_guard(
     for code_path, prompt_path in code_to_prompt.items():
         if code_path not in changed_norm:
             continue
-        # Stale registry: the registered prompt no longer exists on
-        # disk. Skip rather than block - the bug we're fixing is silent
-        # prompt drift, not "we can't generate at all because someone
-        # deleted a prompt".
+        # The prompt is part of THIS change set (modified, added, or
+        # deleted alongside the code) - the source-of-truth contract is
+        # satisfied because the user/bot is explicitly editing the
+        # prompt too. Module deletion (code + prompt both removed
+        # intentionally) also lands here. This check MUST come before
+        # the on-disk existence check so a same-change-set deletion is
+        # not misclassified as a stale registry.
+        if prompt_path in changed_norm:
+            continue
+        # Code changed, prompt NOT in the change set. If the prompt
+        # also doesn't exist on disk, the registry is stale (a prior
+        # deletion that was never reflected in architecture.json) -
+        # warn and skip rather than block, otherwise we brick auto-heal
+        # on a registry-drift state we did not cause.
         if not (worktree / prompt_path).is_file():
             logger.warning(
                 "prompt-source guard: registered prompt %s for %s is "
-                "missing on disk; skipping that pair for this round.",
+                "missing on disk and not in this change set; treating "
+                "as stale registry and skipping that pair.",
                 prompt_path,
                 code_path,
             )
             continue
-        if prompt_path not in changed_norm:
-            offenders.append((code_path, prompt_path))
+        # Code changed, prompt unchanged AND present on disk = DRIFT.
+        offenders.append((code_path, prompt_path))
 
     if not offenders:
         return None
