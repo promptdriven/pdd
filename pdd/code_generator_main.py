@@ -4018,8 +4018,12 @@ def code_generator_main(
                     raise click.UsageError(f"Generated output is not valid JSON: {jde}")
 
             # Architecture conformance check: verify generated code exports match
-            # the interface declarations in architecture.json (hard failure on mismatch)
-            if not _env_flag_enabled("PDD_SKIP_CONFORMANCE") and generated_code_content:
+            # the interface declarations in architecture.json (hard failure on mismatch).
+            # Gate on `is not None` rather than a truthy check so an empty generation
+            # over an existing module still fires the conformance gate — without this
+            # an empty body silently slipped past every gate and the writer below
+            # truncated the existing file to 0 bytes (external review iter-13 follow-up).
+            if not _env_flag_enabled("PDD_SKIP_CONFORMANCE") and generated_code_content is not None:
                 try:
                     _verify_architecture_conformance(
                         generated_code=generated_code_content,
@@ -4042,9 +4046,17 @@ def code_generator_main(
 
             if (
                 not _env_flag_enabled("PDD_SKIP_CONFORMANCE")
-                and generated_code_content
+                and generated_code_content is not None
                 and existing_code_content is not None
             ):
+                # Gate on `is not None` rather than a truthy check so an
+                # empty generation over an existing module still fires the
+                # public-surface and test-churn gates. The truthy form
+                # previously skipped both gates whenever the provider
+                # returned "", and the writer below then truncated the
+                # existing file to 0 bytes — silent erasure of mature
+                # public APIs and test coverage (external review iter-13
+                # follow-up; reproduced with mocked local generation).
                 try:
                     prompt_name = pathlib.Path(prompt_file).name
                     _verify_public_surface_regression(
@@ -4082,6 +4094,32 @@ def code_generator_main(
             if output_path:
                 p_output = pathlib.Path(output_path)
                 p_output.parent.mkdir(parents=True, exist_ok=True)
+
+                # Safety net for file types the public-surface / test-churn
+                # gates cannot inspect (non-Python source, JSON, YAML,
+                # prompt files, etc.): refuse to overwrite a non-empty
+                # existing file with empty / whitespace-only generated
+                # content. An empty body over an existing artifact is
+                # almost always an upstream provider/parse failure, and
+                # silently truncating to 0 bytes loses real work.
+                # `PDD_ALLOW_EMPTY_GENERATION=1` is the explicit escape
+                # hatch for the rare intentional case.
+                if (
+                    existing_code_content
+                    and existing_code_content.strip()
+                    and (
+                        generated_code_content is None
+                        or not generated_code_content.strip()
+                    )
+                    and not _env_flag_enabled("PDD_ALLOW_EMPTY_GENERATION")
+                ):
+                    raise click.UsageError(
+                        f"Refusing to overwrite {output_path} with empty "
+                        f"generated content (existing file has "
+                        f"{len(existing_code_content)} chars). Empty output "
+                        f"typically indicates an upstream provider or parse "
+                        f"failure. Set PDD_ALLOW_EMPTY_GENERATION=1 to bypass."
+                    )
 
                 final_content = generated_code_content
 

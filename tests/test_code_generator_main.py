@@ -7338,6 +7338,153 @@ class TestSyncCompatibilityGates:
             "BREAKING-CHANGE: remove Service\n",
         )
 
+    # -----------------------------------------------------------------
+    # External review (PR #1015) iter-13 BLOCKING follow-up: an empty
+    # generated body MUST trigger the compatibility gates rather than
+    # silently truncating the existing file to 0 bytes. The original
+    # code gated on `and generated_code_content` (truthy), which made
+    # the check skip whenever the provider returned "" — and the
+    # writer below then erased the existing module / test file
+    # without raising. Three regressions guard the three end-user
+    # surfaces: Python module (public surface), test file (churn),
+    # non-Python file (safety net).
+    # -----------------------------------------------------------------
+    def test_empty_generation_over_existing_module_raises_public_surface(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """Empty local generation over an existing public Python module
+        MUST raise `PublicSurfaceRegressionError` (not silently
+        truncate the file)."""
+        from pdd.code_generator_main import (
+            PublicSurfaceRegressionError,
+            code_generator_main,
+        )
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "service_python.prompt"
+        prompt_file.write_text("Generate the Service class.")
+        output_file = temp_dir_setup["output_dir"] / "service.py"
+        output_file.write_text(
+            "class Service:\n"
+            "    def run(self):\n"
+            "        return 1\n"
+            "\n"
+            "def helper():\n"
+            "    return 'h'\n"
+        )
+
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate the Service class."},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_local_generator_fixture.return_value = ("", 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ):
+            with pytest.raises(PublicSurfaceRegressionError):
+                code_generator_main(
+                    mock_ctx, str(prompt_file), str(output_file), None, False
+                )
+
+        # The compat-gate restore branch must put the original module
+        # back on disk so the repair loop sees the pre-sync baseline.
+        assert "class Service" in output_file.read_text(encoding="utf-8")
+
+    def test_empty_generation_over_existing_test_raises_test_churn(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """Empty local generation over an existing test file MUST raise
+        `TestChurnError` (not silently truncate the test file)."""
+        from pdd.code_generator_main import (
+            TestChurnError,
+            code_generator_main,
+        )
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "test_existing_python.prompt"
+        prompt_file.write_text("Generate tests for the existing module.")
+        output_file = temp_dir_setup["output_dir"] / "test_existing.py"
+        existing_tests = (
+            "\n".join(f"def test_case_{i}():\n    assert True" for i in range(20))
+            + "\n"
+        )
+        output_file.write_text(existing_tests)
+
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate tests for the existing module."},
+            {"output": str(output_file)},
+            "python",
+        )
+        mock_local_generator_fixture.return_value = ("", 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ):
+            with pytest.raises(TestChurnError):
+                code_generator_main(
+                    mock_ctx, str(prompt_file), str(output_file), None, False
+                )
+
+        # Restore branch puts the original tests back on disk.
+        assert output_file.read_text(encoding="utf-8") == existing_tests
+
+    def test_empty_generation_over_existing_non_python_file_raises_safety_guard(
+        self,
+        mock_ctx,
+        temp_dir_setup,
+        mock_construct_paths_fixture,
+        mock_local_generator_fixture,
+        mock_env_vars,
+    ):
+        """Empty local generation over an existing non-Python artifact
+        (one the public-surface / test-churn gates cannot inspect)
+        MUST be refused by the safety guard — silent truncation would
+        otherwise lose real work."""
+        import click
+
+        from pdd.code_generator_main import code_generator_main
+
+        mock_ctx.obj['local'] = True
+        prompt_file = temp_dir_setup["prompts_dir"] / "config_yaml.prompt"
+        prompt_file.write_text("Generate the YAML config.")
+        output_file = temp_dir_setup["output_dir"] / "config.yaml"
+        existing_yaml = "key: value\nother: 42\n"
+        output_file.write_text(existing_yaml)
+
+        mock_construct_paths_fixture.return_value = (
+            {},
+            {"prompt_file": "Generate the YAML config."},
+            {"output": str(output_file)},
+            "yaml",
+        )
+        mock_local_generator_fixture.return_value = ("", 0.001, "mock_model_v1")
+
+        with patch(
+            "pdd.code_generator_main.is_git_repository", return_value=False
+        ):
+            with pytest.raises(click.UsageError, match="Refusing to overwrite"):
+                code_generator_main(
+                    mock_ctx, str(prompt_file), str(output_file), None, False
+                )
+
+        # The safety guard fires BEFORE the writer, so the original
+        # file is untouched on disk.
+        assert output_file.read_text(encoding="utf-8") == existing_yaml
+
 
 # ---------------------------------------------------------------------------
 # Tests for <pdd-interface> signature conformance (Issue #928)
