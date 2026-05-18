@@ -3625,3 +3625,222 @@ def test_register_untracked_prompts_preserves_dict_format(tmp_path):
     assert isinstance(reloaded.get("modules"), list), "modules key should be preserved"
     filenames = {m["filename"] for m in reloaded["modules"]}
     assert "new_Python.prompt" in filenames, "Newly registered prompt should be in modules"
+
+
+# ---------------------------------------------------------------------------
+# Issue #1074 — architecture_sync dev-unit regression tests
+#
+# These tests pin the architecture_sync defects called out in issue #1074
+# (AC3, AC4, AC5). On current `main` they FAIL; once the four localized
+# fixes land in pdd/architecture_sync.py they must pass and act as
+# permanent regression guards.
+#
+# Issue: https://github.com/promptdriven/pdd/issues/1074
+# ---------------------------------------------------------------------------
+
+
+import os as _os_1074  # local alias to avoid colliding with file-level imports
+
+from pdd.architecture_sync import _resolve_sync_paths as _resolve_sync_paths_1074
+
+
+def test_issue_1074_infer_filepath_preserves_nested_dir_lowercase_language():
+    """AC3: ``_infer_filepath`` must preserve the prompt's directory
+    structure for a nested, lowercase-language prompt name such as
+    ``src/workers/runtime/gemini_cli_python.prompt``.
+
+    On current `main` ``_infer_filepath`` always prepends ``pdd/`` which
+    flattens the nested prompt path under the ``pdd/`` package root and
+    produces ``pdd/src/workers/runtime/gemini_cli.py``. The expected
+    behavior — mirroring the reverse helper
+    ``filepath_to_prompt_filename`` — is to retain ``src/workers/runtime``
+    and emit ``src/workers/runtime/gemini_cli.py``.
+    """
+    out = _infer_filepath("src/workers/runtime/gemini_cli_python.prompt")
+    out_norm = out.replace(_os_1074.sep, "/")
+    assert out_norm.endswith("gemini_cli.py"), out_norm
+    assert "src/workers/runtime" in out_norm, (
+        f"_infer_filepath must preserve nested prompt directory structure, got {out!r}"
+    )
+    assert not out_norm.startswith("pdd/src/"), (
+        f"_infer_filepath must not prepend pdd/ to an already-nested prompt path, got {out!r}"
+    )
+
+
+def test_issue_1074_infer_filepath_case_insensitive_language_suffix():
+    """AC3: ``_infer_filepath`` must match the language suffix
+    case-insensitively against ``_EXT_TO_LANGUAGE``.
+
+    On current `main` the suffix check is hard-coded to lowercase
+    ``_python``, so a PascalCase prompt name like
+    ``src/workers/runtime/gemini_cli_Python.prompt`` falls through to the
+    ``prompts/<filename>`` fallback and is treated as a non-module
+    prompt. The expected behavior is to recognise the language regardless
+    of case and infer a ``.py`` output path that preserves the directory
+    structure.
+    """
+    out = _infer_filepath("src/workers/runtime/gemini_cli_Python.prompt")
+    out_norm = out.replace(_os_1074.sep, "/")
+    assert out_norm.endswith("gemini_cli.py"), (
+        f"PascalCase language suffix must be matched case-insensitively, got {out!r}"
+    )
+    assert "src/workers/runtime" in out_norm, out_norm
+    assert not out_norm.startswith("prompts/"), (
+        f"path-aware prompt name must not fall back to prompts/<filename>, got {out!r}"
+    )
+
+
+def test_issue_1074_resolve_sync_paths_walks_up_to_ancestor_prompts_dir(
+    tmp_path, monkeypatch
+):
+    """AC4: when invoked from a nested directory whose only ``sync``
+    anchor is an ``architecture.json`` (no sibling ``prompts/``),
+    ``_resolve_sync_paths`` must keep walking up to the nearest ancestor
+    that has a real ``prompts/`` directory.
+
+    On current `main` ``_resolve_sync_paths`` short-circuits at the first
+    directory that contains ``architecture.json`` *or* ``prompts/`` and
+    then unconditionally returns ``<sync_root>/prompts``. With a nested
+    ``modules/auth/architecture.json`` and the real ``prompts/`` at the
+    repo root, the resolver therefore returns the non-existent
+    ``modules/auth/prompts`` rather than the ancestor ``prompts/``.
+    """
+    real_prompts = tmp_path / "prompts"
+    real_prompts.mkdir()
+
+    nested = tmp_path / "modules" / "auth"
+    nested.mkdir(parents=True)
+    (nested / "architecture.json").write_text("[]", encoding="utf-8")
+
+    monkeypatch.chdir(nested)
+    prompts_dir, _arch_path = _resolve_sync_paths_1074(None, None)
+    assert prompts_dir.resolve() == real_prompts.resolve(), (
+        "nested architecture.json with no local prompts/ must resolve to "
+        f"ancestor prompts/, got {prompts_dir!r} (expected {real_prompts!r})"
+    )
+
+
+def test_issue_1074_dependency_tag_normalized_from_basename(tmp_path):
+    """AC5: a bare-basename ``<pdd-dependency>`` whose canonical
+    architecture filename is unambiguous must be normalized to the
+    existing entry's full filename.
+
+    On current `main` ``parse_prompt_tags`` filters out dependency text
+    that does not end in ``.prompt`` (silently dropping
+    ``<pdd-dependency>api</pdd-dependency>`` to ``[]``) and
+    ``update_architecture_from_prompt`` writes whatever survives verbatim
+    — there is no normalization step that consults the architecture's
+    existing filenames. Expected: ``api`` is rewritten to
+    ``api_python.prompt`` and recorded as a dependency.
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "api_python.prompt").write_text(
+        "<pdd-reason>API module</pdd-reason>\n", encoding="utf-8"
+    )
+    (prompts_dir / "consumer_python.prompt").write_text(
+        "<pdd-reason>Consumer module</pdd-reason>\n"
+        "<pdd-dependency>api</pdd-dependency>\n",
+        encoding="utf-8",
+    )
+
+    arch = [
+        {
+            "filename": "api_python.prompt",
+            "filepath": "pdd/api.py",
+            "priority": 1,
+            "dependencies": [],
+        },
+        {
+            "filename": "consumer_python.prompt",
+            "filepath": "pdd/consumer.py",
+            "priority": 2,
+            "dependencies": [],
+        },
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    result = update_architecture_from_prompt(
+        "consumer_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+    assert result["success"], result.get("error")
+
+    written = json.loads(arch_path.read_text(encoding="utf-8"))
+    if isinstance(written, dict):
+        modules = written.get("modules", [])
+    else:
+        modules = written
+    consumer = next(m for m in modules if m["filename"] == "consumer_python.prompt")
+    deps = consumer.get("dependencies", [])
+    assert "api_python.prompt" in deps, (
+        "bare basename <pdd-dependency>api</pdd-dependency> must be normalized "
+        f"to api_python.prompt against the existing arch entry; got {deps!r}"
+    )
+    assert "api" not in deps, (
+        f"unnormalized basename must not be retained verbatim: {deps!r}"
+    )
+
+
+def test_issue_1074_dependency_tag_normalized_from_case_variant(tmp_path):
+    """AC5: a ``<pdd-dependency>`` that differs from an existing
+    architecture entry only by letter-case (e.g. ``API_Python.prompt``
+    vs the canonical ``api_python.prompt``) must be normalized to the
+    existing filename.
+
+    On current `main` ``update_architecture_from_prompt`` writes
+    dependency tags verbatim without consulting the architecture's
+    existing filenames, so ``API_Python.prompt`` survives and points at
+    no real module.
+    """
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "api_python.prompt").write_text(
+        "<pdd-reason>API</pdd-reason>\n", encoding="utf-8"
+    )
+    (prompts_dir / "consumer_python.prompt").write_text(
+        "<pdd-reason>Consumer</pdd-reason>\n"
+        "<pdd-dependency>API_Python.prompt</pdd-dependency>\n",
+        encoding="utf-8",
+    )
+
+    arch = [
+        {
+            "filename": "api_python.prompt",
+            "filepath": "pdd/api.py",
+            "priority": 1,
+            "dependencies": [],
+        },
+        {
+            "filename": "consumer_python.prompt",
+            "filepath": "pdd/consumer.py",
+            "priority": 2,
+            "dependencies": [],
+        },
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    result = update_architecture_from_prompt(
+        "consumer_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+    assert result["success"], result.get("error")
+
+    written = json.loads(arch_path.read_text(encoding="utf-8"))
+    if isinstance(written, dict):
+        modules = written.get("modules", [])
+    else:
+        modules = written
+    consumer = next(m for m in modules if m["filename"] == "consumer_python.prompt")
+    deps = consumer.get("dependencies", [])
+    assert "api_python.prompt" in deps, (
+        "case-variant dependency tag must be normalized to existing arch "
+        f"filename, got {deps!r}"
+    )
+    assert "API_Python.prompt" not in deps, (
+        f"unnormalized case variant must not be retained: {deps!r}"
+    )

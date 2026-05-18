@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 """
 Architecture sync module for bidirectional sync between architecture.json and prompt files.
 
@@ -117,17 +119,26 @@ def _resolve_sync_paths(
     else:
         project_root = find_project_root(cwd)
         current = cwd
-        sync_root = project_root
+        sync_root_prompts = None
+        sync_root_arch = None
 
         while True:
-            if (current / "architecture.json").exists() or (current / "prompts").exists():
-                sync_root = current
-                break
-            if current == project_root or current.parent == current:
+            if (current / "prompts").exists() and sync_root_prompts is None:
+                sync_root_prompts = current
+                break  # Found prompts, no need to go higher
+            if (current / "architecture.json").exists() and sync_root_arch is None:
+                sync_root_arch = current
+                
+            if current.parent == current:
                 break
             current = current.parent
 
-        resolved_prompts_dir = sync_root / "prompts"
+        if sync_root_prompts is not None:
+            resolved_prompts_dir = sync_root_prompts / "prompts"
+        elif sync_root_arch is not None:
+            resolved_prompts_dir = sync_root_arch / "prompts"
+        else:
+            resolved_prompts_dir = project_root / "prompts"
 
     if architecture_path is not None:
         return resolved_prompts_dir, resolve_explicit(architecture_path)
@@ -283,7 +294,7 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
             for elem in dep_elems
             if elem.text
             for dep in [elem.text.strip()]
-            if dep and dep.endswith('.prompt') and '\n' not in dep and len(dep) <= 100
+            if dep and '\n' not in dep and len(dep) <= 100 and (dep.endswith('.prompt') or '.' not in dep)
         ]
 
     except (etree.XMLSyntaxError, etree.ParserError):
@@ -337,9 +348,15 @@ def _infer_filepath(filename: str) -> str:
         Inferred filepath string
     """
     stem = filename[:-len('.prompt')]
-    if stem.endswith('_python'):
-        module_name = stem[:-len('_python')]
-        return f'pdd/{module_name}.py'
+    
+    for ext, lang in _EXT_TO_LANGUAGE.items():
+        lang_suffix = f"_{lang}"
+        if stem.lower().endswith(lang_suffix.lower()):
+            module_name = stem[:-len(lang_suffix)]
+            if module_name == Path(module_name).name and lang == "Python":
+                return f'pdd/{module_name}{ext}'
+            return f'{module_name}{ext}'
+            
     return f'prompts/{filename}'
 
 
@@ -879,10 +896,45 @@ def update_architecture_from_prompt(
         )
         if should_update_deps:
             old_deps = module_entry.get('dependencies', [])
+            
+            # Normalize dependencies against existing architecture filenames
+            normalized_deps = []
+            for dep in tags['dependencies']:
+                matched = False
+                for mod in arch_data:
+                    mod_fn = mod.get('filename')
+                    if not mod_fn:
+                        continue
+                    if dep == mod_fn:
+                        normalized_deps.append(mod_fn)
+                        matched = True
+                        break
+                    if dep.lower() == mod_fn.lower():
+                        normalized_deps.append(mod_fn)
+                        matched = True
+                        break
+                    if dep.endswith('.prompt') and Path(dep).name.lower() == Path(mod_fn).name.lower():
+                        normalized_deps.append(mod_fn)
+                        matched = True
+                        break
+                    if not dep.endswith('.prompt'):
+                        if Path(mod_fn).name.lower() == f"{Path(dep).name.lower()}_python.prompt":
+                            normalized_deps.append(mod_fn)
+                            matched = True
+                            break
+                        # A more generic check for basename matches without extension
+                        mod_stem = Path(mod_fn).name.lower()
+                        if mod_stem.startswith(Path(dep).name.lower() + "_"):
+                            normalized_deps.append(mod_fn)
+                            matched = True
+                            break
+                if not matched:
+                    normalized_deps.append(dep)
+            
             # Compare as sets to detect changes (order-independent)
-            if set(old_deps) != set(tags['dependencies']):
-                changes['dependencies'] = {'old': old_deps, 'new': tags['dependencies']}
-                module_entry['dependencies'] = tags['dependencies']
+            if set(old_deps) != set(normalized_deps):
+                changes['dependencies'] = {'old': old_deps, 'new': normalized_deps}
+                module_entry['dependencies'] = normalized_deps
                 updated = True
 
         # 6. Write back to architecture.json (if updated and not dry run)
@@ -1189,8 +1241,7 @@ def sync_prompts_to_architecture(
 
     try:
         if filenames is None:
-            sync_result = sync_all_prompts_to_architecture(
-                prompts_dir=resolved_prompts_dir,
+            sync_result = sync_all_prompts_to_architecture(                prompts_dir=resolved_prompts_dir,
                 architecture_path=resolved_architecture_path,
                 dry_run=dry_run,
             )

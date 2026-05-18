@@ -3784,3 +3784,136 @@ def test_augment_architecture_from_pr_branch_dict_format_merges_modules(tmp_path
         "Dict-format PR architecture modules should be merged, "
         "but isinstance(pr_arch, list) check at agentic_sync.py:167 silently drops them"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1074 — agentic_sync dev-unit regression tests
+#
+# These tests pin the agentic_sync defect in ``_architecture_sync_modules``
+# called out in issue #1074 AC2 (duplicate-filepath dedup) and act as
+# regression guards for AC1 (worktree skip — already correct on `main`
+# via the existing dot-prefix filter).
+#
+# Issue: https://github.com/promptdriven/pdd/issues/1074
+# ---------------------------------------------------------------------------
+
+
+def _write_minimal_pddrc_1074(path: Path) -> None:
+    path.write_text(
+        "contexts:\n"
+        "  default:\n"
+        "    defaults:\n"
+        "      prompts_dir: prompts\n"
+        "      generate_output_path: pdd/\n"
+        "    paths:\n"
+        "      - '**'\n",
+        encoding="utf-8",
+    )
+
+
+def test_issue_1074_architecture_sync_modules_dedupes_duplicate_output_filepaths(
+    tmp_path: Path,
+) -> None:
+    """AC2: two architecture entries that point at the same absolute
+    output ``filepath`` must be scheduled as a single module.
+
+    On current `main` ``_architecture_sync_modules`` dedupes on
+    ``(arch_path.resolve(), basename)`` where ``basename`` is derived
+    from ``filename`` (not ``filepath``), so two entries with different
+    filenames (``api_python.prompt`` and ``api_v2_python.prompt``) but
+    the same output filepath (``pdd/api.py``) both survive dedup and are
+    scheduled — producing duplicate scheduling and noisy false
+    staleness. The authoritative dedup key per README §"sync-architecture"
+    is the absolute output ``filepath``.
+    """
+    (tmp_path / "prompts").mkdir()
+    arch = [
+        {"filename": "api_python.prompt", "filepath": "pdd/api.py", "priority": 1},
+        {"filename": "api_v2_python.prompt", "filepath": "pdd/api.py", "priority": 2},
+    ]
+    (tmp_path / "architecture.json").write_text(json.dumps(arch), encoding="utf-8")
+
+    modules, _arch, _root_arch = _architecture_sync_modules(tmp_path)
+
+    filepaths = [m.entry.get("filepath") for m in modules]
+    abs_filepaths = [
+        str((tmp_path / fp).resolve()) if fp else None for fp in filepaths
+    ]
+    unique = {p for p in abs_filepaths if p is not None}
+    assert len(modules) == len(unique), (
+        "duplicate absolute output filepaths must be scheduled only once; "
+        f"got {len(modules)} module(s) for {len(unique)} unique filepath(s): "
+        f"{abs_filepaths!r}"
+    )
+
+
+def test_issue_1074_architecture_sync_modules_skips_pdd_worktrees(
+    tmp_path: Path,
+) -> None:
+    """AC1 regression guard: ``_architecture_sync_modules`` must not pick
+    up ``architecture.json`` files inside ``.pdd/worktrees/``.
+
+    Already correct on `main` via the dot-prefix filter in
+    ``find_architecture_for_project``; this test pins that behavior so
+    a future change to the discovery walk cannot regress it without
+    failing CI.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [{"filename": "real_python.prompt", "filepath": "pdd/real.py", "priority": 1}]
+        ),
+        encoding="utf-8",
+    )
+
+    worktree = tmp_path / ".pdd" / "worktrees" / "fix-issue-9999"
+    worktree.mkdir(parents=True)
+    (worktree / "architecture.json").write_text(
+        json.dumps(
+            [{"filename": "stale_python.prompt", "filepath": "pdd/stale.py", "priority": 1}]
+        ),
+        encoding="utf-8",
+    )
+    _write_minimal_pddrc_1074(worktree / ".pddrc")
+
+    modules, _arch, _root_arch = _architecture_sync_modules(tmp_path)
+    scheduled = {m.basename for m in modules}
+    assert "real" in scheduled
+    assert "stale" not in scheduled, (
+        f"global sync must not schedule a stale .pdd/worktrees/ module: {scheduled!r}"
+    )
+
+
+def test_issue_1074_architecture_sync_modules_skips_dot_worktrees(
+    tmp_path: Path,
+) -> None:
+    """AC1 regression guard: ``_architecture_sync_modules`` must not
+    schedule modules from a dot-prefixed ``.worktrees/`` tooling
+    directory.
+
+    Already correct on `main`; retained as a regression guard against a
+    future change that would re-introduce hidden-directory traversal.
+    """
+    (tmp_path / "prompts").mkdir()
+    (tmp_path / "architecture.json").write_text(
+        json.dumps(
+            [{"filename": "real_python.prompt", "filepath": "pdd/real.py", "priority": 1}]
+        ),
+        encoding="utf-8",
+    )
+
+    wt = tmp_path / ".worktrees" / "feature-branch"
+    wt.mkdir(parents=True)
+    (wt / "architecture.json").write_text(
+        json.dumps(
+            [{"filename": "stale_python.prompt", "filepath": "pdd/stale.py", "priority": 1}]
+        ),
+        encoding="utf-8",
+    )
+    _write_minimal_pddrc_1074(wt / ".pddrc")
+
+    modules, _arch, _root_arch = _architecture_sync_modules(tmp_path)
+    scheduled = {m.basename for m in modules}
+    assert "stale" not in scheduled, (
+        f"global sync must not schedule a stale .worktrees/ module: {scheduled!r}"
+    )
