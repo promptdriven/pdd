@@ -618,6 +618,13 @@ upload-pypi:
 
 publish:
 	@set -e; \
+	if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: working tree is dirty; refusing to publish."; \
+		echo "python -m build reads files from the working tree, not from the commit,"; \
+		echo "so uncommitted edits would be baked into the wheel. Commit or stash first."; \
+		git status --short; \
+		exit 1; \
+	fi; \
 	HEAD_SHA=$$(git rev-parse HEAD); \
 	TAG=$$(git tag --points-at HEAD --list 'v*' | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$$' | head -1); \
 	if [ -z "$$TAG" ]; then \
@@ -732,7 +739,26 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			git push origin "$$EXISTING_TAG"; \
 			echo "Tag $$EXISTING_TAG pushed. GHA will request gltanaka approval, then publish."; \
 		elif [ "$$REMOTE_TAG_COMMIT" = "$$HEAD_SHA" ]; then \
-			echo "Tag $$EXISTING_TAG already on origin at HEAD; nothing to do."; \
+			echo "Tag $$EXISTING_TAG already on origin at HEAD."; \
+			if command -v gh >/dev/null 2>&1; then \
+				if ! gh release view "$$EXISTING_TAG" >/dev/null 2>&1; then \
+					echo "GitHub Release for $$EXISTING_TAG is missing. Creating it idempotently."; \
+					gh release create "$$EXISTING_TAG" --generate-notes --verify-tag --target main \
+						|| echo "(could not create GitHub Release; check gh auth and permissions)"; \
+				else \
+					echo "GitHub Release for $$EXISTING_TAG exists."; \
+				fi; \
+				LATEST_RUN_STATUS=$$(gh run list --workflow release.yml --event push --limit 1 --json status,conclusion --jq '.[0] | "\(.status):\(.conclusion)"' 2>/dev/null || echo ""); \
+				if [ -n "$$LATEST_RUN_STATUS" ]; then \
+					case "$$LATEST_RUN_STATUS" in \
+						completed:success) echo "Last release.yml run: success.";; \
+						completed:*) echo "Last release.yml run did not succeed ($$LATEST_RUN_STATUS). To re-trigger, delete and re-push the tag, or run 'gh workflow run release.yml'.";; \
+						*) echo "Last release.yml run status: $$LATEST_RUN_STATUS (may still be pending gltanaka approval).";; \
+					esac; \
+				fi; \
+			else \
+				echo "(install 'gh' CLI to auto-check release status)"; \
+			fi; \
 		else \
 			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			exit 1; \
