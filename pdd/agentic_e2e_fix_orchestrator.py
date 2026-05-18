@@ -1096,6 +1096,177 @@ def _detect_meaningful_changes(cwd: Path, initial_file_hashes: Dict[str, Optiona
     return [p for p in _detect_changed_files(cwd, initial_file_hashes) if not _is_noise_path(p)]
 
 
+# Sentinel returned by ``_reevaluate_step3_not_a_bug_on_resume`` to signal that
+# the resume-time cycle-waste-breaker condition holds (cached NOT_A_BUG,
+# direct edits, no fixed units, current_cycle > 1). The caller treats this as a
+# terminal-success short-circuit equivalent to the inline Step 3 cycle-waste
+# breaker (Issue #1034) — it MUST NOT be written into ``step_outputs``.
+NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME = "NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME"
+NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE = (
+    "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining "
+    "state as not a bug."
+)
+
+
+def _reevaluate_step3_not_a_bug_on_resume(
+    cached_output: str,
+    *,
+    dev_unit_states: Dict[str, Any],
+    initial_file_hashes: Optional[Dict[str, Optional[str]]],
+    cwd: Path,
+    quiet: bool = False,
+    source: str = "step_outputs",
+    current_cycle: Optional[int] = None,
+    cycle_start_hashes: Optional[Dict[str, Optional[str]]] = None,
+) -> str:
+    """Re-evaluate a cached Step 3 ``NOT_A_BUG`` token on workflow resume.
+
+    Implements the resume-time guard described in
+    ``pdd/prompts/agentic_e2e_fix_orchestrator_python.prompt`` (Issue #1034):
+    when the cached entry classifies as ``NOT_A_BUG``, re-run the same
+    direct-edit + ``dev_unit_states`` + cycle-waste-breaker checks that the
+    inline Step 3 path applies. If any guard would have suppressed the token,
+    demote the cached output to
+    ``FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>`` so the existing
+    ``FAILED:`` rewind in :func:`validate_cached_state` reruns Step 3.
+
+    The raw cached token MUST NOT be trusted on resume. Both
+    ``step_outputs["3"]`` and ``bug_step_outputs["3"]`` callers route through
+    this helper for symmetry.
+
+    Cycle-waste-breaker terminal-success path: when ``current_cycle > 1`` and
+    direct edits exist with no FIXED dev units, mirror the inline Step 3
+    cycle-waste-breaker (lines 2127-2134 of the inner loop) by returning the
+    :data:`NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME` sentinel instead of demoting.
+    The caller is expected to translate that sentinel into a terminal-success
+    workflow exit so the orchestrator does NOT spend another Step 3 LLM call
+    when the prior-cycle direct-edit fix is already terminal — but ONLY when
+    we can prove no in-cycle progress was made since the cycle's start
+    snapshot. Without that proof, conservatively demote and rerun Step 3.
+
+    Args:
+        cached_output: The cached Step 3 output text.
+        dev_unit_states: Restored ``dev_unit_states`` from workflow state.
+        initial_file_hashes: Restored workflow-start file hash snapshot. If
+            ``None``, the direct-edit check is skipped (fail open).
+        cwd: Repo working directory used for direct-edit detection.
+        quiet: Suppress console messages when True.
+        source: Diagnostic label (``"step_outputs"`` or ``"bug_step_outputs"``).
+        current_cycle: Restored cycle counter from workflow state. When
+            ``current_cycle > 1`` and the direct-edit guard would otherwise
+            fire with no FIXED units AND ``cycle_start_hashes`` proves no
+            in-cycle progress, return the terminal-success sentinel instead
+            of the FAILED demotion token. When ``None``, the cycle-waste-
+            breaker terminal-success path is disabled (backwards compatible
+            with helper-only test callers).
+        cycle_start_hashes: Restored snapshot of file hashes captured at the
+            start of the current cycle. Required to prove the cycle has made
+            no in-cycle progress before authorizing terminal-success on
+            resume. If ``None`` (legacy state or stale post-cycle save), the
+            terminal-success branch conservatively demotes to ``FAILED:
+            NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits`` instead.
+
+    Returns:
+        The original ``cached_output`` if the token should still be trusted,
+        a ``"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>"`` token if a
+        guard demotes it, or :data:`NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME` when
+        the cycle-waste-breaker terminal-success path applies.
+    """
+    if not cached_output or str(cached_output).startswith("FAILED:"):
+        return cached_output
+    if _classify_step_output(cached_output, step_num=3) != "NOT_A_BUG":
+        return cached_output
+
+    # Guard 1: dev_unit_states with any FIXED unit suppresses NOT_A_BUG.
+    # Per the prompt's cycle-waste-breaker rule on resume (no cycle_start_hashes
+    # available), has_fixed_units True is treated as terminal-for-cycle and
+    # suppresses the cached token.
+    has_fixed_units = any(
+        isinstance(s, dict) and s.get("fixed") for s in (dev_unit_states or {}).values()
+    )
+    if has_fixed_units:
+        if not quiet:
+            console.print(
+                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} suppressed "
+                f"because dev_unit_states has FIXED units. Demoting to "
+                f"FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:dev_unit_states.[/yellow]"
+            )
+        return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:dev_unit_states"
+
+    # Guard 2: direct-edit detection using restored initial_file_hashes.
+    # If the snapshot is missing, fail open (do not suppress) per the prompt.
+    if initial_file_hashes is not None:
+        try:
+            direct_edits = _detect_meaningful_changes(cwd, initial_file_hashes)
+        except Exception:
+            direct_edits = []
+        if direct_edits:
+            # Cycle-waste-breaker terminal success on resume (Issue #1034):
+            # mirror the inline Step 3 path at lines 2127-2134 — when
+            # current_cycle > 1, direct edits exist, no FIXED dev units exist,
+            # AND we can prove no in-cycle progress has been made (via the
+            # restored ``cycle_start_hashes`` snapshot), the prior-cycle
+            # direct-edit fix is treated as terminal and the workflow exits
+            # successfully instead of rerunning Step 3.
+            #
+            # Without ``cycle_start_hashes`` we CANNOT trust the assumption
+            # that the resumed cycle made no progress: Step 1 inside the
+            # resumed cycle can run ``pdd fix`` and write meaningful edits
+            # BEFORE Step 3 is reached (``dev_unit_states`` is only updated
+            # at Step 8). So when ``cycle_start_hashes`` is missing or shows
+            # any in-cycle progress, conservatively demote to FAILED so
+            # Step 3 reruns instead of silently exiting as terminal-success.
+            if current_cycle is not None and current_cycle > 1:
+                cycle_progress: List[str] = []
+                if cycle_start_hashes is not None:
+                    try:
+                        cycle_progress = _detect_meaningful_changes(
+                            cwd, cycle_start_hashes
+                        )
+                    except Exception:
+                        cycle_progress = []
+                if cycle_start_hashes is None or cycle_progress:
+                    if not quiet:
+                        if cycle_start_hashes is None:
+                            console.print(
+                                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in "
+                                f"{source} cannot terminal-success on resume — "
+                                f"cycle_start_hashes is missing (legacy state). "
+                                f"Conservatively demoting to FAILED: "
+                                f"NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits "
+                                f"so Step 3 reruns.[/yellow]"
+                            )
+                        else:
+                            console.print(
+                                f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in "
+                                f"{source} cannot terminal-success on resume — "
+                                f"current cycle has in-cycle progress "
+                                f"({len(cycle_progress)} file(s) changed since "
+                                f"cycle_start_hashes). Demoting to FAILED: "
+                                f"NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits "
+                                f"so Step 3 reruns.[/yellow]"
+                            )
+                    return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits"
+                if not quiet:
+                    console.print(
+                        f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} "
+                        f"matches cycle-waste-breaker (current_cycle={current_cycle}, "
+                        f"direct edits present, no FIXED dev units, no in-cycle "
+                        f"progress vs cycle_start_hashes). Treating prior direct-edit "
+                        f"fix as terminal success instead of rerunning Step 3.[/yellow]"
+                    )
+                return NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME
+            if not quiet:
+                console.print(
+                    f"[yellow]Resume guard: cached Step 3 NOT_A_BUG in {source} suppressed "
+                    f"because direct edits exist on disk relative to initial_file_hashes. "
+                    f"Demoting to FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits.[/yellow]"
+                )
+            return "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits"
+
+    return cached_output
+
+
 def _has_unpushed_commits(cwd: Path) -> bool:
     """Check if there are commits ahead of the remote tracking branch."""
     result = subprocess.run(
@@ -1622,6 +1793,25 @@ def run_agentic_e2e_fix_orchestrator(
     # Issue #1001: deferred action computed during resume that must be applied
     # after `success`/`final_message` are initialized below. Default: no-op.
     _resume_deferred_action: Optional[str] = None
+    _cached_step9_resume_action: Optional[str] = None
+    # On resume, restore the current cycle's start snapshot so the resume-time
+    # cycle-waste-breaker can prove no in-cycle progress before authorizing
+    # terminal success. None when the saved state is legacy (no snapshot) or
+    # was saved after Step 9 completed (the snapshot is stale across cycles).
+    resumed_cycle_start_hashes: Optional[Dict[str, Optional[str]]] = None
+    # Set by the resume-time Step 3 re-evaluation if the cycle-waste-breaker
+    # terminal-success condition holds (Issue #1034). Skips the inner workflow.
+    resume_terminal_success = False
+    # Issue #1034 follow-up: True when the resumed cycle was mid-flight
+    # (last_completed_step > 0, current_cycle > 1) but no cycle_start_hashes
+    # was persisted (legacy state file or pre-snapshot interrupt). The outer
+    # loop will capture a fresh post-edit snapshot at the cycle-entry point,
+    # which would make `_detect_meaningful_changes(cwd, cycle_start_hashes)`
+    # falsely report "no in-cycle progress" and let the inline cycle-waste-
+    # breaker terminal-success on a baseline it cannot verify. This flag is
+    # consulted in the inline cycle-waste-breaker and cleared at the next
+    # legitimate cycle rollover.
+    cycle_baseline_unverified = False
 
     # Resume Logic
     if resume:
@@ -1651,6 +1841,82 @@ def run_agentic_e2e_fix_orchestrator(
             if isinstance(saved_sha, str) and saved_sha:
                 resumed_initial_sha = saved_sha
 
+            # Issue #1034 (codex P2 follow-up): restore the current cycle's
+            # start snapshot so the resume-time cycle-waste-breaker can prove
+            # no in-cycle progress before authorizing terminal success.
+            #
+            # Restore the snapshot UNCONDITIONALLY here — the cached Step 3
+            # NOT_A_BUG demotion below depends on the in-cycle-progress proof,
+            # and a stale-snapshot guard cannot run until AFTER
+            # ``validate_cached_state`` has had a chance to rewind
+            # ``last_completed_step`` (FAILED-rewind from 9 → 2 keeps us in
+            # the same cycle). The cycle-rollover branch below
+            # (``if last_completed_step >= 9: ...``) is the only place that
+            # legitimately invalidates the restored snapshot — when it fires
+            # we null the local so the next cycle's body recaptures.
+            saved_cycle_start_hashes = loaded_state.get("cycle_start_hashes")
+            if isinstance(saved_cycle_start_hashes, dict):
+                resumed_cycle_start_hashes = saved_cycle_start_hashes
+            else:
+                resumed_cycle_start_hashes = None
+                # Legacy state file or pre-snapshot-save interrupt: we have
+                # no proof of where the cycle started. If we're mid-cycle
+                # (last_completed_step > 0) past cycle 1, the inline
+                # cycle-waste-breaker MUST be blocked from terminal-success
+                # because the fresh capture it gets at outer-loop entry will
+                # be post-edits and falsely report "no in-cycle progress".
+                if last_completed_step > 0 and current_cycle > 1:
+                    cycle_baseline_unverified = True
+
+            # Issue #1034: Re-evaluate cached Step 3 NOT_A_BUG before trusting
+            # last_completed_step. If guards (direct edits or FIXED dev_unit_states)
+            # would have suppressed NOT_A_BUG, demote the cached entry to
+            # "FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:<reason>" so the existing
+            # validate_cached_state FAILED-rewind reruns Step 3.
+            # If the cycle-waste-breaker condition holds on resume (cached
+            # NOT_A_BUG + direct edits + no FIXED units + current_cycle > 1),
+            # the helper returns NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME to signal
+            # the inline cycle-waste-breaker terminal-success path (mirrors
+            # lines 2127-2134 of the inner loop) instead of a demotion.
+            has_cached_failed_output = any(
+                isinstance(output, str) and output.startswith("FAILED:")
+                for output in step_outputs.values()
+            )
+            if last_completed_step >= 9 and not has_cached_failed_output:
+                step9_cached = _resolve_cached_step9_output(step_outputs)
+                _cached_step9_resume_action = _post_step9_resume_action(
+                    step9_cached, current_cycle, max_cycles, console
+                )
+
+            cached_step3 = step_outputs.get("3")
+            # A cached Step 9 success is authoritative for a completed inner
+            # loop. Step 3's cached raw output was already guarded during the
+            # original run, and demoting it here would rewind last_completed_step
+            # before the Step 9 success branch can re-verify and fall through.
+            skip_step3_resume_reeval = (
+                _cached_step9_resume_action == "SUCCESS_FALL_THROUGH"
+            )
+            if cached_step3 and not skip_step3_resume_reeval:
+                demoted = _reevaluate_step3_not_a_bug_on_resume(
+                    cached_step3,
+                    dev_unit_states=dev_unit_states,
+                    initial_file_hashes=resumed_initial_file_hashes,
+                    cwd=cwd,
+                    quiet=quiet,
+                    source="step_outputs",
+                    current_cycle=current_cycle,
+                    cycle_start_hashes=resumed_cycle_start_hashes,
+                )
+                if demoted == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME:
+                    # Honor the inline cycle-waste-breaker terminal-success
+                    # path on resume. The cached cycle counter and step
+                    # outputs are left untouched (we are about to exit) so the
+                    # post-success commit/cleanup/CI branch sees the same
+                    # state it would after an inline break.
+                    resume_terminal_success = True
+                elif demoted is not cached_step3 and demoted != cached_step3:
+                    step_outputs["3"] = demoted
+
             # Issue #467: Validate cached state — correct last_completed_step
             # if any cached step outputs have "FAILED:" prefix.
             last_completed_step = validate_cached_state(
@@ -1666,14 +1932,22 @@ def run_agentic_e2e_fix_orchestrator(
             # before the post-Step-9 pause could be misread as a tokenless "9"
             # and silently advance into a fresh cycle.
             if last_completed_step >= 9:
-                step9_cached = _resolve_cached_step9_output(step_outputs)
-                resume_action = _post_step9_resume_action(
-                    step9_cached, current_cycle, max_cycles, console
-                )
+                if _cached_step9_resume_action is not None:
+                    resume_action = _cached_step9_resume_action
+                else:
+                    step9_cached = _resolve_cached_step9_output(step_outputs)
+                    resume_action = _post_step9_resume_action(
+                        step9_cached, current_cycle, max_cycles, console
+                    )
                 if resume_action == "ADVANCE_CYCLE":
                     current_cycle += 1
                     last_completed_step = 0
                     step_outputs = {}  # Clear outputs for new cycle
+                    # Cycle rollover invalidates the restored snapshot; it
+                    # belongs to the just-completed cycle. Null it so the new
+                    # cycle body recaptures fresh hashes.
+                    resumed_cycle_start_hashes = None
+                    cycle_baseline_unverified = False
                 elif resume_action == "MAX_CYCLES_REACHED":
                     # Defer surfacing the failure until after `success` and
                     # `final_message` are initialized below — mirrors the
@@ -1769,6 +2043,18 @@ def run_agentic_e2e_fix_orchestrator(
             "github_comment_id": github_comment_id,
             "initial_file_hashes": dict(initial_file_hashes),
             "initial_sha": initial_sha,
+            # Persist None when the resumed cycle's baseline is unverified
+            # (legacy state / pre-snapshot interrupt) — otherwise the next
+            # resume would trust the fresh post-edit snapshot and immediately
+            # terminal-success.
+            "cycle_start_hashes": (
+                None if cycle_baseline_unverified
+                else (
+                    dict(resumed_cycle_start_hashes)
+                    if isinstance(resumed_cycle_start_hashes, dict)
+                    else None
+                )
+            ),
         }
         try:
             new_gh_id = save_workflow_state(
@@ -1881,6 +2167,8 @@ def run_agentic_e2e_fix_orchestrator(
                     current_cycle += 1
                     last_completed_step = 0
                     step_outputs = {}  # ADVANCE_CYCLE: clear for new cycle
+                    resumed_cycle_start_hashes = None
+                    cycle_baseline_unverified = False
                     _resume_deferred_action = None
                 else:
                     _resume_deferred_action = "MAX_CYCLES_REACHED"
@@ -1897,6 +2185,21 @@ def run_agentic_e2e_fix_orchestrator(
     elif _resume_deferred_action == "MAX_CYCLES_REACHED":
         final_message = "Max cycles reached."
 
+    # Resume-time cycle-waste-breaker terminal success (Issue #1034): if the
+    # resume guard detected the inline cycle-waste-breaker condition for the
+    # cached Step 3 NOT_A_BUG, skip the inner workflow and fall straight into
+    # the success branch (commit, Step 11 cleanup, CI) just like the inline
+    # path at lines 2127-2134.
+    if resume_terminal_success:
+        success = True
+        final_message = NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE
+        if not quiet:
+            console.print(
+                f"[yellow]NOT_A_BUG with prior direct edits and no new progress "
+                f"this cycle (resumed cycle {current_cycle}) — treating prior fix "
+                f"as terminal.[/yellow]"
+            )
+
     try:
         # Outer Loop
         if current_cycle == 0:
@@ -1905,8 +2208,18 @@ def run_agentic_e2e_fix_orchestrator(
         while current_cycle <= max_cycles and not success:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
 
-            # Snapshot file hashes at cycle start for convergence detection (5b)
-            cycle_start_hashes = _get_file_hashes(cwd)
+            # Snapshot file hashes at cycle start for convergence detection (5b).
+            # Issue #1034 (codex P2 follow-up): on resume, reuse the restored
+            # snapshot so the in-cycle progress check sees what the prior
+            # session captured. Only the FIRST iteration of the outer loop
+            # consumes the resumed snapshot — subsequent cycles must
+            # recapture fresh hashes (otherwise cycles 3, 4, ... would diff
+            # against the stale cycle-2 snapshot).
+            if resumed_cycle_start_hashes is not None:
+                cycle_start_hashes = resumed_cycle_start_hashes
+                resumed_cycle_start_hashes = None
+            else:
+                cycle_start_hashes = _get_file_hashes(cwd)
             
             # Inner Loop (Steps 1-9)
             for step_num in range(1, 10):
@@ -1966,11 +2279,46 @@ def run_agentic_e2e_fix_orchestrator(
 
                     continue
 
-                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830)
+                # Skip redundant diagnosis steps when pdd-bug already analyzed (Issue #830).
+                # Issue #1034: Re-evaluate any cached Step 3 NOT_A_BUG token from
+                # bug_step_outputs symmetrically with the resume-time step_outputs
+                # guard, before short-circuiting Step 3.
                 if str(step_num) in bug_step_outputs and current_cycle == 1:
-                    console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
-                    last_completed_step = step_num
-                    continue
+                    if step_num == 3:
+                        cached_bug3 = bug_step_outputs.get("3", "")
+                        # This branch only runs at current_cycle==1, so the
+                        # cycle-waste-breaker terminal-success path inside the
+                        # helper (which requires current_cycle > 1) is
+                        # irrelevant here. Pass current_cycle=None and
+                        # cycle_start_hashes=None explicitly to keep the helper
+                        # signature consistent and avoid trusting an
+                        # unrelated outer-loop snapshot.
+                        demoted_bug3 = _reevaluate_step3_not_a_bug_on_resume(
+                            cached_bug3,
+                            dev_unit_states=dev_unit_states,
+                            initial_file_hashes=initial_file_hashes,
+                            cwd=cwd,
+                            quiet=quiet,
+                            source="bug_step_outputs",
+                            current_cycle=None,
+                            cycle_start_hashes=None,
+                        )
+                        if demoted_bug3 != cached_bug3:
+                            # Drop the suppressed entry from both caches and fall
+                            # through to run Step 3 fresh.
+                            bug_step_outputs.pop("3", None)
+                            # If we pre-populated step_outputs["3"] from this stale
+                            # bug-state entry, clear it so the step actually runs.
+                            if step_outputs.get("3") == cached_bug3:
+                                step_outputs.pop("3", None)
+                        else:
+                            console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
+                            last_completed_step = step_num
+                            continue
+                    else:
+                        console.print(f"[bold][Step {step_num}/9] Reusing pdd-bug analysis[/bold]")
+                        last_completed_step = step_num
+                        continue
 
                 step_name = STEP_NAMES[step_num]
                 description = STEP_DESCRIPTIONS[step_num]
@@ -2191,6 +2539,30 @@ def run_agentic_e2e_fix_orchestrator(
                     # detection survives interruption.
                     "initial_file_hashes": dict(initial_file_hashes),
                     "initial_sha": initial_sha,
+                    # Current-cycle start snapshot (Issue #1034 codex P2 follow-up):
+                    # persisted so the resume-time cycle-waste-breaker can prove
+                    # no in-cycle progress before authorizing terminal success.
+                    # NOTE: distinguish `{}` (clean-tree baseline; any file
+                    # present later in the cycle is in-cycle progress) from
+                    # `None` (truly missing / post-rollover sentinel). The
+                    # truthy check `if cycle_start_hashes else None` would
+                    # collapse `{}` to `None` and trick resume into thinking
+                    # the baseline is missing, recapturing the post-edit tree
+                    # and mis-reporting no progress.
+                    # Persist None when the resumed cycle's baseline is
+                    # unverified (legacy state / pre-snapshot interrupt) —
+                    # the in-memory cycle_start_hashes was either restored
+                    # from a stale prior session save or freshly captured
+                    # post-edit; either way the next resume must not trust
+                    # it.
+                    "cycle_start_hashes": (
+                        None if cycle_baseline_unverified
+                        else (
+                            dict(cycle_start_hashes)
+                            if isinstance(cycle_start_hashes, dict)
+                            else None
+                        )
+                    ),
                 }
                 
                 new_gh_id = save_workflow_state(
@@ -2258,7 +2630,13 @@ def run_agentic_e2e_fix_orchestrator(
                         has_cycle_progress = bool(
                             _detect_meaningful_changes(cwd, cycle_start_hashes)
                         )
-                        if has_direct_edits and not has_fixed_units and not has_cycle_progress and current_cycle > 1:
+                        if (
+                            has_direct_edits
+                            and not has_fixed_units
+                            and not has_cycle_progress
+                            and current_cycle > 1
+                            and not cycle_baseline_unverified
+                        ):
                             console.print(
                                 "[yellow]NOT_A_BUG with prior direct edits and no new progress "
                                 "this cycle — treating prior fix as terminal.[/yellow]"
@@ -2266,6 +2644,11 @@ def run_agentic_e2e_fix_orchestrator(
                             success = True
                             final_message = "Direct-edit fix applied in a prior cycle; Step 3 classifies remaining state as not a bug."
                             break
+                        if cycle_baseline_unverified:
+                            console.print(
+                                "[yellow]Resumed cycle baseline unverified (no saved cycle_start_hashes); "
+                                "refusing terminal-success and falling through to continue the cycle.[/yellow]"
+                            )
                         console.print("[yellow]NOT_A_BUG ignored — fixes were already applied in prior cycles.[/yellow]")
                     else:
                         console.print("[yellow]NOT_A_BUG detected in Step 3. Issue is not a bug, stopping workflow.[/yellow]")
@@ -2414,16 +2797,40 @@ def run_agentic_e2e_fix_orchestrator(
             if final_message:
                 break
             
-            # Prepare for next cycle
+            # Prepare for next cycle.
+            # Issue #1034 (codex P2 follow-up): null the local snapshot
+            # BEFORE mutating cycle counters. An interrupt that lands
+            # after current_cycle/last_completed_step are advanced but
+            # before this assignment would otherwise be saved by the
+            # KeyboardInterrupt/Exception handlers (which read locals())
+            # as the new cycle's snapshot — stale, and the resume-time
+            # rollover guard (which only discards when
+            # last_completed_step >= 9) would not catch it because
+            # last_completed_step is already 0 by then. The next
+            # iteration's recapture (line ~1905) is the authoritative
+            # source for the new cycle.
+            cycle_start_hashes = None
             current_cycle += 1
             last_completed_step = 0
             step_outputs = {} # Clear outputs for next cycle
-            
+            # The next cycle's body recaptures cycle_start_hashes fresh
+            # at outer-loop entry, giving the inline cycle-waste-breaker
+            # a verifiable baseline. The resume-time legacy-state flag
+            # can be cleared here.
+            cycle_baseline_unverified = False
+
             state_data["current_cycle"] = current_cycle
             state_data["last_completed_step"] = 0
             state_data["step_outputs"] = {}
             state_data["last_saved_at"] = datetime.now().isoformat()
-            
+            # Issue #1034 codex P2 follow-up: the just-completed cycle's
+            # cycle_start_hashes is stale for the next cycle. Clear it so
+            # any resume from this transitional state falls back to the
+            # conservative demote-and-rerun-Step-3 path instead of
+            # diffing against the wrong cycle's snapshot. The next cycle's
+            # body recaptures a fresh snapshot.
+            state_data["cycle_start_hashes"] = None
+
             if current_cycle <= max_cycles:
                  save_workflow_state(
                     cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
@@ -2542,6 +2949,12 @@ def run_agentic_e2e_fix_orchestrator(
 
     except KeyboardInterrupt:
         console.print("\n[bold red]Interrupted by user. Saving state...[/bold red]")
+        # Capture the workflow-start snapshot and current-cycle snapshot if
+        # they were initialized; an interrupt before initialization leaves
+        # these as locals that may not exist, so guard with locals().get().
+        _interrupt_initial_hashes = locals().get("initial_file_hashes")
+        _interrupt_initial_sha = locals().get("initial_sha")
+        _interrupt_cycle_start_hashes = locals().get("cycle_start_hashes")
         state_data = {
             "workflow": workflow_name,
             "issue_url": issue_url,
@@ -2555,7 +2968,29 @@ def run_agentic_e2e_fix_orchestrator(
             "model_used": model_used,
             "changed_files": changed_files,
             "last_saved_at": datetime.now().isoformat(),
-            "github_comment_id": github_comment_id
+            "github_comment_id": github_comment_id,
+            # Issue #1034 codex P2 follow-up: persist workflow-start and
+            # cycle-start snapshots so resume after an interrupt still has
+            # the data needed for direct-edit detection and the cycle-waste-
+            # breaker in-cycle-progress proof.
+            "initial_file_hashes": (
+                dict(_interrupt_initial_hashes)
+                if isinstance(_interrupt_initial_hashes, dict)
+                else None
+            ),
+            "initial_sha": _interrupt_initial_sha if isinstance(_interrupt_initial_sha, str) else None,
+            # If the cycle was running on an unverified baseline, save None
+            # so the next resume re-detects "unverified" via the missing-
+            # snapshot path rather than trusting a stale post-edit local.
+            "cycle_start_hashes": (
+                None
+                if locals().get("cycle_baseline_unverified", False)
+                else (
+                    dict(_interrupt_cycle_start_hashes)
+                    if isinstance(_interrupt_cycle_start_hashes, dict)
+                    else None
+                )
+            ),
         }
         save_workflow_state(
             cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id
@@ -2565,6 +3000,12 @@ def run_agentic_e2e_fix_orchestrator(
     except Exception as e:
         console.print(f"\n[bold red]Fatal error: {e}[/bold red]")
         try:
+            # Same locals().get() guard as the KeyboardInterrupt handler:
+            # the exception may fire before initial_file_hashes etc. are
+            # initialized.
+            _exc_initial_hashes = locals().get("initial_file_hashes")
+            _exc_initial_sha = locals().get("initial_sha")
+            _exc_cycle_start_hashes = locals().get("cycle_start_hashes")
             state_data = {
                 "workflow": workflow_name,
                 "issue_url": issue_url,
@@ -2578,7 +3019,30 @@ def run_agentic_e2e_fix_orchestrator(
                 "model_used": model_used,
                 "changed_files": changed_files,
                 "last_saved_at": datetime.now().isoformat(),
-                "github_comment_id": github_comment_id
+                "github_comment_id": github_comment_id,
+                # Issue #1034 codex P2 follow-up: persist workflow-start and
+                # cycle-start snapshots so resume after a fatal exception
+                # still has the data needed for direct-edit detection and
+                # the cycle-waste-breaker in-cycle-progress proof.
+                "initial_file_hashes": (
+                    dict(_exc_initial_hashes)
+                    if isinstance(_exc_initial_hashes, dict)
+                    else None
+                ),
+                "initial_sha": _exc_initial_sha if isinstance(_exc_initial_sha, str) else None,
+                # If the cycle was running on an unverified baseline, save
+                # None so the next resume re-detects "unverified" via the
+                # missing-snapshot path rather than trusting a stale post-
+                # edit local.
+                "cycle_start_hashes": (
+                    None
+                    if locals().get("cycle_baseline_unverified", False)
+                    else (
+                        dict(_exc_cycle_start_hashes)
+                        if isinstance(_exc_cycle_start_hashes, dict)
+                        else None
+                    )
+                ),
             }
             save_workflow_state(
                 cwd, issue_number, workflow_name, state_data, state_dir, repo_owner, repo_name, use_github_state, github_comment_id

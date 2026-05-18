@@ -6184,7 +6184,7 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)",
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
