@@ -238,7 +238,7 @@ def test_ac5_checkup_validate_stays_green_with_examples(tmp_path: Path) -> None:
     )
 
     warnings = list_validate_arch_include_warnings(tmp_path, strict=False)
-    assert warnings == [], (
+    assert not warnings, (
         f"Bundled-sample warnings leaked into non-strict run: {warnings}"
     )
 
