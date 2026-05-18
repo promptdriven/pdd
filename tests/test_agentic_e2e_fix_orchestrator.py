@@ -7693,3 +7693,312 @@ class TestCommitAndPushFiltersGhWrapper:
             f"The filter at agentic_e2e_fix_orchestrator.py:1325 must drop "
             f".gh-wrapper/* via _is_intermediate_file. Committed: {committed!r}"
         )
+
+
+class TestIssue1033Step2ResumeReverification:
+    """Regression coverage for cached Step 2 pass tokens on resume."""
+
+    @staticmethod
+    def _state(last_completed_step: int, step2_output: str) -> Dict[str, object]:
+        step_outputs = {
+            "1": "Step 1 output",
+            "2": step2_output,
+        }
+        for step_num in range(3, last_completed_step + 1):
+            step_outputs[str(step_num)] = f"Step {step_num} output"
+        if last_completed_step >= 9:
+            step_outputs["9"] = "ALL_TESTS_PASS"
+
+        return {
+            "workflow": "e2e_fix",
+            "issue_number": 1,
+            "current_cycle": 1,
+            "last_completed_step": last_completed_step,
+            "step_outputs": step_outputs,
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {},
+            "initial_sha": "",
+        }
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_resume_step2_cached_pass_reverify_fails_reruns_step2(
+        self,
+        mock_extract,
+        mock_verify,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (
+            False,
+            "FAILED tests/test_e2e_webhook.py::test_repositories_added",
+        )
+        e2e_fix_default_args.update(
+            {"resume": True, "max_cycles": 1, "skip_cleanup": True, "skip_ci": True}
+        )
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = track_run
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(self._state(2, "All tests pass. ALL_TESTS_PASS"), None),
+        ), patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert mock_verify.called
+        saved_states = [
+            call.args[3]
+            for call in mock_save.call_args_list
+            if len(call.args) > 3 and isinstance(call.args[3], dict)
+        ]
+        assert any(
+            state.get("last_completed_step") == 1
+            and "VERIFICATION_FAILED_ON_RESUME"
+            in state.get("step_outputs", {}).get("2", "")
+            for state in saved_states
+        )
+
+        step3_calls = [label for label in executed_labels if "step3" in label]
+        step2_calls = [label for label in executed_labels if "step2" in label]
+        if step3_calls:
+            assert step2_calls
+            assert executed_labels.index(step2_calls[0]) < executed_labels.index(
+                step3_calls[0]
+            )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_resume_step2_cached_pass_reverify_passes_exits_only_at_step2_boundary(
+        self,
+        mock_extract,
+        mock_verify,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (True, "1 passed in 0.5s")
+        e2e_fix_default_args.update(
+            {"resume": True, "max_cycles": 1, "skip_cleanup": True, "skip_ci": True}
+        )
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(self._state(2, "All tests pass. ALL_TESTS_PASS"), None),
+        ):
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert mock_verify.called
+        assert success is True, msg
+        assert not any(
+            "step1" in call.kwargs.get("label", "") for call in mock_run.call_args_list
+        )
+        assert not any(
+            "step2" in call.kwargs.get("label", "") for call in mock_run.call_args_list
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_resume_step2_cached_local_tests_pass_triggers_reverify(
+        self,
+        mock_extract,
+        mock_verify,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (
+            False,
+            "FAILED tests/test_e2e_webhook.py::test_x",
+        )
+        e2e_fix_default_args.update(
+            {"resume": True, "max_cycles": 1, "skip_cleanup": True, "skip_ci": True}
+        )
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(self._state(2, "Local tests pass. LOCAL_TESTS_PASS"), None),
+        ):
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert mock_verify.called
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_resume_step2_cached_pass_empty_discovery_does_not_trust_cache(
+        self,
+        mock_extract,
+        mock_verify,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        mock_extract.return_value = []
+        e2e_fix_default_args.update(
+            {"resume": True, "max_cycles": 1, "skip_cleanup": True, "skip_ci": True}
+        )
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = track_run
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(self._state(2, "All tests pass. ALL_TESTS_PASS"), None),
+        ), patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        mock_verify.assert_not_called()
+        saved_states = [
+            call.args[3]
+            for call in mock_save.call_args_list
+            if len(call.args) > 3 and isinstance(call.args[3], dict)
+        ]
+        assert any(
+            state.get("last_completed_step") == 1
+            and "VERIFICATION_FAILED_ON_RESUME"
+            in state.get("step_outputs", {}).get("2", "")
+            for state in saved_states
+        )
+
+        step3_calls = [label for label in executed_labels if "step3" in label]
+        step2_calls = [label for label in executed_labels if "step2" in label]
+        if step3_calls:
+            assert step2_calls
+            assert executed_labels.index(step2_calls[0]) < executed_labels.index(
+                step3_calls[0]
+            )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_pass_does_not_mask_step9_resume_reverify_failure(
+        self,
+        mock_extract,
+        mock_verify,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.side_effect = [
+            (True, "Step 2 still passes"),
+            (False, "Step 9 resume verification failed"),
+        ]
+        e2e_fix_default_args.update(
+            {"resume": True, "max_cycles": 1, "skip_cleanup": True, "skip_ci": True}
+        )
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(self._state(9, "All tests pass. ALL_TESTS_PASS"), None),
+        ), patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert mock_verify.call_count == 2
+        assert success is False
+        assert msg == "Max cycles reached."
+        saved_states = [
+            call.args[3]
+            for call in mock_save.call_args_list
+            if len(call.args) > 3 and isinstance(call.args[3], dict)
+        ]
+        assert any(
+            "VERIFICATION_FAILED_ON_RESUME"
+            in state.get("step_outputs", {}).get("9", "")
+            for state in saved_states
+        )
+
+    @patch("pdd.agentic_e2e_fix_orchestrator._verify_tests_independently")
+    @patch("pdd.agentic_e2e_fix_orchestrator._extract_test_files")
+    def test_step2_failure_cancels_deferred_step9_success_resume(
+        self,
+        mock_extract,
+        mock_verify,
+        e2e_fix_mock_dependencies,
+        e2e_fix_default_args,
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        mock_extract.return_value = ["tests/test_e2e_webhook.py"]
+        mock_verify.return_value = (False, "Step 2 resume verification failed")
+        e2e_fix_default_args.update(
+            {"resume": True, "max_cycles": 1, "skip_cleanup": True, "skip_ci": True}
+        )
+
+        executed_labels = []
+
+        def track_run(*args, **kwargs):
+            label = kwargs.get("label", "")
+            executed_labels.append(label)
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = track_run
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(self._state(9, "All tests pass. ALL_TESTS_PASS"), None),
+        ), patch("pdd.agentic_e2e_fix_orchestrator.save_workflow_state") as mock_save:
+            success, _msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert mock_verify.call_count == 1
+        assert success is False
+        saved_states = [
+            call.args[3]
+            for call in mock_save.call_args_list
+            if len(call.args) > 3 and isinstance(call.args[3], dict)
+        ]
+        assert any(
+            state.get("last_completed_step") == 1
+            and "VERIFICATION_FAILED_ON_RESUME"
+            in state.get("step_outputs", {}).get("2", "")
+            for state in saved_states
+        )
+        step2_calls = [label for label in executed_labels if "step2" in label]
+        step3_calls = [label for label in executed_labels if "step3" in label]
+        assert step2_calls
+        if step3_calls:
+            assert executed_labels.index(step2_calls[0]) < executed_labels.index(
+                step3_calls[0]
+            )
+
+    def test_prompt_documents_step2_reverification_on_resume(self):
+        prompt_path = (
+            Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+        content = prompt_path.read_text()
+        marker = "% Resume & State"
+        start = content.index(marker)
+        rest = content[start + len(marker):]
+        next_section = rest.find("\n% ")
+        section_body = rest if next_section == -1 else rest[:next_section]
+        section_body_lower = section_body.lower()
+
+        assert "step 2" in section_body_lower
+        assert "verification_failed_on_resume" in section_body_lower
+        assert "_verify_tests_independently" in section_body
+        assert "deferred post-step-9 success" in section_body_lower

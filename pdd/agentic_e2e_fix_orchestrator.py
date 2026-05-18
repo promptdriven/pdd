@@ -1614,6 +1614,7 @@ def run_agentic_e2e_fix_orchestrator(
     dev_unit_states: Dict[str, Any] = {}
     skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
+    resumed_from_state = False
     # On resume, restore the workflow-start file snapshot so guards that diff
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
     resumed_initial_file_hashes: Optional[Dict[str, Optional[str]]] = None
@@ -1628,6 +1629,7 @@ def run_agentic_e2e_fix_orchestrator(
             cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state
         )
         if loaded_state:
+            resumed_from_state = True
             console.print(f"[blue]Resuming from cycle {loaded_state.get('current_cycle', 1)} step {loaded_state.get('last_completed_step', 0)}...[/blue]")
             current_cycle = loaded_state.get("current_cycle", 0)
             last_completed_step = loaded_state.get("last_completed_step", 0)
@@ -1748,6 +1750,95 @@ def run_agentic_e2e_fix_orchestrator(
     import_error_retries = 0  # Global budget: max 1 retry across all cycles
     verification_failure_context = ""  # Injected into Step 1 prompt on retry
 
+    def _persist_resume_reverification_state() -> None:
+        nonlocal github_comment_id
+
+        state_data_resume = {
+            "workflow": workflow_name,
+            "issue_url": issue_url,
+            "issue_number": issue_number,
+            "current_cycle": current_cycle,
+            "last_completed_step": last_completed_step,
+            "step_outputs": step_outputs.copy(),
+            "dev_unit_states": dev_unit_states.copy(),
+            "total_cost": total_cost,
+            "model_used": model_used,
+            "changed_files": changed_files.copy(),
+            "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+            "last_saved_at": datetime.now().isoformat(),
+            "github_comment_id": github_comment_id,
+            "initial_file_hashes": dict(initial_file_hashes),
+            "initial_sha": initial_sha,
+        }
+        try:
+            new_gh_id = save_workflow_state(
+                cwd,
+                issue_number,
+                workflow_name,
+                state_data_resume,
+                state_dir,
+                repo_owner,
+                repo_name,
+                use_github_state,
+                github_comment_id,
+            )
+            if new_gh_id:
+                github_comment_id = new_gh_id
+        except Exception as save_exc:
+            logger.debug(
+                "Best-effort resume-reverify state save failed: %s",
+                save_exc,
+                exc_info=True,
+            )
+
+    # Issue #1033: a prior run can persist Step 2's raw ALL_TESTS_PASS before
+    # independent verification. Re-check cached pass tokens before the resume
+    # skip at the top of the inner loop can trust them.
+    if resumed_from_state and last_completed_step >= 2:
+        step2_cached_token = _classify_step_output(
+            step_outputs.get("2", ""), step_num=2
+        )
+        if step2_cached_token in ("ALL_TESTS_PASS", "LOCAL_TESTS_PASS"):
+            test_files = _extract_test_files(
+                issue_content, changed_files, cwd, initial_file_hashes
+            )
+            verified = False
+            verify_output = "no test files found for independent verification"
+            if test_files:
+                verified, verify_output = _verify_tests_independently(test_files, cwd)
+                if _fallback_scan_was_capped and verified:
+                    verified = False
+                    verify_output += (
+                        f"\nFALLBACK_CAPPED: Only {len(test_files)} of potentially "
+                        "hundreds of test files were verified; cannot confirm full "
+                        "suite pass."
+                    )
+            else:
+                console.print(
+                    "[bold red]No test files found for cached Step 2 resume "
+                    "verification. Cannot trust cached pass.[/bold red]"
+                )
+
+            if verified:
+                console.print("[green]Cached Step 2 pass verified on resume.[/green]")
+                if last_completed_step == 2 and _resume_deferred_action is None:
+                    success = True
+                    final_message = (
+                        "All tests passed (cached Step 2 pass independently "
+                        "verified on resume)."
+                    )
+            else:
+                console.print(
+                    "[bold red]Cached Step 2 pass failed independent "
+                    "verification on resume.[/bold red]"
+                )
+                step_outputs["2"] = (
+                    f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
+                )
+                last_completed_step = 1
+                _resume_deferred_action = None
+                _persist_resume_reverification_state()
+
     # Issue #1001 round 11: save-before-verify race.
     # The inner-loop state save at line ~2049 persists step_outputs["9"] with
     # the LLM's raw output BEFORE the independent verification at line ~2061 /
@@ -1784,56 +1875,7 @@ def run_agentic_e2e_fix_orchestrator(
                     f"FAILED: VERIFICATION_FAILED_ON_RESUME: {verify_output}"
                 )
 
-                # Issue #1001 round 12 (LOW): persist the FAILED marker BEFORE
-                # the ADVANCE_CYCLE branch clears step_outputs, otherwise the
-                # diagnostic is dead code — the inner-loop's first state save
-                # would only land after cycle advance with an empty step_outputs.
-                # Assemble the full state dict here (state_data is not yet in
-                # scope at this point in the function; it is first defined at
-                # the inner-loop site). The shape mirrors that site exactly so
-                # other fields (total_cost, dev_unit_states, initial_sha, etc.)
-                # are not clobbered on disk.
-                _state_data_resume = {
-                    "workflow": workflow_name,
-                    "issue_url": issue_url,
-                    "issue_number": issue_number,
-                    "current_cycle": current_cycle,
-                    "last_completed_step": last_completed_step,
-                    "step_outputs": step_outputs.copy(),
-                    "dev_unit_states": dev_unit_states.copy(),
-                    "total_cost": total_cost,
-                    "model_used": model_used,
-                    "changed_files": changed_files.copy(),
-                    "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
-                    "last_saved_at": datetime.now().isoformat(),
-                    "github_comment_id": github_comment_id,
-                    "initial_file_hashes": dict(initial_file_hashes),
-                    "initial_sha": initial_sha,
-                }
-                try:
-                    new_gh_id = save_workflow_state(
-                        cwd,
-                        issue_number,
-                        workflow_name,
-                        _state_data_resume,
-                        state_dir,
-                        repo_owner,
-                        repo_name,
-                        use_github_state,
-                        github_comment_id,
-                    )
-                    if new_gh_id:
-                        github_comment_id = new_gh_id
-                except Exception as _save_exc:
-                    # Best-effort: the FAILED marker is still observable in
-                    # the in-memory step_outputs if we later save again
-                    # within the same cycle; don't crash resume on a save
-                    # transient.
-                    logger.debug(
-                        "Best-effort resume-reverify state save failed: %s",
-                        _save_exc,
-                        exc_info=True,
-                    )
+                _persist_resume_reverification_state()
 
                 if current_cycle < max_cycles:
                     current_cycle += 1
@@ -1860,7 +1902,7 @@ def run_agentic_e2e_fix_orchestrator(
         if current_cycle == 0:
             current_cycle = 1
 
-        while current_cycle <= max_cycles:
+        while current_cycle <= max_cycles and not success:
             console.print(f"\n[bold cyan][Cycle {current_cycle}/{max_cycles}] Starting fix cycle...[/bold cyan]")
 
             # Snapshot file hashes at cycle start for convergence detection (5b)
