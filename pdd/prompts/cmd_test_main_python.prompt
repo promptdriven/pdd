@@ -19,6 +19,7 @@
         - `strength` - An optional float (default None). If provided, overrides the 'strength' value from `ctx.obj`. Used by orchestrators to pass explicit values.
         - `temperature` - An optional float (default None). If provided, overrides the 'temperature' value from `ctx.obj`. Used by orchestrators to pass explicit values.
         - `manual` - An optional boolean (default False). When True, forces legacy single-LLM test generation and bypasses the agentic test generation pipeline, regardless of detected language or agentic_mode setting.
+        - `repair_directive` - An optional string (keyword-only, default None). When provided non-empty, injected as a `<test_repair_directive>` block into the in-process `prompt_content` flowing into the cloud payload, `generate_test`, `increase_tests`, or `run_agentic_test_generate`. Sourced explicitly from the caller's loop-local retry state; `cmd_test_main` MUST NOT read `PDD_REPAIR_DIRECTIVE` from `os.environ`. See Behavior section for full semantics.
     Outputs:
         - Returns a tuple containing (`str`, `float`, `str`, `bool | None`, `str`):
             - `str`: The generated unit test code.

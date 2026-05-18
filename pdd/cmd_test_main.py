@@ -22,6 +22,7 @@ from .code_generator_main import (
     TestChurnError,
     _env_flag_enabled,
     _get_test_churn_threshold,
+    _prompt_allows_test_churn,
     _verify_test_churn,
 )
 
@@ -226,9 +227,17 @@ def cmd_test_main(
             # (#1012, F-K). Either per-gate (`PDD_SKIP_TEST_CHURN_GATE`)
             # or umbrella (`PDD_SKIP_CONFORMANCE`) disables this
             # shortcut; if set, the empty-content branch falls through
-            # to the warning-and-return path.
-            churn_skip = _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE") or _env_flag_enabled(
-                "PDD_SKIP_CONFORMANCE"
+            # to the warning-and-return path. It must also honor the
+            # anchored prompt-side `BREAKING-CHANGE: rewrite tests`
+            # opt-out parsed by `_prompt_allows_test_churn` so a
+            # deletion is treated symmetrically with a non-empty
+            # rewrite (otherwise the opt-out works only when the agent
+            # writes *some* content, not when it empties/deletes the
+            # file).
+            churn_skip = (
+                _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
+                or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+                or _prompt_allows_test_churn(prompt_content_for_churn)
             )
             if agentic_success and existing_test_content and not churn_skip:
                 # Restore the pre-existing file before raising so the

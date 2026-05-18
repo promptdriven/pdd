@@ -668,6 +668,67 @@ def test_cmd_test_main_agentic_empty_output_first_time_is_exempt(
     assert not output_path.exists()
 
 
+def test_cmd_test_main_agentic_deletion_honors_prompt_breaking_change(
+    mock_ctx_fixture, tmp_path
+):
+    """An anchored ``BREAKING-CHANGE: rewrite tests`` directive in the
+    prompt MUST disable the deletion-as-churn shortcut, mirroring the
+    way ``_verify_test_churn`` honors the same marker for wholesale
+    rewrites. Without this symmetry, the prompt-based opt-out works
+    when the agent rewrites the file but silently fails when the agent
+    empties/deletes it."""
+    output_path = tmp_path / "tests" / "test_calc.py"
+    output_path.parent.mkdir(parents=True)
+    existing_content = (
+        "def test_a(): pass\n"
+        "def test_b(): pass\n"
+        "def test_c(): pass\n"
+    )
+    output_path.write_text(existing_content, encoding="utf-8")
+
+    mock_ctx_fixture.obj["agentic_mode"] = True
+
+    def fake_agentic(*_args, **_kwargs):
+        # Simulate the agent silently deleting the canonical test file
+        # AND reporting success with empty generated_content.
+        if output_path.exists():
+            output_path.unlink()
+        return ("", 0.05, "model-x", True, None)
+
+    with patch("pdd.cmd_test_main.construct_paths") as mock_construct_paths, \
+         patch("pdd.agentic_test_generate.run_agentic_test_generate", fake_agentic):
+        mock_construct_paths.return_value = (
+            {},
+            {
+                "prompt_file": (
+                    "Spec for calc.\n"
+                    "BREAKING-CHANGE: rewrite tests to drop the deprecated helper\n"
+                ),
+                "code_file": "code",
+            },
+            {"output": str(output_path)},
+            "python",
+        )
+
+        # Must NOT raise — the prompt explicitly opted out of the
+        # test-churn gate, so an agentic deletion is accepted just as
+        # an agentic wholesale rewrite would be.
+        result = cmd_test_main(
+            ctx=mock_ctx_fixture,
+            prompt_file="prompts/calc.prompt",
+            code_file="src/calc.py",
+            output=str(output_path),
+            language="python",
+            merge=False,
+        )
+
+    assert result[0] == ""
+    assert result[3] is True
+    # Deletion accepted — the pre-existing file is NOT restored because
+    # the prompt opted out of the gate.
+    assert not output_path.exists()
+
+
 # ---------------------------------------------------------------------------
 # Codex review (#1015) F-B (iter-6): the deletion-as-churn raise must
 # gate on agentic_success. If the agent itself failed (tool error,
