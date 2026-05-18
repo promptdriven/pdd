@@ -773,3 +773,99 @@ def test_agentic_test_generate_ignores_stale_env_directive_without_kwarg(
     instruction = mock_run.call_args.kwargs["instruction"]
     assert "<test_repair_directive>" not in instruction
     assert "STALE-OUTER-DIRECTIVE" not in instruction
+
+
+# -----------------------------------------------------------------------------
+# Alternate-path churn recovery (PR #1015 external review iter-11 follow-up).
+# The agent may write tests to a path other than `output_test_file` (e.g.
+# `__tests__/foo.test.ts`). When that alt path existed before the run with
+# real coverage, the outer `cmd_test_main` churn check compares the alt
+# content against the CANONICAL path's pre-existing content (empty) and
+# misses the regression. `run_agentic_test_generate` now recovers the
+# alt-path's prior content via `git show HEAD:<rel>` and re-runs the
+# churn check, restoring the prior content on failure.
+# -----------------------------------------------------------------------------
+
+
+@patch("pdd.agentic_test_generate._read_prior_content_from_git")
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_alt_path_rewrite_with_tracked_prior_raises_churn_error(
+    mock_agents, mock_load, mock_run, mock_git, mock_env
+):
+    """Agent rewrites a pre-existing alt-path test file (20 tests → 1)
+    when the canonical path is absent. The alt-path's prior content
+    (recovered from git) drives the churn check; the gate must fire
+    AND the alt-path content must be restored to its pre-existing
+    value so the repair loop sees the correct baseline."""
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    alt_path = mock_env["root"] / "__tests__" / "foo.test.ts"
+    alt_path.parent.mkdir(parents=True, exist_ok=True)
+    rewritten = "it('case 0', () => {});\n"
+
+    pre_existing = (
+        "\n".join(f"it('case {i}', () => {{}});" for i in range(20)) + "\n"
+    )
+    mock_git.return_value = pre_existing
+
+    def side_effect(*args, **kwargs):
+        # Canonical path stays missing; agent writes to the alt path.
+        alt_path.write_text(rewritten, encoding="utf-8")
+        return (True, '{"success": true, "message": "Generated tests"}', 0.2, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    from pdd.code_generator_main import TestChurnError
+
+    with pytest.raises(TestChurnError) as excinfo:
+        run_agentic_test_generate(
+            mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+        )
+
+    # Repair-loop hand-off: alt path restored, cost/model attached.
+    assert alt_path.read_text(encoding="utf-8") == pre_existing
+    assert excinfo.value.total_cost == 0.2
+    assert excinfo.value.model_name == "agentic-anthropic"
+    # Canonical path stayed untouched (this branch only fires when
+    # canonical was never written).
+    assert not mock_env["test"].exists()
+
+
+@patch("pdd.agentic_test_generate._read_prior_content_from_git")
+@patch("pdd.agentic_test_generate.run_agentic_task")
+@patch("pdd.agentic_test_generate.load_prompt_template")
+@patch("pdd.agentic_test_generate.get_available_agents")
+def test_alt_path_rewrite_with_untracked_prior_does_not_raise(
+    mock_agents, mock_load, mock_run, mock_git, mock_env
+):
+    """When the alt-path file is not in git (`git show` returns empty),
+    the recovery downgrades to first-time-generation behavior — no
+    churn raise, and the previous return-value contract holds."""
+    mock_agents.return_value = ["anthropic"]
+    mock_load.return_value = "Template"
+
+    alt_path = mock_env["root"] / "__tests__" / "foo.test.ts"
+    alt_path.parent.mkdir(parents=True, exist_ok=True)
+    rewritten = "it('case 0', () => {});\n"
+
+    # Git can't recover this file (untracked / first commit).
+    mock_git.return_value = ""
+
+    def side_effect(*args, **kwargs):
+        alt_path.write_text(rewritten, encoding="utf-8")
+        return (True, '{"success": true, "message": "Generated tests"}', 0.1, "anthropic")
+
+    mock_run.side_effect = side_effect
+
+    content, cost, model, success, error_msg = run_agentic_test_generate(
+        mock_env["prompt"], mock_env["code"], mock_env["test"], quiet=True
+    )
+
+    # Returned alt-path content, success TRUE, no exception.
+    assert content == rewritten
+    assert cost == 0.1
+    assert success is True
+    assert alt_path.read_text(encoding="utf-8") == rewritten
