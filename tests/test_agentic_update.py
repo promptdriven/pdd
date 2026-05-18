@@ -799,7 +799,7 @@ def test_scope_guard_preserves_included_doc_edits(
     mock_run.side_effect = simulate_agent
 
     with patch("pdd.agentic_update.PROJECT_ROOT", repo):
-        success, _, _, _, _ = run_agentic_update(
+        success, _, _, _, changed_files = run_agentic_update(
             str(prompt), str(code), test_files=[], quiet=True
         )
 
@@ -811,6 +811,14 @@ def test_scope_guard_preserves_included_doc_edits(
     )
     # The prompt edit must also survive.
     assert prompt.read_text() == new_prompt
+    # The edited included doc must be reported in changed_files so callers
+    # (e.g. `pdd change`) can persist or display the doc edit.
+    resolved_changed = {str(Path(p).resolve()) for p in changed_files}
+    assert str(included.resolve()) in resolved_changed, (
+        "Edited included doc was not reported in changed_files: "
+        f"got {sorted(resolved_changed)!r}"
+    )
+    assert str(prompt.resolve()) in resolved_changed
 
 
 def test_scope_guard_reverts_unrelated_context_dir_edits(
@@ -895,13 +903,20 @@ def test_scope_guard_preserves_new_untracked_context_file(
     mock_run.side_effect = simulate_agent
 
     with patch("pdd.agentic_update.PROJECT_ROOT", repo):
-        success, _, _, _, _ = run_agentic_update(
+        success, _, _, _, changed_files = run_agentic_update(
             str(prompt), str(code), test_files=[], quiet=True
         )
 
     assert success is True
     assert new_shared.exists(), "Untracked new context/ file was removed"
     assert new_shared.read_text() == new_shared_content
+    # Newly-created files reachable from the prompt directory must be
+    # reported in changed_files so downstream callers can surface them.
+    resolved_changed = {str(Path(p).resolve()) for p in changed_files}
+    assert str(new_shared.resolve()) in resolved_changed, (
+        "Newly-created shared include not reported in changed_files: "
+        f"got {sorted(resolved_changed)!r}"
+    )
 
 
 def test_scope_guard_still_reverts_unrelated_mutations(
