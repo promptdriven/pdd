@@ -740,25 +740,29 @@ release: check-deps check-suspicious-files check-release-remote check-release-br
 			echo "Tag $$EXISTING_TAG pushed. GHA will request gltanaka approval, then publish."; \
 		elif [ "$$REMOTE_TAG_COMMIT" = "$$HEAD_SHA" ]; then \
 			echo "Tag $$EXISTING_TAG already on origin at HEAD."; \
+			RECOVERY_FAILED=0; \
 			if command -v gh >/dev/null 2>&1; then \
 				if ! gh release view "$$EXISTING_TAG" >/dev/null 2>&1; then \
 					echo "GitHub Release for $$EXISTING_TAG is missing. Creating it idempotently."; \
 					gh release create "$$EXISTING_TAG" --generate-notes --verify-tag --target main \
-						|| echo "(could not create GitHub Release; check gh auth and permissions)"; \
+						|| { echo "(could not create GitHub Release; check gh auth and permissions)"; RECOVERY_FAILED=1; }; \
 				else \
 					echo "GitHub Release for $$EXISTING_TAG exists."; \
 				fi; \
-				LATEST_RUN_STATUS=$$(gh run list --workflow release.yml --event push --limit 1 --json status,conclusion --jq '.[0] | "\(.status):\(.conclusion)"' 2>/dev/null || echo ""); \
-				if [ -n "$$LATEST_RUN_STATUS" ]; then \
+				LATEST_RUN_STATUS=$$(gh run list --workflow release.yml --limit 20 --json status,conclusion,headSha --jq ".[] | select(.headSha==\"$$HEAD_SHA\") | \"\(.status):\(.conclusion)\"" 2>/dev/null | head -1); \
+				if [ -z "$$LATEST_RUN_STATUS" ]; then \
+					echo "No release.yml run found for HEAD ($$HEAD_SHA); the workflow may not have started yet."; \
+				else \
 					case "$$LATEST_RUN_STATUS" in \
-						completed:success) echo "Last release.yml run: success.";; \
-						completed:*) echo "Last release.yml run did not succeed ($$LATEST_RUN_STATUS). To re-trigger, delete and re-push the tag, or run 'gh workflow run release.yml'.";; \
-						*) echo "Last release.yml run status: $$LATEST_RUN_STATUS (may still be pending gltanaka approval).";; \
+						completed:success) echo "release.yml run for this tag: success.";; \
+						completed:*) echo "release.yml run for this tag did not succeed ($$LATEST_RUN_STATUS). To re-trigger, delete and re-push the tag, or run 'gh workflow run release.yml'."; RECOVERY_FAILED=1;; \
+						*) echo "release.yml run for this tag status: $$LATEST_RUN_STATUS (may still be pending gltanaka approval).";; \
 					esac; \
 				fi; \
 			else \
 				echo "(install 'gh' CLI to auto-check release status)"; \
 			fi; \
+			if [ "$$RECOVERY_FAILED" = "1" ]; then exit 1; fi; \
 		else \
 			echo "Error: tag $$EXISTING_TAG on origin points at $$REMOTE_TAG_COMMIT, not HEAD ($$HEAD_SHA)."; \
 			exit 1; \
