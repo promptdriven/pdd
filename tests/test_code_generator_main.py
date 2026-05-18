@@ -6924,6 +6924,105 @@ class TestSyncCompatibilityGates:
             for record in caplog.records
         )
 
+    # -----------------------------------------------------------------
+    # External review (PR #1015) follow-up: extend churn-gate file-type
+    # detection past Python/JS — `<name>_test.go` and `<name>_spec.rb`
+    # live next to production code (not under `tests/`) and the gate's
+    # early-return previously skipped them.
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_catches_sibling_go_test_file(self):
+        """`handler_test.go` sitting next to `handler.go` must trip the
+        churn gate when generation drops most of the existing tests."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = "\n".join(f"func TestCase{i}(t *testing.T) {{}}" for i in range(20)) + "\n"
+        after = "func TestCase0(t *testing.T) {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "handler_test_go.prompt",
+                "service/handler_test.go",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_sibling_ruby_spec_file(self):
+        """`widget_spec.rb` next to `widget.rb` must trip the gate too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = "\n".join(f"it 'case {i}' do; end" for i in range(20)) + "\n"
+        after = "it 'case 0' do; end\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_spec_ruby.prompt",
+                "app/widget_spec.rb",
+                "Document the public API.",
+            )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) follow-up: `from __future__ import …`
+    # is a compiler directive, not a public attribute, so removing it
+    # MUST NOT trip the public-surface gate.
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_ignores_future_import(self):
+        """`from __future__ import annotations` is not part of the
+        importable public surface — removing it after a Python-version
+        bump must not fail the gate."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from __future__ import annotations\n"
+            "def public_one(x: int) -> int:\n    return x\n"
+        )
+        after = "def public_one(x: int) -> int:\n    return x\n"
+
+        # Must NOT raise — the only "removed" name is a future directive.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Clean up the future-imports header.",
+        )
+
+    # -----------------------------------------------------------------
+    # External review (PR #1015) follow-up: `BREAKING-CHANGE: remove
+    # Service` should authorize removing every captured descendant of
+    # `Service` (its methods, nested classes, and their methods). Without
+    # the expansion the caller has to enumerate every member by hand.
+    # -----------------------------------------------------------------
+    def test_public_surface_regression_breaking_change_remove_class_covers_descendants(self):
+        """Listing a top-level class in `BREAKING-CHANGE: remove …`
+        implicitly authorizes removing every `Class.method` /
+        `Class.Inner.method` descendant the snapshot captured."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "class Service:\n"
+            "    def run(self):\n        return 1\n"
+            "    class Inner:\n"
+            "        def go(self):\n            return 2\n"
+            "def keep_me():\n    return 0\n"
+        )
+        after = "def keep_me():\n    return 0\n"
+
+        # The directive only names `Service`; the gate must accept the
+        # disappearance of `Service.run`, `Service.Inner`, and
+        # `Service.Inner.go` without forcing the caller to enumerate them.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "BREAKING-CHANGE: remove Service\n",
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests for <pdd-interface> signature conformance (Issue #928)

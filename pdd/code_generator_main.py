@@ -495,10 +495,21 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         ".spec.js",
         ".spec.jsx",
     )
+    # `<name>_test.<ext>` / `<name>_spec.<ext>` patterns for files that live
+    # next to production code rather than under `tests/`. Go's
+    # `handler_test.go` is the canonical example and Ruby's `widget_spec.rb`
+    # follows the same shape — without these the test-churn gate skips
+    # files the language's test runner unambiguously treats as tests.
+    sibling_test_suffixes = (
+        "_test.go",
+        "_test.rb",
+        "_spec.rb",
+    )
     return (
         name.startswith("test_")
         or name.endswith("_test.py")
         or lower_name.endswith(js_like_test_suffixes)
+        or lower_name.endswith(sibling_test_suffixes)
         or any(part in {"tests", "__tests__"} for part in path.parts)
     )
 
@@ -755,6 +766,13 @@ def _snapshot_public_surface(code_text: str, language: str) -> Set[str]:
                 if exposed and not exposed.startswith("_"):
                     names.add(exposed)
         elif isinstance(node, ast.ImportFrom):
+            # ``from __future__ import annotations`` (and other future
+            # imports) are compiler directives, not module attributes —
+            # callers never write `mymodule.annotations`. Treating them
+            # as public surface would block harmless cleanup like
+            # removing the directive after a Python-version bump.
+            if node.module == "__future__":
+                continue
             for alias in node.names:
                 # ``from X import *`` has alias.name == "*"; no fixed
                 # identifier is bound, so it does not contribute.
@@ -1766,10 +1784,22 @@ def _verify_public_surface_regression(
     if not before:
         return
     allowed_removed = _prompt_breaking_change_removed_symbols(prompt_content)
+    # ``BREAKING-CHANGE: remove Service`` is unambiguous about the whole
+    # class going away — auto-include every descendant ``Service.run``,
+    # ``Service.Inner.method`` etc. that the snapshot captured. Without
+    # this the caller has to list every member by hand, which defeats the
+    # opt-out. Only mirrors `_snapshot_public_surface`'s class-member
+    # recursion, so no new naming convention to learn.
+    expanded_allowed = set(allowed_removed)
+    for name in allowed_removed:
+        prefix = f"{name}."
+        for sym in before:
+            if sym.startswith(prefix):
+                expanded_allowed.add(sym)
     removed = [
         symbol
         for symbol in _diff_public_surface(before, after)
-        if symbol not in allowed_removed
+        if symbol not in expanded_allowed
     ]
     before_signatures = _snapshot_public_signatures(existing_code, language or "python")
     after_signatures = _snapshot_public_signatures(generated_code, language or "python")
