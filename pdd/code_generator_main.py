@@ -497,25 +497,38 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
     )
     # `<name>_test.<ext>` / `<name>_spec.<ext>` patterns for files that live
     # next to production code rather than under `tests/`. Go's
-    # `handler_test.go` is the canonical example and Ruby's `widget_spec.rb`
-    # follows the same shape — without these the test-churn gate skips
-    # files the language's test runner unambiguously treats as tests.
+    # `handler_test.go` is the canonical example, Ruby's `widget_spec.rb`
+    # and Rust's `widget_test.rs` follow the same shape — without these
+    # the test-churn gate skips files the language's test runner
+    # unambiguously treats as tests.
     sibling_test_suffixes = (
         "_test.go",
         "_test.rb",
         "_spec.rb",
+        "_test.rs",
     )
-    # Java/Kotlin/Scala PascalCase test suffixes: `FooTest.java`,
-    # `BarTests.kt`, `WidgetSpec.kt`. The agentic test prompt names
-    # `Test.java` as a recognised convention, so the churn gate has to
-    # match. Case-sensitive — lowercasing would false-positive on
+    # PascalCase JVM/.NET/Swift test suffixes: `FooTest.java`,
+    # `FooIT.java` (Maven failsafe integration test), `FooTestCase.java`
+    # (older JUnit/TestNG), `BarTests.kt`, `WidgetSpec.kt`, ScalaTest's
+    # `FooSpec.scala`, Swift `FooTests.swift`, xUnit/NUnit
+    # `FooTests.cs`. The agentic test prompt names `Test.java` as a
+    # recognised convention; the rest follow the same camel-case
+    # convention. Case-sensitive — lowercasing would false-positive on
     # `latest.kt`, `manifest.java`, `request.scala` etc.
     pascal_test_suffixes = (
         "Test.java",
         "Tests.java",
+        "TestCase.java",
+        "IT.java",
         "Test.kt",
         "Tests.kt",
         "Spec.kt",
+        "Test.scala",
+        "Tests.scala",
+        "Spec.scala",
+        "Tests.swift",
+        "Test.cs",
+        "Tests.cs",
     )
     return (
         name.startswith("test_")
@@ -563,6 +576,16 @@ def _collect_bound_module_names(tree: ast.Module) -> Set[str]:
             for alias in node.names:
                 bound.add(alias.asname or alias.name.split(".", 1)[0])
         elif isinstance(node, ast.ImportFrom):
+            # ``from __future__ import …`` is a compiler directive, not
+            # a runtime module attribute callers can rely on. Excluding
+            # it here means ``__all__ = ["annotations"]`` does NOT
+            # promote the future-import binding into the public surface
+            # (which would otherwise diff as ``removed: annotations``
+            # when the directive is cleaned up after a Python-version
+            # bump). Mirrors the same skip in `_snapshot_public_surface`
+            # and `_snapshot_public_signatures`.
+            if node.module == "__future__":
+                continue
             for alias in node.names:
                 if alias.name == "*":
                     continue
