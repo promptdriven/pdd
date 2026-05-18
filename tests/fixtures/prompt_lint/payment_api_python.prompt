@@ -1,0 +1,31 @@
+% Fixture: payment_api_python.prompt
+% Realistic payment API prompt with vague contract terms and NO vocabulary block.
+% Expected: VAGUE_TERM warns for valid, authorized, duplicate, graceful, successful.
+
+<contract_rules>
+R1 - Amount validation
+The system MUST reject any charge where the amount is not valid.
+
+R2 - Authorized callers only
+
+For every POST /charge request,
+the system MUST return HTTP 403
+when called by an unauthorized principal.
+
+R3 - Duplicate idempotency
+
+For every charge request with the same idempotency_key,
+the system MUST NOT create a duplicate transaction.
+
+R4 - Success response
+The system MUST return HTTP 200 with a successful charge receipt.
+
+R5 - Graceful error handling
+The system MUST handle provider failures gracefully.
+</contract_rules>
+
+<requirements>
+- Accept payments in USD and EUR.
+- Log all charge attempts for audit purposes.
+- Validate idempotency_key presence on every request.
+</requirements>

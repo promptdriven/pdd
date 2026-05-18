@@ -1,0 +1,46 @@
+% LINT DEMO — all vague terms defined: run `pdd prompt lint` on this file to see zero warnings.
+% pdd prompt lint examples/prompts_linter/prompts/lint_demo_fixed_python.prompt
+
+You are a Python developer. Implement the `file_upload` module (`src/file_upload.py`).
+
+<vocabulary>
+- authorized user: a user whose Bearer JWT is present, unexpired, and contains the "upload" scope claim
+- duplicate upload: an upload whose SHA-256 hash and tenant_id match a row in the uploads table with status="accepted" created within the last 30 days
+- graceful rejection: returns HTTP 409 with JSON body {"code": "DUPLICATE", "detail": "<human-readable reason>"}; never raises an unhandled exception
+- valid response: HTTP 201 with JSON body {"id": "<uuid4>", "size": <bytes>, "created_at": "<ISO-8601>"}
+- complete upload: a row in the uploads table with status="accepted" and storage_path set to a non-null S3 key
+- active session: a session whose expires_at timestamp is in the future and whose revoked flag is false
+- successful upload: an upload that returns a valid response within 2000 ms with no error fields in the body
+- trusted service: a caller presenting a service-to-service JWT with aud="internal" and a recognised service_id claim
+- reasonable file size: ≤ 50 MB as measured by Content-Length header before reading the stream
+- safe record: an audit log entry containing user_id, tenant_id, file hash, timestamp, and outcome; never containing raw file content or PII beyond user_id
+</vocabulary>
+
+<contract_rules>
+1. Only authorized users may upload files.
+2. Reject duplicate uploads gracefully.
+3. Return a valid response when the upload is complete.
+4. Active sessions are allowed up to 10 uploads per day.
+5. Log all successful uploads for audit purposes.
+6. Trusted services may bypass the rate limit.
+</contract_rules>
+
+<requirements>
+- Accept multipart/form-data POST to /upload.
+- Return HTTP 201 with {"id": "<uuid>"} on successful upload.
+- Reject duplicate files with HTTP 409.
+- Sanitize file names before saving to storage.
+- Enforce a reasonable file size limit.
+</requirements>
+
+<acceptance_tests>
+1. Given an authorized user, when they POST a valid file, then the server returns HTTP 201.
+2. Given a duplicate upload, when submitted by an active session, then the server returns HTTP 409.
+3. Given an expired session, when a request arrives, then the server returns HTTP 401.
+4. Given a complete upload, the audit log must contain a safe record.
+</acceptance_tests>
+
+Instructions
+- Implement using FastAPI and Python 3.12+.
+- Use type annotations for all public functions.
+- Raise HTTPException for all error paths.

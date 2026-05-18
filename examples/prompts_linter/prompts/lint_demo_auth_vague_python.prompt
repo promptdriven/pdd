@@ -1,0 +1,33 @@
+% LINT DEMO — auth service with vague terms.
+% Shows how "safe", "recent", "trusted", and "reasonable" hide policy decisions.
+% pdd prompt lint examples/prompts_linter/prompts/lint_demo_auth_vague_python.prompt
+
+You are a Python developer. Implement the `auth` module (`src/auth.py`).
+
+<contract_rules>
+1. Passwords must be stored safely.
+2. Only trusted clients may request a token refresh.
+3. Reject login attempts from recent failed logins.
+4. Tokens must expire after a reasonable period.
+5. Return a valid token response on successful authentication.
+6. Active accounts may have at most 5 concurrent sessions.
+</contract_rules>
+
+<requirements>
+- POST /login: accepts email + password, returns JWT access token and refresh token.
+- POST /refresh: accepts refresh token, returns new access token.
+- POST /logout: revokes the supplied refresh token.
+- Enforce account lockout after repeated failures.
+</requirements>
+
+<acceptance_tests>
+1. Given valid credentials, when the user logs in, then the server returns a valid token response.
+2. Given a recent failed login, when another attempt arrives, then the server returns HTTP 429.
+3. Given a trusted client, when it calls /refresh, then it receives a new valid token.
+4. Given an active account at the session limit, when a new login occurs, the oldest session is revoked gracefully.
+</acceptance_tests>
+
+Instructions
+- Use bcrypt for password hashing.
+- Issue JWTs signed with RS256.
+- Store refresh tokens in Redis with an appropriate TTL.
