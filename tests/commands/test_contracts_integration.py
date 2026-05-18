@@ -29,6 +29,17 @@ RATE_LIMITER_ISSUES = FIXTURES / "rate_limiter_issues_python.prompt"
 STORY_PAYMENT_GOOD = FIXTURES / "story__payment_flow.md"
 STORY_PAYMENT_BAD = FIXTURES / "story__payment_bad_refs.md"
 
+# Waiver fixture paths
+WAIVER_VALID = FIXTURES / "waiver_valid_python.prompt"
+WAIVER_EXPIRED = FIXTURES / "waiver_expired_python.prompt"
+WAIVER_MISSING_FIELDS = FIXTURES / "waiver_missing_fields_python.prompt"
+WAIVER_REF_MISSING = FIXTURES / "waiver_ref_missing_python.prompt"
+
+# Additional fixture paths
+CAPABILITIES_NO_MODAL = FIXTURES / "capabilities_no_modal_python.prompt"
+COVERAGE_UNCHECKED = FIXTURES / "coverage_unchecked_python.prompt"
+NON_SEQUENTIAL = FIXTURES / "non_sequential_ids_python.prompt"
+
 
 @pytest.fixture
 def runner():
@@ -448,6 +459,299 @@ class TestJsonSchemaShape:
         result = _json_invoke(runner, str(PAYMENT_CLEAN))
         # If this raises, stdout was contaminated with non-JSON
         json.loads(result.output)
+
+
+# ---------------------------------------------------------------------------
+# TestWaiverIntegration
+# ---------------------------------------------------------------------------
+
+class TestWaiverIntegration:
+    """Waiver blocks: valid waivers suppress UNCOVERED_MUST_NOT; invalid
+    waivers produce EXPIRED_WAIVER, MISSING_WAIVER_FIELDS, WAIVER_REF_MISSING."""
+
+    def test_valid_waiver_exits_zero(self, runner):
+        """W1 covers R3 MUST NOT with a future Expires date — must be clean."""
+        result = _invoke(runner, str(WAIVER_VALID))
+        assert result.exit_code == 0
+
+    def test_valid_waiver_no_uncovered_must_not(self, runner):
+        result = _json_invoke(runner, str(WAIVER_VALID))
+        data = json.loads(result.output)
+        uncovered = _issues(data, "UNCOVERED_MUST_NOT")
+        assert uncovered == [], f"R3 MUST NOT should be covered by waiver W1: {uncovered}"
+
+    def test_valid_waiver_no_waiver_issues(self, runner):
+        result = _json_invoke(runner, str(WAIVER_VALID))
+        data = json.loads(result.output)
+        waiver_codes = {"EXPIRED_WAIVER", "MISSING_WAIVER_FIELDS", "WAIVER_REF_MISSING"}
+        found = [i for i in _issues(data) if i["code"] in waiver_codes]
+        assert found == []
+
+    def test_expired_waiver_detected(self, runner):
+        """W1 Expires: 2020-01-01 is in the past — must flag EXPIRED_WAIVER."""
+        result = _json_invoke(runner, str(WAIVER_EXPIRED))
+        data = json.loads(result.output)
+        expired = _issues(data, "EXPIRED_WAIVER")
+        assert len(expired) >= 1
+
+    def test_expired_waiver_is_warning(self, runner):
+        result = _json_invoke(runner, str(WAIVER_EXPIRED))
+        data = json.loads(result.output)
+        expired = _issues(data, "EXPIRED_WAIVER")
+        assert all(i["level"] == "warn" for i in expired)
+
+    def test_expired_waiver_mentions_waiver_id(self, runner):
+        result = _json_invoke(runner, str(WAIVER_EXPIRED))
+        data = json.loads(result.output)
+        expired = _issues(data, "EXPIRED_WAIVER")
+        combined = " ".join(i["message"] + i["line"] for i in expired)
+        assert "W1" in combined
+
+    def test_missing_waiver_fields_detected(self, runner):
+        """W1 is missing Approved by and Expires fields."""
+        result = _json_invoke(runner, str(WAIVER_MISSING_FIELDS))
+        data = json.loads(result.output)
+        missing = _issues(data, "MISSING_WAIVER_FIELDS")
+        assert len(missing) >= 1
+
+    def test_missing_waiver_fields_is_warning(self, runner):
+        result = _json_invoke(runner, str(WAIVER_MISSING_FIELDS))
+        data = json.loads(result.output)
+        missing = _issues(data, "MISSING_WAIVER_FIELDS")
+        assert all(i["level"] == "warn" for i in missing)
+
+    def test_waiver_ref_missing_detected(self, runner):
+        """Coverage says WAIVED W99 but W99 is not defined in <waivers>."""
+        result = _json_invoke(runner, str(WAIVER_REF_MISSING))
+        data = json.loads(result.output)
+        ref_missing = _issues(data, "WAIVER_REF_MISSING")
+        assert len(ref_missing) >= 1
+
+    def test_waiver_ref_missing_is_error(self, runner):
+        result = _json_invoke(runner, str(WAIVER_REF_MISSING))
+        data = json.loads(result.output)
+        ref_missing = _issues(data, "WAIVER_REF_MISSING")
+        assert all(i["level"] == "error" for i in ref_missing)
+
+    def test_waiver_ref_missing_mentions_waiver_id(self, runner):
+        result = _json_invoke(runner, str(WAIVER_REF_MISSING))
+        data = json.loads(result.output)
+        ref_missing = _issues(data, "WAIVER_REF_MISSING")
+        combined = " ".join(i["message"] + i["line"] for i in ref_missing)
+        assert "W99" in combined
+
+    def test_valid_waiver_json_zero_counts(self, runner):
+        result = _json_invoke(runner, str(WAIVER_VALID))
+        data = json.loads(result.output)
+        assert data[0]["warn_count"] == 0
+        assert data[0]["error_count"] == 0
+
+
+# ---------------------------------------------------------------------------
+# TestCapabilitiesAndCoverage
+# ---------------------------------------------------------------------------
+
+class TestCapabilitiesAndCoverage:
+    """Capabilities section and coverage checks."""
+
+    def test_capabilities_no_modal_detected(self, runner):
+        """A capabilities line without MUST/MUST NOT/MAY/SHOULD must flag MISSING_MODAL."""
+        result = _json_invoke(runner, str(CAPABILITIES_NO_MODAL))
+        data = json.loads(result.output)
+        missing = _issues(data, "MISSING_MODAL")
+        assert len(missing) >= 1
+
+    def test_capabilities_no_modal_is_warning(self, runner):
+        result = _json_invoke(runner, str(CAPABILITIES_NO_MODAL))
+        data = json.loads(result.output)
+        missing = _issues(data, "MISSING_MODAL")
+        assert all(i["level"] == "warn" for i in missing)
+
+    def test_capabilities_with_modal_not_flagged(self, runner):
+        """Lines that DO have MAY/MUST/MUST NOT must not be flagged."""
+        result = _json_invoke(runner, str(CAPABILITIES_NO_MODAL))
+        data = json.loads(result.output)
+        missing = _issues(data, "MISSING_MODAL")
+        flagged_lines = [i["line"] for i in missing]
+        for line in flagged_lines:
+            assert not any(
+                modal in line.upper()
+                for modal in ("MUST NOT", "MUST", "MAY", "SHOULD", "DOES NOT")
+            )
+
+    def test_coverage_unchecked_rule_detected(self, runner):
+        """R2 coverage entry starts with TODO — must flag UNCHECKED_RULE."""
+        result = _json_invoke(runner, str(COVERAGE_UNCHECKED))
+        data = json.loads(result.output)
+        unchecked = _issues(data, "UNCHECKED_RULE")
+        assert len(unchecked) >= 1
+
+    def test_coverage_unchecked_rule_is_warning(self, runner):
+        result = _json_invoke(runner, str(COVERAGE_UNCHECKED))
+        data = json.loads(result.output)
+        unchecked = _issues(data, "UNCHECKED_RULE")
+        assert all(i["level"] == "warn" for i in unchecked)
+
+    def test_coverage_unchecked_mentions_rule(self, runner):
+        result = _json_invoke(runner, str(COVERAGE_UNCHECKED))
+        data = json.loads(result.output)
+        unchecked = _issues(data, "UNCHECKED_RULE")
+        combined = " ".join(i["message"] + i["line"] for i in unchecked)
+        assert "R2" in combined
+
+    def test_coverage_checked_rules_not_flagged(self, runner):
+        """R1 and R3 have real coverage entries — only R2 must be flagged."""
+        result = _json_invoke(runner, str(COVERAGE_UNCHECKED))
+        data = json.loads(result.output)
+        unchecked = _issues(data, "UNCHECKED_RULE")
+        rule_ids = [i["rule_id"] for i in unchecked]
+        assert "R1" not in rule_ids
+        assert "R3" not in rule_ids
+
+
+# ---------------------------------------------------------------------------
+# TestExitCodeSemantics
+# ---------------------------------------------------------------------------
+
+class TestExitCodeSemantics:
+    """Exit code contract: 0=clean, 1=warnings only, 2=errors."""
+
+    def test_clean_prompt_exits_zero(self, runner):
+        result = _invoke(runner, str(PAYMENT_CLEAN))
+        assert result.exit_code == 0
+
+    def test_warnings_only_exits_one(self, runner):
+        """NON_SEQUENTIAL_ID is a warning only — must exit 1, not 2."""
+        result = _invoke(runner, str(NON_SEQUENTIAL))
+        assert result.exit_code == 1
+
+    def test_error_present_exits_nonzero_and_not_one(self, runner):
+        """DUPLICATE_ID is an error — must exit != 0 and != 1 (i.e., 2)."""
+        result = _invoke(runner, str(PAYMENT_ISSUES))
+        assert result.exit_code != 0
+        assert result.exit_code != 1
+
+    def test_strict_warnings_become_errors_exits_two(self, runner):
+        """NON_SEQUENTIAL_ID is a warn; with --strict it becomes an error → exit 2."""
+        result = _invoke(runner, "--strict", str(NON_SEQUENTIAL))
+        assert result.exit_code == 2
+
+    def test_json_exit_code_still_nonzero_with_issues(self, runner):
+        """--json flag must not suppress the exit code."""
+        result = _json_invoke(runner, str(PAYMENT_ISSUES))
+        assert result.exit_code != 0
+
+    def test_json_exit_code_zero_for_clean(self, runner):
+        result = _json_invoke(runner, str(PAYMENT_CLEAN))
+        assert result.exit_code == 0
+
+
+# ---------------------------------------------------------------------------
+# TestRecursiveStoryScanning
+# ---------------------------------------------------------------------------
+
+class TestRecursiveStoryScanning:
+    """--stories must scan subdirectories recursively (rglob, not glob)."""
+
+    def test_stories_in_subdirectory_are_found(self, runner, tmp_path):
+        """Story files nested in a subdirectory must be included in output."""
+        subdir = tmp_path / "sub"
+        subdir.mkdir()
+        story = subdir / "story__nested.md"
+        story.write_text("# Nested story\n\n## Story\nAs a user.\n")
+        result = _json_invoke(runner, "--stories", str(tmp_path), str(PAYMENT_CLEAN))
+        data = json.loads(result.output)
+        story_paths = [e["path"] for e in data if "story__nested" in e["path"]]
+        assert len(story_paths) == 1, (
+            f"Nested story not found in output. Paths: {[e['path'] for e in data]}"
+        )
+
+    def test_flat_and_nested_stories_both_found(self, runner, tmp_path):
+        """Both top-level and subdirectory stories must appear in a single scan."""
+        flat = tmp_path / "story__flat.md"
+        flat.write_text("# Flat story\n\n## Story\nAs a user.\n")
+        nested_dir = tmp_path / "module_a"
+        nested_dir.mkdir()
+        nested = nested_dir / "story__nested.md"
+        nested.write_text("# Nested story\n\n## Story\nAs a user.\n")
+
+        result = _json_invoke(runner, "--stories", str(tmp_path), str(PAYMENT_CLEAN))
+        data = json.loads(result.output)
+        story_names = {Path(e["path"]).name for e in data if "story__" in e["path"]}
+        assert "story__flat.md" in story_names
+        assert "story__nested.md" in story_names
+
+    def test_non_story_md_files_not_scanned(self, runner, tmp_path):
+        """Files not matching story__*.md must not appear in story results."""
+        regular = tmp_path / "README.md"
+        regular.write_text("# README\nThis is not a story.\n")
+        story = tmp_path / "story__real.md"
+        story.write_text("# Real story\n\n## Story\nAs a user.\n")
+
+        result = _json_invoke(runner, "--stories", str(tmp_path), str(PAYMENT_CLEAN))
+        data = json.loads(result.output)
+        story_paths = [e["path"] for e in data]
+        assert not any("README" in p for p in story_paths)
+
+    def test_stories_json_with_stories_flag_is_valid_json(self, runner):
+        """--json output when --stories is also passed must still be parseable."""
+        result = _json_invoke(
+            runner, "--stories", str(FIXTURES), str(PAYMENT_CLEAN)
+        )
+        data = json.loads(result.output)
+        assert isinstance(data, list)
+
+    def test_stories_results_contain_md_extension(self, runner):
+        result = _json_invoke(
+            runner, "--stories", str(FIXTURES), str(PAYMENT_CLEAN)
+        )
+        data = json.loads(result.output)
+        story_entries = [e for e in data if "story__" in e["path"]]
+        assert len(story_entries) >= 2
+        for e in story_entries:
+            assert e["path"].endswith(".md")
+
+
+# ---------------------------------------------------------------------------
+# TestStrictModeWithStories
+# ---------------------------------------------------------------------------
+
+class TestStrictModeWithStories:
+    """--strict escalates warnings in both prompt and story results."""
+
+    def test_strict_bad_story_exits_two(self, runner):
+        """A story with UNKNOWN_STORY_REF warnings + --strict must exit 2."""
+        result = _invoke(
+            runner, "--strict", "--stories", str(FIXTURES), str(PAYMENT_CLEAN)
+        )
+        assert result.exit_code == 2
+
+    def test_strict_bad_story_issues_are_errors(self, runner):
+        result = _json_invoke(
+            runner, "--strict", "--stories", str(FIXTURES), str(PAYMENT_CLEAN)
+        )
+        data = json.loads(result.output)
+        bad_story = next(
+            (e for e in data if "story__payment_bad_refs" in e["path"]), None
+        )
+        assert bad_story is not None
+        for issue in bad_story["issues"]:
+            assert issue["level"] == "error", (
+                f"Expected error, got warn for: {issue['message']}"
+            )
+
+    def test_strict_good_story_still_exits_zero_if_all_clean(self, runner):
+        """A fully clean prompt + clean story with --strict must still exit 0."""
+        result = _invoke(runner, "--strict", str(PAYMENT_CLEAN))
+        assert result.exit_code == 0
+
+    def test_strict_escalates_non_sequential_in_prompt(self, runner):
+        """NON_SEQUENTIAL_ID is warn by default; with --strict it becomes error."""
+        result = _json_invoke(runner, "--strict", str(NON_SEQUENTIAL))
+        data = json.loads(result.output)
+        seq = _issues(data, "NON_SEQUENTIAL_ID")
+        assert len(seq) >= 1
+        assert all(i["level"] == "error" for i in seq)
 
 
 # ---------------------------------------------------------------------------
