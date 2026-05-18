@@ -7013,6 +7013,86 @@ class TestNotABugSuppressedOnResume:
             f"final_message={final_message!r}"
         )
 
+    def test_resume_step9_advance_clears_unverified_baseline_for_new_cycle(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """A legacy post-Step-9 resume that advances to a fresh cycle must clear
+        cycle_baseline_unverified so the new cycle can trust its newly captured
+        cycle_start_hashes baseline."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        initial_hashes = {"src/module.py": "originalhash"}
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: CODE_BUG in module.py",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "Step 7 output",
+                "8": "Step 8 output",
+                "9": "Some tests still failing. CONTINUE_CYCLE",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def detect_side_effect(cwd, hashes):
+            if hashes is initial_hashes or (
+                isinstance(hashes, dict) and hashes == initial_hashes
+            ):
+                return ["src/module.py"]
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value={"src/module.py": "editedhash"},
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: NOT_A_BUG — expected behavior.", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        success, final_message = result[0], result[1]
+        assert success is True
+        assert final_message == (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        )
+
     def test_resume_legacy_state_inline_cycle_waste_breaker_blocked_when_rerun_returns_not_a_bug(
         self, e2e_fix_mock_dependencies, e2e_fix_default_args
     ):

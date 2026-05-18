@@ -1924,6 +1924,7 @@ def run_agentic_e2e_fix_orchestrator(
                     # belongs to the just-completed cycle. Null it so the new
                     # cycle body recaptures fresh hashes.
                     resumed_cycle_start_hashes = None
+                    cycle_baseline_unverified = False
                 elif resume_action == "MAX_CYCLES_REACHED":
                     # Defer surfacing the failure until after `success` and
                     # `final_message` are initialized below — mirrors the
@@ -2103,6 +2104,8 @@ def run_agentic_e2e_fix_orchestrator(
                     current_cycle += 1
                     last_completed_step = 0
                     step_outputs = {}  # ADVANCE_CYCLE: clear for new cycle
+                    resumed_cycle_start_hashes = None
+                    cycle_baseline_unverified = False
                     _resume_deferred_action = None
                 else:
                     _resume_deferred_action = "MAX_CYCLES_REACHED"
