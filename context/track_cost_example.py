@@ -16,6 +16,7 @@ Each CSV row contains:
                         (e.g. "vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat")
 """
 
+import csv
 import os
 import sys
 import tempfile
@@ -40,13 +41,6 @@ def cli(ctx, output_cost):
     """Tiny demo CLI that mimics how `pdd` wires track_cost into its commands."""
     ctx.ensure_object(dict)
     ctx.obj['output_cost'] = output_cost
-    # Simulate what `llm_invoke` does when it tries multiple models in order
-    # (the first attempt failed -> fallback succeeded). This list becomes the
-    # `attempted_models` column.
-    ctx.obj['attempted_models'] = [
-        'vertex_ai/gemini-2.5-pro',
-        'deepseek/deepseek-chat',
-    ]
 
 
 @cli.command()
@@ -65,6 +59,17 @@ def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, 
     """
     with open(prompt_file, 'r', encoding='utf-8') as fh:
         prompt = fh.read()
+
+    # Simulate what `llm_invoke` does during command execution when it tries
+    # multiple models in order (the first attempt failed -> fallback succeeded).
+    # This list is published on `ctx.obj` *during* the command, mirroring how
+    # `llm_invoke` records each candidate, and becomes the `attempted_models`
+    # column. track_cost scopes this per-command, so populating it here (not in
+    # the group callback) reflects real runtime behavior.
+    ctx.obj['attempted_models'] = [
+        'vertex_ai/gemini-2.5-pro',
+        'deepseek/deepseek-chat',
+    ]
 
     generated = f"Processed prompt ({len(prompt)} chars)"
     if output:
@@ -112,9 +117,24 @@ def main() -> int:
 
         # The last column must be attempted_models — newest column.
         with open(cost_path, 'r', encoding='utf-8') as fh:
-            header = fh.readline().rstrip('\r\n').split(',')
+            reader = csv.reader(fh)
+            rows = list(reader)
+        assert len(rows) >= 2, f'expected header + at least 1 data row, got {rows}'
+        header = rows[0]
+        data_row = rows[1]
         assert header[-1] == 'attempted_models', f'expected attempted_models last, got {header}'
         print('attempted_models column is last:', header[-1] == 'attempted_models')
+
+        # Verify the full fallback history made it into the CSV row, proving the
+        # per-command scoping in track_cost preserves `attempted_models` written
+        # during the wrapped command's execution.
+        expected_attempted = 'vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat'
+        actual_attempted = data_row[-1]
+        assert actual_attempted == expected_attempted, (
+            f'expected attempted_models cell {expected_attempted!r}, '
+            f'got {actual_attempted!r}'
+        )
+        print('attempted_models cell records full fallback history:', actual_attempted)
 
     return 0
 
