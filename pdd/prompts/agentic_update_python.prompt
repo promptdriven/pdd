@@ -41,7 +41,12 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
     - Detect changed files (created, modified, or deleted).
     - Re-discover test files after the run to catch any newly created tests.
 9. **Success Criterion**: The operation is considered successful if the `prompt_file` itself was modified, regardless of the agent's internal success report.
-10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common` where `allowed = {prompt_path.resolve(), code_path.resolve()} | {p.resolve() for p in selected_tests}`. Import it alongside the other agentic_common imports. This prevents the agent from accidentally deleting or modifying unrelated files.
+10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common`. The `allowed` set MUST be derived from the transitive `<include>` graph of `prompt_path` so that documents referenced by `<include>` tags (and shared include files under `context/`) are preserved, matching the Scope Boundaries documented in `agentic_update_LLM.prompt`. At minimum, `allowed` MUST contain:
+    - `prompt_path.resolve()` and `code_path.resolve()`;
+    - `{p.resolve() for p in selected_tests}`;
+    - every resolved file path returned by `_compute_include_allowlist(prompt_path)` (see Requirement 11).
+    Import `_revert_out_of_scope_changes` alongside the other `agentic_common` imports. This prevents the agent from accidentally deleting or modifying unrelated files while still allowing permitted included-doc edits to survive.
+11. **Include Allowlist Helper**: Implement a module-level helper `_compute_include_allowlist(prompt_path: Path, *, max_depth: int = 3) -> set[Path]` that performs a depth-bounded, cycle-safe breadth-first walk of `<include>` references reachable from `prompt_path`, reusing `pdd.sync_order.extract_includes_from_file` as the single include parser so this module cannot disagree with PDD preprocessing/fingerprinting on what counts as an include. Resolution order for each raw include string: try `PROJECT_ROOT / include_str` first, then `current_file.parent / include_str`; silently skip includes that do not resolve to an existing file under `PROJECT_ROOT`. The helper MUST: (a) be cycle-safe (track a visited set of resolved paths), (b) cap recursion at `max_depth` levels, (c) return only resolved `Path` objects under `PROJECT_ROOT`, (d) never raise on missing files or unreadable includes (log a debug message and continue). If `pdd.sync_order` cannot be imported, fall back to returning an empty set so the scope guard degrades to the prior prompt/code/tests-only behavior rather than failing.
 
 % Dependencies
 <pdd.agentic_common>
@@ -51,6 +56,9 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
 <pdd.load_prompt_template>
     <include>context/load_prompt_template_example.py</include>
 </pdd.load_prompt_template>
+<pdd.sync_order.extract_includes_from_file>
+    <include select="def:extract_includes_from_file" mode="interface">pdd/sync_order.py</include>
+</pdd.sync_order.extract_includes_from_file>
 <pdd.prompt.agentic_update_LLM>
     <include>prompts/agentic_update_LLM.prompt</include>
 </pdd.prompt.agentic_update_LLM>
