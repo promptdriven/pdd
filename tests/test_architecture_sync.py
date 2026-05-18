@@ -646,6 +646,70 @@ def test_resolve_sync_paths_uses_nested_architecture_with_ancestor_prompts(tmp_p
     assert architecture_path.resolve() == (backend / "architecture.json").resolve()
 
 
+def test_nested_sync_architecture_scopes_ancestor_prompt_registration(tmp_path, monkeypatch):
+    """No-arg nested sync must not auto-register unrelated ancestor prompts."""
+    repo_root = tmp_path / "repo"
+    backend = repo_root / "backend" / "functions"
+    prompts_dir = repo_root / "prompts"
+    (repo_root / ".git").mkdir(parents=True)
+    backend.mkdir(parents=True)
+    (prompts_dir / "backend").mkdir(parents=True)
+    (prompts_dir / "unrelated_python.prompt").write_text(
+        "<pdd-reason>Unrelated module</pdd-reason>",
+        encoding="utf-8",
+    )
+    (prompts_dir / "backend" / "worker_python.prompt").write_text(
+        "<pdd-reason>Updated backend worker</pdd-reason>",
+        encoding="utf-8",
+    )
+    architecture_path = backend / "architecture.json"
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "backend/worker_python.prompt",
+                    "filepath": "worker.py",
+                    "description": "Backend worker",
+                    "reason": "Old backend worker",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(backend)
+
+    result = sync_prompts_to_architecture(dry_run=False)
+    arch_data = json.loads(architecture_path.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert result["updated_count"] == 1
+    assert result["registered"] == []
+    assert [module["filename"] for module in arch_data] == [
+        "backend/worker_python.prompt"
+    ]
+    assert arch_data[0]["reason"] == "Updated backend worker"
+
+
+def test_sync_prompts_to_architecture_dry_run_reports_registrations(tmp_path, monkeypatch):
+    """Dry-run should expose prompt registrations that a real run would write."""
+    (tmp_path / ".git").mkdir()
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "new_python.prompt").write_text(
+        "<pdd-reason>New module</pdd-reason>",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = sync_prompts_to_architecture(dry_run=True)
+
+    assert result["success"] is True
+    assert result["registered"] == ["new_python.prompt"]
+
+
 def test_resolve_sync_paths_does_not_escape_nested_project_root(tmp_path, monkeypatch):
     """A nested project without prompts/ must not borrow a parent project's prompts."""
     outer = tmp_path / "outer"

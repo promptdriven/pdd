@@ -442,6 +442,7 @@ class GlobalSyncModule(NamedTuple):
     entry: Dict[str, Any]
     aliases: Tuple[Tuple[Path, str], ...] = ()
     dependency_scopes: Tuple[Tuple[Path, Tuple[Any, ...]], ...] = ()
+    sync_candidates: Tuple[Tuple[str, Path], ...] = ()
 
 
 def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[str]:
@@ -513,6 +514,8 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
                 if existing_record is not None:
                     _merge_duplicate_output_dependencies(existing_record["entry"], entry)
                     existing_record["aliases"].append((arch_path.resolve(), basename))
+                    duplicate_cwd = _resolve_module_cwd(basename, arch_dir)
+                    existing_record["sync_candidates"].append((basename, duplicate_cwd))
                     dependencies = entry.get("dependencies", [])
                     if isinstance(dependencies, list):
                         existing_record["dependency_scopes"].append(
@@ -540,6 +543,7 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
                 "entry": entry,
                 "aliases": [(arch_path.resolve(), basename)],
                 "dependency_scopes": dependency_scopes,
+                "sync_candidates": [(basename, cwd)],
             }
             raw_modules.append(record)
             if filepath:
@@ -573,6 +577,7 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
                 entry,
                 tuple(record["aliases"]),
                 tuple(record["dependency_scopes"]),
+                tuple(record["sync_candidates"]),
             )
         )
 
@@ -742,20 +747,51 @@ def _analyze_global_sync_modules(
         module_cwds[key] = cwd
         module_targets[key] = basename
 
-        try:
-            context_name, prompts_dir, lang_to_path = _resolve_module_sync_context(
-                basename, cwd
-            )
-        except Exception as exc:
-            modules_to_sync.append(key)
-            module_operations[key] = [
-                f"analysis-error: {exc}; queued for sync as safe fallback"
-            ]
-            continue
+        sync_candidates = module.sync_candidates or ((basename, cwd),)
+        candidate_errors: List[str] = []
+        selected_context: Optional[str] = None
+        selected_prompts_dir: Optional[Path] = None
+        selected_lang_to_path: Dict[str, Path] = {}
+        selected_basename = basename
+        selected_cwd = cwd
 
-        if not lang_to_path:
+        for candidate_basename, candidate_cwd in sync_candidates:
+            try:
+                context_name, prompts_dir, lang_to_path = _resolve_module_sync_context(
+                    candidate_basename, candidate_cwd
+                )
+            except Exception as exc:
+                candidate_errors.append(f"{candidate_basename}: {exc}")
+                continue
+            if not lang_to_path:
+                continue
+            selected_context = context_name
+            selected_prompts_dir = prompts_dir
+            selected_lang_to_path = lang_to_path
+            selected_basename = candidate_basename
+            selected_cwd = candidate_cwd
+            break
+
+        if not selected_lang_to_path:
+            if candidate_errors and len(candidate_errors) == len(sync_candidates):
+                modules_to_sync.append(key)
+                module_operations[key] = [
+                    "analysis-error: "
+                    + "; ".join(candidate_errors)
+                    + "; queued for sync as safe fallback"
+                ]
+                continue
             skipped_modules.append(f"{key}: no syncable prompt file found")
             continue
+
+        basename = selected_basename
+        cwd = selected_cwd
+        context_name = selected_context
+        assert selected_prompts_dir is not None
+        prompts_dir = selected_prompts_dir
+        lang_to_path = selected_lang_to_path
+        module_cwds[key] = cwd
+        module_targets[key] = basename
 
         operations: List[str] = []
         needs_sync = False

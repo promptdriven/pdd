@@ -1000,6 +1000,61 @@ class TestArchitectureSyncModules:
         assert graph["report"] == ["helper"]
         assert warnings == []
 
+    @patch("pdd.agentic_sync._run_readonly_sync_determine_in_cwd")
+    def test_duplicate_output_analysis_uses_syncable_duplicate_candidate(
+        self, mock_determine, tmp_path
+    ):
+        """If the kept basename has no prompt, try the skipped duplicate basename."""
+        decision = MagicMock()
+        decision.operation = "generate"
+        decision.reason = "stale"
+        decision.estimated_cost = 1.25
+        mock_determine.return_value = decision
+
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "backend/report_python.prompt",
+                        "filepath": "backend/functions/report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "backend" / "functions"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_prompts = nested_dir / "prompts"
+        nested_prompts.mkdir()
+        (nested_prompts / "report_python.prompt").write_text(
+            "% nested report prompt",
+            encoding="utf-8",
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        analysis = _analyze_global_sync_modules(modules, tmp_path, quiet=True)
+
+        assert [module.key for module in modules] == ["backend/report"]
+        assert analysis.skipped_modules == []
+        assert analysis.modules_to_sync == ["backend/report"]
+        assert analysis.module_targets["backend/report"] == "report"
+        assert analysis.module_cwds["backend/report"] == nested_dir
+        mock_determine.assert_called_once()
+        assert mock_determine.call_args.kwargs["basename"] == "report"
+
 
 class TestRunGlobalSync:
     @patch("pdd.agentic_sync._find_project_root")

@@ -529,6 +529,22 @@ def register_untracked_prompts(
     return {'registered': registered, 'skipped': skipped, 'errors': errors}
 
 
+def _architecture_prompt_filenames(architecture_path: Path) -> set[str]:
+    """Return prompt filenames already owned by an architecture file."""
+    if not architecture_path.exists():
+        return set()
+    try:
+        arch_data = extract_modules(json.loads(architecture_path.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    return {
+        filename
+        for module in arch_data
+        for filename in [module.get("filename")]
+        if isinstance(filename, str) and filename.endswith(".prompt")
+    }
+
+
 # --- Architecture Update ---
 
 def _format_signature_param(
@@ -990,7 +1006,8 @@ def update_architecture_from_prompt(
 def sync_all_prompts_to_architecture(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
-    dry_run: bool = False
+    dry_run: bool = False,
+    only_files: Optional[set] = None,
 ) -> Dict[str, Any]:
     """
     Sync ALL prompt files to architecture.json.
@@ -1002,6 +1019,7 @@ def sync_all_prompts_to_architecture(
         prompts_dir: Directory containing prompt files
         architecture_path: Path to architecture.json
         dry_run: If True, perform validation without writing changes
+        only_files: Optional prompt filenames eligible for auto-registration.
 
     Returns:
         Dict with keys:
@@ -1017,7 +1035,12 @@ def sync_all_prompts_to_architecture(
         Would update 15 modules
     """
     # Pre-pass: auto-register any prompt files with PDD tags not in architecture.json
-    reg_result = register_untracked_prompts(prompts_dir, architecture_path, dry_run)
+    reg_result = register_untracked_prompts(
+        prompts_dir,
+        architecture_path,
+        dry_run,
+        only_files=only_files,
+    )
 
     # Load architecture.json to get all prompt filenames
     if not architecture_path.exists():
@@ -1256,10 +1279,22 @@ def sync_prompts_to_architecture(
 
     try:
         if filenames is None:
+            register_only_files: Optional[set] = None
+            try:
+                prompts_owner = resolved_prompts_dir.parent.resolve(strict=False)
+                architecture_owner = resolved_architecture_path.parent.resolve(strict=False)
+            except OSError:
+                prompts_owner = resolved_prompts_dir.parent
+                architecture_owner = resolved_architecture_path.parent
+            if prompts_owner != architecture_owner:
+                register_only_files = _architecture_prompt_filenames(
+                    resolved_architecture_path
+                )
             sync_result = sync_all_prompts_to_architecture(
                 prompts_dir=resolved_prompts_dir,
                 architecture_path=resolved_architecture_path,
                 dry_run=dry_run,
+                only_files=register_only_files,
             )
         else:
             results = []
@@ -1311,6 +1346,7 @@ def sync_prompts_to_architecture(
             "results": sync_result["results"],
             "validation": validation,
             "errors": sync_result.get("errors", []),
+            "registered": sync_result.get("registered", []),
         }
     except Exception as exc:
         return {
