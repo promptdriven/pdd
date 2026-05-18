@@ -324,17 +324,73 @@ def test_generate_env_vars(runner, mock_code_gen):
 def test_example_success(runner, mock_context_gen):
     """Test the example command success path."""
     with runner.isolated_filesystem():
-        with open("prompt.txt", "w") as f: f.write("p")
-        with open("code.py", "w") as f: f.write("c")
-        
-        result = runner.invoke(generate_module.example, ["prompt.txt", "code.py", "--output", "out.md"])
-        
+        # Use a `<basename>_<language>.prompt` filename so infer_module_identity()
+        # would resolve to ("foo", "python"); this exercises the same naming
+        # contract that `clears_run_report=True` relies on (see #1057).
+        with open("foo_python.prompt", "w") as f: f.write("p")
+        with open("foo.py", "w") as f: f.write("c")
+
+        result = runner.invoke(generate_module.example, ["foo_python.prompt", "foo.py", "--output", "out.md"])
+
         assert result.exit_code == 0
         mock_context_gen.assert_called_once()
         kwargs = mock_context_gen.call_args[1]
-        assert kwargs["prompt_file"] == "prompt.txt"
-        assert kwargs["code_file"] == "code.py"
+        assert kwargs["prompt_file"] == "foo_python.prompt"
+        assert kwargs["code_file"] == "foo.py"
         assert kwargs["output"] == "out.md"
+
+
+def test_example_command_declares_clears_run_report():
+    """Regression test for issue #1057.
+
+    `pdd example` must be decorated with ``@log_operation(..., clears_run_report=True)``
+    so a successful example regeneration invalidates any stale
+    ``.pdd/meta/<module>_<language>_run.json``. Without that flag, the
+    fingerprint would be refreshed while the run report kept describing the
+    pre-mutation example output.
+
+    We assert against the source file because this test module deliberately
+    mocks ``pdd.operation_log.log_operation`` with a no-op decorator factory
+    at import time (see the top of this file), which strips the decorator
+    parameters from the in-memory function object. The source is the
+    authoritative record of the decorator stack.
+    """
+    import importlib
+    import inspect
+    import re
+    from pathlib import Path
+
+    # Resolve the real module file path. ``pdd.commands`` re-exports ``generate``
+    # as a Click command at attribute lookup time, which can shadow the module
+    # object — use importlib to bypass that and reach the real submodule.
+    real_generate = importlib.import_module("pdd.commands.generate")
+    module_file = getattr(real_generate, "__file__", None)
+    if not module_file:
+        # Fall back to filesystem lookup via the package, which should always
+        # have a __file__.
+        pdd_commands = importlib.import_module("pdd.commands")
+        module_file = str(Path(pdd_commands.__file__).parent / "generate.py")
+    source = Path(module_file).read_text(encoding="utf-8")
+
+    # Match the @log_operation(...) decorator immediately preceding `def example(`.
+    # Allow other decorators (e.g. @track_cost) between them.
+    pattern = re.compile(
+        r"@log_operation\((?P<args>[^)]*)\)\s*(?:@[\w\.]+(?:\([^)]*\))?\s*)*def\s+example\b",
+        re.DOTALL,
+    )
+    match = pattern.search(source)
+    assert match is not None, (
+        "pdd.commands.generate.example must be wrapped with @log_operation(...)"
+    )
+    decorator_args = match.group("args")
+    assert 'operation="example"' in decorator_args, (
+        "example command's @log_operation must declare operation=\"example\""
+    )
+    assert "clears_run_report=True" in decorator_args, (
+        "Regression for issue #1057: `pdd example` must declare "
+        "clears_run_report=True on its @log_operation decorator so a fresh "
+        "fingerprint never coexists with a stale per-module run report."
+    )
 
 # --- Test Command Tests ---
 

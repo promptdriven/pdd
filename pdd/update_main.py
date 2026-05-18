@@ -1321,9 +1321,20 @@ def update_main(
                 if not sync_metadata:
                     # Save fingerprint so the file isn't detected as changed next run
                     if "Success" in result.get("status", ""):
-                        from .operation_log import save_fingerprint, infer_module_identity
+                        from .operation_log import (
+                            clear_run_report,
+                            infer_module_identity,
+                            save_fingerprint,
+                        )
                         basename, language = infer_module_identity(prompt_path)
                         if basename and language:
+                            # Clear stale run report first so it can't outlive
+                            # the prompt/code pair it described. Best-effort:
+                            # never fail the update because of metadata I/O.
+                            try:
+                                clear_run_report(basename, language)
+                            except Exception:
+                                pass
                             try:
                                 paths = {
                                     "prompt": Path(prompt_path),

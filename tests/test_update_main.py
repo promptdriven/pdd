@@ -3609,6 +3609,7 @@ def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestra
 
     with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
          patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.operation_log.clear_run_report") as mock_clear_rr, \
          patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
 
         ctx = click.Context(click.Command("update"))
@@ -3629,6 +3630,15 @@ def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestra
     assert mock_sync.call_count == 0
     assert mock_save_fp.call_count == mock_update_file_pair.call_count
     assert mock_save_fp.call_count >= 1
+    # Regression for issue #1057: in --repo mode without --sync-metadata, each
+    # successful pair update must clear any stale run report *before* the new
+    # fingerprint is saved, otherwise a `.pdd/meta/<basename>_<language>_run.json`
+    # from a prior runtime verification can outlive the prompt/code pair it
+    # described.
+    assert mock_clear_rr.call_count == mock_save_fp.call_count, (
+        "clear_run_report must be called once per successful pair update "
+        "alongside save_fingerprint (issue #1057)"
+    )
 
 
 @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
