@@ -3797,28 +3797,52 @@ def _git_changed_files(worktree: Path) -> List[str]:
 
 
 def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
-    """Build the ``code_path -> prompt_path`` mapping from ``architecture.json``.
+    """Build the ``code_path -> prompt_path`` mapping from ``architecture.json`` AS OF HEAD.
+
+    Reads from ``git show HEAD:architecture.json`` rather than the
+    worktree filesystem so a fixer cannot remove its own registry
+    entry in the same change set and slip past the guard (review pass
+    #3 Finding 2). The pre-fixer ``HEAD`` is the canonical registry
+    for enforcing the source-of-truth contract.
 
     Returns ``None`` when the registry is missing/unreadable/unparseable
     or lists no prompt-owned modules so the caller can degrade
     gracefully. Logs a WARNING describing the skip in every such case so
-    operators can spot a temporarily-broken registry.
+    operators can spot a temporarily-broken registry. Does NOT fall
+    back to reading from the worktree filesystem - that would re-open
+    the registry-evasion hole.
     """
-    arch_path = worktree / "architecture.json"
-    try:
-        data = json.loads(arch_path.read_text(encoding="utf-8"))
-    except FileNotFoundError:
+    result = subprocess.run(
+        ["git", "show", "HEAD:architecture.json"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # ``git show HEAD:architecture.json`` returns non-zero when
+        # the worktree is not a git repo, HEAD does not exist (no
+        # commits), or architecture.json is not in the HEAD tree.
+        # Degrade gracefully rather than block, but emit enough
+        # diagnostic for the operator to recognize a misconfigured
+        # worktree.
         logger.warning(
-            "prompt-source guard: architecture.json missing at %s; "
-            "skipping prompt-drift enforcement for this round.",
-            arch_path,
+            "prompt-source guard: architecture.json missing at HEAD "
+            "in %s (git show exit=%s, stderr=%s); skipping prompt-"
+            "drift enforcement for this round.",
+            worktree,
+            result.returncode,
+            (result.stderr or "").strip(),
         )
         return None
-    except (OSError, json.JSONDecodeError) as exc:
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
         logger.warning(
-            "prompt-source guard: architecture.json at %s is unreadable "
-            "(%s); skipping prompt-drift enforcement for this round.",
-            arch_path,
+            "prompt-source guard: architecture.json at HEAD in %s is "
+            "unparseable (%s); skipping prompt-drift enforcement for "
+            "this round.",
+            worktree,
             exc,
         )
         return None
@@ -3837,9 +3861,10 @@ def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
 
     if not mapping:
         logger.warning(
-            "prompt-source guard: architecture.json at %s lists no "
-            "prompt-owned modules; skipping prompt-drift enforcement.",
-            arch_path,
+            "prompt-source guard: architecture.json at HEAD in %s "
+            "lists no prompt-owned modules; skipping prompt-drift "
+            "enforcement.",
+            worktree,
         )
         return None
     return mapping

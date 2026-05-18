@@ -4323,6 +4323,36 @@ def _write_arch_json(worktree: Path, modules: List[Dict[str, Any]]) -> Path:
     return path
 
 
+def _commit_arch_to_head(worktree: Path, modules: List[Dict[str, Any]]) -> Path:
+    """Initialize a git repo in ``worktree`` and commit ``architecture.json`` to HEAD.
+
+    Required after review pass #3 Finding 2: ``_load_prompt_source_map``
+    reads via ``git show HEAD:architecture.json`` (not the worktree
+    filesystem) to prevent a fixer from removing its own registry
+    entry in the same change set. Tests that previously seeded the
+    registry by writing to the worktree alone now need a real commit.
+    """
+    path = _write_arch_json(worktree, modules)
+    subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=worktree,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+    )
+    subprocess.run(
+        ["git", "add", "architecture.json"], cwd=worktree, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed registry"],
+        cwd=worktree,
+        check=True,
+    )
+    return path
+
+
 def _prompt_module(filename: str, filepath: str) -> Dict[str, Any]:
     """Minimal architecture module shape for testing the guard mapping."""
     return {"filename": filename, "filepath": filepath}
@@ -4366,12 +4396,12 @@ class TestPromptSourceGuardHelper:
     ) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        self._seed_code(tmp_path, "pdd/agentic_update.py")
-        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
 
         reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
 
@@ -4389,12 +4419,12 @@ class TestPromptSourceGuardHelper:
     ) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        self._seed_code(tmp_path, "pdd/agentic_update.py")
-        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
 
         reason = _check_prompt_source_guard(
             tmp_path,
@@ -4413,11 +4443,11 @@ class TestPromptSourceGuardHelper:
         # non-empty mapping but the changed file is outside the prompt-
         # owned set.  The guard MUST NOT widen its scope to unregistered
         # paths (tests/ in particular).
-        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
 
         reason = _check_prompt_source_guard(
             tmp_path,
@@ -4429,11 +4459,7 @@ class TestPromptSourceGuardHelper:
     def test_multiple_offenders_are_enumerated(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        self._seed_code(tmp_path, "pdd/agentic_update.py")
-        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
-        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
-        self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [
                 _prompt_module(
@@ -4445,6 +4471,10 @@ class TestPromptSourceGuardHelper:
                 ),
             ],
         )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
+        self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
 
         reason = _check_prompt_source_guard(
             tmp_path,
@@ -4465,11 +4495,7 @@ class TestPromptSourceGuardHelper:
     ) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        self._seed_code(tmp_path, "pdd/agentic_update.py")
-        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
-        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
-        self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [
                 _prompt_module(
@@ -4481,6 +4507,10 @@ class TestPromptSourceGuardHelper:
                 ),
             ],
         )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
+        self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
 
         reason = _check_prompt_source_guard(
             tmp_path,
@@ -4519,10 +4549,37 @@ class TestPromptSourceGuardHelper:
     def test_malformed_architecture_json_degrades_gracefully(
         self, tmp_path: Path, caplog: pytest.LogCaptureFixture
     ) -> None:
+        """Genuinely exercise the JSON-decode failure path against
+        HEAD (review pass #3 Finding 2 switched the read source to
+        ``git show HEAD:architecture.json``). Commits a malformed
+        registry to HEAD so the helper hits the JSONDecodeError
+        branch rather than the no-repo / no-HEAD branch.
+        """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
+        # Initialize a real git repo and commit garbage as
+        # architecture.json so HEAD's blob is unparseable.
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+        )
         (tmp_path / "architecture.json").write_text(
             "this is not json {", encoding="utf-8"
+        )
+        subprocess.run(
+            ["git", "add", "architecture.json"], cwd=tmp_path, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "garbage registry"],
+            cwd=tmp_path,
+            check=True,
         )
 
         with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
@@ -4532,7 +4589,7 @@ class TestPromptSourceGuardHelper:
 
         assert reason is None
         assert any(
-            "architecture.json" in rec.getMessage() for rec in caplog.records
+            "unparseable" in rec.getMessage() for rec in caplog.records
         )
 
     def test_code_missing_with_prompt_missing_is_allowed(
@@ -4552,7 +4609,7 @@ class TestPromptSourceGuardHelper:
         """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
@@ -4580,7 +4637,7 @@ class TestPromptSourceGuardHelper:
         """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
@@ -4595,32 +4652,36 @@ class TestPromptSourceGuardHelper:
         assert "pdd/agentic_update.py" in reason
         assert "pdd/prompts/agentic_update_python.prompt" in reason
 
-    def test_guard_reads_architecture_from_worktree_not_repo_root(
+    def test_guard_reads_registry_from_head_not_worktree(
         self, tmp_path: Path
     ) -> None:
-        """The worktree's ``architecture.json`` is the single source of
-        truth - never the user's primary checkout or process cwd.  This
-        test deliberately seeds a registry shape that has no parallel
-        in the real repo (a bogus module) and confirms the guard reads
-        and enforces it.
+        """The guard MUST consult ``architecture.json`` at HEAD, not
+        the worktree filesystem (review pass #3 Finding 2).
 
-        Note: this test exercises the no-git-repo fallback path. The
-        HEAD-read flow (review pass #3 Finding 2) returns None when
-        ``git show HEAD:architecture.json`` fails (no repo, no
-        commit), but the helper then attempts the worktree fallback.
-        ``TestPromptSourceGuardRegistryFromHead`` covers the in-repo
-        HEAD-precedence contract directly.
+        Otherwise a fixer can remove its own registry entry in the
+        same change set and slip past the guard. This test commits
+        an entry mapping ``pdd/bogus.py -> bogus_python.prompt`` to
+        HEAD, then overwrites the worktree's ``architecture.json``
+        with an empty list (simulating the fixer's evasion), then
+        confirms the guard still blocks because the HEAD registry
+        retains the entry.
         """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        self._seed_code(tmp_path, "pdd/bogus.py")
-        self._seed_prompt(tmp_path, "pdd/prompts/bogus_python.prompt")
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("bogus_python.prompt", "pdd/bogus.py")],
         )
+        # Fixer evasion: rewrite the worktree's architecture.json to
+        # remove the entry. The HEAD copy still has it.
+        _write_arch_json(tmp_path, [])
+        self._seed_code(tmp_path, "pdd/bogus.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/bogus_python.prompt")
 
-        reason = _check_prompt_source_guard(tmp_path, ["pdd/bogus.py"])
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            ["pdd/bogus.py", "architecture.json"],
+        )
 
         assert reason is not None
         assert "pdd/bogus.py" in reason
@@ -4629,11 +4690,8 @@ class TestPromptSourceGuardHelper:
     def test_no_changed_files_is_allowed(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        _write_arch_json(
-            tmp_path,
-            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
-        )
-
+        # No commit/registry needed: the guard returns None on empty
+        # changed_files BEFORE consulting any registry.
         assert _check_prompt_source_guard(tmp_path, []) is None
 
     def test_code_changed_with_prompt_deleted_in_same_change_set_is_allowed(
@@ -4655,7 +4713,7 @@ class TestPromptSourceGuardHelper:
         # Architecture still lists the module, but BOTH files are
         # absent from disk - this is the retirement scenario where
         # the next commit will drop the registry entry too.
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
@@ -4693,7 +4751,7 @@ class TestPromptSourceGuardHelper:
         """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        _write_arch_json(
+        _commit_arch_to_head(
             tmp_path,
             [_prompt_module("foo_python.prompt", "pdd/foo.py")],
         )
@@ -4999,8 +5057,18 @@ class TestPromptSourceGuardIntegration:
     def _seed_registry(
         self, tmp_path: Path, modules: List[Dict[str, Any]]
     ) -> None:
-        _write_arch_json(tmp_path, modules)
+        # ``_commit_arch_to_head`` initializes a git repo + commits the
+        # registry to HEAD so the post-Finding-2 ``git show
+        # HEAD:architecture.json`` read in ``_load_prompt_source_map``
+        # finds the registry. Also seed the code file(s) so the
+        # post-Finding-1 ``code_still_exists`` check sees them and the
+        # original drift case (code modified, prompt unchanged) reaches
+        # the drift branch.
+        _commit_arch_to_head(tmp_path, modules)
         for entry in modules:
+            code_full = tmp_path / entry["filepath"]
+            code_full.parent.mkdir(parents=True, exist_ok=True)
+            code_full.write_text("# generated code\n", encoding="utf-8")
             prompt_rel = f"pdd/prompts/{entry['filename']}"
             full = tmp_path / prompt_rel
             full.parent.mkdir(parents=True, exist_ok=True)
