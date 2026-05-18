@@ -38,6 +38,32 @@ from .validate_prompt_includes import validate_prompt_includes
 console = Console()
 logger = logging.getLogger(__name__)
 
+# Extensions for languages that follow the `<name>_test.<ext>` /
+# `<name>_spec.<ext>` sibling-file convention (file lives next to
+# production code, not under `tests/`). Used by
+# `_is_test_output_path` so the test-churn gate auto-covers any
+# supported language whose test runner picks up that pattern. Adding
+# a new language with this naming convention to `language_format.csv`
+# should also be appended here; doing so eliminates the
+# `_is_test_output_path` extension-by-extension fix cycle (see PR
+# #1015 external review iter-12 follow-ups). PascalCase JVM/.NET/
+# Swift conventions (`FooTest.java`, `WidgetSpec.kt`) are matched
+# separately to keep the check case-sensitive and dodge
+# `latest.kt`-style false positives.
+_LANGUAGE_TEST_FILE_EXTS: Tuple[str, ...] = (
+    ".py",
+    ".go",
+    ".rb",
+    ".rs",
+    ".exs",
+    ".ex",
+    ".dart",
+    ".clj",
+    ".cljc",
+    ".lua",
+    ".php",
+)
+
 
 class ArchitectureConformanceError(click.UsageError):
     """Typed exception raised when generated code violates the architecture contract.
@@ -495,26 +521,30 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         ".spec.js",
         ".spec.jsx",
     )
-    # `<name>_test.<ext>` / `<name>_spec.<ext>` patterns for files that live
-    # next to production code rather than under `tests/`. Go's
-    # `handler_test.go` is the canonical example, Ruby's `widget_spec.rb`
-    # and Rust's `widget_test.rs` follow the same shape — without these
-    # the test-churn gate skips files the language's test runner
-    # unambiguously treats as tests.
-    sibling_test_suffixes = (
-        "_test.go",
-        "_test.rb",
-        "_spec.rb",
-        "_test.rs",
-    )
+    # `<name>_test.<ext>` / `<name>_spec.<ext>` patterns for files that
+    # live next to production code rather than under `tests/`. Go's
+    # `handler_test.go` is the canonical example; Ruby (`widget_spec.rb`),
+    # Rust (`widget_test.rs`), Elixir (`widget_test.exs`), Dart
+    # (`widget_test.dart`), Clojure, and Lua all follow analogous
+    # shapes. Driven by `_LANGUAGE_TEST_FILE_EXTS` so adding a new
+    # language to `language_format.csv` automatically covers its
+    # `_test.<ext>` / `_spec.<ext>` naming without another fix round.
+    if any(
+        lower_name.endswith(f"_test{ext}") or lower_name.endswith(f"_spec{ext}")
+        for ext in _LANGUAGE_TEST_FILE_EXTS
+    ):
+        return True
     # PascalCase JVM/.NET/Swift test suffixes: `FooTest.java`,
     # `FooIT.java` (Maven failsafe integration test), `FooTestCase.java`
     # (older JUnit/TestNG), `BarTests.kt`, `WidgetSpec.kt`, ScalaTest's
-    # `FooSpec.scala`, Swift `FooTests.swift`, xUnit/NUnit
-    # `FooTests.cs`. The agentic test prompt names `Test.java` as a
-    # recognised convention; the rest follow the same camel-case
-    # convention. Case-sensitive — lowercasing would false-positive on
-    # `latest.kt`, `manifest.java`, `request.scala` etc.
+    # `FooSpec.scala`, ScalaCheck / Spock `FooSpec.groovy`, Swift
+    # `FooTests.swift`, xUnit/NUnit `FooTests.cs`. The agentic test
+    # prompt names `Test.java` as a recognised convention; the rest
+    # follow the same camel-case convention. Case-sensitive —
+    # lowercasing would false-positive on `latest.kt`, `manifest.java`,
+    # `request.scala`, `latest.groovy` etc. Languages whose test
+    # filenames are lowercase (Python/Go/Ruby/Rust/Elixir/Dart/...) are
+    # already handled by the `_test.<ext>` / `_spec.<ext>` branch above.
     pascal_test_suffixes = (
         "Test.java",
         "Tests.java",
@@ -526,15 +556,16 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         "Test.scala",
         "Tests.scala",
         "Spec.scala",
+        "Test.groovy",
+        "Tests.groovy",
+        "Spec.groovy",
         "Tests.swift",
         "Test.cs",
         "Tests.cs",
     )
     return (
         name.startswith("test_")
-        or name.endswith("_test.py")
         or lower_name.endswith(js_like_test_suffixes)
-        or lower_name.endswith(sibling_test_suffixes)
         or name.endswith(pascal_test_suffixes)
         or any(part in {"tests", "__tests__"} for part in path.parts)
     )
