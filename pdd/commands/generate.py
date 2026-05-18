@@ -406,7 +406,8 @@ def generate(
 @click.argument("prompt_file", type=click.UNPROCESSED)
 @click.argument("code_file", type=click.UNPROCESSED)
 @click.option("--output", default=None, help="Where to save the generated example.")
-@click.option("--format", "format_", type=click.Choice(["code", "md"]), default=None,
+@click.option("--format", "format_", type=click.Choice(["code", "md"]), default="code",
+              show_default=True,
               help="Output format: 'code' (uses language extension) or 'md' (markdown).")
 @click.pass_context
 @log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)

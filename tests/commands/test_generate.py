@@ -413,6 +413,37 @@ def test_example_success(runner, mock_context_gen):
         assert kwargs["output"] == "out.md"
 
 
+def test_example_format_defaults_to_code(runner, mock_context_gen):
+    """Regression for codex finding on pdd/commands/generate.py:409.
+
+    `pdd example PROMPT CODE --output example.txt` (no explicit ``--format``)
+    must forward ``format="code"`` into ``context_generator_main`` so the
+    code-format path that normalizes the output suffix to the language
+    extension still runs. A regression to ``default=None`` would skip that
+    normalization, contradicting the documented default in --help and
+    README examples.
+    """
+    with runner.isolated_filesystem():
+        with open("foo_python.prompt", "w") as f:
+            f.write("p")
+        with open("foo.py", "w") as f:
+            f.write("c")
+
+        result = runner.invoke(
+            generate_module.example,
+            ["foo_python.prompt", "foo.py", "--output", "example.txt"],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_context_gen.assert_called_once()
+        kwargs = mock_context_gen.call_args[1]
+        assert kwargs["format"] == "code", (
+            "pdd example must forward format='code' by default so the "
+            "code-format suffix-normalization path runs (regression for "
+            "codex finding on pdd/commands/generate.py:409)."
+        )
+
+
 def test_example_command_declares_clears_run_report():
     """Regression test for issue #1057.
 

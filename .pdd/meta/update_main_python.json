@@ -1,8 +1,8 @@
 {
   "pdd_version": "0.0.233",
-  "timestamp": "2026-05-18T20:28:30.510290+00:00",
+  "timestamp": "2026-05-18T20:41:18.604230+00:00",
   "command": "fix",
-  "prompt_hash": "d4a990bfa6d05f32dd119192eafb53700b9fcc654af9cef3e01645b980debf88",
+  "prompt_hash": "aeaa7818a13e029491dcc7f4bd85050231437a89180f9b03c661b1d207704ce4",
   "code_hash": "5b5da7b572d4dfb42d4a2f0c183aa84b6801993871fa27becdc2a3910eaad828",
   "example_hash": "b318834c648f25e6141d81f3ecac1d9da592a6bb4740500983f2b07b8a10d902",
   "test_hash": "d475bb56e5fcc6e45b1ff395464a467657836fa122a69cb20db8af34baffb701",
@@ -11,12 +11,18 @@
   },
   "include_deps": {
     "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/agentic_update_example.py": "dafed5c5980cce43f16f6828ef45f76e3fdd4ee8a41d21e53cea846b2b6dca33",
     "context/api_key_scanner_example.py": "4b9f880a30445f25edffc394857ae0c218097726c41ab996a03fcbc4350b5482",
+    "context/architecture_sync_example.py": "3dbf29b2f53c4ad341c5722e2778ce1c3ffde318e1b2c0161c343e28505c32fa",
+    "context/auto_include_example.py": "0c278ed716298149777bc7082827eb8aa6d80dac264c66b6cded6871232f2df7",
     "context/construct_paths_example.py": "9fb88745a2a0e2834f9da30c2128a122fef4d5a74212ceacc5f9c3d9ddb9a8ca",
     "context/ctx_obj_params.prompt": "829e2ab327e37b75afcd0dcf3893dcaec9012a89a1f6e5198ec7cfc0395d2782",
     "context/git_update_example.py": "811304cee2cb890879ee68a816aed49dff2e7b50cfdca3125e16e0ae99819574",
+    "context/metadata_sync_example.py": "704453b3386724eef225b61c48f2fe922e1a973ac211c494e1d955dd44bcca11",
+    "context/operation_log_example.py": "5a829a3d99fad9c7319635223bbdab3455592f4207f0ab491dd5a297eb815350",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
     "context/sync_determine_operation_example.py": "94a333b37d9875bcc9b39e22d4d00de1b196ad2f7e0fa997e6f638e153dbdfad",
-    "context/update_prompt_example.py": "56b9d8c7aa823c2996a3dc5741a47844e223bfd088366d74e48b6a099b5a11c4"
+    "context/update_prompt_example.py": "56b9d8c7aa823c2996a3dc5741a47844e223bfd088366d74e48b6a099b5a11c4",
+    "pdd/validate_prompt_includes.py": "fa97b72a58534e255768634f928f4cfdd2130a7a4d8b296da3eefdf77d47855b"
   }
 }
