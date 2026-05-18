@@ -209,7 +209,9 @@ class TestApplyArchitectureCorrections:
             {"filename": "foo_python.prompt", "dependencies": ["bar_python.prompt", "baz_python.prompt"]},
         ]
 
-        result = _apply_architecture_corrections(arch_path, architecture, corrections, quiet=True)
+        result = _apply_architecture_corrections(
+            tmp_path, corrections, architecture, quiet=True
+        )
         assert result[0]["dependencies"] == ["bar_python.prompt", "baz_python.prompt"]
 
         # Verify file was written
@@ -225,7 +227,9 @@ class TestApplyArchitectureCorrections:
             {"filename": "nonexistent_python.prompt", "dependencies": ["x_python.prompt"]},
         ]
 
-        result = _apply_architecture_corrections(arch_path, architecture, corrections, quiet=True)
+        result = _apply_architecture_corrections(
+            tmp_path, corrections, architecture, quiet=True
+        )
         assert result[0]["dependencies"] == []
 
 
@@ -749,7 +753,9 @@ class TestArchitectureSyncModules:
     def test_nested_arch_module_without_pddrc_defaults_to_arch_dir(self, tmp_path):
         """When no .pddrc claims a basename, cwd defaults to the arch file's
         own directory (preserves nested-arch isolation)."""
-        nested_dir = tmp_path / "examples" / "demo"
+        # ``services/api`` is a real nested project; ``examples/`` is excluded as
+        # a bundled-sample tree per issue #1060.
+        nested_dir = tmp_path / "services" / "api"
         nested_dir.mkdir(parents=True)
         nested_arch = nested_dir / "architecture.json"
         nested_arch.write_text(
