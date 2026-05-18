@@ -153,7 +153,7 @@ def run_agentic_test_generate(
     verbose: bool = False,
     quiet: bool = False,
     repair_directive: str | None = None,
-) -> tuple[str, float, str, bool]:
+) -> TestResult:
     """
     Agentic test generation for non-Python languages.
 
@@ -176,11 +176,11 @@ def run_agentic_test_generate(
             into the agent instruction template is augmented.
 
     Returns:
-        Tuple (generated_content, cost, model_name, success):
-            generated_content: The content of the generated test file.
-            cost: Estimated LLM cost.
-            model_name: Model/provider used.
-            success: Whether the agentic test generation succeeded (tests passed).
+        :class:`TestResult` with ``content`` (generated test file),
+        ``cost`` (estimated LLM cost), ``model`` (provider/model
+        identifier), ``agentic_success`` (``True``/``False`` once tests
+        run; may be ``None`` on early failures), and ``error_message``
+        (populated when the agent could not complete).
     """
     project_root = Path.cwd()
 
