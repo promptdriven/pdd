@@ -20,6 +20,7 @@ from .code_generator_main import (
     TestChurnError,
     _env_flag_enabled,
     _get_test_churn_threshold,
+    _prompt_allows_test_churn,
     _verify_public_surface_regression,
     _verify_test_churn,
 )
@@ -606,8 +607,16 @@ def run_one_session_sync(
             # flags internally, but the deletion-as-churn shortcut
             # below raises ``TestChurnError`` directly without going
             # through that helper, so it needs an explicit guard here.
-            if _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE") or _env_flag_enabled(
-                "PDD_SKIP_CONFORMANCE"
+            # The prompt-side `BREAKING-CHANGE: rewrite tests` opt-out
+            # parsed by `_prompt_allows_test_churn` is honored here too
+            # so a deletion is treated symmetrically with a non-empty
+            # rewrite — otherwise the opt-out works for rewrites but
+            # silently fails when the agent empties/deletes the test
+            # file.
+            if (
+                _env_flag_enabled("PDD_SKIP_TEST_CHURN_GATE")
+                or _env_flag_enabled("PDD_SKIP_CONFORMANCE")
+                or _prompt_allows_test_churn(prompt_content)
             ):
                 churn_gate_passed = True
                 break
