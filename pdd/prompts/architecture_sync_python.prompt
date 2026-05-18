@@ -12,17 +12,17 @@
       },
       {
         "name": "update_architecture_from_prompt",
-        "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
+        "signature": "(prompt_filename: str, prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: success, updated, changes, error, warnings"
       },
       {
         "name": "sync_all_prompts_to_architecture",
-        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: success, updated_count, skipped_count, results, errors, registered"
       },
       {
         "name": "validate_dependencies",
-        "signature": "(dependencies: List[str], prompts_dir: Path) -> Dict[str, Any]",
+        "signature": "(dependencies: List[str], prompts_dir: Path = PROMPTS_DIR) -> Dict[str, Any]",
         "returns": "Dict with keys: valid, missing, duplicates"
       },
       {
@@ -32,7 +32,7 @@
       },
       {
         "name": "get_architecture_entry_for_prompt",
-        "signature": "(prompt_filename: str, architecture_path: Path) -> Optional[Dict[str, Any]]",
+        "signature": "(prompt_filename: str, architecture_path: Path = ARCHITECTURE_JSON_PATH) -> Optional[Dict[str, Any]]",
         "returns": "Architecture entry dict or None"
       },
       {
@@ -52,7 +52,7 @@
       },
       {
         "name": "register_untracked_prompts",
-        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool, only_files: Optional[set] = None) -> Dict[str, Any]",
+        "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: registered, skipped, errors"
       }
     ]
