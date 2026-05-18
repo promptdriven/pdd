@@ -3646,6 +3646,71 @@ def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestra
 @patch("pdd.update_main.get_git_changed_files", return_value=set())
 @patch("pdd.update_main.update_file_pair")
 @patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_clear_run_report_failure_warns_and_continues(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+    capsys,
+):
+    # Regression for issue #1057: when clear_run_report raises in repo-mode
+    # legacy fingerprinting, we must surface a non-fatal warning (when not
+    # quiet) and still proceed to save_fingerprint, so the user is told that
+    # runtime verification state may still describe the pre-mutation files.
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch(
+             "pdd.operation_log.clear_run_report",
+             side_effect=OSError("disk full"),
+         ) as mock_clear_rr, \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
+
+        ctx = click.Context(click.Command("update"))
+        # quiet=False so the warning is emitted
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=False,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+    # clear_run_report attempted for each successful pair
+    assert mock_clear_rr.call_count == mock_update_file_pair.call_count
+    # save_fingerprint still called per pair despite clear failure
+    assert mock_save_fp.call_count == mock_update_file_pair.call_count
+    assert mock_save_fp.call_count >= 1
+    # Warning surfaced to the user
+    out = capsys.readouterr().out
+    assert "Run report clear failed" in out
+    assert "disk full" in out
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
 def test_repo_mode_sync_metadata_batch_continues_when_one_pair_orchestrator_raises(
     mock_pddrc,
     mock_update_file_pair,

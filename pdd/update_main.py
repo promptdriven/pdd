@@ -1330,11 +1330,18 @@ def update_main(
                         if basename and language:
                             # Clear stale run report first so it can't outlive
                             # the prompt/code pair it described. Best-effort:
-                            # never fail the update because of metadata I/O.
+                            # never fail the update because of metadata I/O,
+                            # but surface failures as a non-fatal warning so
+                            # the user knows runtime verification state may
+                            # still describe the pre-mutation files.
                             try:
                                 clear_run_report(basename, language)
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                if not quiet:
+                                    rprint(
+                                        f"[warning][metadata] Run report clear failed for "
+                                        f"{basename} ({language}): {exc}[/warning]"
+                                    )
                             try:
                                 paths = {
                                     "prompt": Path(prompt_path),
