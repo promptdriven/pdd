@@ -465,6 +465,7 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
     raw_modules: List[Tuple[str, Path, Path, Dict[str, Any]]] = []
     architecture: List[Dict[str, Any]] = []
     seen: set[Tuple[Path, str]] = set()
+    seen_output_paths: set[Path] = set()
 
     for arch_path in arch_files:
         try:
@@ -477,6 +478,18 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
             basename = _basename_from_architecture_filename(entry.get("filename", ""))
             if not basename:
                 continue
+            filepath = str(entry.get("filepath") or "").strip()
+            if filepath:
+                output_path = Path(filepath)
+                if not output_path.is_absolute():
+                    output_path = arch_dir / output_path
+                try:
+                    output_path = output_path.resolve(strict=False)
+                except OSError:
+                    output_path = output_path.absolute()
+                if output_path in seen_output_paths:
+                    continue
+                seen_output_paths.add(output_path)
             dedupe_key = (arch_path.resolve(), basename)
             if dedupe_key in seen:
                 continue
@@ -1167,6 +1180,27 @@ def _prompt_exists_for_context(
     return prompt_dir.is_dir() and any(prompt_dir.glob(f"{glob.escape(name_part)}_*.prompt"))
 
 
+_NESTED_PDDRC_EXCLUDED_PARTS = {
+    "__pycache__",
+    "node_modules",
+    "venv",
+    "env",
+}
+
+
+def _is_ignored_nested_pddrc(project_root: Path, pddrc_path: Path) -> bool:
+    """Return True for nested configs in hidden/tooling directories."""
+    try:
+        parts = pddrc_path.parent.relative_to(project_root).parts
+    except ValueError:
+        return True
+
+    return any(
+        part.startswith(".") or part in _NESTED_PDDRC_EXCLUDED_PARTS
+        for part in parts
+    )
+
+
 def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     """Determine the correct working directory for a module based on .pddrc discovery.
 
@@ -1192,6 +1226,8 @@ def _resolve_module_cwd(basename: str, project_root: Path) -> Path:
     for depth in range(1, 3):
         pattern = "/".join(["*"] * depth) + "/.pddrc"
         for pddrc_path in project_root.glob(pattern):
+            if _is_ignored_nested_pddrc(project_root, pddrc_path):
+                continue
             try:
                 config = _load_pddrc_config(pddrc_path)
                 detected = _detect_context_from_basename(basename, config, pddrc_path=pddrc_path)

@@ -14,6 +14,7 @@ from pdd.architecture_sync import (
     _find_renamed_prompt_file,
     _infer_filepath,
     _infer_module_tags,
+    _resolve_sync_paths,
     filepath_to_prompt_filename,
     generate_tags_from_architecture,
     get_architecture_entry_for_prompt,
@@ -323,11 +324,79 @@ def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp
 
     assert result["success"] is True
     assert result["updated_count"] == 1
+    assert root_arch[0]["reason"] == "Original root reason"
+    assert nested_arch[0]["reason"] == "Updated nested reason"
     assert result["skipped_count"] == 0
     assert result["validation"]["valid"] is True
     assert result["errors"] == []
     assert updated_arch[0]["reason"] == "New core reason"
     assert updated_arch[0]["dependencies"] == ["dep_python.prompt"]
+
+
+def test_sync_prompts_to_architecture_normalizes_basename_dependency_tags(tmp_path):
+    """Path-aware architecture sync should resolve stale basename dependency tags."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "src").mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "src" / "worker_app_Python.prompt").write_text(
+        "\n".join(
+            [
+                "<pdd-reason>Worker app</pdd-reason>",
+                "<pdd-dependency>config_python.prompt</pdd-dependency>",
+                "<pdd-dependency>services/lifecycle_Python.prompt</pdd-dependency>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "src/worker_app_Python.prompt",
+                    "filepath": "src/worker_app.py",
+                    "description": "Worker app",
+                    "reason": "Old",
+                    "dependencies": [],
+                    "priority": 1,
+                },
+                {
+                    "filename": "src/config_Python.prompt",
+                    "filepath": "src/config.py",
+                    "description": "Config",
+                    "reason": "Config",
+                    "dependencies": [],
+                    "priority": 2,
+                },
+                {
+                    "filename": "src/services/lifecycle_Python.prompt",
+                    "filepath": "src/services/lifecycle.py",
+                    "description": "Lifecycle",
+                    "reason": "Lifecycle",
+                    "dependencies": [],
+                    "priority": 3,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = sync_prompts_to_architecture(
+        filenames=["src/worker_app_Python.prompt"],
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False,
+    )
+
+    updated_arch = json.loads(architecture_path.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert result["validation"]["valid"] is True
+    assert updated_arch[0]["dependencies"] == [
+        "src/config_Python.prompt",
+        "src/services/lifecycle_Python.prompt",
+    ]
 
 
 def test_sync_prompts_to_architecture_dry_run_preserves_architecture_file(tmp_path):
@@ -559,8 +628,22 @@ def test_sync_prompts_to_architecture_prefers_nearest_cwd_project(tmp_path, monk
 
     assert result["success"] is True
     assert result["updated_count"] == 1
-    assert root_arch[0]["reason"] == "Original root reason"
-    assert nested_arch[0]["reason"] == "Updated nested reason"
+
+
+def test_resolve_sync_paths_uses_nested_architecture_with_ancestor_prompts(tmp_path, monkeypatch):
+    """Nested architecture.json files can use an ancestor prompts directory."""
+    repo_root = tmp_path / "repo"
+    backend = repo_root / "backend" / "functions"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "prompts").mkdir()
+    backend.mkdir(parents=True)
+    (backend / "architecture.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(backend)
+
+    prompts_dir, architecture_path = _resolve_sync_paths(None, None)
+
+    assert prompts_dir.resolve() == (repo_root / "prompts").resolve()
+    assert architecture_path.resolve() == (backend / "architecture.json").resolve()
 
 
 def test_sync_prompts_to_architecture_falls_back_to_repo_root_from_nested_cwd(tmp_path, monkeypatch):
@@ -2480,6 +2563,26 @@ def test_infer_filepath_python():
     assert _infer_filepath('cli_detector_python.prompt') == 'pdd/cli_detector.py'
 
 
+def test_infer_filepath_path_aware_pascal_python():
+    """_infer_filepath reverses path-aware PascalCase Python prompt names."""
+    assert (
+        _infer_filepath('src/workers/runtime/gemini_cli_Python.prompt')
+        == 'src/workers/runtime/gemini_cli.py'
+    )
+    assert (
+        _infer_filepath('src/clients/__init___Python.prompt')
+        == 'src/clients/__init__.py'
+    )
+
+
+def test_infer_filepath_path_aware_typescript_react():
+    """_infer_filepath reverses path-aware TypeScriptReact prompt names."""
+    assert (
+        _infer_filepath('app/sheet/[id]/page_TypeScriptReact.prompt')
+        == 'app/sheet/[id]/page.tsx'
+    )
+
+
 def test_infer_filepath_llm():
     """_infer_filepath returns prompts/<filename> for _LLM.prompt files."""
     assert _infer_filepath('agentic_arch_step5_design_LLM.prompt') == 'prompts/agentic_arch_step5_design_LLM.prompt'
@@ -2488,6 +2591,7 @@ def test_infer_filepath_llm():
 def test_infer_module_tags_python():
     """_infer_module_tags returns ['module', 'python'] for _python.prompt files."""
     assert _infer_module_tags('cli_detector_python.prompt') == ['module', 'python']
+    assert _infer_module_tags('src/workers/runtime/gemini_cli_Python.prompt') == ['module', 'python']
 
 
 def test_infer_module_tags_llm():

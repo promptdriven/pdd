@@ -814,6 +814,41 @@ class TestArchitectureSyncModules:
         }
         assert {module.cwd for module in report_modules} == {shared_dir}
 
+    def test_duplicate_absolute_filepaths_are_scheduled_once(self, tmp_path):
+        """Root and nested architecture entries for the same file should not
+        produce duplicate global sync work."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "backend/report_python.prompt",
+                        "filepath": "backend/functions/report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "backend" / "functions"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "backend/report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, architecture, _arch_path = _architecture_sync_modules(tmp_path)
+
+        assert [module.basename for module in modules] == ["backend/report"]
+        assert len(architecture) == 1
+
 
 class TestRunGlobalSync:
     @patch("pdd.agentic_sync._find_project_root")
@@ -1764,6 +1799,29 @@ class TestResolveModuleCwd:
         })
         result = _resolve_module_cwd("components/button", tmp_path)
         assert result == sub
+
+    def test_hidden_worktree_pddrc_does_not_claim_root_module(self, tmp_path):
+        """Local worktree copies must not steal module cwd resolution."""
+        (tmp_path / "prompts" / "backend").mkdir(parents=True)
+        (tmp_path / "prompts" / "backend" / "config_python.prompt").write_text("% root prompt")
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "backend": {
+                "paths": ["backend/**"],
+                "defaults": {"prompts_dir": "prompts/backend"},
+            },
+        })
+
+        worktree = tmp_path / ".worktrees" / "issue-123"
+        (worktree / "prompts" / "backend").mkdir(parents=True)
+        (worktree / "prompts" / "backend" / "config_python.prompt").write_text("% stale copy")
+        self._write_pddrc(worktree / ".pddrc", {
+            "backend": {
+                "paths": ["backend/**"],
+                "defaults": {"prompts_dir": "prompts/backend"},
+            },
+        })
+
+        assert _resolve_module_cwd("backend/config", tmp_path) == tmp_path
 
     def test_nested_pddrc_match_requires_matching_prompt_file(self, tmp_path):
         """Broad nested contexts must not hijack similarly named root modules.

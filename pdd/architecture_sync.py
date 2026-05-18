@@ -117,20 +117,27 @@ def _resolve_sync_paths(
     else:
         project_root = find_project_root(cwd)
         current = cwd
-        sync_root = project_root
+        architecture_candidate: Optional[Path] = None
 
         while True:
-            if (current / "architecture.json").exists() or (current / "prompts").exists():
-                sync_root = current
+            if architecture_candidate is None and (current / "architecture.json").exists():
+                architecture_candidate = current / "architecture.json"
+            if (current / "prompts").exists():
+                resolved_prompts_dir = current / "prompts"
                 break
-            if current == project_root or current.parent == current:
+            if current.parent == current:
+                resolved_prompts_dir = project_root / "prompts"
                 break
             current = current.parent
 
-        resolved_prompts_dir = sync_root / "prompts"
-
     if architecture_path is not None:
         return resolved_prompts_dir, resolve_explicit(architecture_path)
+
+    if prompts_dir is None:
+        resolved_architecture_path = architecture_candidate or (
+            resolved_prompts_dir.parent / "architecture.json"
+        )
+        return resolved_prompts_dir, resolved_architecture_path
 
     resolved_architecture_path = resolved_prompts_dir.parent / "architecture.json"
     return resolved_prompts_dir, resolved_architecture_path
@@ -336,7 +343,18 @@ def _infer_filepath(filename: str) -> str:
     Returns:
         Inferred filepath string
     """
-    stem = filename[:-len('.prompt')]
+    normalized = _normalize_prompt_filename(filename)
+    stem = normalized[:-len('.prompt')] if normalized.endswith('.prompt') else normalized
+
+    language_to_ext = {language: ext for ext, language in _EXT_TO_LANGUAGE.items()}
+    for language, ext in sorted(language_to_ext.items(), key=lambda item: len(item[0]), reverse=True):
+        suffix = f'_{language}'
+        if stem.endswith(suffix):
+            filepath_stem = stem[:-len(suffix)]
+            if '/' in filepath_stem:
+                return f'{filepath_stem}{ext}'
+            return f'pdd/{filepath_stem}{ext}'
+
     if stem.endswith('_python'):
         module_name = stem[:-len('_python')]
         return f'pdd/{module_name}.py'
@@ -353,11 +371,56 @@ def _infer_module_tags(filename: str) -> List[str]:
     Returns:
         List of tag strings
     """
-    if filename.endswith('_python.prompt'):
+    normalized = _normalize_prompt_filename(filename)
+    stem = normalized[:-len('.prompt')] if normalized.endswith('.prompt') else normalized
+    if filename.endswith('_python.prompt') or stem.endswith('_Python'):
         return ['module', 'python']
-    if filename.endswith('_LLM.prompt'):
+    if normalized.endswith('_LLM.prompt'):
         return ['llm']
     return ['module']
+
+
+def _normalize_dependency_filenames(
+    dependencies: List[str],
+    arch_data: List[Dict[str, Any]],
+) -> List[str]:
+    """Resolve prompt dependency tags to architecture filenames when unambiguous."""
+    all_filenames = {
+        filename
+        for module in arch_data
+        for filename in [module.get("filename")]
+        if isinstance(filename, str) and filename
+    }
+    by_exact_lower: Dict[str, List[str]] = {}
+    by_basename_lower: Dict[str, List[str]] = {}
+    for filename in all_filenames:
+        by_exact_lower.setdefault(filename.lower(), []).append(filename)
+        by_basename_lower.setdefault(Path(filename).name.lower(), []).append(filename)
+
+    normalized_dependencies: List[str] = []
+    seen: set[str] = set()
+    for dependency in dependencies:
+        normalized = _normalize_prompt_filename(dependency)
+        resolved = normalized
+        if normalized not in all_filenames:
+            exact_matches = by_exact_lower.get(normalized.lower(), [])
+            suffix_matches = [
+                filename
+                for filename in all_filenames
+                if filename.lower().endswith(f"/{normalized.lower()}")
+            ]
+            if len(exact_matches) == 1:
+                resolved = exact_matches[0]
+            elif len(suffix_matches) == 1:
+                resolved = suffix_matches[0]
+            else:
+                basename_matches = by_basename_lower.get(Path(normalized).name.lower(), [])
+                if len(basename_matches) == 1:
+                    resolved = basename_matches[0]
+        if resolved not in seen:
+            normalized_dependencies.append(resolved)
+            seen.add(resolved)
+    return normalized_dependencies
 
 
 def register_untracked_prompts(
@@ -879,10 +942,11 @@ def update_architecture_from_prompt(
         )
         if should_update_deps:
             old_deps = module_entry.get('dependencies', [])
+            tag_dependencies = _normalize_dependency_filenames(tags['dependencies'], arch_data)
             # Compare as sets to detect changes (order-independent)
-            if set(old_deps) != set(tags['dependencies']):
-                changes['dependencies'] = {'old': old_deps, 'new': tags['dependencies']}
-                module_entry['dependencies'] = tags['dependencies']
+            if set(old_deps) != set(tag_dependencies):
+                changes['dependencies'] = {'old': old_deps, 'new': tag_dependencies}
+                module_entry['dependencies'] = tag_dependencies
                 updated = True
 
         # 6. Write back to architecture.json (if updated and not dry run)
