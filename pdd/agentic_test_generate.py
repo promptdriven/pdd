@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import re
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -87,6 +88,37 @@ def _extract_json_from_text(text: str) -> dict[str, Any] | None:
         return json.loads(json_str)
     except json.JSONDecodeError:
         return None
+
+
+def _read_prior_content_from_git(path: Path, project_root: Path) -> str:
+    """Return the HEAD-committed content of ``path`` from git, or empty.
+
+    Used to recover the pre-sync baseline of an alternate-path test
+    file before the agent overwrote it. When the file is untracked,
+    never committed, or git is unavailable, returns an empty string
+    (the caller treats that as "first-time generation" and skips the
+    churn check).
+    """
+    try:
+        rel = path.resolve().relative_to(project_root.resolve()).as_posix()
+    except ValueError:
+        # Path is outside the project root — git rev-parse will not
+        # resolve it via the project_root cwd.
+        return ""
+    try:
+        result = subprocess.run(
+            ["git", "show", f"HEAD:{rel}"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            check=False,
+            encoding="utf-8",
+        )
+    except (OSError, FileNotFoundError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout or ""
 
 
 def _read_generated_test_file(test_file: Path) -> str:
@@ -316,6 +348,7 @@ def run_agentic_test_generate(
             )
 
     # If the expected output file doesn't exist, check if agent created it with different extension
+    alt_path_used: Path | None = None
     if not generated_content and changed_files:
         # Look for any new test files in changed_files
         for changed_file in changed_files:
@@ -327,9 +360,52 @@ def run_agentic_test_generate(
                         generated_content = changed_path.read_text(encoding="utf-8")
                         if verbose and not quiet:
                             console.print(f"[yellow]Test file created at different path: {changed_file}[/yellow]")
+                        alt_path_used = changed_path
                         break
                     except OSError:
                         continue
+
+    # When the agent wrote to an alternate path (e.g. `__tests__/foo.test.ts`)
+    # instead of `output_test_file`, the outer churn check in
+    # `cmd_test_main` compares the alt-path content against the
+    # CANONICAL path's pre-existing content (empty when canonical
+    # didn't exist), which lets a 20-test alt file shrink to 1 test
+    # without tripping the gate. Recover the alt-path's prior content
+    # from git and re-run the churn check here so the gate fires before
+    # we return. Untracked/never-committed alt files fall through to
+    # the existing behavior — first-time generation is exempt anyway.
+    if alt_path_used is not None and generated_content:
+        prior = _read_prior_content_from_git(alt_path_used, project_root)
+        if prior:
+            # Lazy import to avoid circular dependency.
+            from .code_generator_main import (
+                TestChurnError,
+                _verify_test_churn,
+            )
+
+            try:
+                _verify_test_churn(
+                    existing_code=prior,
+                    generated_code=generated_content,
+                    prompt_name=prompt_file.name,
+                    output_path=str(alt_path_used),
+                    prompt_content=prompt_content,
+                )
+            except TestChurnError as churn_err:
+                churn_err.total_cost = float(cost or 0.0)
+                churn_err.model_name = (
+                    f"agentic-{provider}" if provider else "agentic-cli"
+                )
+                # Restore the pre-existing alternate-file content so the
+                # repair loop sees the canonical pre-sync state on disk
+                # — without this the rewritten alt file becomes the new
+                # baseline for the next retry and the gate slowly
+                # accepts the regression.
+                try:
+                    alt_path_used.write_text(prior, encoding="utf-8")
+                except OSError:
+                    pass
+                raise
 
     if not quiet:
         status_color = "green" if final_success else "red"

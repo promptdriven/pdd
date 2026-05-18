@@ -7024,6 +7024,85 @@ class TestSyncCompatibilityGates:
         )
 
     # -----------------------------------------------------------------
+    # External review (PR #1015) iter-11 follow-up: extend test-suffix
+    # detection past `Test.java`/`Tests.kt`/`Spec.kt` to cover JUnit
+    # integration tests (`FooIT.java`), older JUnit/TestNG
+    # (`FooTestCase.java`), ScalaTest specs (`FooSpec.scala`), and
+    # Rust sibling tests (`foo_test.rs`).
+    # -----------------------------------------------------------------
+    def test_test_churn_gate_catches_java_integration_test(self):
+        """`FooIT.java` (Maven failsafe integration test) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  @Test public void case{i}() {{}}" for i in range(20))
+            + "\n"
+        )
+        after = "  @Test public void case0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooIT_java.prompt",
+                "src/test/java/FooIT.java",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_java_testcase(self):
+        """`FooTestCase.java` (older JUnit/TestNG convention) too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  public void testCase{i}() {{}}" for i in range(20))
+            + "\n"
+        )
+        after = "  public void testCase0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooTestCase_java.prompt",
+                "src/test/java/FooTestCase.java",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_scala_spec(self):
+        """`FooSpec.scala` (ScalaTest convention) too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = "\n".join(f'  it("case {i}") {{}}' for i in range(20)) + "\n"
+        after = '  it("case 0") {}\n'
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooSpec_scala.prompt",
+                "src/test/scala/FooSpec.scala",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_rust_sibling_test(self):
+        """`widget_test.rs` next to `widget.rs` (Rust sibling test) too."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"#[test]\nfn case_{i}() {{}}" for i in range(20)) + "\n"
+        )
+        after = "#[test]\nfn case_0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "widget_test_rs.prompt",
+                "src/widget_test.rs",
+                "Cover the public API.",
+            )
+
+    # -----------------------------------------------------------------
     # External review (PR #1015) follow-up: `from __future__ import …`
     # is a compiler directive, not a public attribute, so removing it
     # MUST NOT trip the public-surface gate.
@@ -7048,6 +7127,35 @@ class TestSyncCompatibilityGates:
             "pdd/module.py",
             "python",
             "Clean up the future-imports header.",
+        )
+
+    def test_public_surface_regression_future_import_under_dunder_all(self):
+        """`__all__ = ["annotations"]` combined with `from __future__
+        import annotations` must NOT promote the future binding into
+        the public surface: cleaning up the directive (and the bogus
+        `__all__` entry) should not fire `removed: annotations`."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from __future__ import annotations\n"
+            "__all__ = [\"annotations\", \"public_one\"]\n"
+            "def public_one():\n    return 1\n"
+        )
+        after = (
+            "__all__ = [\"public_one\"]\n"
+            "def public_one():\n    return 1\n"
+        )
+
+        # Must NOT raise — `annotations` was only ever a `__future__`
+        # binding, which the gate now ignores even when `__all__`
+        # mentions it.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Clean up the future-imports header and __all__ list.",
         )
 
     def test_public_surface_regression_future_import_to_real_assignment(self):
