@@ -2995,6 +2995,392 @@ class TestCheckupReviewLoopRuntime:
         )
 
 
+class TestPostFixNoDiffPushVerification:
+    """Regression tests for promptdriven/pdd#1062.
+
+    The post-fix push guard in ``checkup_review_loop._run_round`` must not
+    treat a no-op push as a successful diff. When
+    ``_commit_and_push_if_changed`` returns ``(True, "No changes to push.")``
+    the fixer produced no diff and the PR head has not advanced — so the
+    verifier's "clean" verdict (issued against an unchanged worktree with the
+    fixer's claim injected into the prompt) is not proof of a landed fix.
+
+    Tests 1-3 below were originally written by Step 5 in
+    ``tests/test_issue_1062_reproduction.py``; per the project's
+    no-issue-named-files convention they live here instead.
+    Test 4 is a happy-path regression guard so an over-eager fix
+    (e.g. "always reject fixer success") doesn't slip through.
+    """
+
+    # The codex finding from issue #1062 (#1054 / PR #1055): missing
+    # include-allowlist coverage in agentic_update snapshots.
+    _BLOCKING_FINDING: Dict[str, str] = {
+        "severity": "blocker",
+        "area": "tests",
+        "location": "pdd/agentic_update.py:1",
+        "evidence": (
+            "before_paths and after_paths omit _compute_include_allowlist(prompt_path)"
+        ),
+        "finding": (
+            "Included documentation files are not tracked in changed-file snapshots."
+        ),
+        "required_fix": (
+            "Extend before_paths / after_paths with the include allowlist and add "
+            "regression tests test_changed_files_reports_edited_included_doc and "
+            "test_changed_files_reports_newly_created_included_doc."
+        ),
+    }
+
+    def _patch_io_no_diff_push(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> List[str]:
+        """Patch the network/git seams.
+
+        Key difference from ``TestCheckupReviewLoopRuntime._patch_io``:
+        ``_commit_and_push_if_changed`` returns the realistic "no changes
+        to push" path (the message ``_commit_and_push_if_changed``
+        produces when the fixer claimed success but did not modify the
+        worktree) instead of a fake successful push.
+        """
+        import pdd.checkup_review_loop as mod
+
+        push_messages: List[str] = []
+
+        def fake_commit_and_push(*_args: Any, **_kwargs: Any):
+            push_messages.append("no-changes")
+            return True, "No changes to push."
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/promptdriven/pdd.git",
+                "head_ref": "change/1055",
+                "head_owner": "promptdriven",
+                "head_repo": "pdd",
+            },
+        )
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_commit_and_push)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        return push_messages
+
+    def _patch_io_real_push(self, monkeypatch: Any, tmp_path: Path) -> None:
+        """Patch the network/git seams with a real-looking SHA push."""
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/promptdriven/pdd.git",
+                "head_ref": "change/1055",
+                "head_owner": "promptdriven",
+                "head_repo": "pdd",
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "abc1234")
+        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+    # ---------- Test 1: rendered report (reproduction from Step 5) ----------
+
+    def test_fixer_claim_without_push_must_not_mark_finding_fixed_in_report(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A fixer success claim that produced no diff must not clear the
+        original blocking finding in the rendered report.
+
+        ``_commit_and_push_if_changed`` returns ``"No changes to push."``,
+        so the PR head SHA cannot have advanced. The verifier's "clean"
+        verdict — issued only against the in-process worktree and the
+        fixer's rationale — must not be presented as proof that the fix
+        landed in the PR head.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io_no_diff_push(monkeypatch, tmp_path)
+
+        def fake_task(role: str, _instruction: str, _cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "review-codex-round1" in label and "verify" not in label:
+                return True, _json("findings", [self._BLOCKING_FINDING]), 0.1, role
+            if "fix-claude-for-codex-round1" in label:
+                payload = {
+                    "summary": (
+                        "fixed - before_paths and after_paths now include "
+                        "_compute_include_allowlist(prompt_path). Added "
+                        "test_changed_files_reports_edited_included_doc and "
+                        "test_changed_files_reports_newly_created_included_doc."
+                    ),
+                    "changed_files": [
+                        "pdd/agentic_update.py",
+                        "tests/test_agentic_update.py",
+                    ],
+                    "dispositions": {"*": "fixed"},
+                    "rationales": {
+                        "*": "Snapshots now cover include allowlist; tests added."
+                    },
+                }
+                return True, json.dumps(payload), 0.5, role
+            # Verifier and any later rounds return clean (so the loop
+            # terminates promptly and we measure the bug, not flakiness).
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True, "loop must complete and produce a report"
+
+        # The blocking finding must remain visible — it has NOT been
+        # fixed because no diff was committed/pushed to the PR.
+        assert self._BLOCKING_FINDING["finding"] in report, (
+            "Finding must remain reported when the PR head does not "
+            "contain the claimed change; got report:\n" + report
+        )
+
+        # The report must NOT advertise a clean reviewer status when the
+        # verifier's clean verdict came from an unverified fixer claim.
+        assert "reviewer-status: codex=clean" not in report, (
+            "Reviewer must not be reported as clean when no diff was "
+            "pushed; got report:\n" + report
+        )
+
+        # The "No findings remain" tombstone row only appears when the
+        # loop genuinely believes everything is fixed.
+        assert (
+            "| info | fixed | - | No findings remain." not in report
+        ), "Report must not present an unverified claim as a completed fix."
+
+    # ---------- Test 2: in-memory state (reproduction from Step 5) ----------
+
+    def test_fixer_claim_without_push_keeps_finding_open_in_state(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """State-level check: the finding's status must not flip to
+        ``fixed`` when the fixer's success claim was never proven
+        against the PR head."""
+        from pdd.checkup_review_loop import (
+            ReviewLoopState,
+            run_checkup_review_loop,
+        )
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io_no_diff_push(monkeypatch, tmp_path)
+
+        captured: Dict[str, ReviewLoopState] = {}
+        real_finalize = mod._finalize
+
+        def spy_finalize(ctx, state, reviewers, artifacts_dir):  # type: ignore[no-untyped-def]
+            captured["state"] = state
+            return real_finalize(ctx, state, reviewers, artifacts_dir)
+
+        monkeypatch.setattr(mod, "_finalize", spy_finalize)
+
+        def fake_task(role: str, _instruction: str, _cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "review-codex-round1" in label and "verify" not in label:
+                return True, _json("findings", [self._BLOCKING_FINDING]), 0.1, role
+            if "fix-claude-for-codex-round1" in label:
+                return (
+                    True,
+                    json.dumps(
+                        {
+                            "summary": "fixed",
+                            "changed_files": ["pdd/agentic_update.py"],
+                            "dispositions": {"*": "fixed"},
+                            "rationales": {"*": "claim only"},
+                        }
+                    ),
+                    0.5,
+                    role,
+                )
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        state = captured.get("state")
+        assert state is not None, "_finalize spy must have been invoked"
+
+        fixed_keys = [
+            (k, f.status)
+            for k, f in state.findings_by_key.items()
+            if f.status == "fixed"
+        ]
+        assert not fixed_keys, (
+            "No finding may be marked 'fixed' when the fixer's claim was "
+            "never proven against the PR head (no diff was pushed). "
+            f"Got fixed findings: {fixed_keys}"
+        )
+
+    # ---------- Test 3: verification-gap signal (reproduction from Step 5) ----------
+
+    def test_no_diff_pushed_records_unverified_outcome(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When the fixer pushed no changes, the report must surface a
+        verification-gap signal to the operator (per issue #1062
+        acceptance criterion #4: if verification cannot complete, the
+        report should clearly say so rather than implying the finding
+        is fixed)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io_no_diff_push(monkeypatch, tmp_path)
+
+        def fake_task(role: str, _instruction: str, _cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "review-codex-round1" in label and "verify" not in label:
+                return True, _json("findings", [self._BLOCKING_FINDING]), 0.1, role
+            if "fix-claude-for-codex-round1" in label:
+                return (
+                    True,
+                    json.dumps(
+                        {
+                            "summary": "fixed",
+                            "changed_files": [],
+                            "dispositions": {"*": "fixed"},
+                            "rationales": {"*": "no-op claim"},
+                        }
+                    ),
+                    0.5,
+                    role,
+                )
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+
+        unverified_markers = (
+            "verification=unverified",
+            "unverified",
+            "could not verify",
+            "verification incomplete",
+            "no diff",
+            "No changes to push",
+        )
+        assert any(marker in report for marker in unverified_markers), (
+            "Report must surface that the fixer claim was not verified "
+            "against the PR head; expected one of "
+            f"{unverified_markers!r} in:\n{report}"
+        )
+
+    # ---------- Test 4: happy-path regression guard ----------
+
+    def test_legitimate_fix_with_real_push_still_marks_finding_fixed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Regression guard: when the fixer DOES produce a real diff and
+        ``_commit_and_push_if_changed`` returns a real commit SHA (the
+        existing happy-path shape), the verifier's clean verdict still
+        clears the finding. This guards against an over-eager fix that
+        would refuse to mark any fixer claim as fixed (e.g. an
+        "always-reject" fix to the post-fix push guard).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io_real_push(monkeypatch, tmp_path)
+
+        # Spy on state to confirm the finding's status flips to "fixed".
+        captured: Dict[str, Any] = {}
+        real_finalize = mod._finalize
+
+        def spy_finalize(ctx, state, reviewers, artifacts_dir):  # type: ignore[no-untyped-def]
+            captured["state"] = state
+            return real_finalize(ctx, state, reviewers, artifacts_dir)
+
+        monkeypatch.setattr(mod, "_finalize", spy_finalize)
+
+        def fake_task(role: str, _instruction: str, _cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "review-codex-round1" in label and "verify" not in label:
+                return True, _json("findings", [self._BLOCKING_FINDING]), 0.1, role
+            if "fix-claude-for-codex-round1" in label:
+                # Real fix: write a file into the worktree to model an
+                # actual diff. The patched ``_commit_and_push_if_changed``
+                # returns the real-SHA shape regardless of file state,
+                # so this is purely scenario-realism for the test name.
+                target = tmp_path / "pdd" / "agentic_update.py"
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text("# fixed include-allowlist coverage\n")
+                return (
+                    True,
+                    json.dumps(
+                        {
+                            "summary": "fixed",
+                            "changed_files": ["pdd/agentic_update.py"],
+                            "dispositions": {"*": "fixed"},
+                            "rationales": {"*": "Include allowlist now snapshotted."},
+                        }
+                    ),
+                    0.5,
+                    role,
+                )
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+
+        state = captured.get("state")
+        assert state is not None, "_finalize spy must have been invoked"
+
+        # Happy path: with a real push, the finding must be marked fixed
+        # in state and the reviewer status must read clean in the report.
+        fixed_keys = [
+            k for k, f in state.findings_by_key.items() if f.status == "fixed"
+        ]
+        assert fixed_keys, (
+            "When the fixer produces a real diff and the push succeeds "
+            "with a real SHA, the finding MUST be marked fixed. Got "
+            f"statuses: {[(k, f.status) for k, f in state.findings_by_key.items()]}"
+        )
+        assert "reviewer-status: codex=clean" in report, (
+            "Happy-path report must read reviewer-status: codex=clean; "
+            "got:\n" + report
+        )
+
+
 class TestPromptInjection:
     """Reviewer and fixer prompts must reflect the configured gate, not the
     hard-coded default. Otherwise the LLM keeps flagging/fixing severities the
