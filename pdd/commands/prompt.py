@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code
 """
 Prompt authoring and quality utilities (pdd prompt …).
 """
@@ -111,7 +112,7 @@ def prompt_group() -> None:
     help="Write suggested <vocabulary> entries back into the scanned file(s).",
 )
 @click.pass_context
-def prompt_lint(
+def prompt_lint(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
     ctx: click.Context,
     target: Optional[str],
     ambiguity: bool,
@@ -190,8 +191,8 @@ def prompt_lint(
 
         # Scan a directory of prompts
         elif target_path.is_dir():
-            for p in sorted(target_path.rglob("*.prompt")):
-                all_results.append(scan_prompt(p, strict=strict))
+            for prompt_path in sorted(target_path.rglob("*.prompt")):
+                all_results.append(scan_prompt(prompt_path, strict=strict))
 
     # Scan user stories directory (via --stories flag)
     if stories_dir is not None:

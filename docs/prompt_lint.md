@@ -54,7 +54,9 @@ It may be a single `.prompt` file or a directory — directories are scanned
 recursively for `*.prompt` files.
 
 `--stories` always takes a **directory** of `story__*.md` files, never a
-prompt path. To scan both together, keep them as separate arguments:
+prompt path. Story files are scanned **recursively** — subdirectories are
+included automatically. To scan both a prompt and stories together, keep them
+as separate arguments:
 
 ```bash
 # Correct — story directory after --stories, prompt as TARGET

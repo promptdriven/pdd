@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code
 """
 Prompt and user-story lint engine.
 
@@ -134,6 +135,7 @@ class LintIssue:
     interpretations: list[str] = field(default_factory=list)  # LLM-sourced readings
 
     def as_dict(self) -> dict:
+        """Serialise this issue to a JSON-safe dictionary."""
         return {
             "level": self.level,
             "term": self.term,
@@ -154,13 +156,16 @@ class LintResult:
 
     @property
     def warn_count(self) -> int:
+        """Count of warning-level issues."""
         return sum(1 for i in self.issues if i.level == "warn")
 
     @property
     def error_count(self) -> int:
+        """Count of error-level issues."""
         return sum(1 for i in self.issues if i.level == "error")
 
     def as_dict(self) -> dict:
+        """Serialise this result to a JSON-safe dictionary."""
         return {
             "path": str(self.path),
             "warn_count": self.warn_count,
@@ -176,9 +181,9 @@ class LintResult:
 def _extract_xml_sections(text: str) -> dict[str, str]:
     """Return tag-name → inner text for all XML-style sections found."""
     sections: dict[str, str] = {}
-    for m in _XML_SECTION_RE.finditer(text):
-        tag = m.group("tag").lower()
-        body = m.group("body")
+    for section_match in _XML_SECTION_RE.finditer(text):
+        tag = section_match.group("tag").lower()
+        body = section_match.group("body")
         # Last occurrence wins for duplicate tags
         sections[tag] = body
     return sections
@@ -288,12 +293,12 @@ def _extract_vocabulary_terms(vocab_text: str) -> set[str]:
             continue
 
         # Standard: "term: ..." or "- term: ..." or "* term: ..." or "term - ..."
-        m = re.match(
+        term_match = re.match(
             r"^[-*]?\s*([A-Za-z][A-Za-z0-9 _-]*?)\s*(?::\s|\s+-\s)",
             stripped,
         )
-        if m:
-            phrase = m.group(1).strip().lower()
+        if term_match:
+            phrase = term_match.group(1).strip().lower()
             terms.add(phrase)
             # Also add each individual word so "valid response" covers "valid"
             for word in re.split(r"[\s_-]+", phrase):
@@ -385,17 +390,17 @@ def scan_prompt(path: Path, *, strict: bool = False) -> LintResult:
 
     # Collect vocabulary terms from all vocabulary-source sections
     vocab_terms: set[str] = set()
-    for vk in _VOCABULARY_SECTIONS:
-        if vk in sections:
-            vocab_terms |= _extract_vocabulary_terms(sections[vk])
+    for vocab_key in _VOCABULARY_SECTIONS:
+        if vocab_key in sections:
+            vocab_terms |= _extract_vocabulary_terms(sections[vocab_key])
 
     # Prose (% lines) is only meaningful contract text when the file also has at
     # least one structured contract section.  Without this gate, LLM instruction
     # prompts that use % for their body text produce hundreds of false positives.
-    _CONTRACT_SECTIONS = frozenset({
+    contract_sections = frozenset({
         "contract_rules", "requirements", "acceptance_tests", "acceptance criteria"
     })
-    has_contract_section = any(k in sections for k in _CONTRACT_SECTIONS)
+    has_contract_section = any(k in sections for k in contract_sections)
 
     # Scan recognised content sections only (skip architecture metadata)
     found_any_section = False
@@ -483,7 +488,7 @@ def apply_suggestions(path: Path, issues: list[LintIssue]) -> int:
 # Optional LLM ambiguity pass
 # ---------------------------------------------------------------------------
 
-def run_llm_ambiguity_pass(
+def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
     path: Path,
     strength: float = 0.5,
     temperature: float = 0.0,
@@ -499,8 +504,8 @@ def run_llm_ambiguity_pass(
     Safe to call: always returns [] on any error so CI never breaks on LLM failure.
     """
     try:
-        from .llm_invoke import llm_invoke
-        from .preprocess import preprocess
+        from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
+        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
 
         template_path = Path(__file__).parent / "prompts" / "prompt_lint_LLM.prompt"
         if not template_path.exists():
@@ -545,6 +550,6 @@ def run_llm_ambiguity_pass(
             ))
         return issues
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
         logger.warning("prompt_lint LLM pass failed: %s", exc)
         return []
