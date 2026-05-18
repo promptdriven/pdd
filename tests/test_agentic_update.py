@@ -951,3 +951,90 @@ def test_scope_guard_still_reverts_unrelated_mutations(
     assert unrelated.read_text() == "untouchable baseline\n", (
         "Scope guard failed to revert an out-of-scope mutation"
     )
+
+
+def test_compute_include_allowlist_honors_body_form_path_attr(tmp_path: Path) -> None:
+    """
+    ``<include path="X">Y</include>`` must allowlist X, not Y.
+
+    Mirrors ``pdd.preprocess.process_include_tags`` which evaluates
+    ``attrs.get('path') or content.strip()`` — the attribute wins when both
+    are present. Without this, the scope guard would diverge from the real
+    include graph for attributed body includes (issue #1054, round 3 finding).
+    """
+    from pdd.agentic_update import _compute_include_allowlist
+
+    real_target = tmp_path / "docs" / "source.md"
+    real_target.parent.mkdir()
+    real_target.write_text("real target")
+
+    # Note: fallback.md intentionally does NOT exist — the preprocessor would
+    # never look at the body text when ``path=`` is present, so neither should
+    # the allowlist.
+    prompt = tmp_path / "p.prompt"
+    prompt.write_text('<include path="docs/source.md">fallback.md</include>')
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", tmp_path):
+        allowed = _compute_include_allowlist(prompt)
+
+    assert real_target.resolve() in allowed
+    # The body-text path must NOT have been resolved or allowlisted.
+    assert not any(p.name == "fallback.md" for p in allowed)
+
+
+def test_scope_guard_preserves_body_form_path_attr_included_doc(
+    tmp_path: Path,
+    real_scope_guard_deps: Tuple[MagicMock, ...],
+) -> None:
+    """
+    Round-3 regression: ``<include path="docs/source.md">fallback.md</include>``
+    must allow agent edits to ``docs/source.md`` to survive the scope guard.
+
+    Prior to honoring ``path=`` on body-form includes, the allowlist tried to
+    resolve ``fallback.md`` instead of ``docs/source.md`` and the real target
+    was reverted by ``_revert_out_of_scope_changes``.
+    """
+    _, _, mock_run, _ = real_scope_guard_deps
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    docs = repo / "docs"
+    docs.mkdir()
+    included = docs / "source.md"
+    included.write_text("original included content\n")
+
+    prompt = repo / "feature.prompt"
+    prompt.write_text(
+        '<include path="docs/source.md">fallback.md</include>\n'
+        "original prompt body\n"
+    )
+    code = repo / "feature.py"
+    code.write_text("def feature():\n    return 1\n")
+
+    _init_git_repo(repo)
+
+    new_included = "agent-rewritten included content\n"
+    new_prompt = (
+        '<include path="docs/source.md">fallback.md</include>\n'
+        "agent-updated prompt body\n"
+    )
+
+    def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        prompt.write_text(new_prompt)
+        included.write_text(new_included)
+        return True, "ok", 0.0, "claude"
+
+    mock_run.side_effect = simulate_agent
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", repo):
+        success, _, _, _, _ = run_agentic_update(
+            str(prompt), str(code), test_files=[], quiet=True
+        )
+
+    assert success is True
+    assert included.read_text() == new_included, (
+        "Included doc referenced via <include path=\"...\"> body form was "
+        "reverted by the scope guard (issue #1054 round-3 regression)"
+    )
+    assert prompt.read_text() == new_prompt
