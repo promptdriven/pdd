@@ -1,0 +1,700 @@
+"""Regression tests for issue #1061.
+
+PR #1055 produced an architecture/prompt drift: ``architecture.json`` for
+``agentic_update_python.prompt`` gained a ``"sync_order_python.prompt"``
+dependency even though the prompt only declares
+``<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>``. The prompt
+included ``pdd/sync_order.py`` purely as helper/source context with
+``mode="interface"`` / ``select="..."``.
+
+Per ``docs/prompting_guide.md`` ``<pdd-dependency>`` is the authoritative
+architectural declaration; a plain ``<include>`` can be context without
+being an architecture edge. ``pdd sync`` must not write only one side of
+that contract, or ``pdd checkup --validate-arch-includes`` fails with::
+
+    architecture.json / <include> mismatch:
+      'agentic_update_python.prompt' declares dependency on module
+      'sync_order' ('sync_order_python.prompt') but the prompt has no
+      <include> or <pdd-dependency> of that module's prompt
+
+These tests encode the acceptance criteria: a selected/interface include
+of ``pdd/sync_order.py`` (no matching ``<pdd-dependency>``) must not
+cause ``validate-arch-includes`` to flag a mismatch after sync. They
+exercise the two production code paths that update architecture
+dependencies during ``pdd sync``: the auto-deps merge and the
+prompt-driven metadata update.
+"""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+from unittest.mock import patch, MagicMock
+
+from pdd.architecture_include_validation import (
+    cross_validate_architecture_with_prompt_includes,
+)
+from pdd.architecture_sync import update_architecture_from_prompt
+from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+from pdd.load_prompt_template import load_prompt_template
+
+
+# Prompt body matching the #1055 shape: interface-mode source-context include
+# of ``pdd/sync_order.py`` but no matching ``<pdd-dependency>`` for the
+# ``sync_order`` module prompt.
+_PROMPT_1055_SHAPE = """<pdd-reason>Coordinates agentic prompt updates.</pdd-reason>
+
+<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Write the `pdd/agentic_update.py` module.
+
+% Dependencies
+<pdd.sync_order.extract_includes_from_file>
+    <include select="def:extract_includes_from_file" mode="interface">pdd/sync_order.py</include>
+</pdd.sync_order.extract_includes_from_file>
+"""
+
+
+def _seed_project(tmp_path: Path) -> tuple[Path, Path]:
+    """Create a minimal project tree resembling promptdriven/pdd."""
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    pdd_dir = tmp_path / "pdd"
+    pdd_dir.mkdir()
+    (pdd_dir / "sync_order.py").write_text(
+        "def extract_includes_from_file(p):\n    pass\n",
+        encoding="utf-8",
+    )
+
+    (prompts / "agentic_update_python.prompt").write_text(
+        _PROMPT_1055_SHAPE, encoding="utf-8"
+    )
+    (prompts / "agentic_update_LLM.prompt").write_text("%", encoding="utf-8")
+    (prompts / "sync_order_python.prompt").write_text("%", encoding="utf-8")
+    return prompts, pdd_dir
+
+
+def test_auto_deps_does_not_promote_interface_include_of_module_source(
+    tmp_path: Path,
+) -> None:
+    """``merge_auto_deps_includes_into_architecture`` must not turn an
+    ``<include select="..." mode="interface">pdd/sync_order.py</include>``
+    helper-context include into an architecture dependency on
+    ``sync_order_python.prompt``.
+
+    Per the prompting guide, that include is context for the LLM; the
+    architecture edge would have to come from a ``<pdd-dependency>`` tag
+    instead. Promoting context-only includes is precisely what produces
+    the #1055 drift.
+    """
+    prompts, _ = _seed_project(tmp_path)
+    old_prompt = (
+        "<pdd-reason>r</pdd-reason>\n\n"
+        "<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>\n\n"
+        "% Body\n"
+    )
+    new_prompt = _PROMPT_1055_SHAPE
+
+    arch = [
+        {
+            "filename": "agentic_update_python.prompt",
+            "dependencies": ["agentic_update_LLM.prompt"],
+        },
+        {"filename": "agentic_update_LLM.prompt", "dependencies": []},
+        {"filename": "sync_order_python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch, indent=2), encoding="utf-8")
+
+    report = merge_auto_deps_includes_into_architecture(
+        tmp_path,
+        prompts / "agentic_update_python.prompt",
+        old_prompt,
+        new_prompt,
+    )
+
+    # The interface-mode include is context, not an arch edge.
+    assert "sync_order_python.prompt" not in report["added_dependencies"], (
+        "auto-deps must not promote a `mode=interface` source-file include "
+        "into an architecture dependency on the module's prompt"
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    deps = final[0]["dependencies"]
+    assert "sync_order_python.prompt" not in deps, (
+        f"architecture.json gained an undeclared dependency: {deps!r}"
+    )
+
+
+def test_metadata_sync_trims_architecture_to_prompt_dependencies(
+    tmp_path: Path,
+) -> None:
+    """``update_architecture_from_prompt`` must remove architecture deps
+    that the prompt does not declare via ``<pdd-dependency>``.
+
+    Starting from the post-buggy-sync state PR #1055 produced — arch has
+    ``sync_order_python.prompt`` but the prompt does not — sync must
+    converge the architecture back onto the prompt's authoritative
+    declaration so ``validate-arch-includes`` passes.
+    """
+    prompts, _ = _seed_project(tmp_path)
+
+    # Architecture as PR #1055 left it: extra `sync_order_python.prompt`.
+    arch = [
+        {
+            "filename": "agentic_update_python.prompt",
+            "dependencies": [
+                "agentic_update_LLM.prompt",
+                "sync_order_python.prompt",
+            ],
+        },
+        {"filename": "agentic_update_LLM.prompt", "dependencies": []},
+        {"filename": "sync_order_python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch, indent=2), encoding="utf-8")
+
+    result = update_architecture_from_prompt(
+        prompt_filename="agentic_update_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+    )
+    assert result["success"], result.get("error")
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    deps = final[0]["dependencies"]
+    assert deps == ["agentic_update_LLM.prompt"], (
+        "sync should trim architecture deps to match the prompt's "
+        f"<pdd-dependency> declarations; got {deps!r}"
+    )
+
+
+def test_validate_arch_includes_passes_for_1055_shape_after_sync(
+    tmp_path: Path,
+) -> None:
+    """End-to-end: starting from a clean state and applying the #1055
+    prompt edit, the two sync paths together (auto-deps merge + metadata
+    sync) must leave the project in a state where
+    ``cross_validate_architecture_with_prompt_includes`` reports no
+    mismatches — the acceptance criterion explicitly named in the issue.
+    """
+    prompts, _ = _seed_project(tmp_path)
+
+    old_prompt = (
+        "<pdd-reason>r</pdd-reason>\n\n"
+        "<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>\n\n"
+        "% Body\n"
+    )
+    new_prompt = _PROMPT_1055_SHAPE
+
+    # Start arch in sync with the pre-edit prompt.
+    arch = [
+        {
+            "filename": "agentic_update_python.prompt",
+            "dependencies": ["agentic_update_LLM.prompt"],
+        },
+        {"filename": "agentic_update_LLM.prompt", "dependencies": []},
+        {"filename": "sync_order_python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch, indent=2), encoding="utf-8")
+
+    # Simulate the two sync stages that mutate architecture.json deps.
+    merge_auto_deps_includes_into_architecture(
+        tmp_path,
+        prompts / "agentic_update_python.prompt",
+        old_prompt,
+        new_prompt,
+    )
+    update_architecture_from_prompt(
+        prompt_filename="agentic_update_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    warnings = cross_validate_architecture_with_prompt_includes(final, tmp_path)
+    assert warnings == [], (
+        "validate-arch-includes must not warn after sync for the #1055 "
+        f"shape; got: {warnings!r}"
+    )
+
+
+def test_buggy_post_sync_state_is_detected_by_validation(tmp_path: Path) -> None:
+    """Sanity check: the *current* buggy state PR #1055 produced — arch
+    listing ``sync_order_python.prompt`` while the prompt does not — IS
+    flagged by ``cross_validate_architecture_with_prompt_includes`` with
+    the exact warning text quoted in the issue. This guards against
+    regressions in the validator itself.
+    """
+    prompts, _ = _seed_project(tmp_path)
+
+    arch = [
+        {
+            "filename": "agentic_update_python.prompt",
+            "dependencies": [
+                "agentic_update_LLM.prompt",
+                "sync_order_python.prompt",
+            ],
+        },
+        {"filename": "agentic_update_LLM.prompt", "dependencies": []},
+        {"filename": "sync_order_python.prompt", "dependencies": []},
+    ]
+    warnings = cross_validate_architecture_with_prompt_includes(arch, tmp_path)
+    assert any(
+        "declares dependency on module 'sync_order'" in w
+        and "but the prompt has no <include> or <pdd-dependency>" in w
+        for w in warnings
+    ), f"expected the #1061 mismatch warning, got: {warnings!r}"
+
+
+# ---------------------------------------------------------------------------
+# Step 9 fix-detection tests.
+#
+# The fix spans two files (Step 7):
+#   * pdd/prompts/agentic_sync_identify_modules_LLM.prompt  (the prompt fix)
+#   * pdd/agentic_sync.py                                   (caller of LLM
+#                                                            + _apply_architecture_corrections)
+#
+# Tests 1-2 exercise the *rendered prompt sent to the LLM*: that's the
+# contract Step 7 changed. Tests 3-5 exercise the caller/callee boundary
+# in agentic_sync.py with a prompt-following mock LLM (Step 4 confirmed
+# the suspect modules use no real external APIs, so the only mock point
+# is the LLM boundary).
+# ---------------------------------------------------------------------------
+
+
+def _render_identify_modules_prompt(issue_content: str, arch_json: str, issue_number: int) -> str:
+    """Mirror exactly how ``run_agentic_sync`` renders the LLM prompt.
+
+    Point the path resolver at the worktree via ``PDD_PATH`` so we read the
+    *worktree's* prompt file (which carries the Step 7 fix) rather than any
+    installed copy under ``/opt/pdd-repo`` or site-packages.
+    """
+    import os
+    worktree_root = Path(__file__).resolve().parent.parent
+    old_pdd_path = os.environ.get("PDD_PATH")
+    os.environ["PDD_PATH"] = str(worktree_root)
+    try:
+        template = load_prompt_template("agentic_sync_identify_modules_LLM")
+    finally:
+        if old_pdd_path is None:
+            os.environ.pop("PDD_PATH", None)
+        else:
+            os.environ["PDD_PATH"] = old_pdd_path
+    assert template is not None, "agentic_sync_identify_modules_LLM template must load"
+    safe_arch = arch_json.replace("{", "{{").replace("}", "}}")
+    return template.format(
+        issue_content=issue_content,
+        architecture_json=safe_arch,
+        issue_number=issue_number,
+    )
+
+
+def test_identify_modules_prompt_declares_pdd_dependency_authoritative() -> None:
+    """The rendered LLM prompt MUST instruct the model that ``<pdd-dependency>``
+    is the authoritative source of truth and that ``<include>`` directives
+    (in any form, including ``mode="interface"``, ``select="def:..."``) are
+    LLM context only and MUST NOT become architectural dependencies.
+
+    Without these rules in the rendered contract, ``_apply_architecture_corrections``
+    will faithfully apply whatever the LLM returns — which is exactly how the
+    #1055 / #1061 drift got written to ``architecture.json`` in the first place.
+
+    This is the BEHAVIOR test of the Step 7 fix: it asserts on the string
+    actually sent to the LLM via the production rendering path, not on Python
+    source structure. An empty stub in agentic_sync.py would still cause this
+    test to fail because the assertion is on the prompt contents.
+    """
+    rendered = _render_identify_modules_prompt(
+        issue_content="Sync architecture for issue #1061.",
+        arch_json='[{"filename": "agentic_update_python.prompt", "dependencies": ["agentic_update_LLM.prompt"]}]',
+        issue_number=1061,
+    )
+
+    # Authoritative-source rule: <pdd-dependency> is the source of truth.
+    assert "<pdd-dependency>" in rendered, (
+        "Prompt must reference <pdd-dependency> as the authoritative tag"
+    )
+    assert "single source of truth" in rendered or "source of truth" in rendered, (
+        "Prompt must label <pdd-dependency> as the source of truth for deps"
+    )
+    # The rule must explicitly bind both directions: a dep belongs iff the
+    # prompt declares it, AND must not be added otherwise.
+    assert "if and only if" in rendered, (
+        "Prompt must state the if-and-only-if binding between <pdd-dependency> "
+        "and architecture.json[dependencies]"
+    )
+    assert "MUST NOT" in rendered, (
+        "Prompt must use MUST NOT to express the hard boundary on fabricated deps"
+    )
+
+    # Context-only rule: <include> (incl. mode="interface" / select=) is NOT
+    # an architectural edge.
+    assert "<include>" in rendered, "Prompt must mention <include> directives"
+    assert "context only" in rendered or "context-only" in rendered or "LLM context" in rendered, (
+        "Prompt must label <include> directives as context-only"
+    )
+    assert 'mode="interface"' in rendered, (
+        "Prompt must explicitly call out mode=\"interface\" as still context-only "
+        "(this is the exact #1055 shape)"
+    )
+    assert "select=" in rendered or 'select="def:' in rendered, (
+        "Prompt must call out select=\"def:...\" / select=\"...\" as still context-only"
+    )
+
+
+def test_identify_modules_prompt_includes_1055_worked_example() -> None:
+    """The rendered prompt MUST contain a worked example using the exact
+    #1055 / #1061 shape — ``pdd/sync_order.py`` pulled in as an interface
+    include — so the LLM has a concrete pattern to follow when it sees
+    architecture.json contains ``sync_order_python.prompt`` but the prompt
+    does not declare it via ``<pdd-dependency>``.
+
+    Step 7 added this worked example specifically because the bug was that
+    the LLM's "validate dependencies" task had no concrete example showing
+    that an interface-mode include is NOT an architectural edge. Without
+    the example, the LLM may default to "if the prompt mentions sync_order,
+    treat it as a dep". The example is the corrective signal.
+    """
+    rendered = _render_identify_modules_prompt(
+        issue_content="Validate dependencies",
+        arch_json="[]",
+        issue_number=1061,
+    )
+
+    # The worked example must reference the exact file from the issue.
+    assert "pdd/sync_order.py" in rendered, (
+        "Prompt's worked example must reference pdd/sync_order.py — the exact "
+        "file from PR #1055 that produced the drift"
+    )
+    assert "sync_order_python.prompt" in rendered, (
+        "Worked example must show sync_order_python.prompt as the candidate "
+        "fake-dep being discussed"
+    )
+    # And it must demonstrate the correction = REMOVE the fake dep, not add
+    # a fabricated <pdd-dependency> tag.
+    assert "agentic_update_LLM.prompt" in rendered, (
+        "Worked example must show the surviving authoritative dep "
+        "(agentic_update_LLM.prompt) after correction"
+    )
+    # The example must direct the LLM toward the correction direction:
+    # removing the spurious arch entry, not fabricating a <pdd-dependency>.
+    lower = rendered.lower()
+    assert "do not" in lower or "do not propose adding" in lower or "do not keep" in lower, (
+        "Worked example must explicitly tell the LLM not to fabricate or keep "
+        "the spurious dependency"
+    )
+
+
+def _arch_entry(name: str, deps: list[str]) -> dict:
+    return {"filename": name, "dependencies": list(deps)}
+
+
+@patch("pdd.agentic_sync.AsyncSyncRunner")
+@patch("pdd.agentic_sync._filter_already_synced", side_effect=lambda mods, *a, **kw: mods)
+@patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+@patch("pdd.agentic_sync._run_dry_run_validation")
+@patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
+@patch("pdd.agentic_sync.run_agentic_task")
+@patch("pdd.agentic_sync._load_architecture_json")
+@patch("pdd.agentic_sync._run_gh_command")
+@patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+def test_run_agentic_sync_with_prompt_compliant_llm_does_not_write_undeclared_dep(
+    mock_gh_cli,
+    mock_gh_cmd,
+    mock_load_arch,
+    mock_agentic_task,
+    mock_build_graph,
+    mock_dry_run,
+    mock_branch_diff,
+    mock_filter_synced,
+    mock_runner_cls,
+    tmp_path: Path,
+) -> None:
+    """End-to-end: when the LLM follows the Step-7-fixed prompt, ``pdd sync``
+    must NOT leave a fabricated ``sync_order_python.prompt`` dependency in
+    ``architecture.json``.
+
+    A prompt-following LLM, given the #1055-shape arch (``sync_order_python.prompt``
+    listed under ``agentic_update_python.prompt``) and the prompt's
+    ``<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>`` declaration,
+    should emit ``DEPS_VALID: false`` with a correction that *removes* the
+    spurious dep (per the new Authoritative Source Rule). This test verifies
+    that the caller (``run_agentic_sync``) faithfully passes that correction
+    through ``_apply_architecture_corrections`` and the final on-disk arch
+    matches the prompt's ``<pdd-dependency>`` declaration.
+
+    Cross-check vs Step 4: the only external boundary is the LLM call, mocked
+    here via ``run_agentic_task``. No HTTP/SDK calls are issued by the writers,
+    consistent with Step 4 findings.
+    """
+    # Real arch on disk so _apply_architecture_corrections can rewrite it.
+    arch_path = tmp_path / "architecture.json"
+    architecture = [
+        _arch_entry(
+            "agentic_update_python.prompt",
+            ["agentic_update_LLM.prompt", "sync_order_python.prompt"],
+        ),
+        _arch_entry("agentic_update_LLM.prompt", []),
+        _arch_entry("sync_order_python.prompt", []),
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    mock_gh_cmd.return_value = (True, json.dumps({"title": "t", "body": "b", "comments_url": ""}))
+    mock_load_arch.return_value = (architecture, arch_path)
+    mock_dry_run.return_value = (True, {"agentic_update": tmp_path}, [], 0.0)
+    mock_build_graph.return_value = MagicMock(graph={"agentic_update": []}, warnings=[])
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = (True, "ok", 0.0)
+    mock_runner_cls.return_value = mock_runner
+
+    # Prompt-compliant LLM: trims sync_order_python.prompt, leaving the only
+    # <pdd-dependency> declaration (agentic_update_LLM.prompt).
+    mock_agentic_task.return_value = (
+        True,
+        (
+            'MODULES_TO_SYNC: ["agentic_update"]\n'
+            "DEPS_VALID: false\n"
+            "DEPS_CORRECTIONS: ["
+            '{"filename": "agentic_update_python.prompt", '
+            '"dependencies": ["agentic_update_LLM.prompt"]}'
+            "]"
+        ),
+        0.01,
+        "anthropic",
+    )
+
+    from pdd.agentic_sync import run_agentic_sync
+
+    success, _msg, _cost, _model = run_agentic_sync(
+        "https://github.com/promptdriven/pdd/issues/1061",
+        quiet=True,
+    )
+    assert success, "run_agentic_sync should succeed with prompt-compliant LLM output"
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = next(e for e in final if e["filename"] == "agentic_update_python.prompt")
+    assert entry["dependencies"] == ["agentic_update_LLM.prompt"], (
+        "After sync, architecture.json must match the prompt's <pdd-dependency> "
+        f"declaration; got {entry['dependencies']!r}"
+    )
+
+
+@patch("pdd.agentic_sync.AsyncSyncRunner")
+@patch("pdd.agentic_sync._filter_already_synced", side_effect=lambda mods, *a, **kw: mods)
+@patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+@patch("pdd.agentic_sync._run_dry_run_validation")
+@patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
+@patch("pdd.agentic_sync._apply_architecture_corrections")
+@patch("pdd.agentic_sync.run_agentic_task")
+@patch("pdd.agentic_sync._load_architecture_json")
+@patch("pdd.agentic_sync._run_gh_command")
+@patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+def test_caller_passes_llm_corrections_through_to_apply_corrections(
+    mock_gh_cli,
+    mock_gh_cmd,
+    mock_load_arch,
+    mock_agentic_task,
+    mock_apply,
+    mock_build_graph,
+    mock_dry_run,
+    mock_branch_diff,
+    mock_filter_synced,
+    mock_runner_cls,
+    tmp_path: Path,
+) -> None:
+    """Caller-side behavior: ``run_agentic_sync`` must invoke
+    ``_apply_architecture_corrections`` with the corrections parsed from the
+    LLM. This test mocks the callee (``_apply_architecture_corrections``) and
+    drives the caller, verifying the call boundary.
+
+    Per the "Testing Caller Behavior Bugs" rule: testing only the callee here
+    would always pass because the callee was never broken — the prompt/LLM
+    contract is. This test asserts the callee was called and inspects
+    ``call_args`` to confirm the caller wired up correctly.
+    """
+    arch_path = tmp_path / "architecture.json"
+    architecture = [
+        _arch_entry(
+            "agentic_update_python.prompt",
+            ["agentic_update_LLM.prompt", "sync_order_python.prompt"],
+        ),
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    mock_gh_cmd.return_value = (True, json.dumps({"title": "t", "body": "b", "comments_url": ""}))
+    mock_load_arch.return_value = (architecture, arch_path)
+    mock_dry_run.return_value = (True, {"agentic_update": tmp_path}, [], 0.0)
+    mock_build_graph.return_value = MagicMock(graph={"agentic_update": []}, warnings=[])
+    # Mock apply to return arch unchanged (we only care it was called correctly).
+    mock_apply.return_value = architecture
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = (True, "ok", 0.0)
+    mock_runner_cls.return_value = mock_runner
+
+    expected_corrections = [
+        {
+            "filename": "agentic_update_python.prompt",
+            "dependencies": ["agentic_update_LLM.prompt"],
+        }
+    ]
+    mock_agentic_task.return_value = (
+        True,
+        (
+            'MODULES_TO_SYNC: ["agentic_update"]\n'
+            "DEPS_VALID: false\n"
+            f"DEPS_CORRECTIONS: {json.dumps(expected_corrections)}"
+        ),
+        0.01,
+        "anthropic",
+    )
+
+    from pdd.agentic_sync import run_agentic_sync
+
+    run_agentic_sync(
+        "https://github.com/promptdriven/pdd/issues/1061",
+        quiet=True,
+    )
+
+    # The caller MUST have invoked _apply_architecture_corrections with the
+    # parsed corrections, not skipped them.
+    mock_apply.assert_called()
+    call = mock_apply.call_args
+    # Corrections is the 3rd positional arg (or `corrections` kwarg). Be
+    # liberal about kwargs vs args, but pick by *position*/*name*, not by
+    # shape-match (the architecture list has the same dict shape).
+    if "corrections" in call.kwargs:
+        forwarded = call.kwargs["corrections"]
+    else:
+        assert len(call.args) >= 3, (
+            f"Expected at least 3 positional args to _apply_architecture_corrections; "
+            f"got args={call.args!r} kwargs={call.kwargs!r}"
+        )
+        forwarded = call.args[2]
+    assert forwarded == expected_corrections, (
+        "Caller must forward LLM-parsed corrections verbatim to "
+        f"_apply_architecture_corrections; got {forwarded!r}"
+    )
+
+
+# Scope addition: covers expansion item "_apply_architecture_corrections caller
+# at pdd/agentic_sync.py:1890-1900 is not filtered to modules_to_sync so
+# corrections to modules outside the sync set bypass the deterministic
+# per-module update_architecture_from_prompt re-convergence" identified by
+# Step 6 but only loosely covered by Step 8's plan.
+@patch("pdd.agentic_sync.AsyncSyncRunner")
+@patch("pdd.agentic_sync._filter_already_synced", side_effect=lambda mods, *a, **kw: mods)
+@patch("pdd.agentic_sync._detect_modules_from_branch_diff", return_value=[])
+@patch("pdd.agentic_sync._run_dry_run_validation")
+@patch("pdd.agentic_sync.build_dep_graph_from_architecture_data")
+@patch("pdd.agentic_sync.run_agentic_task")
+@patch("pdd.agentic_sync._load_architecture_json")
+@patch("pdd.agentic_sync._run_gh_command")
+@patch("pdd.agentic_sync._check_gh_cli", return_value=True)
+def test_out_of_scope_corrections_do_not_fabricate_undeclared_deps(
+    mock_gh_cli,
+    mock_gh_cmd,
+    mock_load_arch,
+    mock_agentic_task,
+    mock_build_graph,
+    mock_dry_run,
+    mock_branch_diff,
+    mock_filter_synced,
+    mock_runner_cls,
+    tmp_path: Path,
+) -> None:
+    """A misbehaving LLM that proposes a correction for a module OUTSIDE the
+    sync set (here: ``other_python.prompt``) and tries to ADD a dependency
+    the prompt does not declare via ``<pdd-dependency>`` must NOT be allowed
+    to leave ``architecture.json`` in a state that fails
+    ``validate-arch-includes``.
+
+    This is the Step 6 scope-expansion bug: corrections are applied verbatim
+    even for modules not in ``modules_to_sync``, bypassing the deterministic
+    per-module re-convergence via ``update_architecture_from_prompt``. The
+    fix must either (a) filter corrections to ``modules_to_sync`` only, or
+    (b) re-converge every touched entry from the prompt's ``<pdd-dependency>``
+    source-of-truth.
+
+    The test sets up a real prompts tree so that ``<pdd-dependency>`` can be
+    consulted by the fix, then asserts the final on-disk arch is consistent
+    with the prompt declarations — i.e. the spurious dep is NOT present.
+    """
+    # Real project tree the fix can read pdd-dependency tags from.
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts_dir = project_root / "prompts"
+    prompts_dir.mkdir()
+    # "other" is OUT of modules_to_sync. Its prompt only declares foo_LLM.prompt.
+    (prompts_dir / "other_python.prompt").write_text(
+        "<pdd-reason>r</pdd-reason>\n\n"
+        "<pdd-dependency>foo_LLM.prompt</pdd-dependency>\n\n"
+        "% Body\n",
+        encoding="utf-8",
+    )
+    (prompts_dir / "foo_python.prompt").write_text(
+        "<pdd-reason>r</pdd-reason>\n\n% Body\n", encoding="utf-8"
+    )
+    (prompts_dir / "foo_LLM.prompt").write_text("%", encoding="utf-8")
+    (prompts_dir / "sync_order_python.prompt").write_text("%", encoding="utf-8")
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        _arch_entry("foo_python.prompt", []),
+        _arch_entry("other_python.prompt", ["foo_LLM.prompt"]),
+        _arch_entry("foo_LLM.prompt", []),
+        _arch_entry("sync_order_python.prompt", []),
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    mock_gh_cmd.return_value = (True, json.dumps({"title": "t", "body": "b", "comments_url": ""}))
+    mock_load_arch.return_value = (architecture, arch_path)
+    mock_dry_run.return_value = (True, {"foo": project_root}, [], 0.0)
+    mock_build_graph.return_value = MagicMock(graph={"foo": []}, warnings=[])
+    mock_runner = MagicMock()
+    mock_runner.run.return_value = (True, "ok", 0.0)
+    mock_runner_cls.return_value = mock_runner
+
+    # MODULES_TO_SYNC = ["foo"]  (so "other" is OUT OF SCOPE), but the LLM
+    # tries to corrupt "other"'s deps anyway by adding sync_order_python.prompt
+    # — which "other_python.prompt" does NOT declare via <pdd-dependency>.
+    mock_agentic_task.return_value = (
+        True,
+        (
+            'MODULES_TO_SYNC: ["foo"]\n'
+            "DEPS_VALID: false\n"
+            "DEPS_CORRECTIONS: ["
+            '{"filename": "other_python.prompt", '
+            '"dependencies": ["foo_LLM.prompt", "sync_order_python.prompt"]}'
+            "]"
+        ),
+        0.01,
+        "anthropic",
+    )
+
+    from pdd.agentic_sync import run_agentic_sync
+
+    with patch("pdd.agentic_sync._find_project_root", return_value=project_root):
+        run_agentic_sync(
+            "https://github.com/promptdriven/pdd/issues/1061",
+            quiet=True,
+        )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    other_entry = next(e for e in final if e["filename"] == "other_python.prompt")
+    assert "sync_order_python.prompt" not in other_entry["dependencies"], (
+        "Out-of-scope LLM-proposed corrections must not fabricate a dep the "
+        "prompt does not declare via <pdd-dependency>; got "
+        f"{other_entry['dependencies']!r}"
+    )
+    # And validate-arch-includes must be clean for the out-of-scope module.
+    warnings = cross_validate_architecture_with_prompt_includes(final, project_root)
+    bad = [w for w in warnings if "other_python.prompt" in w]
+    assert bad == [], (
+        f"validate-arch-includes warnings for out-of-scope module: {bad!r}"
+    )
