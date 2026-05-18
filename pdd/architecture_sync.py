@@ -125,6 +125,9 @@ def _resolve_sync_paths(
             if (current / "prompts").exists():
                 resolved_prompts_dir = current / "prompts"
                 break
+            if current == project_root:
+                resolved_prompts_dir = project_root / "prompts"
+                break
             if current.parent == current:
                 resolved_prompts_dir = project_root / "prompts"
                 break

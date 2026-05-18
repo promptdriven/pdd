@@ -456,6 +456,26 @@ def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[s
     return basenames
 
 
+def _merge_duplicate_output_dependencies(
+    target_entry: Dict[str, Any],
+    duplicate_entry: Dict[str, Any],
+) -> None:
+    """Merge dependency edges from a duplicate-output architecture entry."""
+    target_dependencies = target_entry.get("dependencies", [])
+    duplicate_dependencies = duplicate_entry.get("dependencies", [])
+    if not isinstance(target_dependencies, list) or not isinstance(duplicate_dependencies, list):
+        return
+
+    merged = list(target_dependencies)
+    seen = {str(dep) for dep in merged}
+    for dependency in duplicate_dependencies:
+        dep_key = str(dependency)
+        if dep_key not in seen:
+            merged.append(dependency)
+            seen.add(dep_key)
+    target_entry["dependencies"] = merged
+
+
 def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModule], List[Dict[str, Any]], Path]:
     """Return architecture modules with cwd scope preserved."""
     arch_files = find_architecture_for_project(project_root)
@@ -465,7 +485,7 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
     raw_modules: List[Tuple[str, Path, Path, Dict[str, Any]]] = []
     architecture: List[Dict[str, Any]] = []
     seen: set[Tuple[Path, str]] = set()
-    seen_output_paths: set[Path] = set()
+    entry_by_output_path: Dict[Path, Dict[str, Any]] = {}
 
     for arch_path in arch_files:
         try:
@@ -487,9 +507,11 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
                     output_path = output_path.resolve(strict=False)
                 except OSError:
                     output_path = output_path.absolute()
-                if output_path in seen_output_paths:
+                existing_entry = entry_by_output_path.get(output_path)
+                if existing_entry is not None:
+                    _merge_duplicate_output_dependencies(existing_entry, entry)
                     continue
-                seen_output_paths.add(output_path)
+                entry_by_output_path[output_path] = entry
             dedupe_key = (arch_path.resolve(), basename)
             if dedupe_key in seen:
                 continue

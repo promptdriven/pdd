@@ -324,8 +324,6 @@ def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp
 
     assert result["success"] is True
     assert result["updated_count"] == 1
-    assert root_arch[0]["reason"] == "Original root reason"
-    assert nested_arch[0]["reason"] == "Updated nested reason"
     assert result["skipped_count"] == 0
     assert result["validation"]["valid"] is True
     assert result["errors"] == []
@@ -628,6 +626,8 @@ def test_sync_prompts_to_architecture_prefers_nearest_cwd_project(tmp_path, monk
 
     assert result["success"] is True
     assert result["updated_count"] == 1
+    assert root_arch[0]["reason"] == "Original root reason"
+    assert nested_arch[0]["reason"] == "Updated nested reason"
 
 
 def test_resolve_sync_paths_uses_nested_architecture_with_ancestor_prompts(tmp_path, monkeypatch):
@@ -644,6 +644,24 @@ def test_resolve_sync_paths_uses_nested_architecture_with_ancestor_prompts(tmp_p
 
     assert prompts_dir.resolve() == (repo_root / "prompts").resolve()
     assert architecture_path.resolve() == (backend / "architecture.json").resolve()
+
+
+def test_resolve_sync_paths_does_not_escape_nested_project_root(tmp_path, monkeypatch):
+    """A nested project without prompts/ must not borrow a parent project's prompts."""
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    outer.mkdir()
+    inner.mkdir()
+    (outer / "prompts").mkdir()
+    (outer / "architecture.json").write_text("[]", encoding="utf-8")
+    (inner / ".git").mkdir()
+    (inner / "architecture.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(inner)
+
+    prompts_dir, architecture_path = _resolve_sync_paths(None, None)
+
+    assert prompts_dir.resolve() == (inner / "prompts").resolve()
+    assert architecture_path.resolve() == (inner / "architecture.json").resolve()
 
 
 def test_sync_prompts_to_architecture_falls_back_to_repo_root_from_nested_cwd(tmp_path, monkeypatch):

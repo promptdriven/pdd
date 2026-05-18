@@ -814,16 +814,16 @@ class TestArchitectureSyncModules:
         }
         assert {module.cwd for module in report_modules} == {shared_dir}
 
-    def test_duplicate_absolute_filepaths_are_scheduled_once(self, tmp_path):
+    def test_duplicate_absolute_filepaths_are_scheduled_once_and_merge_dependencies(self, tmp_path):
         """Root and nested architecture entries for the same file should not
-        produce duplicate global sync work."""
+        produce duplicate global sync work or lose dependency edges."""
         (tmp_path / "architecture.json").write_text(
             json.dumps(
                 [
                     {
                         "filename": "backend/report_python.prompt",
                         "filepath": "backend/functions/report.py",
-                        "dependencies": [],
+                        "dependencies": ["backend/config_python.prompt"],
                     }
                 ]
             ),
@@ -837,7 +837,7 @@ class TestArchitectureSyncModules:
                     {
                         "filename": "backend/report_python.prompt",
                         "filepath": "report.py",
-                        "dependencies": [],
+                        "dependencies": ["backend/models_python.prompt"],
                     }
                 ]
             ),
@@ -848,6 +848,11 @@ class TestArchitectureSyncModules:
 
         assert [module.basename for module in modules] == ["backend/report"]
         assert len(architecture) == 1
+        assert architecture[0]["dependencies"] == [
+            "backend/config_python.prompt",
+            "backend/models_python.prompt",
+        ]
+        assert modules[0].entry["dependencies"] == architecture[0]["dependencies"]
 
 
 class TestRunGlobalSync:
