@@ -191,11 +191,37 @@ def generate(
                 "--dry-run is only valid with --incremental --experimental-prd."
             )
 
+        # ----- experimental-prd requires --incremental ---------------------
+        # `--experimental-prd` is meaningful only when paired with
+        # `--incremental`; without it the flag would silently no-op and
+        # users would fall through to agentic or standard code generation.
+        if experimental_prd and not incremental:
+            raise click.UsageError(
+                "--experimental-prd requires --incremental."
+            )
+
+        # Code-generation options that, when present, signal the caller
+        # wants legacy prompt-to-code generation even if the target file
+        # looks PRD-like (e.g. a `.md` prompt with `--output out.py`).
+        code_gen_options_present = bool(
+            output
+            or original_prompt
+            or unit_test
+            or exclude_tests
+            or env
+            or template
+        )
+
         # ----- explicit PRD opt-in -----------------------------------------
-        # An --incremental run pointing at a GitHub issue URL or PRD-like file
-        # must say so explicitly via --experimental-prd; we refuse to dispatch
-        # based on suffix alone.
-        if incremental and (is_issue or is_prd) and not experimental_prd:
+        # An --incremental run pointing at a GitHub issue URL or a PRD-like
+        # file must say so explicitly via --experimental-prd; we refuse to
+        # dispatch based on suffix alone. PRD-like prompts combined with
+        # explicit code-generation options stay in legacy code generation.
+        if (
+            incremental
+            and not experimental_prd
+            and (is_issue or (is_prd and not code_gen_options_present))
+        ):
             raise click.UsageError(
                 "To use incremental PRD mode, run: "
                 f"pdd generate --incremental --experimental-prd {target}"

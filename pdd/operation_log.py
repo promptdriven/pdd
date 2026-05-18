@@ -384,9 +384,42 @@ def log_operation(
                         # save_fingerprint so a fresh fingerprint never
                         # coexists with a stale per-module run report
                         # (issue #1057).
+                        stale_run_report_remains = False
                         if clears_run_report:
-                            clear_run_report(basename, language)
-                        if updates_fingerprint:
+                            try:
+                                clear_run_report(basename, language)
+                            except Exception as cr_exc:  # noqa: BLE001
+                                stale_run_report_remains = True
+                                Console().print(
+                                    f"[yellow]Warning: Failed to clear run "
+                                    f"report for {basename}_{language}: "
+                                    f"{cr_exc}[/yellow]"
+                                )
+                            # Defensive: clear_run_report() swallows OSError
+                            # on the actual unlink, so verify the report is
+                            # really gone before we write a fresh fingerprint
+                            # that would otherwise coexist with stale runtime
+                            # verification state (issue #1057).
+                            try:
+                                _stale_path = get_run_report_path(basename, language)
+                                if _stale_path.exists():
+                                    stale_run_report_remains = True
+                                    Console().print(
+                                        f"[yellow]Warning: clear_run_report "
+                                        f"did not remove {_stale_path}; "
+                                        f"skipping fingerprint update so a "
+                                        f"fresh fingerprint does not coexist "
+                                        f"with a stale run report.[/yellow]"
+                                    )
+                            except Exception as _vrf_exc:  # noqa: BLE001
+                                stale_run_report_remains = True
+                                Console().print(
+                                    f"[yellow]Warning: could not verify "
+                                    f"run-report removal for "
+                                    f"{basename}_{language}: "
+                                    f"{_vrf_exc}[/yellow]"
+                                )
+                        if updates_fingerprint and not stale_run_report_remains:
                             save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
