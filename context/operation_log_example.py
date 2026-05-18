@@ -97,17 +97,6 @@ def demonstrate_state_management():
         "test": Path("tests/test_calculator.py"),
     }
 
-    # Save fingerprint after successful operation
-    save_fingerprint(
-        basename=basename,
-        language=language,
-        operation="generate",
-        paths=paths,
-        cost=0.192,
-        model="gemini/gemini-3-pro-preview",
-    )
-    print("Saved fingerprint")
-
     # Save run report after test execution
     run_report = {
         "tests_passed": 10,
@@ -117,9 +106,35 @@ def demonstrate_state_management():
     save_run_report(basename, language, run_report)
     print("Saved run report")
 
-    # Clear stale run report after a successful regeneration (never on failure)
-    clear_run_report(basename, language)
-    print("Cleared run report")
+    # After a successful regeneration that mutates code/tests/etc., invalidate
+    # the stale runtime-verification report BEFORE writing the fresh
+    # fingerprint. Required ordering (issue #1057): clear_run_report() then
+    # save_fingerprint(). If clear_run_report fails or the stale _run.json
+    # still exists afterward, skip save_fingerprint() so a fresh fingerprint
+    # never coexists with stale runtime state.
+    from pdd.operation_log import get_run_report_path
+
+    try:
+        clear_run_report(basename, language)
+        print("Cleared run report")
+    except Exception as exc:  # noqa: BLE001 - non-fatal cleanup warning
+        print(f"WARN: clear_run_report failed: {exc}")
+
+    if get_run_report_path(basename, language).exists():
+        print(
+            "WARN: stale run report still present; skipping save_fingerprint "
+            "to avoid partial-sync state (issue #1057)"
+        )
+    else:
+        save_fingerprint(
+            basename=basename,
+            language=language,
+            operation="generate",
+            paths=paths,
+            cost=0.192,
+            model="gemini/gemini-3-pro-preview",
+        )
+        print("Saved fingerprint")
 
 
 # Example CLI command using the @log_operation decorator
