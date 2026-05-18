@@ -6963,6 +6963,66 @@ class TestSyncCompatibilityGates:
                 "Document the public API.",
             )
 
+    def test_test_churn_gate_catches_pascal_case_java_test_file(self):
+        """`src/test/java/FooTest.java` (PascalCase `Test.java`) must trip
+        the churn gate. The agentic test prompt names `Test.java` as a
+        first-class test convention."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(
+                f"  @Test public void case{i}() {{}}" for i in range(20)
+            )
+            + "\n"
+        )
+        after = "  @Test public void case0() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "FooTest_java.prompt",
+                "src/test/java/FooTest.java",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_catches_kotlin_spec_file(self):
+        """`WidgetSpec.kt` (PascalCase `Spec.kt`) must trip the gate."""
+        from pdd.code_generator_main import TestChurnError, _verify_test_churn
+
+        before = (
+            "\n".join(f"  fun `case {i}`() {{}}" for i in range(20)) + "\n"
+        )
+        after = "  fun `case 0`() {}\n"
+
+        with pytest.raises(TestChurnError):
+            _verify_test_churn(
+                before,
+                after,
+                "WidgetSpec_kt.prompt",
+                "src/test/kotlin/WidgetSpec.kt",
+                "Cover the public API.",
+            )
+
+    def test_test_churn_gate_skips_pascal_case_false_positive(self):
+        """`latest.kt` is NOT a test file even though it ends with the
+        substring `test.kt` — the PascalCase suffix match is
+        case-sensitive on `Test`/`Tests`/`Spec` to avoid this trap."""
+        from pdd.code_generator_main import _verify_test_churn
+
+        # Large rewrite that would normally trip the gate.
+        before = "\n".join(f"val item{i} = {i}" for i in range(50)) + "\n"
+        after = "val item0 = 0\n"
+
+        # Must NOT raise — `latest.kt` is regular code, not a test.
+        _verify_test_churn(
+            before,
+            after,
+            "latest_kt.prompt",
+            "src/main/kotlin/latest.kt",
+            "Internal refactor.",
+        )
+
     # -----------------------------------------------------------------
     # External review (PR #1015) follow-up: `from __future__ import …`
     # is a compiler directive, not a public attribute, so removing it
@@ -6988,6 +7048,35 @@ class TestSyncCompatibilityGates:
             "pdd/module.py",
             "python",
             "Clean up the future-imports header.",
+        )
+
+    def test_public_surface_regression_future_import_to_real_assignment(self):
+        """A regenerated module that drops `from __future__ import
+        annotations` AND binds a real `annotations = …` attribute MUST
+        NOT trip the signature-drift diff. Without the parallel
+        `__future__` skip in `_snapshot_public_signatures` the
+        before-signature `[import:from __future__]` would falsely diff
+        against the after-signature `[assignment]` on the same name."""
+        from pdd.code_generator_main import _verify_public_surface_regression
+
+        before = (
+            "from __future__ import annotations\n"
+            "def public_one(x: int) -> int:\n    return x\n"
+        )
+        after = (
+            "annotations = {\"version\": 1}\n"
+            "def public_one(x: int) -> int:\n    return x\n"
+        )
+
+        # Must NOT raise — `annotations` only existed as a `__future__`
+        # directive before, which the gate now ignores.
+        _verify_public_surface_regression(
+            before,
+            after,
+            "module_Python.prompt",
+            "pdd/module.py",
+            "python",
+            "Replace the future-imports header with a real annotations dict.",
         )
 
     # -----------------------------------------------------------------
