@@ -1634,7 +1634,15 @@ def _apply_architecture_corrections(
         # Locate every architecture.json under project_root that declares this
         # filename. Use default discovery (skip bundled samples) so a root-level
         # sync run cannot write to bundled-sample arch files.
-        owners: List[Tuple[Path, List[Dict[str, Any]], int]] = []
+        #
+        # Carry the *raw* loaded JSON alongside the extracted modules list so
+        # write-back preserves the original on-disk shape (bare-list or
+        # ``{prd_files, modules}`` dict). ``extract_modules`` returns the same
+        # dict objects by reference (it does not deep-copy), so mutating
+        # ``modules[idx]["dependencies"]`` also mutates the corresponding entry
+        # in ``raw_data`` (whether ``raw_data`` is the bare list or the
+        # dict wrapper). See ``pdd/architecture_registry.py::extract_modules``.
+        owners: List[Tuple[Path, Any, List[Dict[str, Any]], int]] = []
         for arch_path in find_architecture_for_project(project_root):
             try:
                 data = json.loads(arch_path.read_text(encoding="utf-8"))
@@ -1643,7 +1651,7 @@ def _apply_architecture_corrections(
             modules = extract_modules(data)
             for idx, entry in enumerate(modules):
                 if entry.get("filename") == filename:
-                    owners.append((arch_path, modules, idx))
+                    owners.append((arch_path, data, modules, idx))
                     break  # one owner per file
 
         if not owners:
@@ -1655,7 +1663,7 @@ def _apply_architecture_corrections(
             continue
 
         if len(owners) > 1:
-            paths = ", ".join(str(p) for p, _, _ in owners)
+            paths = ", ".join(str(p) for p, _, _, _ in owners)
             if not quiet:
                 console.print(
                     f"[yellow]Skipping ambiguous correction: filename "
@@ -1664,11 +1672,16 @@ def _apply_architecture_corrections(
                 )
             continue
 
-        arch_path, modules, idx = owners[0]
+        arch_path, raw_data, modules, idx = owners[0]
         old_deps = modules[idx].get("dependencies", [])
+        # Mutate the dict in place — because extract_modules returns the same
+        # dict objects (not copies), this propagates into ``raw_data`` whether
+        # the file was bare-list or ``{prd_files, modules}`` shaped.
         modules[idx]["dependencies"] = new_deps
         try:
-            atomic_write_json(arch_path, modules)
+            # Write the raw loaded structure back so the original shape (and
+            # any sibling keys like ``prd_files``) is preserved on disk.
+            atomic_write_json(arch_path, raw_data)
             successful_changes += 1
             if not quiet:
                 console.print(

@@ -5454,7 +5454,7 @@
           },
           {
             "name": "find_architecture_for_project",
-            "signature": "(project_root: Path)",
+            "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)",
             "returns": "List[Path]"
           },
           {
@@ -5469,7 +5469,7 @@
           },
           {
             "name": "load_combined_architecture_data",
-            "signature": "(project_root: Path)",
+            "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)",
             "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"
           },
           {
