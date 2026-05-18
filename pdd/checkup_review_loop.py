@@ -45,6 +45,7 @@ from .agentic_change import _run_gh_command
 from .agentic_checkup_orchestrator import _get_git_root, _setup_pr_worktree
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
+from .architecture_registry import extract_modules
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -1033,6 +1034,26 @@ def run_checkup_review_loop(
             # would represent the SAME logical fix round as two attempts
             # and would prematurely trip the oscillation/no-progress
             # guards downstream.
+
+        # Issue #1063: deterministic prompt-source guard. The fixer can
+        # produce a code-only patch on a prompt-owned module (e.g.
+        # editing ``pdd/agentic_update.py`` while leaving
+        # ``pdd/prompts/agentic_update_python.prompt`` untouched). That
+        # silently violates PDD's source-of-truth contract and the next
+        # ``pdd sync`` overwrites the bot's edits. Refuse the push here
+        # rather than at the helper layer so the policy lives at the
+        # policy boundary, and DO NOT reset the worktree so the artifacts
+        # remain available for debugging.
+        guard_changed_files = _git_changed_files(worktree)
+        guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
+        if guard_refusal:
+            _write_artifact(
+                artifacts_dir
+                / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                guard_refusal + "\n",
+            )
+            state.stop_reason = guard_refusal
+            break
 
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
@@ -3708,6 +3729,119 @@ def _git_changed_files(worktree: Path) -> List[str]:
         if len(line) > 3:
             files.append(line[3:].strip())
     return files
+
+
+def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
+    """Build the ``code_path -> prompt_path`` mapping from ``architecture.json``.
+
+    Returns ``None`` when the registry is missing/unreadable/unparseable
+    or lists no prompt-owned modules so the caller can degrade
+    gracefully. Logs a WARNING describing the skip in every such case so
+    operators can spot a temporarily-broken registry.
+    """
+    arch_path = worktree / "architecture.json"
+    try:
+        data = json.loads(arch_path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        logger.warning(
+            "prompt-source guard: architecture.json missing at %s; "
+            "skipping prompt-drift enforcement for this round.",
+            arch_path,
+        )
+        return None
+    except (OSError, json.JSONDecodeError) as exc:
+        logger.warning(
+            "prompt-source guard: architecture.json at %s is unreadable "
+            "(%s); skipping prompt-drift enforcement for this round.",
+            arch_path,
+            exc,
+        )
+        return None
+
+    mapping: Dict[str, str] = {}
+    for entry in extract_modules(data):
+        filepath = entry.get("filepath")
+        filename = entry.get("filename")
+        if not (isinstance(filepath, str) and isinstance(filename, str)):
+            continue
+        if not filepath or not filename:
+            continue
+        mapping[Path(filepath).as_posix()] = (
+            Path("pdd") / "prompts" / filename
+        ).as_posix()
+
+    if not mapping:
+        logger.warning(
+            "prompt-source guard: architecture.json at %s lists no "
+            "prompt-owned modules; skipping prompt-drift enforcement.",
+            arch_path,
+        )
+        return None
+    return mapping
+
+
+def _check_prompt_source_guard(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Refuse commits that touch generated code without their owning prompt.
+
+    PDD's contract is that prompts are source of truth and generated code
+    is regenerated. The review-loop fixer can patch a registered code
+    file without updating its prompt, and the result silently survives
+    until the next ``pdd sync`` overwrites it (issue #1063). This guard
+    enforces the contract deterministically before the push step.
+
+    Returns ``None`` when the push should proceed, or a refusal string
+    (suitable for ``state.stop_reason``) when at least one offending
+    (code_path, prompt_path) pair is present in the change set.
+
+    Degrades gracefully (allow + warn) when:
+      - ``architecture.json`` is missing or unparseable;
+      - the registry yields no prompt-owned modules;
+      - a registered prompt file no longer exists on disk.
+
+    Failing closed on those cases would brick auto-heal on a temporarily
+    broken registry, which is the inverse of the bug we are fixing.
+    """
+    if not changed_files:
+        return None
+
+    code_to_prompt = _load_prompt_source_map(worktree)
+    if code_to_prompt is None:
+        return None
+
+    changed_norm = {Path(p).as_posix() for p in changed_files if p}
+
+    offenders: List[Tuple[str, str]] = []
+    for code_path, prompt_path in code_to_prompt.items():
+        if code_path not in changed_norm:
+            continue
+        # Stale registry: the registered prompt no longer exists on
+        # disk. Skip rather than block - the bug we're fixing is silent
+        # prompt drift, not "we can't generate at all because someone
+        # deleted a prompt".
+        if not (worktree / prompt_path).is_file():
+            logger.warning(
+                "prompt-source guard: registered prompt %s for %s is "
+                "missing on disk; skipping that pair for this round.",
+                prompt_path,
+                code_path,
+            )
+            continue
+        if prompt_path not in changed_norm:
+            offenders.append((code_path, prompt_path))
+
+    if not offenders:
+        return None
+
+    pairs_text = "; ".join(
+        f"{code} is generated from {prompt}" for code, prompt in offenders
+    )
+    return (
+        "generated-code-only fix refused: "
+        f"{pairs_text}. Update the prompt source or run the proper PDD "
+        "sync path before re-running the review loop."
+    )
 
 
 def _git_untracked_files(worktree: Path) -> List[str]:
