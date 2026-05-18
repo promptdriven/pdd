@@ -15,9 +15,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, List
-
-import pytest
+from typing import Any
 
 from pdd.agentic_sync import _apply_architecture_corrections
 from pdd.architecture_include_validation import list_validate_arch_include_warnings
