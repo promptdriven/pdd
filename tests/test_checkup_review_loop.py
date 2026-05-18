@@ -223,6 +223,19 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: "sha-pushed",
             raising=False,
         )
+        # ``_git_head_sha`` is the seam every clean-exit path uses to
+        # capture ``state.last_verified_head_sha``. ``tmp_path`` is not
+        # a git repo, so the real helper returns ``None`` and the
+        # codex review-4 ``local_sha_unknown`` predicate would flip
+        # every happy-path test to ``stale``. Stub to return the same
+        # SHA the push helper produces, so the stale-SHA gate stays
+        # quiet for tests that don't explicitly exercise it.
+        monkeypatch.setattr(
+            mod,
+            "_git_head_sha",
+            lambda *a, **k: "sha-pushed",
+            raising=False,
+        )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
 
     def test_clean_pass_requires_primary_reviewer_only(
@@ -541,11 +554,23 @@ class TestCheckupReviewLoopRuntime:
         import pdd.checkup_review_loop as mod
 
         monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
-        monkeypatch.setattr(
-            mod,
-            "_fetch_pr_metadata",
-            lambda *a, **k: pytest.fail("metadata fetch"),
-        )
+        # Review-only mode now fetches PR metadata (codex review-4 on
+        # #1062). The call is read-only so the contract "no fixer, no
+        # commit, no push" is preserved; stub it to return complete
+        # metadata so the stale-SHA gate has a head_ref to drive the
+        # remote-head probe.
+        metadata_calls: List[int] = []
+
+        def fake_metadata(*a: Any, **k: Any) -> Dict[str, str]:
+            metadata_calls.append(1)
+            return {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            }
+
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
         monkeypatch.setattr(
             mod,
             "_commit_and_push_if_changed",
@@ -583,6 +608,13 @@ class TestCheckupReviewLoopRuntime:
         assert "reviewer-status: codex=findings fresh-final=missing" in report
         assert "Review-only mode: primary reviewer reported findings." in report
         assert "manual-style review found a workflow regression." in report
+        # The metadata fetch must run so the stale-SHA gate is not
+        # blind in review-only mode. The findings status path doesn't
+        # flip fresh_final to clean, so no stale gate fires here, but
+        # the call still needs to happen so a clean review-only run
+        # can be SHA-verified (covered by the dedicated stale-SHA
+        # regression test below).
+        assert metadata_calls, "_fetch_pr_metadata must run in review-only mode"
 
     def test_required_reviewer_limit_defaults_to_failed_unknown_report(
         self, monkeypatch: Any, tmp_path: Path
@@ -4999,4 +5031,133 @@ class TestReviewLoopShaVerification:
         final_state = json.loads((artifacts_dir / "final-state.json").read_text())
         assert final_state["last_verified_head_sha"] == "sha-Initial"
         assert final_state["remote_pr_head_sha"] == "sha-Advanced"
+        assert final_state["fresh_final_status"] == "stale"
+
+    def test_review_only_with_advanced_remote_marks_stale(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review-4 follow-up on #1078.
+
+        ``review_only=True`` previously skipped ``_fetch_pr_metadata``,
+        so the stale-SHA gate's ``metadata_complete`` predicate stayed
+        ``False`` and a review-only run with an advanced remote head
+        rendered ``fresh-final-review: clean`` even though the
+        reviewed SHA was no longer the live PR head. After the fix,
+        metadata is always fetched (read-only) and the gate fires.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        # Complete metadata + advanced remote head + reviewed worktree
+        # SHA. The fixer/verify path is bypassed by review_only=True.
+        self._patch_io(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "Pushed fixes to PR branch.", "sha-pushed"),
+            remote_head="sha-Advanced",
+        )
+        monkeypatch.setattr(
+            mod,
+            "_git_head_sha",
+            lambda *a, **k: "sha-Reviewed",
+            raising=False,
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                pytest.fail("fixer must NOT run in review-only mode")
+            if "verify-" in label:
+                pytest.fail("verifier must NOT run in review-only mode")
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(review_only=True, max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "fresh-final-review: stale" in report
+        assert "remote_pr_head_sha=sha-Advanced" in report
+        assert "issue_aligned: true" not in report
+        # Audit pointer: the loop trusted the worktree HEAD at review
+        # time, not the advanced remote.
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        final_state = json.loads((artifacts_dir / "final-state.json").read_text())
+        assert final_state["last_verified_head_sha"] == "sha-Reviewed"
+        assert final_state["remote_pr_head_sha"] == "sha-Advanced"
+        assert final_state["fresh_final_status"] == "stale"
+
+    def test_local_sha_capture_failure_marks_stale(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review-4 follow-up on #1078.
+
+        Every clean-exit path is supposed to set
+        ``state.last_verified_head_sha`` via ``_git_head_sha``. If the
+        subprocess call fails and returns ``None`` (transient
+        ``git rev-parse`` glitch, missing git binary, future
+        clean-exit path that forgot to capture), the stale-SHA gate's
+        new ``local_sha_unknown`` predicate must fail closed rather
+        than silently render verified — the loop has no SHA to
+        compare against, so it cannot prove the reviewed state matches
+        the live remote.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        # Complete metadata + remote returns something (anything), but
+        # the local SHA capture fails. Even when the remote fetch
+        # would have succeeded, the missing local SHA blocks the
+        # comparison.
+        self._patch_io(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "Pushed fixes to PR branch.", "sha-pushed"),
+            remote_head="sha-RemoteOK",
+        )
+        # ``_git_head_sha`` returns ``None`` — simulates subprocess
+        # failure. The clean-exit paths will all call this and leave
+        # ``state.last_verified_head_sha`` at ``None``.
+        monkeypatch.setattr(
+            mod,
+            "_git_head_sha",
+            lambda *a, **k: None,
+            raising=False,
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                pytest.fail("fixer must NOT run when round-1 reviewer is clean")
+            if "verify-" in label:
+                pytest.fail("verifier must NOT run when round-1 reviewer is clean")
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # No local SHA → can't prove the reviewed state is the live
+        # remote. Must fail closed to stale, with a distinct
+        # stop_reason explaining the failure mode.
+        assert "fresh-final-review: stale" in report
+        assert "Could not capture worktree HEAD" in report
+        assert "issue_aligned: true" not in report
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        final_state = json.loads((artifacts_dir / "final-state.json").read_text())
+        # The local SHA was never captured.
+        assert final_state["last_verified_head_sha"] is None
         assert final_state["fresh_final_status"] == "stale"

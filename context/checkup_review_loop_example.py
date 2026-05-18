@@ -377,23 +377,34 @@ EXAMPLE_FINAL_STATE_PAYLOAD_STALE: Dict[str, object] = {
 # The header block (before any "###" section) MUST contain, in this order:
 #   PR: <pr_url>
 #   Issue: <issue_url>
-#   issue_aligned: true|false
+#   issue_aligned: true|false|unknown
 #   active-reviewer: <role>
 #   reviewer-status: <role>=<status> ... fresh-final=<status>
-#   fresh-final-review: clean|findings|failed|degraded|missing
+#   fresh-final-review: clean|findings|failed|degraded|missing|stale
 #   max-rounds-reached: true|false
 #   max-cost-reached: true|false
 #   max-duration-reached: true|false
 #
 # The active reviewer is the ship gate. The fixer role appears in the status
 # line as `fixer` for traceability but does not independently review the PR.
-# Tokens in {"failed", "degraded", "missing"} mean not-clean for the active
-# reviewer; a superseded primary failure can remain visible after a clean
-# fallback takeover. When that happens, the superseded primary's row in
-# `### Per-Reviewer Status` is annotated with `(optional, superseded by
+# Tokens in {"failed", "degraded", "missing", "stale"} mean not-clean for the
+# active reviewer; a superseded primary failure can remain visible after a
+# clean fallback takeover. When that happens, the superseded primary's row
+# in `### Per-Reviewer Status` is annotated with `(optional, superseded by
 # <fallback>)` so downstream verdict adapters drop the failed primary from
 # the required-reviewer set and resolve the report to `ship_degraded`
 # instead of `unknown`.
+#
+# `stale` is the #1062 marker covering three failure modes the loop must
+# refuse to render as verified:
+#   - the verifier accepted a SHA the remote PR head no longer points at
+#     (remote advanced post-review)
+#   - the live remote head fetch failed despite complete pr_metadata
+#     (fail closed on auth/network/missing-ref errors)
+#   - the local worktree HEAD capture (_git_head_sha) returned None so
+#     the loop had no SHA to compare the remote against
+# `stale` is a HARD_NOT_CLEAN_STATES member and forces
+# `issue_aligned: unknown` so downstream verdict adapters cannot ship.
 #
 # Fixer disagreement is not terminal. If the fixer returns `not_valid` or
 # `blocked`, the active reviewer either accepts the rationale by omitting the

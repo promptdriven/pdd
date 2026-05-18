@@ -813,10 +813,16 @@ def run_checkup_review_loop(
         _post_review_loop_report(context, report, use_github_state)
         return True, report, state.total_cost, state.last_model
 
-    pr_metadata = (
-        {}
-        if config.review_only
-        else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
+    # PR metadata is always fetched, even in review-only mode. The call
+    # is read-only (`gh api repos/.../pulls/{N}`) and degrades to an
+    # empty dict on failure, so it does not violate review-only's
+    # "no fixer, no commit, no push" contract. Without it, the
+    # stale-SHA gate's ``metadata_complete`` predicate stays False and
+    # a review-only run with an advanced remote head silently renders
+    # ``fresh-final-review: clean`` despite the reviewed SHA no longer
+    # matching the live PR head (codex review-4 on #1062).
+    pr_metadata = _fetch_pr_metadata(
+        context.pr_owner, context.pr_repo, context.pr_number
     )
     if not quiet:
         mode_label = "review-only" if config.review_only else "review-loop"
@@ -1271,7 +1277,7 @@ def run_checkup_review_loop(
     # Stale-SHA gate (#1062): after the loop has set
     # ``fresh_final_status``, fetch the current remote PR head and
     # confirm it still equals the LATEST SHA the verifier reviewed
-    # (``state.last_verified_head_sha``). Two ways the gate fires:
+    # (``state.last_verified_head_sha``). Three ways the gate fires:
     #   * ``remote_diverged`` — fetch succeeded and the live remote
     #     SHA does not equal the latest verified SHA. Codex review-2:
     #     compare against the latest verified SHA, NOT against the
@@ -1287,6 +1293,15 @@ def run_checkup_review_loop(
     #     metadata is incomplete (offline-test path with empty
     #     defaults), the gate stays quiet — there is nothing to
     #     verify against and a stale-flip would be a false positive.
+    #   * ``local_sha_unknown`` — codex review-4: every clean-exit
+    #     path is supposed to set ``state.last_verified_head_sha``
+    #     via ``_git_head_sha(worktree)`` (or the fixer's pushed_sha
+    #     on the verify path). If we landed at ``fresh_final_status
+    #     == "clean"`` with that field still ``None``, the SHA
+    #     capture itself failed (transient ``git rev-parse`` glitch,
+    #     missing git binary, future clean-exit path that forgot to
+    #     capture). Fail closed rather than silently rendering
+    #     verified — we have no SHA to compare against.
     metadata_complete = bool(
         pr_metadata
         and pr_metadata.get("clone_url")
@@ -1305,7 +1320,13 @@ def run_checkup_review_loop(
         and state.remote_pr_head_sha is None
         and state.last_verified_head_sha
     )
-    if state.fresh_final_status == "clean" and (remote_diverged or remote_unknown):
+    local_sha_unknown = bool(
+        state.fresh_final_status == "clean"
+        and state.last_verified_head_sha is None
+    )
+    if state.fresh_final_status == "clean" and (
+        remote_diverged or remote_unknown or local_sha_unknown
+    ):
         state.fresh_final_status = "stale"
         for fix in state.fixes:
             if fix.verification_status == "verified":
@@ -1322,7 +1343,17 @@ def run_checkup_review_loop(
             _clean_stop_reason(fresh_final=False),
             "",
         }:
-            if remote_unknown:
+            # Order matters: a local capture failure is the most
+            # fundamental diagnostic. If we couldn't even read the
+            # worktree HEAD, we never had anything to compare against
+            # remotely; reporting "remote advanced" or "fetch failed"
+            # would be misleading.
+            if local_sha_unknown:
+                state.stop_reason = (
+                    "Could not capture worktree HEAD to verify the reviewed "
+                    "SHA; treating verification as stale."
+                )
+            elif remote_unknown:
                 state.stop_reason = (
                     "Could not fetch remote PR head to confirm the verified "
                     "SHA is current; treating verification as stale."
