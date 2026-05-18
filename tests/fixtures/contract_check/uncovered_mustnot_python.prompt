@@ -1,0 +1,19 @@
+% Fixture: uncovered_mustnot_python.prompt
+% R2 (MUST NOT) has no entry in the coverage section.
+% Expected: UNCOVERED_MUST_NOT warning for R2.
+
+<vocabulary>
+- authorized user: a caller whose Bearer JWT contains the "upload" scope
+- duplicate upload: an upload whose hash and tenant_id match an existing accepted upload
+</vocabulary>
+
+<contract_rules>
+R1: The system MUST only accept uploads from authorized users.
+R2: The system MUST NOT accept duplicate uploads.
+R3: The system MUST return HTTP 201 on successful upload.
+</contract_rules>
+
+<coverage>
+- R1: test_unauthorized_rejected (tests/test_upload.py)
+- R3: test_successful_upload (tests/test_upload.py)
+</coverage>

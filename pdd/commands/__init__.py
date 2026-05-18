@@ -20,6 +20,7 @@ from .utility import install_completion_cmd, verify
 from .which import which
 from .firecrawl import firecrawl_cache
 from .prompt import prompt_group
+from .contracts import contracts_group
 
 def register_commands(cli: click.Group) -> None:
     """Register all subcommands with the main CLI group."""
@@ -57,3 +58,4 @@ def register_commands(cli: click.Group) -> None:
     cli.add_command(sessions)
     cli.add_command(firecrawl_cache)
     cli.add_command(prompt_group)
+    cli.add_command(contracts_group)

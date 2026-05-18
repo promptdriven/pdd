@@ -1,0 +1,19 @@
+% Fixture: vague_with_vocab_python.prompt
+% Same vague terms but all defined in vocabulary.
+% Expected: 0 issues.
+
+<vocabulary>
+- duplicate upload: an upload whose SHA-256 hash and tenant_id match a row in uploads with status="accepted"
+- graceful rejection: returns HTTP 409 with JSON {"code": "DUPLICATE", "detail": "..."}
+- authorized user: a caller whose Bearer JWT contains the "upload" scope and is unexpired
+- valid response: HTTP 201 with JSON {"id": "<uuid4>", "size": <bytes>, "created_at": "<ISO-8601>"}
+- successful upload: an upload that returns a valid response within 2000 ms
+- active session: a session whose expires_at is in the future and revoked flag is false
+</vocabulary>
+
+<contract_rules>
+R1: The system MUST reject duplicate uploads gracefully.
+R2: The system MUST only accept uploads from authorized users.
+R3: The system MUST return a valid response on successful upload.
+R4: The system MUST NOT allow active sessions to exceed 10 uploads per day.
+</contract_rules>
