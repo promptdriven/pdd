@@ -735,25 +735,32 @@ def test_compute_include_allowlist_skips_missing_targets(tmp_path: Path) -> None
     assert all(p.exists() for p in allowed)
 
 
-def test_compute_include_allowlist_includes_context_dir(tmp_path: Path) -> None:
-    """Existing tracked files under PROJECT_ROOT/context/ must be allowlisted."""
+def test_compute_include_allowlist_excludes_unreferenced_context_files(
+    tmp_path: Path,
+) -> None:
+    """
+    Tracked files under PROJECT_ROOT/context/ that the prompt does not include
+    MUST NOT appear in the allowlist. Only files reachable via <include> from
+    the prompt are allowlisted; everything else is left to the scope guard so
+    unrelated tracked context/ mutations are reverted.
+    """
     from pdd.agentic_update import _compute_include_allowlist
 
-    prompt = tmp_path / "p.prompt"
-    prompt.write_text("nothing to include")
     context_dir = tmp_path / "context"
     context_dir.mkdir()
-    shared_a = context_dir / "shared_a.md"
-    shared_a.write_text("shared a")
-    shared_b = context_dir / "nested" / "shared_b.md"
-    shared_b.parent.mkdir()
-    shared_b.write_text("shared b")
+    referenced = context_dir / "shared_ref.md"
+    referenced.write_text("referenced shared")
+    unreferenced = context_dir / "shared_other.md"
+    unreferenced.write_text("not referenced")
+
+    prompt = tmp_path / "p.prompt"
+    prompt.write_text("<include>context/shared_ref.md</include>")
 
     with patch("pdd.agentic_update.PROJECT_ROOT", tmp_path):
         allowed = _compute_include_allowlist(prompt)
 
-    assert shared_a.resolve() in allowed
-    assert shared_b.resolve() in allowed
+    assert referenced.resolve() in allowed
+    assert unreferenced.resolve() not in allowed
 
 
 def test_scope_guard_preserves_included_doc_edits(
@@ -806,14 +813,14 @@ def test_scope_guard_preserves_included_doc_edits(
     assert prompt.read_text() == new_prompt
 
 
-def test_scope_guard_preserves_context_dir_edits(
+def test_scope_guard_reverts_unrelated_context_dir_edits(
     tmp_path: Path,
     real_scope_guard_deps: Tuple[MagicMock, ...],
 ) -> None:
     """
-    Tracked files under PROJECT_ROOT/context/ must be preserved even when the
-    prompt does not yet reference them — this is the "intentional new shared
-    include" criterion from issue #1054.
+    Tracked files under PROJECT_ROOT/context/ that the prompt does NOT include
+    must still be reverted by the scope guard. The context/ directory does not
+    grant a blanket allowance; only files reachable via <include> are preserved.
     """
     _, _, mock_run, _ = real_scope_guard_deps
 
@@ -821,21 +828,19 @@ def test_scope_guard_preserves_context_dir_edits(
     repo.mkdir()
     context_dir = repo / "context"
     context_dir.mkdir()
-    shared = context_dir / "shared.md"
-    shared.write_text("baseline shared content\n")
+    unrelated_shared = context_dir / "unrelated_shared.md"
+    unrelated_shared.write_text("baseline unrelated shared\n")
 
     prompt = repo / "feature.prompt"
-    prompt.write_text("original prompt\n")
+    prompt.write_text("original prompt — no includes\n")
     code = repo / "feature.py"
     code.write_text("x = 1\n")
 
     _init_git_repo(repo)
 
-    new_shared = "agent-edited shared content\n"
-
     def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
         prompt.write_text("agent-updated prompt\n")
-        shared.write_text(new_shared)
+        unrelated_shared.write_text("AGENT WENT OUT OF BOUNDS\n")
         return True, "ok", 0.0, "claude"
 
     mock_run.side_effect = simulate_agent
@@ -846,9 +851,57 @@ def test_scope_guard_preserves_context_dir_edits(
         )
 
     assert success is True
-    assert shared.read_text() == new_shared, (
-        "Tracked context/ file was reverted by the scope guard"
+    assert unrelated_shared.read_text() == "baseline unrelated shared\n", (
+        "Tracked context/ file not referenced by the prompt should have been "
+        "reverted, but the scope guard preserved it."
     )
+
+
+def test_scope_guard_preserves_new_untracked_context_file(
+    tmp_path: Path,
+    real_scope_guard_deps: Tuple[MagicMock, ...],
+) -> None:
+    """
+    Newly-created (untracked) files under PROJECT_ROOT/context/ must survive
+    the scope guard even when not yet referenced from the prompt. The scope
+    guard uses ``git status -uno`` so untracked files are inherently safe;
+    this is the "intentional new shared include" criterion from issue #1054.
+    """
+    _, _, mock_run, _ = real_scope_guard_deps
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    context_dir = repo / "context"
+    context_dir.mkdir()
+    # Seed the context directory with a tracked, untouched baseline file so
+    # the directory exists in HEAD without staging the new untracked file.
+    (context_dir / ".keep").write_text("placeholder\n")
+
+    prompt = repo / "feature.prompt"
+    prompt.write_text("original prompt\n")
+    code = repo / "feature.py"
+    code.write_text("x = 1\n")
+
+    _init_git_repo(repo)
+
+    new_shared = context_dir / "new_shared.md"
+    new_shared_content = "freshly created shared include\n"
+
+    def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        prompt.write_text("agent-updated prompt\n")
+        new_shared.write_text(new_shared_content)
+        return True, "ok", 0.0, "claude"
+
+    mock_run.side_effect = simulate_agent
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", repo):
+        success, _, _, _, _ = run_agentic_update(
+            str(prompt), str(code), test_files=[], quiet=True
+        )
+
+    assert success is True
+    assert new_shared.exists(), "Untracked new context/ file was removed"
+    assert new_shared.read_text() == new_shared_content
 
 
 def test_scope_guard_still_reverts_unrelated_mutations(

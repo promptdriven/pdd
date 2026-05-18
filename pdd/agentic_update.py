@@ -213,11 +213,12 @@ def _compute_include_allowlist(
     Includes that do not resolve to an existing file under ``PROJECT_ROOT`` are
     silently skipped (a debug log line is emitted but no error is raised).
 
-    In addition, every existing file under ``PROJECT_ROOT / "context"`` is
-    added to the returned set so that edits to shared-include staging files
-    survive the scope guard even when not yet referenced from the prompt being
-    updated. Newly-created files under ``context/`` are already untracked and
-    unaffected by the scope guard.
+    The allowlist is intentionally narrow: it contains only files reachable
+    via ``<include>`` from ``prompt_path``. Newly-created (untracked) shared
+    include files under ``context/`` or anywhere else are already preserved by
+    the scope guard's ``git status -uno`` invocation, so they do not need to
+    appear here. Tracked files that the prompt does not include are NOT in the
+    allowlist and will be reverted by the scope guard if mutated.
 
     Args:
         prompt_path: Root prompt file from which to walk includes.
@@ -278,17 +279,6 @@ def _compute_include_allowlist(
                 if candidate not in visited:
                     visited.add(candidate)
                     queue.append((candidate, depth + 1))
-
-    # Add every existing file under PROJECT_ROOT/context/ so that edits to
-    # shared-include staging files survive the scope guard.
-    context_dir = project_root / "context"
-    if context_dir.is_dir():
-        try:
-            for path in context_dir.rglob("*"):
-                if path.is_file():
-                    allowlist.add(path.resolve())
-        except OSError as exc:  # pragma: no cover - defensive
-            _logger.debug("Scope guard: failed to enumerate %s: %s", context_dir, exc)
 
     return allowlist
 
