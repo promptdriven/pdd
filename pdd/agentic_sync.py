@@ -464,7 +464,7 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
 
     raw_modules: List[Tuple[str, Path, Path, Dict[str, Any]]] = []
     architecture: List[Dict[str, Any]] = []
-    seen: set[Tuple[Path, str]] = set()
+    seen = set()
 
     for arch_path in arch_files:
         try:
@@ -477,7 +477,19 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
             basename = _basename_from_architecture_filename(entry.get("filename", ""))
             if not basename:
                 continue
-            dedupe_key = (arch_path.resolve(), basename)
+
+            filepath = entry.get("filepath", "")
+            if filepath:
+                try:
+                    output_path = Path(filepath)
+                    if not output_path.is_absolute():
+                        output_path = arch_dir / output_path
+                    dedupe_key = output_path.resolve()
+                except OSError:
+                    dedupe_key = (arch_path.resolve(), basename)
+            else:
+                dedupe_key = (arch_path.resolve(), basename)
+
             if dedupe_key in seen:
                 continue
             seen.add(dedupe_key)
