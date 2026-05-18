@@ -3755,8 +3755,11 @@ def _git_changed_files(worktree: Path) -> List[str]:
       - ``_commit_and_push_if_changed`` only uses the truthiness of the
         list to decide whether to stage; semantics unchanged.
 
-    Untracked files are intentionally excluded here; the staging path
-    surfaces them via ``_git_untracked_files``.
+    Untracked files ARE surfaced (as ``?? path`` records); this matches
+    the original ``--porcelain`` default and lets the guard catch a fixer
+    that adds a NEW registered code module without its prompt.
+    ``_git_untracked_files`` exists separately for the staging path,
+    which needs the explicit untracked list to feed into ``git add --``.
     """
     result = subprocess.run(
         ["git", "status", "--porcelain=v1", "-z"],

@@ -4756,6 +4756,45 @@ class TestPromptSourceGuardChangedFilesParsing:
         # And nothing collapsed with the arrow literal.
         assert not any("->" in entry for entry in changed)
 
+    def test_changed_files_surfaces_deleted_files(
+        self, tmp_path: Path
+    ) -> None:
+        """Belt-and-suspenders for Finding B: confirm an ``rm`` of a
+        registered prompt surfaces in ``_git_changed_files`` so the
+        same-change-set deletion path in ``_check_prompt_source_guard``
+        actually receives the deleted prompt in ``changed_files``. The
+        guard tests at the unit layer use synthetic lists; this test
+        verifies the helper's real-git output makes that synthetic
+        shape correspond to actual filesystem reality.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        prompt = tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt"
+        prompt.write_text("body\n", encoding="utf-8")
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "code\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Edit code and delete prompt - the module-retirement scenario.
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "newcode\n", encoding="utf-8"
+        )
+        prompt.unlink()
+
+        changed = _git_changed_files(tmp_path)
+
+        # Both the modified code and the deleted prompt MUST surface
+        # so the guard's "prompt in change set" check at step (2) of
+        # the new check order can see it.
+        assert "pdd/agentic_update.py" in changed
+        assert "pdd/prompts/agentic_update_python.prompt" in changed
+
 
 class TestPromptSourceGuardIntegration:
     """Wires the guard into the main review loop.
