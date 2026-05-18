@@ -345,7 +345,7 @@ def _filter_invalid_basenames(
 
         # Also extract basename from filepath (e.g. "src/app/dashboard/page.tsx"
         # -> "page"). The filename field may use a different convention
-        # (e.g. "dashboardPage.tsx") that doesn"t match the prompt basename.
+        # (e.g. "dashboardPage.tsx") that doesn't match the prompt basename.
         filepath = entry.get("filepath", "")
         if filepath and not filepath.endswith("_LLM.prompt"):
             fp_stem = Path(filepath).stem  # "page" from "page.tsx"
@@ -1172,7 +1172,6 @@ def _prompt_exists_for_context(
     if "/" in prompt_basename:
         dir_part, name_part = prompt_basename.rsplit("/", 1)
         prompt_dir = prompt_root / dir_part
-
     else:
         name_part = prompt_basename
         prompt_dir = prompt_root
@@ -1345,7 +1344,7 @@ def _llm_fix_dry_run_failure(
 
     suggested_cmd = cmd_match.group(1).strip()
 
-    # Safety: reject commands that don"t look like a pdd sync invocation
+    # Safety: reject commands that don't look like a pdd sync invocation
     if "pdd" not in suggested_cmd or "sync" not in suggested_cmd:
         return False, None, llm_cost, f"LLM suggested unexpected command: {suggested_cmd}"
 
@@ -1355,7 +1354,7 @@ def _llm_fix_dry_run_failure(
     augmented_cmd = f"{suggested_cmd} && echo {pwd_marker} && pwd"
 
     # Run the suggested command directly via shell from project root.
-    # This handles relative cd paths, chained cd"s, etc. naturally.
+    # This handles relative cd paths, chained cd's, etc. naturally.
     try:
         result = subprocess.run(
             augmented_cmd,

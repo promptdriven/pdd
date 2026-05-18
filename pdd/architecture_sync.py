@@ -1,5 +1,3 @@
-from __future__ import annotations
-
 """
 Architecture sync module for bidirectional sync between architecture.json and prompt files.
 
@@ -1241,7 +1239,8 @@ def sync_prompts_to_architecture(
 
     try:
         if filenames is None:
-            sync_result = sync_all_prompts_to_architecture(                prompts_dir=resolved_prompts_dir,
+            sync_result = sync_all_prompts_to_architecture(
+                prompts_dir=resolved_prompts_dir,
                 architecture_path=resolved_architecture_path,
                 dry_run=dry_run,
             )
