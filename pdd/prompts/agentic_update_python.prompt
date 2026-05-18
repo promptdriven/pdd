@@ -30,6 +30,7 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
     - Expand `~` in `prompt_file`, `code_file`, explicit `test_files`, and `tests_dir` before resolving or validating paths.
     - Resolve the effective project root from the prompt/code file locations by walking upward to the nearest PDD/git project boundary (`.git`, `.pddrc`, `.pdd/`, or `architecture.json`). Do not use import-time `Path.cwd()` as the project root; `pdd update` may be invoked from a subdirectory.
     - Keep the module-level `PROJECT_ROOT` as a test/legacy override only. When it differs from the module default, use it as the effective project root.
+    - Validate `prompt_file` and `code_file` with `Path.is_file()` (not `Path.exists()`). Reject directories so a path that resolves to a directory cannot pass validation and later short-circuit the success criterion when `_snapshot_mtimes` skips non-files. Return `(False, "Prompt file not found: <prompt_file>", 0.0, "", [])` (or the equivalent "Code file not found" message) when validation fails.
 5. **Test Discovery**:
     - If `test_files` is `None`, auto-discover tests using the pattern `test_{code_stem}*{code_suffix}`.
     - Escape `code_stem` and `code_suffix` with `glob.escape()` before building the discovery glob so literal filenames such as `mod[1].py` discover `test_mod[1].py` instead of being interpreted as glob character classes.

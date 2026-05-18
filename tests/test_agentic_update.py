@@ -170,6 +170,43 @@ def test_missing_files(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None
     assert "Code file not found" in msg
 
 
+def test_directory_inputs_rejected(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
+    """Directories passed as prompt or code paths must be rejected.
+
+    Regression for the validation gap noted in PR #1055 review: switching the
+    existence checks from ``Path.is_file()`` to ``Path.exists()`` let a directory
+    pass validation. ``_snapshot_mtimes`` then skipped the directory entry (it
+    is not a file), leaving ``old_prompt_mtime`` unset, and the success
+    criterion treated ``old_prompt_mtime is None`` plus a successful ``stat()``
+    on the directory as a successful prompt modification — a false positive.
+    """
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    code_file = tmp_path / "code.py"
+    code_file.touch()
+
+    success, msg, cost, _, changed = run_agentic_update(
+        str(prompt_dir), str(code_file), test_files=[], quiet=True
+    )
+    assert not success
+    assert "Prompt file not found" in msg
+    assert cost == 0.0
+    assert changed == []
+
+    prompt_file = tmp_path / "real.prompt"
+    prompt_file.touch()
+    code_dir = tmp_path / "code_pkg"
+    code_dir.mkdir()
+
+    success, msg, cost, _, changed = run_agentic_update(
+        str(prompt_file), str(code_dir), test_files=[], quiet=True
+    )
+    assert not success
+    assert "Code file not found" in msg
+    assert cost == 0.0
+    assert changed == []
+
+
 def test_no_agents(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
     """Test behavior when no agents are available."""
     mock_agents, _, _, _ = mock_deps

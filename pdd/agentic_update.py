@@ -361,14 +361,16 @@ def run_agentic_update(
     code_path = Path(code_file).expanduser().resolve()
     project_root = _resolve_project_root(prompt_path, code_path)
 
-    # 1. File existence checks.
-    if not prompt_path.exists():
+    # 1. File existence checks. Reject directories explicitly so a path that
+    # resolves to a directory cannot pass validation (and later short-circuit
+    # the success criterion when ``_snapshot_mtimes`` skips non-files).
+    if not prompt_path.is_file():
         msg = f"Prompt file not found: {prompt_file}"
         if not quiet:
             console.print(f"[red]{msg}[/red]")
         return False, msg, 0.0, "", []
 
-    if not code_path.exists():
+    if not code_path.is_file():
         msg = f"Code file not found: {code_file}"
         if not quiet:
             console.print(f"[red]{msg}[/red]")
