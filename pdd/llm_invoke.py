@@ -3734,6 +3734,7 @@ def llm_invoke(
                             'model_name': model_name_litellm,
                             'thinking_output': None,
                             'finish_reason': finish_reason,
+                            'attempted_models': list(attempted_models),
                         }
                     except Exception as e:
                         last_exception = e

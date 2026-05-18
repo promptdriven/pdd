@@ -1562,6 +1562,38 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
                     assert response['result'].field2 == 42
 
 
+def test_llm_invoke_responses_api_returns_attempted_models(mock_load_models, mock_set_llm_cache):
+    """The OpenAI Responses API success path must include `attempted_models`
+    in the returned dict and the last entry must equal `model_name`."""
+    model_key_name = "OPENAI_API_KEY"
+
+    valid_json = '{"field1": "test_value", "field2": 42}'
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        mock_responses_return = create_mock_openai_responses_api_response(valid_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return):
+            with patch('pdd.llm_invoke.litellm.completion'):
+                mock_cost = 0.0001
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Test prompt {text}",
+                        input_json={"text": "test"},
+                        strength=0.5,
+                        temperature=0.0,
+                        verbose=False,
+                        output_pydantic=SampleOutputModel,
+                    )
+
+                    assert 'attempted_models' in response, \
+                        "Responses API success path must include 'attempted_models' in the return dict"
+                    attempted = response['attempted_models']
+                    assert isinstance(attempted, list) and attempted, \
+                        f"'attempted_models' must be a non-empty list, got: {attempted!r}"
+                    assert attempted[-1] == response['model_name'], \
+                        f"Last attempted model {attempted[-1]!r} must equal model_name {response['model_name']!r}"
+
+
 # --- Tests for Multi-Credential Provider (Vertex AI) ---
 
 def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
