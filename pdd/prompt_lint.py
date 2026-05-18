@@ -434,7 +434,7 @@ def scan_stories(stories_dir: Path, *, strict: bool = False) -> list[LintResult]
         return []
     return [
         scan_prompt(story_path, strict=strict)
-        for story_path in sorted(stories_dir.glob("story__*.md"))
+        for story_path in sorted(stories_dir.rglob("story__*.md"))
     ]
 
 
@@ -516,13 +516,14 @@ def run_llm_ambiguity_pass(
         )
         filled = preprocess(filled, recursive=False, double_curly_brackets=False)
 
-        response_text, _cost, _model = llm_invoke(
-            filled,
+        result = llm_invoke(
+            messages=[{"role": "user", "content": filled}],
             strength=strength,
             temperature=temperature,
             time=time,
             verbose=verbose,
         )
+        response_text = result["result"]
 
         # Strip optional markdown code fences
         json_match = re.search(r"```(?:json)?\s*(\[.*?\])\s*```", response_text, re.DOTALL)
