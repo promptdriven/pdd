@@ -6333,6 +6333,1570 @@ class TestNotABugGuardResumeSnapshot:
 
 
 # ============================================================================
+# Issue #1034: NOT_A_BUG_SUPPRESSED_ON_RESUME regression tests
+#
+# When a cached Step 3 NOT_A_BUG token is loaded on resume (from either
+# step_outputs or bug_step_outputs), the orchestrator must re-run the same
+# direct-edit + dev_unit_states + cycle-waste-breaker guard logic that the
+# inline Step 3 path applies. If any guard would have suppressed the token,
+# the cached entry must be demoted to FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME
+# so that validate_cached_state rewinds last_completed_step and Step 3 reruns.
+# ============================================================================
+
+
+class TestNotABugSuppressedOnResume:
+    """Tests for issue #1034: cached Step 3 NOT_A_BUG must be re-evaluated on resume."""
+
+    def test_helper_passes_through_when_not_a_bug_absent(self, tmp_path):
+        """Non-NOT_A_BUG cached output should be returned unchanged."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: CODE_BUG in module.py"
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={},
+            initial_file_hashes={},
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result == out
+
+    def test_helper_passes_through_when_already_failed(self, tmp_path):
+        """Already-FAILED outputs should be returned unchanged."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "FAILED: VERIFICATION_FAILED"
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={"u1": {"fixed": True}},
+            initial_file_hashes={},
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result == out
+
+    def test_helper_passes_through_when_no_guards_trigger(self, tmp_path):
+        """NOT_A_BUG with no fixed units and no direct edits stays trusted."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={"u1": {"fixed": False}},
+                initial_file_hashes={},
+                cwd=tmp_path,
+                quiet=True,
+            )
+        assert result == out
+
+    def test_helper_demotes_when_dev_unit_fixed(self, tmp_path):
+        """FIXED unit in dev_unit_states must demote cached NOT_A_BUG."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={"u1": {"fixed": True}},
+            initial_file_hashes={},
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:")
+        assert "dev_unit_states" in result
+
+    def test_helper_demotes_when_direct_edits_present(self, tmp_path):
+        """Direct edits relative to restored initial_file_hashes must demote."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes={"src/module.py": "abc"},
+                cwd=tmp_path,
+                quiet=True,
+            )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:")
+        assert "direct_edits" in result
+
+    def test_helper_fails_open_when_initial_hashes_missing(self, tmp_path):
+        """Missing initial_file_hashes must skip direct-edit check (fail open)."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        # No dev_unit_states fixes, no snapshot → cannot suppress → pass through.
+        result = _reevaluate_step3_not_a_bug_on_resume(
+            out,
+            dev_unit_states={},
+            initial_file_hashes=None,
+            cwd=tmp_path,
+            quiet=True,
+        )
+        assert result == out
+
+    def test_resume_demotes_cached_step3_not_a_bug_via_dev_units(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """End-to-end: resume with cached NOT_A_BUG + FIXED dev unit reruns Step 3.
+
+        Without the resume guard, the orchestrator would skip Step 3 entirely
+        (because last_completed_step >= 3 and cached output is NOT_A_BUG),
+        wasting the cycle. The guard must demote the cached entry so
+        validate_cached_state rewinds and Step 3 actually executes.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        # Simulate a resumed state mid-cycle 1 with cached NOT_A_BUG and a
+        # FIXED dev unit (cycle-waste-breaker condition on resume).
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"unit_a": {"fixed": True}},
+            "skipped_steps": {},
+            "initial_file_hashes": {},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                # On rerun, Step 3 must execute — and we let it issue CODE_BUG
+                # so the workflow continues normally.
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 must have been re-executed despite cached NOT_A_BUG token.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume when cached NOT_A_BUG is demoted by "
+            f"the dev_unit_states guard. Called labels: {called_labels}"
+        )
+
+    def test_resume_demotes_cached_step3_not_a_bug_via_direct_edits(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """End-to-end: resume with cached NOT_A_BUG + direct edits reruns Step 3.
+
+        Acceptance test for issue #1034 (first acceptance criterion):
+        the orchestrator must resume into the real wiring path —
+        restored ``initial_file_hashes``, ``_detect_meaningful_changes``,
+        the ``_reevaluate_step3_not_a_bug_on_resume`` demotion to
+        ``FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:direct_edits``, the
+        ``validate_cached_state`` rewind, and a fresh Step 3 run — without
+        exiting as "Issue determined to be not a bug." This complements the
+        helper-level direct-edits test and the dev_unit_states end-to-end test
+        by covering the direct-edit cached-resume path through the full
+        orchestrator entry point.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        # Simulate a resumed state with cached NOT_A_BUG, NO FIXED dev units,
+        # and a non-empty initial_file_hashes snapshot. Direct edits are what
+        # must trigger the demotion — exercised via _detect_meaningful_changes.
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                # On rerun, Step 3 must execute — return CODE_BUG so the
+                # workflow continues past the NOT_A_BUG early-exit branch.
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 must have been re-executed via the direct-edit guard demotion.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume when cached NOT_A_BUG is demoted by "
+            "the direct-edit guard (_detect_meaningful_changes over the "
+            f"restored initial_file_hashes). Called labels: {called_labels}"
+        )
+
+        # And the workflow must NOT have exited as "Issue determined to be not
+        # a bug." — that is the regression the resume guard prevents.
+        # Return tuple shape: (success, final_message, total_cost, model_used, changed_files)
+        assert result is not None
+        final_message = result[1] if isinstance(result, tuple) and len(result) >= 2 else ""
+        assert final_message != "Issue determined to be not a bug.", (
+            "Resume guard failure: workflow exited with the stale cached "
+            f"NOT_A_BUG short-circuit. final_message={final_message!r}"
+        )
+
+    def test_helper_returns_terminal_success_sentinel_on_cycle_waste_breaker(
+        self, tmp_path
+    ):
+        """Cached NOT_A_BUG + direct edits + no FIXED units + current_cycle > 1
+        + cycle_start_hashes proving no in-cycle progress must return the
+        terminal-success sentinel (cycle-waste-breaker path)."""
+        from pdd.agentic_e2e_fix_orchestrator import (
+            NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME,
+            _reevaluate_step3_not_a_bug_on_resume,
+        )
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        initial_hashes = {"src/module.py": "originalhash"}
+        # Cycle start snapshot is identical to the current state — direct
+        # edits exist relative to initial_file_hashes but NO in-cycle
+        # progress has been made since cycle start.
+        cycle_hashes = {"src/module.py": "editedhash"}
+
+        def detect_side_effect(cwd, hashes):
+            # Direct-edit check vs initial_file_hashes → return edits.
+            if hashes is initial_hashes:
+                return ["src/module.py"]
+            # In-cycle progress check vs cycle_start_hashes → no progress.
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes=initial_hashes,
+                cwd=tmp_path,
+                quiet=True,
+                current_cycle=2,
+                cycle_start_hashes=cycle_hashes,
+            )
+        assert result == NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME
+
+    def test_helper_demotes_when_cycle_start_hashes_missing_on_resume(
+        self, tmp_path
+    ):
+        """Codex P2 regression: terminal-success requires cycle_start_hashes
+        to prove no in-cycle progress. Without that snapshot (legacy state),
+        the helper MUST conservatively demote instead of terminal-success."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes={"src/module.py": "originalhash"},
+                cwd=tmp_path,
+                quiet=True,
+                current_cycle=2,
+                cycle_start_hashes=None,
+            )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:"), (
+            f"Expected demotion when cycle_start_hashes missing, got: {result!r}"
+        )
+        assert "direct_edits" in result
+
+    def test_helper_demotes_when_current_cycle_has_progress(self, tmp_path):
+        """Codex P2 regression: if cycle_start_hashes snapshot shows the
+        resumed cycle has already made in-cycle progress (Step 1 ran ``pdd
+        fix`` etc. before Step 3), terminal-success would silently exit
+        despite real work happening this cycle. The helper MUST demote
+        instead so Step 3 reruns."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        initial_hashes = {"src/module.py": "originalhash"}
+        # Snapshot captured at the start of the resumed cycle.
+        cycle_hashes = {"src/module.py": "midhash"}
+
+        def detect_side_effect(cwd, hashes):
+            # Both diffs (vs initial AND vs cycle-start) show changes —
+            # the resumed cycle DID make in-cycle progress.
+            if hashes is initial_hashes:
+                return ["src/module.py"]
+            if hashes is cycle_hashes:
+                return ["src/module.py"]
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes=initial_hashes,
+                cwd=tmp_path,
+                quiet=True,
+                current_cycle=2,
+                cycle_start_hashes=cycle_hashes,
+            )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:"), (
+            f"Expected demotion when cycle has in-cycle progress, got: {result!r}"
+        )
+        assert "direct_edits" in result
+
+    def test_helper_demotes_direct_edits_on_cycle1_even_with_current_cycle(
+        self, tmp_path
+    ):
+        """current_cycle == 1 must still demote (cycle-waste breaker requires >1)."""
+        from pdd.agentic_e2e_fix_orchestrator import _reevaluate_step3_not_a_bug_on_resume
+
+        out = "Root cause: NOT_A_BUG — expected behavior."
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ):
+            result = _reevaluate_step3_not_a_bug_on_resume(
+                out,
+                dev_unit_states={},
+                initial_file_hashes={"src/module.py": "originalhash"},
+                cwd=tmp_path,
+                quiet=True,
+                current_cycle=1,
+            )
+        assert result.startswith("FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME:")
+        assert "direct_edits" in result
+
+    def test_resume_cycle_waste_breaker_terminal_success_via_direct_edits(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """End-to-end: cycle 2+ resume with cached NOT_A_BUG + direct edits +
+        no FIXED units must exit with the inline cycle-waste-breaker terminal
+        success message — without rerunning Step 3.
+
+        Acceptance test for issue #1034 (cycle-waste-breaker acceptance
+        criterion): the inline Step 3 path at lines 2127-2134 exits with
+        ``success = True`` and ``final_message = "Direct-edit fix applied in a
+        prior cycle; Step 3 classifies remaining state as not a bug."`` when
+        ``has_direct_edits and not has_fixed_units and not has_cycle_progress
+        and current_cycle > 1``. The resume guard MUST mirror that path
+        instead of demoting and rerunning Step 3.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        # Avoid Step 11 + CI side effects; the assertion is about workflow exit.
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Codex P2 update: the resume-time terminal-success path now requires
+        # cycle_start_hashes to prove no in-cycle progress. Persist a snapshot
+        # that matches the current state (no in-cycle changes since cycle
+        # start) so the helper authorizes terminal success.
+        initial_hashes = {"src/module.py": "originalhash"}
+        cycle_hashes = {"src/module.py": "editedhash"}
+        resumed_state = {
+            "current_cycle": 2,  # cycle-waste-breaker requires current_cycle > 1
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},  # no FIXED units
+            "skipped_steps": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": "deadbeef",
+            "cycle_start_hashes": cycle_hashes,
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def detect_side_effect(cwd, hashes):
+            # Direct-edit check vs initial_file_hashes → return edits.
+            # In-cycle progress check vs cycle_start_hashes → no progress.
+            if hashes is initial_hashes or hashes == initial_hashes:
+                return ["src/module.py"]
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "Committed prior-cycle direct edits."),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    # Step 3 must NOT rerun on the cycle-waste-breaker path —
+                    # if it does, force a CODE_BUG that would continue the
+                    # workflow, making the assertion below catch the bug.
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 must NOT have been re-executed — the cycle-waste-breaker
+        # terminal-success path short-circuits the inner workflow entirely.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert not step3_calls, (
+            "Step 3 must NOT rerun when the resume cycle-waste-breaker "
+            f"terminal-success path applies. Called labels: {called_labels}"
+        )
+
+        # Workflow exits as success with the inline cycle-waste-breaker
+        # terminal-success message (not "Issue determined to be not a bug.").
+        # Return tuple: (success, final_message, total_cost, model_used, changed_files).
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        success, final_message = result[0], result[1]
+        assert success is True, (
+            "Resume cycle-waste-breaker must produce terminal success "
+            f"(got success={success!r}, final_message={final_message!r})"
+        )
+        assert final_message == (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        ), (
+            "Resume cycle-waste-breaker final_message must mirror the inline "
+            f"Step 3 path. Got: {final_message!r}"
+        )
+
+    def test_resume_does_not_terminal_success_when_current_cycle_has_progress(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (full orchestrator):
+        Resume mid-cycle 2 with cached Step 3 NOT_A_BUG, direct edits relative
+        to initial_file_hashes, no FIXED dev_unit_states, BUT the resumed
+        cycle has already made in-cycle progress vs cycle_start_hashes (Step
+        1 ran ``pdd fix`` in this cycle and wrote edits before the
+        interruption). Resume MUST NOT terminal-success — Step 3 must rerun
+        so the orchestrator can re-evaluate the new state.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        initial_hashes = {"src/module.py": "originalhash"}
+        # cycle_start_hashes was captured at the start of the resumed cycle,
+        # before Step 1 ran. Current file state differs from BOTH initial and
+        # cycle-start snapshots — i.e. the resumed cycle made progress.
+        cycle_hashes = {"src/module.py": "cyclestarthash"}
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 2,  # < 9 so cycle_start_hashes is trusted
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": "deadbeef",
+            "cycle_start_hashes": cycle_hashes,
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def detect_side_effect(cwd, hashes):
+            # Both diffs show changes — the resumed cycle made in-cycle
+            # progress in addition to the prior cycle's direct edits.
+            return ["src/module.py"]
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    # Step 3 reruns and returns CODE_BUG so the workflow
+                    # continues past the NOT_A_BUG early-exit branch.
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 MUST have been re-executed — the cycle-waste-breaker terminal
+        # success path is forbidden when in-cycle progress exists.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume when cycle_start_hashes shows the "
+            "resumed cycle has in-cycle progress (codex P2 regression). "
+            f"Called labels: {called_labels}"
+        )
+
+        # The workflow must NOT have exited with the cycle-waste-breaker
+        # terminal-success message — that is the silent-success regression.
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        _, final_message = result[0], result[1]
+        assert final_message != (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        ), (
+            "Resume cycle-waste-breaker terminal-success path fired when "
+            "cycle_start_hashes shows in-cycle progress — codex P2 "
+            f"regression. final_message={final_message!r}"
+        )
+
+    def test_resume_does_not_terminal_success_when_cycle_start_hashes_missing(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (full orchestrator, legacy state):
+        Resume from a legacy workflow state file with no ``cycle_start_hashes``
+        key — exactly what older PRs / pre-fix runs saved. The terminal-
+        success path requires proof of no in-cycle progress; without that
+        proof the orchestrator MUST conservatively demote and rerun Step 3
+        rather than silently exit as terminal-success.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Legacy state — same as test_resume_cycle_waste_breaker_terminal_success
+        # but with NO ``cycle_start_hashes`` key (simulates pre-fix saved state).
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 4,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            # NOTE: no "cycle_start_hashes" key — legacy state file.
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # Step 3 MUST have been re-executed — without cycle_start_hashes the
+        # terminal-success path cannot prove no in-cycle progress and must
+        # conservatively demote.
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume from legacy state (no "
+            "cycle_start_hashes saved) — codex P2 regression. "
+            f"Called labels: {called_labels}"
+        )
+
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        _, final_message = result[0], result[1]
+        assert final_message != (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        ), (
+            "Resume cycle-waste-breaker terminal-success fired with legacy "
+            "state (no cycle_start_hashes) — codex P2 regression. "
+            f"final_message={final_message!r}"
+        )
+
+    def test_resume_step9_advance_clears_unverified_baseline_for_new_cycle(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """A legacy post-Step-9 resume that advances to a fresh cycle must clear
+        cycle_baseline_unverified so the new cycle can trust its newly captured
+        cycle_start_hashes baseline."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        initial_hashes = {"src/module.py": "originalhash"}
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: CODE_BUG in module.py",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "Step 7 output",
+                "8": "Step 8 output",
+                "9": "Some tests still failing. CONTINUE_CYCLE",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def detect_side_effect(cwd, hashes):
+            if hashes is initial_hashes or (
+                isinstance(hashes, dict) and hashes == initial_hashes
+            ):
+                return ["src/module.py"]
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value={"src/module.py": "editedhash"},
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: NOT_A_BUG — expected behavior.", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        success, final_message = result[0], result[1]
+        assert success is True
+        assert final_message == (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        )
+
+    def test_resume_legacy_state_inline_cycle_waste_breaker_blocked_when_rerun_returns_not_a_bug(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """External reviewer P1 regression: legacy state file (no
+        cycle_start_hashes saved) where the resume helper correctly demotes
+        the cached step_outputs["3"] = NOT_A_BUG via the missing-snapshot
+        branch and validate_cached_state rewinds last_completed_step. The
+        outer loop then captures a FRESH post-edit cycle_start_hashes
+        snapshot at cycle-entry. When Step 3 reruns and returns NOT_A_BUG
+        again, the INLINE cycle-waste-breaker computed
+        ``has_cycle_progress = bool(_detect_meaningful_changes(cwd, fresh))``
+        as False (the fresh snapshot was taken after edits), and with
+        ``has_direct_edits and current_cycle > 1`` would terminal-success
+        on a baseline it cannot verify.
+
+        Fix: ``cycle_baseline_unverified`` flag set in the resume logic
+        when ``resumed_cycle_start_hashes is None and last_completed_step >
+        0 and current_cycle > 1``; the inline cycle-waste-breaker AND-s
+        ``not cycle_baseline_unverified`` into the terminal-success
+        condition. The cycle falls through to "NOT_A_BUG ignored" and
+        Step 9 takes loop control normally; the flag is cleared at the
+        next legitimate cycle rollover.
+
+        Without the fix: final_message becomes
+        "Direct-edit fix applied in a prior cycle; Step 3 classifies
+        remaining state as not a bug." (false terminal-success).
+        With the fix: final_message is NOT the terminal-success string;
+        Step 9 is reached and decides loop control.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Legacy state — last_completed_step=3 (mid-cycle, past Step 3),
+        # current_cycle=2, NO cycle_start_hashes key.
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            # NOTE: no "cycle_start_hashes" key (legacy state file).
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        # _detect_meaningful_changes returns a non-empty list against
+        # initial_file_hashes (direct edits present) AND against the
+        # fresh cycle_start_hashes snapshot (because the fresh snapshot
+        # equals the current tree, BUT the function is patched to always
+        # return ["src/module.py"], emulating the worst case where the
+        # function's filter incorrectly reports "has changes").
+        # Actually for the bug repro we want the cycle-progress check to
+        # return EMPTY (the bug condition); pass a side_effect that
+        # distinguishes initial_file_hashes from cycle_start_hashes.
+        initial_hashes = resumed_state["initial_file_hashes"]
+
+        def detect_side_effect(cwd, hashes):
+            # Direct edits vs initial: True (file changed since workflow start)
+            if hashes is initial_hashes or (
+                isinstance(hashes, dict) and hashes == initial_hashes
+            ):
+                return ["src/module.py"]
+            # Cycle progress vs fresh snapshot: empty (the bug condition —
+            # fresh snapshot was taken AFTER edits so diff vs current = empty)
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                # Step 3 rerun ALSO returns NOT_A_BUG — this is the key
+                # difference from the prior test. Without the flag, this
+                # triggers the inline cycle-waste-breaker terminal-success.
+                if "step3" in label:
+                    return (True, "Root cause: NOT_A_BUG — expected behavior.", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        _, final_message = result[0], result[1]
+        assert final_message != (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        ), (
+            "Inline cycle-waste-breaker terminal-successed on a legacy "
+            "resumed cycle with no verifiable baseline — external "
+            "reviewer P1 regression. final_message={!r}".format(final_message)
+        )
+
+    def test_resume_with_fresh_post_edit_cycle_start_hashes_does_not_terminal_success(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """External reviewer P1 follow-up regression: the in-memory
+        ``cycle_baseline_unverified`` flag from the prior fix is NOT
+        persisted. After a legacy resume reruns Step 3 (with the flag
+        blocking inline terminal-success), the normal state save would
+        write a FRESH post-edit ``cycle_start_hashes`` and forget the
+        unverified marker. The very next resume would restore that
+        snapshot, the helper would see ``cycle_start_hashes != None``
+        with no in-cycle progress (post-edit baseline matches current
+        tree), and the cycle-waste-breaker terminal-success path
+        would fire immediately — zero step calls — on a baseline that
+        is still unverified.
+
+        Fix: persist ``cycle_start_hashes`` as ``None`` at all save
+        sites while ``cycle_baseline_unverified`` is True, so the
+        next resume's missing-snapshot path re-sets the flag and the
+        helper demotes via the same legacy-state branch.
+
+        This test simulates the disk state AFTER the bad save:
+        ``cycle_start_hashes`` is a fresh post-edit snapshot, all
+        other markers unchanged. With the fix this state cannot be
+        produced (the save persists None). The test instead verifies
+        directly that the helper, when given the in-memory snapshot
+        the reviewer reproduced, demotes via the missing-snapshot path
+        when ``cycle_start_hashes`` is None (the persist-as-None
+        behavior). The end-to-end flow is verified by asserting that
+        a save invoked while ``cycle_baseline_unverified`` is True
+        writes ``cycle_start_hashes=None``.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Legacy resume: no cycle_start_hashes saved, Step 3 cached as
+        # NOT_A_BUG, last_completed_step=3 mid-cycle 2.
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 3,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            # NOTE: no "cycle_start_hashes" key (legacy state).
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+        initial_hashes = resumed_state["initial_file_hashes"]
+
+        def detect_side_effect(cwd, hashes):
+            # Direct edits exist vs initial_file_hashes; no progress vs
+            # any fresh cycle baseline.
+            if hashes is initial_hashes or (
+                isinstance(hashes, dict) and hashes == initial_hashes
+            ):
+                return ["src/module.py"]
+            return []
+
+        saved_states = []
+
+        def capture_save(cwd, issue_number, workflow_name, state_data,
+                         state_dir, repo_owner, repo_name, use_github_state,
+                         github_comment_id):
+            saved_states.append({
+                "current_cycle": state_data.get("current_cycle"),
+                "last_completed_step": state_data.get("last_completed_step"),
+                "cycle_start_hashes": state_data.get("cycle_start_hashes"),
+            })
+            return None
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value={"src/module.py": "freshpostedithash"},
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: NOT_A_BUG — expected behavior.", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # While cycle_baseline_unverified is True (the resumed cycle),
+        # every save MUST persist cycle_start_hashes=None — NOT the
+        # fresh post-edit local that _get_file_hashes returned.
+        unverified_cycle_saves = [
+            s for s in saved_states
+            if s["current_cycle"] == 2 and s["last_completed_step"] is not None
+        ]
+        assert unverified_cycle_saves, (
+            f"No saves captured for the unverified cycle. saved_states={saved_states}"
+        )
+        for save in unverified_cycle_saves:
+            assert save["cycle_start_hashes"] is None, (
+                f"Save during cycle_baseline_unverified=True wrote a non-None "
+                f"cycle_start_hashes={save['cycle_start_hashes']!r}; the next "
+                f"resume would restore it as a valid baseline and terminal-"
+                f"success on an unverified cycle. Full save: {save}"
+            )
+
+    def test_bug_step_outputs_not_a_bug_resuppressed_by_dev_units(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args, tmp_path
+    ):
+        """bug_step_outputs[\"3\"] = NOT_A_BUG must be re-evaluated symmetrically.
+
+        Loads a sibling bug_state_<issue>.json with a cached NOT_A_BUG step 3.
+        Combined with a FIXED dev unit in workflow state (mid-resume), the
+        cached bug-state token must NOT short-circuit Step 3 — the orchestrator
+        must run Step 3 fresh.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 1
+
+        # Write a sibling bug_state file under .pdd/state for the orchestrator to
+        # discover via the bug-state candidates loop.
+        cwd = e2e_fix_default_args["cwd"]
+        bug_state_dir = cwd / ".pdd" / "state"
+        bug_state_dir.mkdir(parents=True, exist_ok=True)
+        bug_state_file = bug_state_dir / f"bug_state_{e2e_fix_default_args['issue_number']}.json"
+        bug_state_file.write_text(json.dumps({
+            "step_outputs": {
+                "2": "Bug step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+            }
+        }))
+
+        # Resume into cycle 1, but at a step before 3 so the bug_step_outputs
+        # reuse branch is the entry vector (not the prior-resume guard).
+        resumed_state = {
+            "current_cycle": 1,
+            "last_completed_step": 0,
+            "step_outputs": {},
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {"unit_a": {"fixed": True}},
+            "skipped_steps": {},
+            "initial_file_hashes": {},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Some tests still failing. CONTINUE_CYCLE", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun when bug_step_outputs[3] = NOT_A_BUG is "
+            "demoted by the dev_unit_states guard symmetrically with the "
+            f"step_outputs path. Called labels: {called_labels}"
+        )
+
+    def test_prompt_documents_not_a_bug_suppressed_on_resume(self):
+        """Orchestrator source prompt must document the demotion token.
+
+        Issue #1034 requires the prompt to specify
+        ``FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME`` so regeneration preserves
+        the resume-time guard.
+        """
+        prompt_path = (
+            Path(__file__).parent.parent
+            / "prompts"
+            / "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+        if not prompt_path.exists():
+            pytest.skip("Prompt file not available in public repo")
+        template = prompt_path.read_text()
+        assert "NOT_A_BUG_SUPPRESSED_ON_RESUME" in template, (
+            "Prompt must document the FAILED: NOT_A_BUG_SUPPRESSED_ON_RESUME "
+            "demotion token used by the resume-time guard."
+        )
+
+    def test_resume_after_step9_interrupt_with_cached_not_a_bug_uses_restored_snapshot(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (Finding A on PR #1035 iteration 3):
+
+        Resume from a state interrupted mid-Step-9: ``last_completed_step=9``,
+        ``current_cycle=2``, cached ``step_outputs["3"]=NOT_A_BUG``, with a
+        saved ``cycle_start_hashes`` that proves the cycle DID make in-cycle
+        progress (direct edits exist relative to BOTH the workflow-start
+        snapshot AND the cycle-start snapshot).
+
+        Previous behavior: ``saved_cycle_start_hashes`` was discarded eagerly
+        because ``last_completed_step >= 9``. The cached NOT_A_BUG demotion
+        then ran with ``cycle_start_hashes=None`` and demoted via the
+        legacy/conservative branch, ``validate_cached_state`` rewound to 2,
+        but the rollover (``if last_completed_step >= 9``) did NOT fire — so
+        we stayed in the SAME cycle, but the outer loop captured a FRESH
+        ``cycle_start_hashes = _get_file_hashes(cwd)`` AFTER all the edits.
+        The inline cycle-waste-breaker at line ~2293 then saw no in-cycle
+        progress (cycle_start matched current state) and falsely triggered
+        terminal-success.
+
+        Fix: restore the snapshot UNCONDITIONALLY at resume time and only
+        null it inside the cycle-rollover branch. With the restored
+        snapshot in scope, the in-cycle progress check sees the real prior
+        edits and the cycle-waste-breaker correctly refuses to terminal-
+        success.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # initial_file_hashes captured at workflow start (pre-cycle 2).
+        initial_hashes = {"src/module.py": "originalhash"}
+        # cycle_start_hashes captured at the start of cycle 2, BEFORE the
+        # in-cycle progress that was made during cycle 2's Steps 1-8.
+        # This is the RESTORED snapshot the bug throws away.
+        restored_cycle_hashes = {"src/module.py": "cycle2starthash"}
+        # If the fresh capture path runs (the buggy path), it would diff
+        # against this — which matches the CURRENT state (post-edits), so
+        # `_detect_meaningful_changes(cwd, fresh_hashes)` returns [] and the
+        # cycle-waste-breaker falsely terminal-successes.
+        fresh_cycle_hashes = {"src/module.py": "currenthash"}
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 9,  # interrupted in Step 9
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: NOT_A_BUG — expected behavior.",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "Step 7 output",
+                "8": "Step 8 output",
+                "9": "Step 9 output",
+            },
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},  # no FIXED units — direct-edit path only
+            "skipped_steps": {},
+            "initial_file_hashes": initial_hashes,
+            "initial_sha": "deadbeef",
+            "cycle_start_hashes": restored_cycle_hashes,
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        def detect_side_effect(cwd, hashes):
+            # The whole point of Fix A: which snapshot reaches the in-cycle
+            # progress check at line 2293 of the orchestrator decides the
+            # cycle-waste-breaker outcome.
+            #
+            # - vs initial_hashes → direct edits exist (relative to
+            #   workflow start, the prior cycle wrote files).
+            # - vs restored_cycle_hashes → in-cycle progress EXISTS (cycle
+            #   2 ran Steps 1-8 and wrote files). The cycle-waste-breaker
+            #   MUST see this to refuse terminal-success. This is what
+            #   Fix A enables.
+            # - vs fresh_cycle_hashes (the buggy path) → NO progress
+            #   (snapshot equals current state). The bug uses this and
+            #   falsely terminal-successes.
+            # - vs anything else (e.g. an empty dict from the default
+            #   _get_file_hashes mock used elsewhere) → treat as no diff.
+            if hashes is initial_hashes or hashes == initial_hashes:
+                return ["src/module.py"]
+            if hashes is restored_cycle_hashes or hashes == restored_cycle_hashes:
+                return ["src/module.py"]
+            return []
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            # The fresh capture at line 1905 returns the post-edits state.
+            # The buggy path uses this as the cycle_start_hashes baseline
+            # for the in-cycle progress check, which silently passes.
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value=fresh_cycle_hashes,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    # The rerun must also produce NOT_A_BUG so we exercise
+                    # the cycle-waste-breaker branch at line 2285+ which is
+                    # where the bug fires. (If rerun returned CODE_BUG, the
+                    # workflow would continue past the NOT_A_BUG guard and
+                    # the bug would not manifest in this scenario.)
+                    return (True, "Root cause: NOT_A_BUG — expected behavior.", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # The workflow MUST NOT have exited with the inline cycle-waste-
+        # breaker terminal-success message. That is the false-positive
+        # regression: with the snapshot discarded eagerly, the rerun Step 3
+        # NOT_A_BUG branch saw `has_cycle_progress=False` (fresh capture
+        # matched current state) and fired terminal-success.
+        assert result is not None
+        assert isinstance(result, tuple) and len(result) >= 2
+        success, final_message = result[0], result[1]
+        assert final_message != (
+            "Direct-edit fix applied in a prior cycle; Step 3 classifies "
+            "remaining state as not a bug."
+        ), (
+            "Codex P2 Finding A: resume from Step-9-interrupt falsely "
+            "terminal-successed via the inline cycle-waste-breaker — the "
+            "restored cycle_start_hashes was discarded before the rerun "
+            "Step 3 NOT_A_BUG path could prove in-cycle progress. "
+            f"final_message={final_message!r}"
+        )
+
+        # And Step 3 MUST have been re-executed (proving demotion + rewind
+        # happened and the workflow did NOT short-circuit on the cached
+        # NOT_A_BUG token).
+        called_labels = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+        step3_calls = [l for l in called_labels if "step3" in l]
+        assert step3_calls, (
+            "Step 3 must rerun on resume from a Step-9-interrupt state — "
+            "the cached NOT_A_BUG token must be demoted by the in-cycle "
+            "progress check. Called labels: "
+            f"{called_labels}"
+        )
+
+    def test_keyboardinterrupt_after_cycle_rollover_does_not_persist_stale_cycle_start_hashes(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (Finding B on PR #1035 iteration 3):
+
+        After cycle rollover (``current_cycle += 1``, ``last_completed_step=0``,
+        ``step_outputs={}``), the local ``cycle_start_hashes`` variable
+        still held the just-completed cycle's snapshot. If a
+        ``KeyboardInterrupt`` fired in the window between rollover and the
+        next iteration's recapture at line ~1905, the handler at line ~2592
+        read ``locals().get("cycle_start_hashes")`` and persisted that stale
+        snapshot. A subsequent resume then trusted it as the NEW cycle's
+        start snapshot, breaking the cycle-waste-breaker baseline.
+
+        Fix: null the local ``cycle_start_hashes`` right after the rollover
+        block so the interrupt handler records ``None`` rather than the
+        stale prior snapshot. The next iteration's recapture (or a fresh
+        resume) is the authoritative source.
+
+        We simulate the rollover-then-interrupt window by patching
+        ``_get_file_hashes`` to raise ``KeyboardInterrupt`` on its SECOND
+        call: the first call is the cycle-1 recapture at line ~1905, then
+        cycle 1 completes its inner loop (LOOP_BACK on Step 9), rollover
+        fires, the next iteration calls ``_get_file_hashes`` again — which
+        now raises. The handler then saves state. We assert the persisted
+        ``cycle_start_hashes`` is ``None``, NOT the stale cycle-1 snapshot.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 3
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # Capture saved state for inspection.
+        saved_states = []
+
+        def capture_save(cwd, issue_number, workflow_name, state_data,
+                         state_dir, repo_owner, repo_name, use_github_state,
+                         github_comment_id):
+            # Deep-copy the snapshot dict (if any) so later mutations of the
+            # in-memory state_data don't retroactively change what we
+            # captured.
+            snapshot = state_data.get("cycle_start_hashes")
+            if isinstance(snapshot, dict):
+                snapshot = dict(snapshot)
+            saved_states.append({
+                "current_cycle": state_data.get("current_cycle"),
+                "last_completed_step": state_data.get("last_completed_step"),
+                "cycle_start_hashes": snapshot,
+            })
+            return None
+
+        # _get_file_hashes is called once at workflow start to seed
+        # initial_file_hashes, then once per cycle's outer-loop body for
+        # cycle_start_hashes. We want the SECOND cycle's recapture to raise
+        # — that is: call 1 = initial_file_hashes, call 2 = cycle-1
+        # cycle_start_hashes, call 3 = cycle-2 cycle_start_hashes (raise).
+        call_counter = {"n": 0}
+        cycle1_snapshot = {"src/module.py": "cycle1starthash"}
+
+        def hashes_side_effect(cwd):
+            call_counter["n"] += 1
+            if call_counter["n"] == 1:
+                # Workflow-start snapshot (initial_file_hashes).
+                return {"src/module.py": "initialhash"}
+            if call_counter["n"] == 2:
+                # Cycle 1's cycle_start_hashes recapture at line ~1905.
+                return cycle1_snapshot
+            # Cycle 2's recapture — fires AFTER the rollover that should
+            # have nulled the local. Raise here to simulate the interrupt
+            # window the bug exposed.
+            raise KeyboardInterrupt("simulated interrupt in cycle-2 recapture")
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            side_effect=hashes_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    # LOOP_BACK so cycle 1 completes its inner loop and the
+                    # outer loop enters the rollover branch.
+                    return (True, "Tests still failing. LOOP_BACK", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            with pytest.raises(KeyboardInterrupt):
+                run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # The interrupt-handler save MUST be present — it is the last entry
+        # if the orchestrator also saves intermediate state.
+        assert saved_states, (
+            "Interrupt handler did not persist any state. Check that "
+            "save_workflow_state mock is wired correctly."
+        )
+        interrupt_save = saved_states[-1]
+
+        # current_cycle should have advanced to 2 (rollover succeeded
+        # before the interrupt).
+        assert interrupt_save["current_cycle"] == 2, (
+            f"Expected rollover to have advanced current_cycle to 2 before "
+            f"the interrupt; saved state shows current_cycle="
+            f"{interrupt_save['current_cycle']}, saved_states={saved_states}"
+        )
+        assert interrupt_save["last_completed_step"] == 0, (
+            f"Expected last_completed_step=0 after rollover; got "
+            f"{interrupt_save['last_completed_step']}"
+        )
+
+        # THE FIX: cycle_start_hashes saved by the interrupt handler must
+        # NOT be the stale cycle-1 snapshot. It must be None (or missing).
+        assert interrupt_save["cycle_start_hashes"] != cycle1_snapshot, (
+            "Codex P2 Finding B: interrupt handler persisted the stale "
+            "prior-cycle's cycle_start_hashes after rollover. Resume from "
+            "this state would trust the wrong baseline as the new cycle's "
+            f"start snapshot. saved cycle_start_hashes={interrupt_save['cycle_start_hashes']!r}"
+        )
+        assert interrupt_save["cycle_start_hashes"] is None, (
+            "After cycle rollover, the local cycle_start_hashes should be "
+            "nulled so the interrupt handler persists None (the next "
+            "iteration's recapture is the authoritative source). Got: "
+            f"{interrupt_save['cycle_start_hashes']!r}"
+        )
+
+    def test_resume_from_post_rollover_null_snapshot_recaptures_fresh(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Bonus regression for Finding B: simulate a resume from the state
+        saved by the prior test (``cycle_start_hashes=None``, mid-cycle).
+        The orchestrator MUST treat the missing snapshot as "no restored
+        snapshot" and recapture fresh hashes at the outer-loop top — NOT
+        crash on the ``None`` value.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["resume"] = True
+        e2e_fix_default_args["max_cycles"] = 2
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        # State exactly as Finding B's interrupt-handler would save: post-
+        # rollover, with cycle_start_hashes=None.
+        resumed_state = {
+            "current_cycle": 2,
+            "last_completed_step": 0,
+            "step_outputs": {},
+            "total_cost": 0.0,
+            "model_used": "gpt-4",
+            "changed_files": [],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "initial_file_hashes": {"src/module.py": "initialhash"},
+            "initial_sha": "deadbeef",
+            "cycle_start_hashes": None,  # explicit None — Finding B output
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        # Track which hashes the inner-loop's cycle-waste-breaker uses by
+        # capturing the value of _detect_meaningful_changes' second arg
+        # (cycle_start_hashes for the in-cycle progress check at line 2294).
+        observed_calls = []
+
+        def detect_side_effect(cwd, hashes):
+            observed_calls.append(hashes)
+            return ["src/module.py"]
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=["src/module.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            side_effect=detect_side_effect,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step3" in label:
+                    return (True, "Root cause: CODE_BUG in module.py", 0.1, "gpt-4")
+                if "step9" in label:
+                    return (True, "Tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            # Must not crash on None snapshot — the recapture path handles it.
+            result = run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert result is not None
+        # The orchestrator should have proceeded normally — Step 3 reruns
+        # (last_completed_step=0 means we start from Step 1) and the
+        # workflow continues. None of the cycle-waste-breaker baselines
+        # should have been the stale prior-cycle snapshot.
+        # Specifically, observed_calls should never include a hashes dict
+        # that wasn't either the restored initial_file_hashes or a freshly
+        # captured snapshot from this cycle.
+        restored_initial = resumed_state["initial_file_hashes"]
+        for h in observed_calls:
+            # Either it's the restored initial snapshot (workflow-start
+            # diff) or a fresh capture (cycle_start_hashes baseline). The
+            # one thing it must NOT be is None — that would mean the
+            # recapture didn't fire.
+            assert h is not None, (
+                "_detect_meaningful_changes was invoked with hashes=None — "
+                "the post-rollover recapture path failed to seed a fresh "
+                "cycle_start_hashes after Finding B's None snapshot."
+            )
+
+    def test_main_save_preserves_empty_cycle_start_hashes_dict(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Codex P2 regression (iteration 5): the main-loop save site at
+        line ~2238 originally used a truthy check
+        (``dict(cycle_start_hashes) if cycle_start_hashes else None``),
+        which collapses an empty dict ``{}`` to ``None``. ``{}`` is a
+        valid baseline (cycle started from a clean tree — any file written
+        later is in-cycle progress); persisting it as ``None`` makes
+        resume treat the snapshot as missing and re-capture the
+        already-edited tree, mis-detecting no progress.
+
+        Fix: use ``isinstance(cycle_start_hashes, dict)`` so ``{}`` is
+        preserved as ``{}`` and only ``None`` (truly missing /
+        post-rollover sentinel) serializes as null.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+        e2e_fix_default_args["max_cycles"] = 1
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        saved_states = []
+
+        def capture_save(cwd, issue_number, workflow_name, state_data,
+                         state_dir, repo_owner, repo_name, use_github_state,
+                         github_comment_id):
+            snapshot = state_data.get("cycle_start_hashes")
+            if isinstance(snapshot, dict):
+                snapshot = dict(snapshot)
+            saved_states.append({
+                "current_cycle": state_data.get("current_cycle"),
+                "last_completed_step": state_data.get("last_completed_step"),
+                "cycle_start_hashes": snapshot,
+            })
+            return None
+
+        # _get_file_hashes returns {} for both the workflow-start snapshot
+        # and the cycle-1 start snapshot — simulating a clean tree.
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            side_effect=capture_save,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._get_file_hashes",
+            return_value={},
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_changed_files",
+            return_value=[],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._detect_meaningful_changes",
+            return_value=[],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ):
+            def side_effect(*args, **kwargs):
+                label = kwargs.get("label", "")
+                if "step9" in label:
+                    return (True, "Tests pass. ALL_TESTS_PASS", 0.1, "gpt-4")
+                return (True, f"Output for {label}", 0.1, "gpt-4")
+
+            mock_run.side_effect = side_effect
+
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        # At least one main-loop save fired before the workflow exited.
+        # The persisted cycle_start_hashes MUST be {} (the clean-tree
+        # baseline), NOT None.
+        main_loop_saves = [
+            s for s in saved_states
+            if s["last_completed_step"] is not None
+            and s["last_completed_step"] > 0
+        ]
+        assert main_loop_saves, (
+            f"No main-loop save was captured; saved_states={saved_states}. "
+            "The test setup needs adjustment."
+        )
+        for save in main_loop_saves:
+            assert save["cycle_start_hashes"] == {}, (
+                f"Main-loop save collapsed empty cycle_start_hashes to "
+                f"{save['cycle_start_hashes']!r}; expected the empty dict "
+                f"baseline to survive serialization. Full save: {save}"
+            )
+
+
+# ============================================================================
 # Issue #1001: .gh-wrapper artifact filter (runtime defect 1)
 # ============================================================================
 
@@ -7154,6 +8718,87 @@ class TestPostStep9ResumeRoutesToCleanupNotStep1:
             "_commit_and_push when resume re-verification confirms the "
             "cached Step 9 success token."
         )
+
+    def test_resume_with_step3_not_a_bug_and_step9_success_preserves_step9_routing(
+        self, mock_deps, tmp_path
+    ):
+        """Greg review regression for PR #1035.
+
+        A completed cycle with cached Step 9 ``ALL_TESTS_PASS`` is authoritative.
+        The resume-time Step 3 NOT_A_BUG guard must not demote Step 3 first and
+        rewind ``last_completed_step`` before the Step 9 success branch can
+        re-verify and fall through to commit/cleanup/CI.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1035,
+            "current_cycle": 2,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "NOT_A_BUG",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — verification succeeded",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": ["src/app.py"],
+            "dev_unit_states": {},
+            "initial_file_hashes": {"src/app.py": "initial"},
+            "cycle_start_hashes": {"src/app.py": "cycle-start"},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+        mock_deps["hashes"].return_value = {"src/app.py": "current"}
+
+        executed_labels = []
+
+        def fail_if_step_runs(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            raise AssertionError(
+                f"Steps 1-9 must not run after cached Step 9 success: {executed_labels}"
+            )
+
+        mock_deps["run"].side_effect = fail_if_step_runs
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_ok.py"],
+        ) as extract_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "pytest exit code 0"),
+        ) as verify_mock:
+            success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1035",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1035,
+                issue_author="user",
+                issue_title="Resume with Step 3 NOT_A_BUG and Step 9 success",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        assert extract_mock.called and verify_mock.called
+        executed_steps = self._executed_step_numbers(executed_labels)
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Cached Step 9 success must route directly to post-success work; "
+            f"executed steps: {sorted(executed_steps)} labels={executed_labels}"
+        )
+        assert success is True, final_message
+        assert mock_deps["commit"].called
 
     def test_resume_reverify_failure_persists_failed_marker_before_advancing(
         self, mock_deps, tmp_path

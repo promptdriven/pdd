@@ -297,3 +297,4 @@ fake_test_output.py
 github_token
 diff_base.txt
 modules.txt
+.loop/
