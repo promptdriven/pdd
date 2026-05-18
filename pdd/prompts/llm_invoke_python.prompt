@@ -104,6 +104,7 @@
     - 'model_name': Name of the selected model.
     - 'thinking_output': Reasoning output if available.
     - 'finish_reason': Provider completion reason when available. For litellm.completion/batch_completion, use the LiteLLM callback's `completion_response.choices[0].finish_reason`; for OpenAI Responses API, use the response status (for example "completed"). Return None when unavailable.
+    - 'attempted_models': Chronological list[str] of every model name that was attempted during this `llm_invoke` call, in the order attempted, ending with the successful model. Includes (1) any cloud attempt that recoverably failed via `CloudFallbackError` / `CloudInvocationError` and fell back to local, recorded as the cloud-routed model name (e.g. `"cloud:<base_model>"` or the cloud-reported model when known), and (2) every local candidate model that was tried, whether it succeeded or was skipped due to context-window overflow, schema validation failure, or other fallback-eligible errors. For a single-attempt successful call this is a one-element list containing the successful model. The successful model is always the LAST entry and equals `model_name`. Never empty on success; always present in the return dict.
 
 % Model Selection:
     - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate).
@@ -211,6 +212,30 @@
       RuntimeError: token count, model context limits attempted, usage percentage, and guidance
       to reduce prompt size or use a model with a larger context window.
     - After exhausting all candidates: Raise RuntimeError.
+
+% Attempted-Models History:
+    - Maintain a per-call chronological `attempted_models: list[str]` initialized to `[]` at the
+      top of `llm_invoke`. Append each candidate model name BEFORE the LLM call (so models skipped
+      mid-call due to context-window pre-validation or auth-error skip are still recorded).
+    - Cloud path: When cloud execution is attempted, append the cloud-routed model name (use the
+      cloud response's `modelName` when available, otherwise the base model from
+      `$PDD_MODEL_DEFAULT` prefixed with `"cloud:"`). Do this BEFORE raising/catching
+      CloudFallbackError or CloudInvocationError so cloud→local fallbacks preserve the cloud
+      attempt in the history.
+    - Local fallback loop: Append each local candidate model when its iteration begins, regardless
+      of whether it ultimately succeeds, is skipped (context window overflow, missing api_key with
+      PDD_FORCE, github_copilot OAuth token missing), or fails with a fallback-eligible error
+      (SchemaValidationError, ContextWindowExceededError, recoverable API errors).
+    - Include `attempted_models` (a copy of the list) in the returned dictionary on success.
+    - On terminal RuntimeError (all candidates exhausted), attach the list to the exception as an
+      `attempted_models` attribute via `setattr(exc, "attempted_models", list(attempted_models))`
+      so callers can still surface the full history on failure.
+    - Publish progress to the Click context for non-LLM consumers (e.g. `track_cost`):
+      attempt to read `click.get_current_context(silent=True)`; if a context is returned and
+      `ctx.obj` is a dict (initialize an empty dict on `ctx.obj` only if `ctx.obj is None`,
+      never overwrite a non-dict), set `ctx.obj['attempted_models'] = list(attempted_models)` after
+      each append. When no Click context exists (library usage, tests), this is a silent no-op —
+      never raise from the context publication step.
 
 % Cloud Execution:
     - Define three cloud-related exceptions:
