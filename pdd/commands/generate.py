@@ -227,6 +227,17 @@ def generate(
                 f"pdd generate --incremental --experimental-prd {target}"
             )
 
+        # ----- experimental-prd requires a PRD-like target -----------------
+        # `--experimental-prd` is only valid when the target is a GitHub issue
+        # URL or a PRD-like file. Reject combinations like `--template` or a
+        # plain prompt file so the flag cannot silently fall through to
+        # standard code generation.
+        if incremental and experimental_prd and not (is_issue or is_prd):
+            raise click.UsageError(
+                "--experimental-prd requires a GitHub issue URL or a PRD-like "
+                "file (e.g. .md/.markdown/.prd) as the target."
+            )
+
         # ----- incremental PRD mode ----------------------------------------
         if incremental and experimental_prd and (is_issue or is_prd):
             forbidden = {

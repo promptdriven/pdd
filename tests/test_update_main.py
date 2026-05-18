@@ -3721,14 +3721,12 @@ def test_repo_mode_clear_run_report_silent_unlink_failure_warns(
     capsys,
     tmp_path,
 ):
-    """Regression for issue #1057 (round 4): ``clear_run_report`` in
+    """Regression for issue #1057 (round 4+): ``clear_run_report`` in
     ``pdd/operation_log.py`` silently swallows ``OSError`` on the actual
-    ``os.remove`` (lines 317-320). The previous repo-mode regression test only
-    forced ``clear_run_report`` itself to raise, which did not exercise the
-    real-world filesystem failure path. Repo-mode must verify that the run
-    report is actually gone after the call and surface a non-fatal warning if
-    it remains; otherwise a fresh fingerprint can coexist with a stale
-    ``_run.json`` describing the pre-update files.
+    ``os.remove`` (lines 317-320). Repo-mode must verify that the run report
+    is actually gone after the call, surface a non-fatal warning if it
+    remains, AND skip ``save_fingerprint`` so a fresh fingerprint cannot
+    coexist with a stale ``_run.json`` describing the pre-update files.
     """
     def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
         return {
@@ -3776,10 +3774,10 @@ def test_repo_mode_clear_run_report_silent_unlink_failure_warns(
     # clear_run_report attempted for each successful pair, but it silently
     # did nothing (no exception raised, no file removed).
     assert mock_clear_rr.call_count == mock_update_file_pair.call_count
-    # save_fingerprint still runs per pair — the partial-sync state we want
-    # the user to know about.
-    assert mock_save_fp.call_count == mock_update_file_pair.call_count
-    assert mock_save_fp.call_count >= 1
+    # save_fingerprint must be SKIPPED when the stale run report remains,
+    # so we don't claim finalized metadata while runtime verification still
+    # describes the pre-update files (issue #1057).
+    assert mock_save_fp.call_count == 0
     # Defensive warning surfaced to the user because the report file still
     # exists after clear_run_report returned.
     out = capsys.readouterr().out

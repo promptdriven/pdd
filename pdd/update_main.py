@@ -1359,34 +1359,39 @@ def update_main(
                             # Surface that as a non-fatal warning so the user
                             # knows runtime verification state may still
                             # describe the pre-mutation files.
+                            _stale_remains = False
                             if _pre_existed and _stale_report_path is not None:
                                 try:
                                     _still_there = _stale_report_path.exists()
                                 except Exception:
                                     _still_there = False
-                                if _still_there and not quiet:
-                                    rprint(
-                                        f"[warning][metadata] Run report clear failed for "
-                                        f"{basename} ({language}): "
-                                        f"{_stale_report_path} still exists after "
-                                        f"clear_run_report; runtime verification state "
-                                        f"may still describe the pre-update files."
-                                        f"[/warning]"
+                                if _still_there:
+                                    _stale_remains = True
+                                    if not quiet:
+                                        rprint(
+                                            f"[warning][metadata] Run report clear failed for "
+                                            f"{basename} ({language}): "
+                                            f"{_stale_report_path} still exists after "
+                                            f"clear_run_report; skipping fingerprint update so a "
+                                            f"fresh fingerprint does not coexist with a stale "
+                                            f"run report (issue #1057)."
+                                            f"[/warning]"
+                                        )
+                            if not _stale_remains:
+                                try:
+                                    paths = {
+                                        "prompt": Path(prompt_path),
+                                        "code": Path(code_path),
+                                    }
+                                    save_fingerprint(
+                                        basename, language,
+                                        operation="update",
+                                        paths=paths,
+                                        cost=result.get("cost", 0.0),
+                                        model=result.get("model", "unknown"),
                                     )
-                            try:
-                                paths = {
-                                    "prompt": Path(prompt_path),
-                                    "code": Path(code_path),
-                                }
-                                save_fingerprint(
-                                    basename, language,
-                                    operation="update",
-                                    paths=paths,
-                                    cost=result.get("cost", 0.0),
-                                    model=result.get("model", "unknown"),
-                                )
-                            except Exception:
-                                pass  # Best-effort; don't fail the update
+                                except Exception:
+                                    pass  # Best-effort; don't fail the update
                 else:
                     if "Success" in result.get("status", ""):
                         try:
