@@ -1056,8 +1056,14 @@ def sync_main(
                                     ):
                                         break
                                     if not quiet:
+                                        if isinstance(exc, PublicSurfaceRegressionError):
+                                            failure_label = "Public surface regression"
+                                        elif isinstance(exc, TestChurnError):
+                                            failure_label = "Test churn threshold exceeded"
+                                        else:
+                                            failure_label = "Architecture conformance failed"
                                         rprint(
-                                            "[yellow]Architecture conformance failed; "
+                                            f"[yellow]{failure_label}; "
                                             f"retrying generation with repair directive "
                                             f"(signature: {', '.join(new_signature) or '<none>'}).[/yellow]"
                                         )

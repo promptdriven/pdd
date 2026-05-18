@@ -96,6 +96,14 @@
 - Bump package metadata, README/PyPI version references, and shell completions from 0.0.237 to 0.0.238.
 - Tighten `.pdd/meta` ignore rules while retaining the required run reports for long-running metadata/auto-heal modules.
 
+### Chore
+
+- Refresh Cloud Batch test-duration data and synchronize prompt, example, architecture, and `.pdd/meta` artifacts for the updated modules.
+
+### Test
+
+- Add regression coverage for generated-PR auto-heal authorization, metadata finalization/staging failures, default update fingerprinting, redirected-output skips, scoped global sync dependency handling, duplicate dry-run guard behavior, and skipped workflow completion.
+
 ## v0.0.237 (2026-05-13)
 
 ### CI
