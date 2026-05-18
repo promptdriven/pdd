@@ -1,72 +1,123 @@
-import click
-from typing import Optional, Tuple
+"""Example showing how to use the `track_cost` decorator from `pdd.track_cost`.
+
+The decorator wraps a Click command function, records the per-command cost,
+the model that succeeded, and the chronological list of attempted models, then
+appends a row to the CSV file specified via `--output-cost` (or the
+`PDD_OUTPUT_COST_PATH` environment variable).
+
+Each CSV row contains:
+    - timestamp:        ISO-8601 datetime of when the command started
+    - model:            successful model name (string)
+    - command:          Click command name (string)
+    - cost:             cost in USD (float, e.g. 0.05 means $0.05)
+    - input_files:      semicolon-separated input file paths
+    - output_files:     semicolon-separated output file paths
+    - attempted_models: semicolon-separated chronological list of models tried
+                        (e.g. "vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat")
+"""
+
 import os
-from pdd.track_cost import track_cost  # Absolute import of the track_cost decorator
-from rich import print as rprint
+import sys
+import tempfile
+
+# Ensure `pdd.track_cost` resolves no matter where this script is launched from.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import click  # noqa: E402
+from typing import Optional, Tuple  # noqa: E402
+
+from pdd.track_cost import track_cost  # noqa: E402
+
 
 @click.group()
-@click.option('--output-cost', type=click.Path(), help='Enable cost tracking and output a CSV file with usage details.')
+@click.option(
+    '--output-cost',
+    type=click.Path(),
+    help='Path to a CSV file where per-command cost rows will be appended.',
+)
 @click.pass_context
 def cli(ctx, output_cost):
-    """PDD Command-Line Interface.
-    
-    PDD is a tool for processing prompts and generating outputs with cost tracking.
-    """
+    """Tiny demo CLI that mimics how `pdd` wires track_cost into its commands."""
     ctx.ensure_object(dict)
     ctx.obj['output_cost'] = output_cost
+    # Simulate what `llm_invoke` does when it tries multiple models in order
+    # (the first attempt failed -> fallback succeeded). This list becomes the
+    # `attempted_models` column.
+    ctx.obj['attempted_models'] = [
+        'vertex_ai/gemini-2.5-pro',
+        'deepseek/deepseek-chat',
+    ]
+
 
 @cli.command()
-@click.option(
-    '--prompt-file',
-    type=click.Path(exists=True),
-    required=True,
-    help='Path to the input prompt file.'
-)
-@click.option(
-    '--output',
-    type=click.Path(),
-    required=False,
-    help='Path to the output file.'
-)
+@click.option('--prompt-file', type=click.Path(exists=True), required=True,
+              help='Path to a prompt file (input).')
+@click.option('--output', type=click.Path(), required=False,
+              help='Path to write generated output (output).')
 @click.pass_context
 @track_cost
 def generate(ctx, prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
-    """
-    Generate output based on the provided prompt file.
-    
-    This command reads a prompt from the specified input file, processes it,
-    and writes the result to the output file. It also returns the cost of
-    the operation and the model used.
-    
-    Parameters:
-        prompt_file (str): Path to the input prompt file.
-        output (Optional[str]): Path to the output file. If not provided, output is printed to console.
-    
+    """Pretend to run an LLM and return (output_path, cost_usd, model_name).
+
     Returns:
-        Tuple[str, float, str]:
-            - Generated output as a string.
-            - Cost of execution in dollars per million tokens.
-            - Model name used for generation.
+        Tuple of (output_string, cost_in_dollars, successful_model_name).
+        track_cost extracts cost from index [-2] and model from index [-1].
     """
-    # Simulate processing the prompt and generating output
-    with open(prompt_file, 'r', encoding='utf-8') as file:
-        prompt = file.read()
-    
-    # Placeholder for actual generation logic
-    generated_output = f"Processed prompt: {prompt}"
-    
-    # Simulate cost and model name
-    cost = 0.05  # Dollars per million tokens
-    model_name = "gpt-4"
-    
-    # Write output to file if specified
+    with open(prompt_file, 'r', encoding='utf-8') as fh:
+        prompt = fh.read()
+
+    generated = f"Processed prompt ({len(prompt)} chars)"
     if output:
-        with open(output, 'w', encoding='utf-8') as out_file:
-            out_file.write(generated_output)
-    else:
-        rprint(generated_output)
-    
-    return generated_output, cost, model_name
+        with open(output, 'w', encoding='utf-8') as fh:
+            fh.write(generated)
+
+    # cost: $0.05, model: the one that eventually succeeded
+    return generated, 0.05, 'deepseek/deepseek-chat'
+
+
+def _print_csv(cost_path: str) -> None:
+    print('--- contents of cost CSV ---')
+    with open(cost_path, 'r', encoding='utf-8') as fh:
+        sys.stdout.write(fh.read())
+    print('--- end of cost CSV ---')
+
+
+def main() -> int:
+    # Use a temp directory so we never pollute the user's working directory.
+    with tempfile.TemporaryDirectory() as tmpdir:
+        prompt_path = os.path.join(tmpdir, 'demo.prompt')
+        output_path = os.path.join(tmpdir, 'demo.out')
+        cost_path = os.path.join(tmpdir, 'cost.csv')
+
+        with open(prompt_path, 'w', encoding='utf-8') as fh:
+            fh.write('Hello, world!')
+
+        # IMPORTANT: track_cost skips CSV writes when PYTEST_CURRENT_TEST is set.
+        # Make sure it is NOT set when running the example standalone.
+        os.environ.pop('PYTEST_CURRENT_TEST', None)
+
+        # Invoke the Click CLI in-process via standalone_mode=False so we can
+        # inspect the resulting CSV here.
+        cli(
+            [
+                '--output-cost', cost_path,
+                'generate',
+                '--prompt-file', prompt_path,
+                '--output', output_path,
+            ],
+            standalone_mode=False,
+        )
+
+        _print_csv(cost_path)
+
+        # The last column must be attempted_models — newest column.
+        with open(cost_path, 'r', encoding='utf-8') as fh:
+            header = fh.readline().rstrip('\r\n').split(',')
+        assert header[-1] == 'attempted_models', f'expected attempted_models last, got {header}'
+        print('attempted_models column is last:', header[-1] == 'attempted_models')
+
+    return 0
+
 
 if __name__ == '__main__':
-    cli(['--output-cost', 'cost.csv', 'generate', '--prompt-file', 'README.md', '--output', 'output.txt'])
+    sys.exit(main())

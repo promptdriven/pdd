@@ -1,8 +1,8 @@
 {
-  "pdd_version": "0.0.241",
-  "timestamp": "2026-05-17T18:33:34.290918+00:00",
-  "command": "example",
-  "prompt_hash": "08f20f2e33886688d14103186bc55760a745b23e9bbe2626a0a7a6c4e1c1528c",
+  "pdd_version": "0.0.233",
+  "timestamp": "2026-05-18T17:46:38.973139+00:00",
+  "command": "fix",
+  "prompt_hash": "b79e36ee84766cd774e5d98c67db28caa4571f4287d543b49ff664b8ff757939",
   "code_hash": "42370b9d59b0caca264991021fb612f02bdae906c8043451288a64697af894ae",
   "example_hash": "48c5aece0ddd153f95ec8a53802d2173d4da12a920b398c5feebb307b9958417",
   "test_hash": "630ae15410752b1bda2608d72ab104add66b1f9cbbd134c003183339b46353f9",
@@ -15,10 +15,7 @@
     "test_llm_invoke_vertex_retry.py": "eafe91ba9376dc7e2da36faf3cd2de3cef50f70cf1c4fc5655e373deb7f50c26"
   },
   "include_deps": {
-    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/path_resolution_example.py": "15ba84fd11c61af8fa12dcb19d63d42f0cb09b747542bf20e69650b8ff4ac137",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
-    "pdd/core/cloud.py": "0487c0b989996af144df3af1c818a6eeafe52fd209710e5a54eb43990c89ae97",
-    "pdd/server/token_counter.py": "3391a7c708713e3d370bf9e981a837f1f7ade08af75d69f402301dbf65a79c9a"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }
