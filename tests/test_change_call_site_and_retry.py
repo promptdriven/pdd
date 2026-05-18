@@ -200,9 +200,11 @@ class TestCallSiteEnumeration:
         judgment = _judge(
             modified_prompt,
             "Does this text explicitly mention ALL FOUR of these function "
-            "names as call sites that need updating: ingest, transform, "
-            "export_csv, audit_log? Each must appear by name, not just as "
-            "a vague reference like 'all call sites'.",
+            "names by name: ingest, transform, export_csv, audit_log? "
+            "Each name must appear literally in the text (in any context — "
+            "as a call site, as a definition, in a list, etc.), not just as "
+            "a vague collective reference like 'all call sites' or "
+            "'the pipeline functions'.",
         )
         assert judgment.passed, (
             f"LLM did not enumerate all 4 call sites. "

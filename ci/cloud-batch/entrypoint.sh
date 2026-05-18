@@ -133,6 +133,13 @@ mkdir -p "${WORK_DIR}"
 tar xzf "${SOURCE_DIR}/pdd-source.tar.gz" -C "${WORK_DIR}"
 cd "${WORK_DIR}"
 
+# Tarball excludes .git, so setuptools-scm cannot infer a version. submit.sh
+# stamps the host's `git describe` value into .pdd-package-version; export it
+# so the editable install below succeeds without the .git tree.
+if [ -f "${WORK_DIR}/.pdd-package-version" ]; then
+    export SETUPTOOLS_SCM_PRETEND_VERSION_FOR_PDD_CLI="$(tr -d '\n' < "${WORK_DIR}/.pdd-package-version")"
+fi
+
 # Install package in dev mode (deps already in image, --no-deps is fast ~5s)
 pip install -e ".[dev]" --no-deps --quiet 2>/dev/null || pip install -e . --no-deps --quiet
 SETUP_END=$(date +%s)
