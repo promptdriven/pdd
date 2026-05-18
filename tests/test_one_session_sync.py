@@ -1686,6 +1686,54 @@ class TestRunOneSessionSync:
 
     @patch("pdd.one_session_sync.run_agentic_task")
     @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
+    def test_one_session_deletion_gate_honors_prompt_breaking_change(
+        self, mock_build, mock_task, tmp_path, monkeypatch
+    ):
+        """An anchored ``BREAKING-CHANGE: rewrite tests`` directive in
+        the prompt MUST disable the deletion-as-churn shortcut, so the
+        deletion path is symmetric with the wholesale-rewrite path
+        (which already honors the prompt opt-out via
+        ``_verify_test_churn`` → ``_prompt_allows_test_churn``). Without
+        this symmetry, the prompt-based opt-out works when the agent
+        rewrites the test file but silently fails when the agent
+        empties/deletes it."""
+        monkeypatch.delenv("PDD_SKIP_TEST_CHURN_GATE", raising=False)
+        monkeypatch.delenv("PDD_SKIP_CONFORMANCE", raising=False)
+        monkeypatch.delenv("PDD_REPAIR_DIRECTIVE", raising=False)
+
+        pdd_files = _make_pdd_files(tmp_path)
+        pdd_files["prompt"].write_text(
+            "Module spec for my_module.\n"
+            "BREAKING-CHANGE: rewrite tests for the new helper API\n",
+            encoding="utf-8",
+        )
+        original_tests = (
+            "def test_a(): pass\n"
+            "def test_b(): pass\n"
+        )
+        pdd_files["test"].write_text(original_tests, encoding="utf-8")
+
+        def fake_task(*args, **kwargs):
+            if pdd_files["test"].exists():
+                pdd_files["test"].unlink()
+            return True, "done", 0.5, "claude-code"
+
+        mock_task.side_effect = fake_task
+
+        result = run_one_session_sync(
+            basename="my_module",
+            language="python",
+            pdd_files=pdd_files,
+            project_root=tmp_path,
+        )
+
+        assert result["success"] is True
+        # Deletion accepted (NOT restored) because the prompt explicitly
+        # opted out of the test-churn gate.
+        assert not pdd_files["test"].exists()
+
+    @patch("pdd.one_session_sync.run_agentic_task")
+    @patch("pdd.one_session_sync.build_one_session_prompt", return_value="mega prompt")
     def test_one_session_surface_gate_runs_before_churn_gate(
         self, mock_build, mock_task, tmp_path, monkeypatch
     ):
