@@ -123,7 +123,17 @@ REVIEW_TRAILING_SECTION_SPLIT_RE = (
 
 # Statuses that always mean "not clean" regardless of how a caller widens
 # `clean_reviewer_states` — provider-side outages must never silently ship.
-HARD_NOT_CLEAN_STATES: frozenset[str] = frozenset({"failed", "degraded", "missing"})
+#
+# ``stale`` was added for issue #1062: it means the verifier-reviewed
+# SHA is no longer the SHA the remote PR head points at, so the
+# verification is operationally meaningless even though it produced
+# a clean verdict on its own SHA. Treating it as hard-not-clean
+# ensures ``_resolve_issue_aligned`` returns ``"unknown"`` and
+# ``_render_final_report`` does not claim a fresh clean final review
+# while the live PR head has drifted out from under it.
+HARD_NOT_CLEAN_STATES: frozenset[str] = frozenset(
+    {"failed", "degraded", "missing", "stale"}
+)
 
 
 # Best-effort secret patterns scrubbed before the reviewer's stderr tail
@@ -561,7 +571,20 @@ class ReviewResult:
 
 @dataclass
 class FixResult:
-    """Result from a fixer role."""
+    """Result from a fixer role.
+
+    The per-fix verification fields below were added for issue #1062.
+    The fixer's ``success`` flag means only "the fixer subprocess
+    completed without error" — not "the finding was actually fixed."
+    A finding may only become ``fixed`` after:
+      1. ``_commit_and_push_if_changed`` produced a real commit SHA
+         (``push_status="pushed"`` and ``pushed_head_sha`` is set), and
+      2. a verifier reviewed that exact SHA and reported it clean
+         (``verification_status="verified"`` and
+         ``verified_head_sha`` equals ``pushed_head_sha``), and
+      3. the current remote PR head still points at that SHA at
+         final-report time (handled in ``_render_final_report``).
+    """
 
     fixer: str
     success: bool
@@ -570,6 +593,27 @@ class FixResult:
     raw_output: str = ""
     dispositions: Dict[str, str] = field(default_factory=dict)
     rationales: Dict[str, str] = field(default_factory=dict)
+    # Push outcome — one of:
+    #   "unattempted" — fixer ran but no push was attempted (e.g. budget
+    #       exhausted before reaching the push call).
+    #   "no_changes" — push call returned ``pushed=True`` but the
+    #       worktree had no diff (or no eligible diff) to commit. The
+    #       verifier MUST NOT run; the finding MUST stay open.
+    #   "pushed"     — push call returned a real commit SHA in
+    #       ``pushed_head_sha``.
+    #   "failed"     — push call returned ``pushed=False``.
+    push_status: str = "unattempted"
+    pushed_head_sha: Optional[str] = None
+    verified_head_sha: Optional[str] = None
+    # Verification outcome — one of:
+    #   "unverified" — default; no verifier confirmation yet.
+    #   "verified"   — verifier ran against ``pushed_head_sha`` and
+    #       reported clean for the fixed findings.
+    #   "stale"      — verifier ran and reported clean, but the remote
+    #       PR head later advanced past ``verified_head_sha``.
+    #   "skipped"    — verifier was intentionally not run (e.g. no diff
+    #       was pushed, or budget was exhausted before the verify pass).
+    verification_status: str = "unverified"
 
 
 @dataclass
@@ -685,6 +729,17 @@ class ReviewLoopState:
     # codex as the fixer after gemini took over reviewing, even
     # though the docs say codex (the original reviewer) is excluded.
     original_reviewer: Optional[str] = None
+    # Current SHA of the remote PR head (``refs/heads/<head_ref>`` on
+    # the head fork) at final-report rendering time. Captured by
+    # ``_fetch_remote_pr_head_sha`` after the loop exits but before
+    # ``_render_final_report`` runs, so a remote that advanced past
+    # the verified SHA can downgrade ``fresh_final_status`` to
+    # ``"stale"`` instead of silently rendering ``clean``. ``None``
+    # when the remote fetch failed (e.g. transient network/auth
+    # failure) — in that case the gate degrades gracefully and the
+    # report keeps the in-loop ``fresh_final_status`` rather than
+    # flipping to stale on every fetch hiccup. Added for #1062.
+    remote_pr_head_sha: Optional[str] = None
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1034,7 +1089,7 @@ def run_checkup_review_loop(
             # and would prematurely trip the oscillation/no-progress
             # guards downstream.
 
-        pushed, push_message = _commit_and_push_if_changed(
+        pushed, push_message, pushed_sha = _commit_and_push_if_changed(
             worktree,
             pr_metadata,
             f"fix: address {reviewer} review-loop findings",
@@ -1043,8 +1098,29 @@ def run_checkup_review_loop(
             # Failed push aborts the loop. We deliberately do NOT run the
             # verifier here — the local worktree contains a commit that the
             # PR does not, so a verify pass would falsely report "fixed".
+            fix.push_status = "failed"
             state.stop_reason = push_message
             break
+
+        if pushed_sha is None:
+            # ``pushed=True`` with no SHA is the "no diff" / "no eligible
+            # changes" sentinel: the fixer claimed success but the
+            # worktree had nothing to commit, so the PR head did not
+            # advance. Running the verifier here would let the fixer
+            # rationale flow into the verify prompt and accept itself
+            # — the smoking-gun bug from PR #1055 / issue #1062. Skip
+            # verify, record the no-diff outcome on the fix, and stop
+            # so the report stays honest.
+            fix.push_status = "no_changes"
+            fix.verification_status = "skipped"
+            state.stop_reason = (
+                f"Fixer {fix.fixer} reported success but produced no diff to "
+                "push; verification skipped."
+            )
+            break
+
+        fix.push_status = "pushed"
+        fix.pushed_head_sha = pushed_sha
 
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
@@ -1097,6 +1173,14 @@ def run_checkup_review_loop(
             if finding.key not in verify_open_keys
         ]
         _mark_findings_fixed(state, fixed_findings)
+        # The verifier accepted the pushed SHA. Record both the SHA it
+        # actually reviewed and the verification verdict on the fix so
+        # ``_render_final_report`` can show the trust chain (#1062).
+        # The stale-SHA gate after the loop may downgrade this later
+        # if the remote head advances before the report renders.
+        fix.verified_head_sha = pushed_sha
+        if fixed_findings:
+            fix.verification_status = "verified"
         _record_reviewer_feedback(state, verify_open_findings, fix)
         pending_findings = verify_open_findings
         if _budget_exhausted(config, state, deadline):
@@ -1131,6 +1215,48 @@ def run_checkup_review_loop(
 
     if state.fresh_final_status == "missing" and state.reviewer_status.get(reviewer) == "clean":
         state.fresh_final_status = "clean"
+
+    # Stale-SHA gate (#1062): after the loop has set
+    # ``fresh_final_status``, fetch the current remote PR head and
+    # confirm it still equals the last SHA the verifier reviewed. If
+    # the remote has advanced, downgrade to ``"stale"`` (a hard-not-
+    # clean state) and mark each verified fix's
+    # ``verification_status="stale"`` so the rendered report does not
+    # imply the live PR head is the SHA that was reviewed. A None
+    # remote SHA (transient fetch failure) degrades gracefully — we
+    # keep the in-loop status rather than flipping every report to
+    # stale on a network hiccup.
+    if pr_metadata:
+        state.remote_pr_head_sha = _fetch_remote_pr_head_sha(worktree, pr_metadata)
+    if (
+        state.remote_pr_head_sha
+        and state.fresh_final_status == "clean"
+    ):
+        verified_shas = {
+            fix.verified_head_sha
+            for fix in state.fixes
+            if fix.verification_status == "verified" and fix.verified_head_sha
+        }
+        if verified_shas and state.remote_pr_head_sha not in verified_shas:
+            state.fresh_final_status = "stale"
+            for fix in state.fixes:
+                if fix.verification_status == "verified":
+                    fix.verification_status = "stale"
+            # Reopen any findings the verifier marked fixed: the live
+            # PR head no longer carries the verified SHA, so those
+            # findings are no longer demonstrably fixed.
+            for finding in state.findings:
+                if finding.status == "fixed":
+                    finding.status = "open"
+            if state.stop_reason in {
+                _clean_stop_reason(fresh_final=True),
+                _clean_stop_reason(fresh_final=False),
+                "",
+            }:
+                state.stop_reason = (
+                    "Remote PR head advanced past the verified SHA after the "
+                    "verifier ran; re-run review on the new head before merge."
+                )
 
     report = _finalize(context, state, roles, artifacts_dir)
     _post_review_loop_report(context, report, use_github_state)
@@ -2154,6 +2280,12 @@ def _run_fix(
 
 
 def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
+    # The base keys (``fixer``/``success``/``summary``/``changed_files``/
+    # ``dispositions``/``rationales``) are load-bearing for downstream
+    # consumers of ``final-state.json``. The four trust-boundary fields
+    # added for issue #1062 (``push_status``, ``pushed_head_sha``,
+    # ``verified_head_sha``, ``verification_status``) are appended
+    # additively so older readers keep working unchanged.
     return {
         "fixer": fix.fixer,
         "success": fix.success,
@@ -2161,6 +2293,10 @@ def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
         "changed_files": list(fix.changed_files),
         "dispositions": dict(fix.dispositions),
         "rationales": dict(fix.rationales),
+        "push_status": fix.push_status,
+        "pushed_head_sha": fix.pushed_head_sha,
+        "verified_head_sha": fix.verified_head_sha,
+        "verification_status": fix.verification_status,
     }
 
 
@@ -3453,8 +3589,16 @@ def _commit_and_push_if_changed(
     worktree: Path,
     pr_metadata: Dict[str, str],
     message: str,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, Optional[str]]:
     """Commit any worktree changes with the bot identity and push to the PR head ref.
+
+    Returns ``(pushed, message, pushed_sha)`` where ``pushed_sha`` is the
+    new commit SHA that actually landed on the PR branch, or ``None``
+    when no commit was created (no diff to push, no eligible diff, or
+    a failed push). The 3-tuple was introduced for issue #1062: the
+    review loop's verifier and "marked fixed" gate both key off this
+    SHA, so collapsing a no-diff "push" into a real-push success was
+    silently rendering unverified fixer claims as completed fixes.
 
     The actual push delegates to ``push_with_retry`` so that auth retries via
     ``PDD_GH_TOKEN_FILE`` stay shared with the e2e fix orchestrator. The review
@@ -3464,7 +3608,7 @@ def _commit_and_push_if_changed(
     """
     changed = _git_changed_files(worktree)
     if not changed:
-        return True, "No changes to push."
+        return True, "No changes to push.", None
 
     stage_cmds: List[List[str]] = [["git", "add", "-u"]]
     untracked = [
@@ -3478,10 +3622,10 @@ def _commit_and_push_if_changed(
     for cmd in stage_cmds:
         result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
         if result.returncode != 0:
-            return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
+            return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}", None
 
     if not _git_has_staged_changes(worktree):
-        return True, "No eligible changes to push."
+        return True, "No eligible changes to push.", None
 
     commit_cmd = [
         "git",
@@ -3495,14 +3639,18 @@ def _commit_and_push_if_changed(
     ]
     result = subprocess.run(commit_cmd, cwd=worktree, capture_output=True, text=True)
     if result.returncode != 0:
-        return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
+        return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}", None
 
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
     head_owner = pr_metadata.get("head_owner", "")
     head_repo = pr_metadata.get("head_repo", "")
     if not clone_url or not head_ref or not head_owner or not head_repo:
-        return False, "Cannot push fixes: PR head repo/ref metadata is unavailable."
+        return (
+            False,
+            "Cannot push fixes: PR head repo/ref metadata is unavailable.",
+            None,
+        )
 
     success, error = push_with_retry(
         worktree,
@@ -3514,7 +3662,7 @@ def _commit_and_push_if_changed(
         force_with_lease_on_non_fast_forward=False,
     )
     if success:
-        return True, "Pushed fixes to PR branch."
+        return True, "Pushed fixes to PR branch.", _git_head_sha(worktree)
     if _is_remote_advanced_push_error(error):
         rebased, rebase_message = _rebase_onto_updated_pr_head(
             worktree,
@@ -3524,7 +3672,7 @@ def _commit_and_push_if_changed(
             repo_name=head_repo,
         )
         if not rebased:
-            return False, rebase_message
+            return False, rebase_message, None
         success, error = push_with_retry(
             worktree,
             repo_owner=head_owner,
@@ -3535,8 +3683,34 @@ def _commit_and_push_if_changed(
             force_with_lease_on_non_fast_forward=False,
         )
         if success:
-            return True, "Pushed fixes to PR branch after rebasing onto updated PR head."
-    return False, f"Failed to push fixes to PR branch: {error.strip()}"
+            return (
+                True,
+                "Pushed fixes to PR branch after rebasing onto updated PR head.",
+                _git_head_sha(worktree),
+            )
+    return False, f"Failed to push fixes to PR branch: {error.strip()}", None
+
+
+def _git_head_sha(worktree: Path) -> Optional[str]:
+    """Return the worktree's current ``HEAD`` SHA, or ``None`` on failure.
+
+    Used by ``_commit_and_push_if_changed`` to attach the actual commit
+    SHA to the return tuple right after the push succeeds. Failure
+    degrades to ``None`` (rather than raising) so a transient
+    ``git rev-parse`` glitch cannot retroactively flip a successful
+    push into a failure — the loop will treat the run as a no-SHA
+    push and skip the verify gate, which is the safe direction.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    sha = (result.stdout or "").strip()
+    return sha or None
 
 
 def _is_remote_advanced_push_error(error: str) -> bool:
@@ -3645,6 +3819,79 @@ def _fetch_pr_head_for_rebase(
         return True, ""
     token_error = token_fetch.stderr.strip() or token_fetch.stdout.strip()
     return False, _redact_secret(token_error, token)
+
+
+def _fetch_remote_pr_head_sha(
+    worktree: Path,
+    pr_metadata: Dict[str, str],
+) -> Optional[str]:
+    """Fetch the current SHA of the remote PR head ref.
+
+    Uses ``git ls-remote <clone_url> refs/heads/<head_ref>`` and returns
+    the SHA on success, ``None`` on any failure (auth, network, missing
+    metadata). Token-bearing URLs follow the same pattern as
+    ``_fetch_pr_head_for_rebase``: try the plain ``clone_url`` first,
+    then retry with ``x-access-token:<token>@github.com`` only if an
+    auth-class error is detected.
+
+    Added for issue #1062: the review-loop final report uses this to
+    confirm that the verifier-reviewed SHA is still the SHA the remote
+    PR head points at. When the remote has advanced, the report
+    downgrades ``fresh_final_status`` to ``"stale"`` instead of
+    silently claiming a clean fresh final review.
+
+    Failure must not be fatal — a transient ``git ls-remote`` failure
+    would otherwise flip every final report to stale. The caller
+    decides what to do with ``None`` (keep the in-loop status).
+    """
+    clone_url = pr_metadata.get("clone_url", "")
+    head_ref = pr_metadata.get("head_ref", "")
+    head_owner = pr_metadata.get("head_owner", "")
+    head_repo = pr_metadata.get("head_repo", "")
+    if not clone_url or not head_ref:
+        return None
+
+    head_refspec = f"refs/heads/{head_ref}"
+
+    def _parse(stdout: str) -> Optional[str]:
+        for line in (stdout or "").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            sha = line.split(None, 1)[0].strip()
+            if sha:
+                return sha
+        return None
+
+    raw = subprocess.run(
+        ["git", "ls-remote", clone_url, head_refspec],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if raw.returncode == 0:
+        return _parse(raw.stdout)
+
+    error = raw.stderr.strip() or raw.stdout.strip()
+    if not _is_git_auth_error(error):
+        return None
+    if not head_owner or not head_repo:
+        return None
+
+    token = _github_token_from_env()
+    if not token:
+        return None
+
+    token_url = _github_tokenized_url(head_owner, head_repo, token)
+    token_run = subprocess.run(
+        ["git", "ls-remote", token_url, head_refspec],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if token_run.returncode != 0:
+        return None
+    return _parse(token_run.stdout)
 
 
 def _is_git_auth_error(error: str) -> bool:
@@ -3799,17 +4046,13 @@ def _write_final_state(
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
         "reviewer_feedback_by_key": dict(state.reviewer_feedback_by_key),
         "findings": [f.to_dict() for f in state.findings],
-        "fixes": [
-            {
-                "fixer": fix.fixer,
-                "success": fix.success,
-                "summary": fix.summary,
-                "changed_files": list(fix.changed_files),
-                "dispositions": dict(fix.dispositions),
-                "rationales": dict(fix.rationales),
-            }
-            for fix in state.fixes
-        ],
+        # ``_fix_result_payload`` is the single rendering authority for
+        # a ``FixResult`` so the JSON shape stays in lock-step with the
+        # per-fix verification fields added for issue #1062 (the legacy
+        # keys are preserved at the front of the dict for backward
+        # compatibility with existing ``final-state.json`` consumers).
+        "fixes": [_fix_result_payload(fix) for fix in state.fixes],
+        "remote_pr_head_sha": state.remote_pr_head_sha,
     }
     _write_artifact(artifacts_dir / "final-state.json", json.dumps(payload, indent=2))
 
@@ -4051,9 +4294,6 @@ def _render_final_report(
             or _has_hard_not_clean_state(state)
             or _has_limit_state(state)
         )
-        verification = (
-            "unverified" if unfinished_review else "verified"
-        )
         for fix in state.fixes:
             changed = ", ".join(fix.changed_files) if fix.changed_files else "none"
             # Failed fixer summaries contain raw subprocess output (e.g.
@@ -4064,12 +4304,49 @@ def _render_final_report(
             # downgraded by trip-wires that lived only in the failed
             # primary's audit row.
             safe_summary = _defang_adapter_trip_wires(fix.summary)
+            # Per-fix verification (#1062). The fixer's own ``success``
+            # is only a process flag (the subprocess returned 0); call
+            # it ``attempted`` until a verifier confirms ``verified``
+            # for this fix. ``failed`` still means the fixer process
+            # itself errored.
+            if not fix.success:
+                fixer_result = "failed"
+            elif fix.verification_status == "verified" and not unfinished_review:
+                fixer_result = "success"
+            else:
+                fixer_result = "attempted"
+            # Per-fix verification status, with a hard override to
+            # ``unverified`` when the global review state has unfinished
+            # work (limits hit, hard-not-clean reviewer, remaining
+            # findings) — the existing ``verification=unverified``
+            # contract for unfinished loops must keep holding.
+            if unfinished_review and fix.verification_status not in {
+                "skipped",
+                "stale",
+            }:
+                verification = "unverified"
+            else:
+                verification = fix.verification_status
+            sha_bits: List[str] = []
+            if fix.pushed_head_sha:
+                sha_bits.append(f"pushed_head_sha={fix.pushed_head_sha}")
+            if fix.verified_head_sha:
+                sha_bits.append(f"verified_head_sha={fix.verified_head_sha}")
+            sha_trail = ("; " + "; ".join(sha_bits)) if sha_bits else ""
             lines.append(
-                f"- {fix.fixer}: {'success' if fix.success else 'failed'}; "
-                f"verification={verification}; changed_files={changed}; {safe_summary}"
+                f"- {fix.fixer}: {fixer_result}; "
+                f"push_status={fix.push_status}; "
+                f"verification={verification}; "
+                f"changed_files={changed}{sha_trail}; {safe_summary}"
             )
     else:
         lines.append("- none")
+    if state.remote_pr_head_sha:
+        # Surface the live PR head SHA observed at final-report time
+        # so operators can compare it against any ``verified_head_sha``
+        # in the audit trail. Added for #1062.
+        lines.append("")
+        lines.append(f"remote_pr_head_sha={state.remote_pr_head_sha}")
     return "\n".join(lines)
 
 

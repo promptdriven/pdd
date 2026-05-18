@@ -363,7 +363,7 @@ class TestIssue1021CheckupReviewLoopMetadataLeak:
         with patch.object(
             crl, "push_with_retry", return_value=(True, "")
         ) as mock_push:
-            pushed, message = crl._commit_and_push_if_changed(
+            pushed, message, pushed_sha = crl._commit_and_push_if_changed(
                 tmp_repo,
                 pr_metadata,
                 "fix: address reviewer findings",
@@ -372,6 +372,12 @@ class TestIssue1021CheckupReviewLoopMetadataLeak:
         # push_with_retry should be invoked once the local commit lands.
         mock_push.assert_called()
         assert pushed is True, f"_commit_and_push_if_changed failed: {message}"
+        # `pushed_sha` is the new (#1062) 3rd element: a real commit
+        # SHA after a successful push. The exact value depends on the
+        # underlying git invocations in this test's `tmp_repo` fixture
+        # so we only assert presence here — the SHA itself is the
+        # responsibility of `_git_head_sha`, which has its own tests.
+        assert pushed_sha is not None and pushed_sha != ""
 
         committed = _staged_files(tmp_repo)
         leaked = sorted(

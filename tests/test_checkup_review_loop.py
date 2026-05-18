@@ -205,7 +205,24 @@ class TestCheckupReviewLoopRuntime:
                 "head_ref": "change/test",
             },
         )
-        monkeypatch.setattr(mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed"))
+        # ``_commit_and_push_if_changed`` returns a 3-tuple
+        # ``(pushed, message, pushed_sha)`` since #1062. The legacy
+        # default helper stubs return a non-None SHA so existing
+        # happy-path tests still flow through the verify step.
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: (True, "pushed", "sha-pushed"),
+        )
+        # ``_fetch_remote_pr_head_sha`` is the new stale-SHA gate
+        # helper. Default to matching ``sha-pushed`` so existing
+        # happy-path tests are not flipped to ``stale``.
+        monkeypatch.setattr(
+            mod,
+            "_fetch_remote_pr_head_sha",
+            lambda *a, **k: "sha-pushed",
+            raising=False,
+        )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
 
     def test_clean_pass_requires_primary_reviewer_only(
@@ -313,7 +330,7 @@ class TestCheckupReviewLoopRuntime:
         monkeypatch.setattr(
             mod,
             "_commit_and_push_if_changed",
-            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
+            lambda *a, **k: pushes.append("pushed") or (True, "pushed", "sha-pushed"),
         )
 
         success, report, cost, _model = run_checkup_review_loop(
@@ -399,7 +416,7 @@ class TestCheckupReviewLoopRuntime:
         monkeypatch.setattr(
             mod,
             "_commit_and_push_if_changed",
-            lambda *a, **k: pushes.append("pushed") or (True, "pushed"),
+            lambda *a, **k: pushes.append("pushed") or (True, "pushed", "sha-pushed"),
         )
 
         success, report, cost, _model = run_checkup_review_loop(
@@ -791,7 +808,7 @@ class TestCheckupReviewLoopRuntime:
             },
         )
         monkeypatch.setattr(
-            mod, "_commit_and_push_if_changed", lambda *a, **k: (False, "auth failed")
+            mod, "_commit_and_push_if_changed", lambda *a, **k: (False, "auth failed", None)
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
 
@@ -3770,6 +3787,66 @@ class TestPushWithRetryClonedRemote:
 
 
 class TestCommitAndPushIfChanged:
+    def test_no_diff_returns_pushed_true_with_none_sha(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The no-diff path (``_git_changed_files`` returns empty) must
+        report ``(True, "No changes to push.", None)``. The ``None`` SHA
+        is the load-bearing signal for the review-loop verifier gate
+        introduced in #1062 — it lets the caller distinguish a real
+        push from a no-op.
+        """
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: [])
+
+        success, message, pushed_sha = mod._commit_and_push_if_changed(
+            tmp_path,
+            {"clone_url": "x", "head_ref": "y", "head_owner": "o", "head_repo": "r"},
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert message == "No changes to push."
+        assert pushed_sha is None
+
+    def test_no_eligible_changes_returns_pushed_true_with_none_sha(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When all worktree changes are filtered (e.g. only ``.pdd/meta``
+        artifacts), the helper reports ``(True, "No eligible changes
+        to push.", None)`` so the loop never advances past the push
+        guard. Same trust-boundary rule as the no-diff path.
+        """
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _worktree: [".pdd/meta/foo.json"]
+        )
+        monkeypatch.setattr(
+            mod,
+            "_git_untracked_files",
+            lambda _worktree: [".pdd/meta/foo.json"],
+        )
+        # Simulate ``git add -u`` returning 0 and the cached-diff probe
+        # reporting no eligible staged changes.
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message, pushed_sha = mod._commit_and_push_if_changed(
+            tmp_path,
+            {"clone_url": "x", "head_ref": "y", "head_owner": "o", "head_repo": "r"},
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert message == "No eligible changes to push."
+        assert pushed_sha is None
+
     def test_fetch_first_rebases_and_retries_push(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -3806,12 +3883,19 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                # The SHA is captured by ``_git_head_sha`` after the
+                # successful push; surface a deterministic value so
+                # the test can assert on it.
+                return type(
+                    "R", (), {"returncode": 0, "stdout": "abc1234\n", "stderr": ""}
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
         monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-        success, message = mod._commit_and_push_if_changed(
+        success, message, pushed_sha = mod._commit_and_push_if_changed(
             tmp_path,
             metadata,
             "fix: address findings",
@@ -3819,6 +3903,10 @@ class TestCommitAndPushIfChanged:
 
         assert success is True
         assert "rebasing" in message
+        # ``pushed_sha`` is the new (#1062) trust-boundary token —
+        # it MUST carry the actual commit SHA after a real push so
+        # the review-loop verifier can key off it.
+        assert pushed_sha == "abc1234"
         assert pushes == [
             ("https://github.com/o/r.git", "HEAD:feature", False),
             ("https://github.com/o/r.git", "HEAD:feature", False),
@@ -3868,12 +3956,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R", (), {"returncode": 0, "stdout": "def5678\n", "stderr": ""}
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
         monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-        success, message = mod._commit_and_push_if_changed(
+        success, message, pushed_sha = mod._commit_and_push_if_changed(
             tmp_path,
             metadata,
             "fix: address findings",
@@ -3881,6 +3973,7 @@ class TestCommitAndPushIfChanged:
 
         assert success is True
         assert "rebasing" in message
+        assert pushed_sha == "def5678"
         assert pushes == [
             ("https://github.com/o/r.git", "HEAD:feature", False),
             ("https://github.com/o/r.git", "HEAD:feature", False),
@@ -3927,13 +4020,17 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
         monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-        success, message = mod._commit_and_push_if_changed(
+        success, message, pushed_sha = mod._commit_and_push_if_changed(
             tmp_path,
             metadata,
             "fix: address findings",
         )
 
         assert success is False
+        # Failed-push path must surface ``None`` as the SHA — the
+        # review loop treats a None SHA as "no push happened" and
+        # MUST NOT proceed to verify.
+        assert pushed_sha is None
         assert pushes == 1
         assert "Failed to rebase fixes" in message
         assert ["git", "rebase", "--abort"] in runs
@@ -3967,6 +4064,10 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R", (), {"returncode": 0, "stdout": "ace9999\n", "stderr": ""}
+                )()
             if cmd[:3] == ["git", "fetch", "--no-tags"]:
                 if "x-access-token" not in cmd[3]:
                     return type(
@@ -3983,7 +4084,7 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
         monkeypatch.setattr(mod.subprocess, "run", fake_run)
 
-        success, message = mod._commit_and_push_if_changed(
+        success, message, pushed_sha = mod._commit_and_push_if_changed(
             tmp_path,
             metadata,
             "fix: address findings",
@@ -3991,6 +4092,7 @@ class TestCommitAndPushIfChanged:
 
         assert success is True
         assert "rebasing" in message
+        assert pushed_sha == "ace9999"
         fetches = [cmd for cmd in runs if cmd[:3] == ["git", "fetch", "--no-tags"]]
         assert fetches[0] == [
             "git",
@@ -4303,3 +4405,277 @@ class TestStaticAnalysisCandidateFindingsIntegration:
         assert any("SUBSET" in name and "CANONICAL" in name for name in names), (
             f"expected SUBSET vs CANONICAL drift, got: {names}"
         )
+
+
+class TestReviewLoopShaVerification:
+    """Regression suite for issue #1062.
+
+    The review loop must distinguish *push outcome* from *verification
+    outcome* by tracking the actual commit SHA each push produces (or
+    None for the no-diff / failed-push paths) and by comparing the
+    verifier-reviewed SHA against the live remote PR head before the
+    final report claims a fix is verified.
+
+    These tests cover the three scenarios in the issue's acceptance
+    criteria:
+
+    1. ``test_fixer_success_without_diff_keeps_finding_open`` — the
+       fixer reports ``success=True`` but the push produced no diff
+       (``_commit_and_push_if_changed`` returns ``(True, ..., None)``).
+       The loop MUST skip verification and the finding MUST stay open.
+
+    2. ``test_remote_head_advanced_after_verify_marks_stale`` — the
+       fixer pushed sha-A and the verifier confirmed it clean, but the
+       remote PR head advanced to sha-B before the final report. The
+       loop MUST mark ``fresh_final_status="stale"`` and surface both
+       SHAs so operators can see the race.
+
+    3. ``test_happy_path_pushes_verifies_same_sha_marks_fixed`` — the
+       fixer pushed sha-A and the remote head still points at sha-A
+       at final-report time. Only this path may render
+       ``verification=verified`` and mark the finding ``fixed``.
+    """
+
+    def _patch_io(
+        self,
+        monkeypatch: Any,
+        tmp_path: Path,
+        push_result: Tuple[bool, str, Any] = (True, "Pushed fixes to PR branch.", "sha-pushed"),
+        remote_head: str | None = "sha-pushed",
+    ) -> None:
+        """Stub external I/O for the review-loop runtime.
+
+        ``push_result`` is the new 3-tuple ``(pushed, message, sha)``
+        contract for ``_commit_and_push_if_changed``. ``remote_head``
+        is the value the new ``_fetch_remote_pr_head_sha`` helper
+        returns; pass ``None`` to model a remote-fetch failure.
+        """
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: push_result,
+        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        # ``_fetch_remote_pr_head_sha`` is the new helper introduced by
+        # the fix for issue #1062. Use ``raising=False`` so the test
+        # patches the seam if it exists (the fixed branch) or no-ops
+        # if it does not (current ``main``); either way the bug-side
+        # assertions below run and reproduce the underlying defect
+        # rather than crashing with an AttributeError on the stub
+        # setup itself.
+        monkeypatch.setattr(
+            mod,
+            "_fetch_remote_pr_head_sha",
+            lambda *a, **k: remote_head,
+            raising=False,
+        )
+
+    @staticmethod
+    def _finding() -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "tests",
+            "location": "pdd/foo.py:1",
+            "evidence": "missing test coverage and impl helper",
+            "finding": (
+                "before_paths and after_paths must include "
+                "_compute_include_allowlist(prompt_path) and the doc "
+                "regression tests must exist."
+            ),
+            "required_fix": (
+                "Add _compute_include_allowlist call sites and "
+                "test_changed_files_reports_edited_included_doc / "
+                "test_changed_files_reports_newly_created_included_doc."
+            ),
+        }
+
+    @staticmethod
+    def _fix_summary() -> str:
+        # Mirrors the PR #1055 fixer payload that triggered #1062: the
+        # fixer claims it added tests and impl, but the worktree has no
+        # diff to push.
+        return (
+            '{"summary":"fixed - before_paths and after_paths now include '
+            '_compute_include_allowlist(prompt_path); '
+            'added test_changed_files_reports_edited_included_doc and '
+            'test_changed_files_reports_newly_created_included_doc",'
+            '"changed_files":["pdd/foo.py","tests/test_foo.py"],'
+            '"dispositions":{"*":"fixed"}}'
+        )
+
+    def test_fixer_success_without_diff_keeps_finding_open(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Smoking-gun regression from PR #1055.
+
+        ``_commit_and_push_if_changed`` returns ``(True, ..., None)``
+        — the new "pushed but no SHA" sentinel for a no-diff fixer
+        run. The loop must NOT invoke the verifier and must NOT mark
+        the finding fixed.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "No changes to push.", None),
+        )
+
+        finding = self._finding()
+        labels: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            labels.append(label)
+            if "verify-" in label:
+                pytest.fail(
+                    "verifier must NOT run when the fixer push produced no diff"
+                )
+            if "fix-" in label:
+                return True, self._fix_summary(), 1.0, role
+            return True, _json("findings", [finding]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The verifier label must never be invoked because the no-diff
+        # push must short-circuit before the verify call.
+        assert success is True
+        assert not any("verify-" in label for label in labels)
+
+        # The report must NOT advertise verification=verified anywhere
+        # and MUST surface that verification is incomplete (the issue's
+        # acceptance criterion is "verification=unverified or
+        # equivalent" — per-fix the bookkeeping is more precise:
+        # ``verification=skipped`` and ``push_status=no_changes``).
+        assert "verification=verified" not in report
+        assert (
+            "verification=unverified" in report
+            or "verification=skipped" in report
+        )
+        assert "push_status=no_changes" in report
+
+        # The finding must remain open — no premature "fixed" tombstone.
+        assert finding["finding"] in report
+        assert "| info | fixed | - | No findings remain." not in report
+        # And the issue-alignment gate cannot read clean while the fixer
+        # claim is unverified.
+        assert "issue_aligned: true" not in report
+
+    def test_remote_head_advanced_after_verify_marks_stale(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """If the remote PR head advances after a clean verify, the
+        loop must NOT claim ``fresh-final=clean``. The verified SHA
+        and current remote head must both appear in the report so
+        operators can audit the race.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "Pushed fixes to PR branch.", "sha-A"),
+            remote_head="sha-B",
+        )
+
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return True, self._fix_summary(), 1.0, role
+            if "verify-" in label:
+                # Verifier confirms the pushed change at sha-A is clean,
+                # but the remote head will have advanced past it by the
+                # time the final report renders.
+                return True, _json("clean"), 0.1, role
+            return True, _json("findings", [finding]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The report must surface the stale state, both SHAs, and refuse
+        # to claim the loop was issue-aligned because verification is
+        # against a SHA the remote no longer points at.
+        assert "fresh-final-review: stale" in report
+        assert "verified_head_sha=sha-A" in report
+        assert "remote_pr_head_sha=sha-B" in report
+        assert "issue_aligned: true" not in report
+
+    def test_happy_path_pushes_verifies_same_sha_marks_fixed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The legitimate-fix regression: push produced a real SHA, the
+        verifier saw it clean, and the remote head still points at that
+        SHA when the final report renders. Only this path is allowed
+        to render ``verification=verified`` and tombstone the finding
+        as fixed.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "Pushed fixes to PR branch.", "sha-A"),
+            remote_head="sha-A",
+        )
+
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return True, self._fix_summary(), 1.0, role
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            return True, _json("findings", [finding]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "fresh-final-review: clean" in report
+        assert "verification=verified" in report
+        assert "verified_head_sha=sha-A" in report
+        assert "remote_pr_head_sha=sha-A" in report
+        # And the finding is fixed (no remaining findings table row).
+        assert "| info | fixed | - | No findings remain." in report
