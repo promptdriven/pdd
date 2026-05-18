@@ -301,6 +301,23 @@ def generate(
             if not resolved_prompt:
                 raise click.UsageError(f"Failed to load template '{template}': empty path.")
 
+        # Validate that the standard-mode prompt file exists before invoking
+        # the generator backend. Without this, a missing prompt would propagate
+        # as an error tuple that the CLI wrapper treats as success (exit 0),
+        # masking failures from scripts and users. We restrict this to direct
+        # prompt-file invocations; template resolution is the registry's
+        # responsibility.
+        if prompt_file and not template:
+            prompt_path = Path(prompt_file)
+            if not prompt_path.exists():
+                raise click.UsageError(
+                    f"Input file not found: {prompt_file}"
+                )
+            if prompt_path.is_dir():
+                raise click.UsageError(
+                    f"Input path is a directory, not a file: {prompt_file}"
+                )
+
         # Parse -e/--env into KEY=VALUE pairs and propagate into os.environ for
         # template / prompt-include resolution. Bare KEY entries are looked up
         # in the live environment.
@@ -468,7 +485,9 @@ def test(
 
             success, message, cost, model, refs = cache_story_prompt_links(
                 story_file=first_arg,
-                prompts_dir=_ctx_value(ctx, "prompts_dir", None),
+                prompts_dir=_ctx_value(
+                    ctx, "prompts_dir", os.environ.get("PDD_PROMPTS_DIR")
+                ),
                 strength=strength,
                 temperature=temperature,
                 time=time_val,
@@ -489,8 +508,12 @@ def test(
             story_result = generate_user_story(
                 prompt_files=list(args),
                 output=output,
-                stories_dir=_ctx_value(ctx, "stories_dir", None),
-                prompts_dir=_ctx_value(ctx, "prompts_dir", None),
+                stories_dir=_ctx_value(
+                    ctx, "stories_dir", os.environ.get("PDD_USER_STORIES_DIR")
+                ),
+                prompts_dir=_ctx_value(
+                    ctx, "prompts_dir", os.environ.get("PDD_PROMPTS_DIR")
+                ),
                 strength=strength,
                 temperature=temperature,
                 time=time_val,

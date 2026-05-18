@@ -365,6 +365,33 @@ def test_generate_exclude_tests_default_false(runner, mock_code_gen):
         assert kwargs["exclude_tests"] is False
         assert kwargs["unit_test_file"] is None
 
+
+def test_generate_missing_prompt_file_fails_usage(runner, mock_code_gen):
+    """Regression for codex finding on pdd/commands/generate.py:284.
+
+    A missing standard prompt file must short-circuit with a usage error and a
+    non-zero exit code. Without this guard, ``code_generator_main`` returns an
+    error tuple that the CLI wrapper would otherwise treat as success (exit 0),
+    masking failures from scripts.
+    """
+    with runner.isolated_filesystem():
+        result = runner.invoke(generate_module.generate, ["missing.prompt"])
+
+    assert result.exit_code != 0, result.output
+    assert "Input file not found" in result.output
+    mock_code_gen.assert_not_called()
+
+
+def test_generate_directory_prompt_fails_usage(runner, mock_code_gen):
+    """A directory passed where a prompt file is expected must error out."""
+    with runner.isolated_filesystem():
+        os.mkdir("prompts_dir")
+        result = runner.invoke(generate_module.generate, ["prompts_dir"])
+
+    assert result.exit_code != 0, result.output
+    assert "directory" in result.output.lower()
+    mock_code_gen.assert_not_called()
+
 # --- Example Command Tests ---
 
 def test_example_success(runner, mock_context_gen):
@@ -568,6 +595,56 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
     assert kwargs["temperature"] == 0.0
     assert kwargs["time"] == 0.25
     assert kwargs["verbose"] is False
+
+
+def test_test_story_mode_links_uses_env_prompts_dir(runner, monkeypatch):
+    """Regression for codex finding on pdd/commands/generate.py:469.
+
+    Story-link mode must fall back to ``PDD_PROMPTS_DIR`` when ctx does not
+    provide an explicit ``prompts_dir`` override. The CLI does not populate
+    that ctx key, so without the env-var fallback story linking scans the
+    wrong locations.
+    """
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "env_prompts")
+    with runner.isolated_filesystem():
+        with open("story__upload_flow.md", "w") as f:
+            f.write("As a user...")
+
+        with patch.object(generate_module, "cache_story_prompt_links") as mock_link:
+            mock_link.return_value = (
+                True, "Story prompt metadata linked.", 0.0, "gpt-4", []
+            )
+            result = runner.invoke(generate_module.test, ["story__upload_flow.md"])
+
+    assert result.exit_code == 0, result.output
+    mock_link.assert_called_once()
+    assert mock_link.call_args[1]["prompts_dir"] == "env_prompts"
+
+
+def test_test_story_generation_uses_env_dirs(runner, monkeypatch):
+    """Regression for codex finding on pdd/commands/generate.py:469.
+
+    Story-generation mode must fall back to ``PDD_PROMPTS_DIR`` and
+    ``PDD_USER_STORIES_DIR`` when ctx lacks explicit overrides.
+    """
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "env_prompts")
+    monkeypatch.setenv("PDD_USER_STORIES_DIR", "env_stories")
+    with runner.isolated_filesystem():
+        with open("upload_python.prompt", "w") as f:
+            f.write("Upload prompt")
+
+        with patch.object(generate_module, "generate_user_story") as mock_gen:
+            mock_gen.return_value = (
+                True, "ok", 0.0, "gpt-4",
+                "env_stories/story__upload_flow.md", ["upload_python.prompt"],
+            )
+            result = runner.invoke(generate_module.test, ["upload_python.prompt"])
+
+    assert result.exit_code == 0, result.output
+    mock_gen.assert_called_once()
+    kwargs = mock_gen.call_args[1]
+    assert kwargs["prompts_dir"] == "env_prompts"
+    assert kwargs["stories_dir"] == "env_stories"
 
 
 def test_test_markdown_input_not_story_mode(runner):
