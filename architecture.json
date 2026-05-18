@@ -5421,6 +5421,12 @@
     "interface": {
       "type": "module",
       "module": {
+        "constants": [
+          {
+            "name": "BUNDLED_SAMPLE_TOPLEVEL_DIRS",
+            "type": "FrozenSet[str]"
+          }
+        ],
         "functions": [
           {
             "name": "extract_modules",
