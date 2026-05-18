@@ -1044,6 +1044,20 @@ def run_checkup_review_loop(
         # rather than at the helper layer so the policy lives at the
         # policy boundary, and DO NOT reset the worktree so the artifacts
         # remain available for debugging.
+        #
+        # Ship-gate contract: this break leaves ``state.reviewer_status``
+        # at ``findings`` (set at line ~925 before the fixer ran),
+        # ``state.fresh_final_status`` at ``missing``, and the affected
+        # findings at ``status="open"`` because ``_mark_reviewer_findings
+        # _fixed`` is only reached after a clean verify pass. Those three
+        # markers are what the downstream ``checkup_verdict_adapter``
+        # parses out of the rendered report to decide ship/non-ship —
+        # NOT the loop's ``success`` return flag, which per the
+        # ``run_checkup_review_loop`` docstring (lines ~706-708) signals
+        # "loop completed with a trustworthy report" and is True on all
+        # three return paths. The analogous failed-push refusal path
+        # (line ~1068) follows the same contract and is exercised by
+        # ``test_failed_push_aborts_loop_without_running_verifier``.
         guard_changed_files = _git_changed_files(worktree)
         guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
         if guard_refusal:

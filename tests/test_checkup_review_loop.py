@@ -4665,17 +4665,44 @@ class TestPromptSourceGuardIntegration:
             use_github_state=False,
         )
 
+        # ``success`` is the loop's "ran without crashing" signal per the
+        # docstring at pdd/checkup_review_loop.py:706-708 — it is NOT the
+        # ship gate. The verdict adapter parses ``reviewer-status:`` and
+        # ``fresh-final-review:`` markers in the rendered report; we assert
+        # those directly below so a future drift between the loop's
+        # internal completion flag and the ship-gating signals cannot
+        # silently turn this refusal into a green check on the PR. See
+        # also ``test_failed_push_aborts_loop_without_running_verifier``
+        # which encodes the same ``success=True`` + non-clean-status
+        # contract for the analogous push-failure refusal path.
         assert success is True
+
         # The policy layer MUST refuse before the push helper is invoked.
         assert push_calls == []
+
+        # Ship-gate markers MUST signal non-clean. The verdict adapter
+        # treats any reviewer-status row whose status is not in
+        # ``clean_reviewer_states`` as non-shippable; ``fresh-final-
+        # review: missing`` keeps the final-fresh gate unsatisfied.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        assert "issue_aligned: unknown" in report
+
         # The refusal MUST name both paths so the operator can act.
         assert "pdd/agentic_update.py" in report
         assert "pdd/prompts/agentic_update_python.prompt" in report
-        # The original finding stays open (NOT marked fixed) because no
-        # verified push landed.
-        assert "broken api" in report
-        # And it lands in the open findings table, not the fixed bucket.
-        assert "| fixed |" not in report or "broken api" in report.split("| fixed |")[0]
+
+        # The original finding stays OPEN in the findings table. Pin the
+        # exact row shape so we assert against the verdict-adapter-visible
+        # marker (``| <severity> | open |``) rather than substring-greping
+        # the whole report. The row appears under the ``### Findings``
+        # heading; status ``open`` is what the adapter consumes.
+        assert "### Findings" in report
+        findings_section = report.split("### Findings", 1)[1].split("### ", 1)[0]
+        assert "| blocker | open |" in findings_section
+        assert "broken api" in findings_section
+        # And confirm the finding was NOT moved to the fixed bucket.
+        assert "| blocker | fixed |" not in findings_section
 
     def test_loop_allows_push_when_prompt_changed_with_code(
         self, monkeypatch: Any, tmp_path: Path
@@ -4785,3 +4812,73 @@ class TestPromptSourceGuardIntegration:
         assert success is True
         # Unregistered files are out of scope for the guard.
         assert push_calls, "push helper should have been invoked"
+
+    def test_guard_trip_fully_terminates_loop_across_multiple_rounds(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A guard trip MUST end the entire run, not just the current
+        round. With ``max_rounds=3`` and a fixer that would otherwise
+        keep producing code-only edits, the loop must invoke the fixer
+        once on round 1 and stop — never running rounds 2 or 3, and
+        never invoking the push helper at any point.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._seed_registry(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/agentic_update.py"]
+        )
+        push_calls: List[str] = []
+
+        def fake_push(*_a: Any, **_kw: Any) -> Tuple[bool, str]:
+            push_calls.append("called")
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        call_labels: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            call_labels.append(label)
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=3, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Push helper is never invoked across the whole run.
+        assert push_calls == []
+        # The fixer ran exactly once (round 1) before the guard tripped.
+        fix_calls = [lbl for lbl in call_labels if "fix-" in lbl]
+        assert len(fix_calls) == 1, (
+            f"fixer must run only once before guard trips, got: {fix_calls}"
+        )
+        # Round 2/3 review/fix/verify labels MUST NOT appear.
+        assert not any("round2" in lbl or "round3" in lbl for lbl in call_labels)
+        # The verifier MUST NOT have run either (it only runs after a
+        # successful push).
+        assert not any("verify-" in lbl for lbl in call_labels)
+        # Reviewer-status reflects the refusal, not "clean".
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
