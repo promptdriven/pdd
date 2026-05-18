@@ -854,6 +854,152 @@ class TestArchitectureSyncModules:
         ]
         assert modules[0].entry["dependencies"] == architecture[0]["dependencies"]
 
+    def test_duplicate_output_alias_resolves_dependency_to_skipped_filename(self, tmp_path):
+        """Dependencies that name a skipped duplicate must resolve to the kept module."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "shared/report_python.prompt",
+                        "filepath": "pkg/report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "pkg"
+        nested_dir.mkdir()
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": [],
+                    },
+                    {
+                        "filename": "runner_python.prompt",
+                        "filepath": "runner.py",
+                        "dependencies": ["report_python.prompt"],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        target_keys = [module.key for module in modules]
+        graph, warnings = _build_scoped_global_dep_graph(
+            modules,
+            target_keys,
+            tmp_path,
+        )
+
+        assert "shared/report" in target_keys
+        assert "runner" in target_keys
+        assert graph["runner"] == ["shared/report"]
+        assert warnings == []
+
+    def test_duplicate_output_dependencies_resolve_in_original_scope(self, tmp_path):
+        """Merged duplicate dependencies must keep their original architecture scope."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "pkg/report.py",
+                        "dependencies": [],
+                    },
+                    {
+                        "filename": "helper_python.prompt",
+                        "filepath": "helper.py",
+                        "dependencies": [],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "pkg"
+        nested_dir.mkdir()
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": ["helper_python.prompt"],
+                    },
+                    {
+                        "filename": "helper_python.prompt",
+                        "filepath": "helper.py",
+                        "dependencies": [],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        target_keys = [module.key for module in modules]
+        graph, warnings = _build_scoped_global_dep_graph(
+            modules,
+            target_keys,
+            tmp_path,
+        )
+
+        assert "report" in target_keys
+        assert ".:helper" in target_keys
+        assert "pkg:helper" in target_keys
+        assert graph["report"] == ["pkg:helper"]
+        assert warnings == []
+
+    def test_duplicate_output_valid_dependencies_survive_malformed_kept_entry(self, tmp_path):
+        """A malformed kept dependency field must not drop valid duplicate edges."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "pkg/report.py",
+                        "dependencies": "not-a-list",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "pkg"
+        nested_dir.mkdir()
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": ["helper_python.prompt"],
+                    },
+                    {
+                        "filename": "helper_python.prompt",
+                        "filepath": "helper.py",
+                        "dependencies": [],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        target_keys = [module.key for module in modules]
+        graph, warnings = _build_scoped_global_dep_graph(
+            modules,
+            target_keys,
+            tmp_path,
+        )
+
+        assert architecture[0]["dependencies"] == ["helper_python.prompt"]
+        assert graph["report"] == ["helper"]
+        assert warnings == []
+
 
 class TestRunGlobalSync:
     @patch("pdd.agentic_sync._find_project_root")

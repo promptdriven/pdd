@@ -440,6 +440,8 @@ class GlobalSyncModule(NamedTuple):
     cwd: Path
     architecture_path: Path
     entry: Dict[str, Any]
+    aliases: Tuple[Tuple[Path, str], ...] = ()
+    dependency_scopes: Tuple[Tuple[Path, Tuple[Any, ...]], ...] = ()
 
 
 def _architecture_module_basenames(architecture: List[Dict[str, Any]]) -> List[str]:
@@ -463,10 +465,10 @@ def _merge_duplicate_output_dependencies(
     """Merge dependency edges from a duplicate-output architecture entry."""
     target_dependencies = target_entry.get("dependencies", [])
     duplicate_dependencies = duplicate_entry.get("dependencies", [])
-    if not isinstance(target_dependencies, list) or not isinstance(duplicate_dependencies, list):
+    if not isinstance(duplicate_dependencies, list):
         return
 
-    merged = list(target_dependencies)
+    merged = list(target_dependencies) if isinstance(target_dependencies, list) else []
     seen = {str(dep) for dep in merged}
     for dependency in duplicate_dependencies:
         dep_key = str(dependency)
@@ -482,10 +484,10 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
     if not arch_files:
         return [], [], project_root / "architecture.json"
 
-    raw_modules: List[Tuple[str, Path, Path, Dict[str, Any]]] = []
+    raw_modules: List[Dict[str, Any]] = []
     architecture: List[Dict[str, Any]] = []
     seen: set[Tuple[Path, str]] = set()
-    entry_by_output_path: Dict[Path, Dict[str, Any]] = {}
+    record_by_output_path: Dict[Path, Dict[str, Any]] = {}
 
     for arch_path in arch_files:
         try:
@@ -507,11 +509,16 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
                     output_path = output_path.resolve(strict=False)
                 except OSError:
                     output_path = output_path.absolute()
-                existing_entry = entry_by_output_path.get(output_path)
-                if existing_entry is not None:
-                    _merge_duplicate_output_dependencies(existing_entry, entry)
+                existing_record = record_by_output_path.get(output_path)
+                if existing_record is not None:
+                    _merge_duplicate_output_dependencies(existing_record["entry"], entry)
+                    existing_record["aliases"].append((arch_path.resolve(), basename))
+                    dependencies = entry.get("dependencies", [])
+                    if isinstance(dependencies, list):
+                        existing_record["dependency_scopes"].append(
+                            (arch_path.resolve(), tuple(dependencies))
+                        )
                     continue
-                entry_by_output_path[output_path] = entry
             dedupe_key = (arch_path.resolve(), basename)
             if dedupe_key in seen:
                 continue
@@ -522,14 +529,33 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
             # resolver scans subdirectories of arch_dir for .pddrc files and
             # falls back to arch_dir when no nested config claims the basename.
             cwd = _resolve_module_cwd(basename, arch_dir)
-            raw_modules.append((basename, cwd, arch_path, entry))
+            dependencies = entry.get("dependencies", [])
+            dependency_scopes = []
+            if isinstance(dependencies, list):
+                dependency_scopes.append((arch_path.resolve(), tuple(dependencies)))
+            record = {
+                "basename": basename,
+                "cwd": cwd,
+                "architecture_path": arch_path,
+                "entry": entry,
+                "aliases": [(arch_path.resolve(), basename)],
+                "dependency_scopes": dependency_scopes,
+            }
+            raw_modules.append(record)
+            if filepath:
+                record_by_output_path[output_path] = record
 
     counts: Dict[str, int] = {}
-    for basename, _, _, _ in raw_modules:
+    for record in raw_modules:
+        basename = record["basename"]
         counts[basename] = counts.get(basename, 0) + 1
 
     modules: List[GlobalSyncModule] = []
-    for basename, cwd, arch_path, entry in raw_modules:
+    for record in raw_modules:
+        basename = record["basename"]
+        cwd = record["cwd"]
+        arch_path = record["architecture_path"]
+        entry = record["entry"]
         if counts[basename] > 1:
             try:
                 rel_scope = arch_path.parent.resolve().relative_to(project_root.resolve()).as_posix()
@@ -538,7 +564,17 @@ def _architecture_sync_modules(project_root: Path) -> Tuple[List[GlobalSyncModul
             key = f"{rel_scope or '.'}:{basename}"
         else:
             key = basename
-        modules.append(GlobalSyncModule(key, basename, cwd, arch_path, entry))
+        modules.append(
+            GlobalSyncModule(
+                key,
+                basename,
+                cwd,
+                arch_path,
+                entry,
+                tuple(record["aliases"]),
+                tuple(record["dependency_scopes"]),
+            )
+        )
 
     return modules, architecture, arch_files[0]
 
@@ -814,14 +850,19 @@ def _build_scoped_global_dep_graph(
     """
     target_set = set(target_keys)
     module_by_key = {module.key: module for module in modules}
-    key_by_scope_basename = {
-        (module.architecture_path.resolve(), module.basename): module.key
-        for module in modules
-    }
+    key_by_scope_basename: Dict[Tuple[Path, str], str] = {}
     # Global basename index used for unambiguous cross-arch fallback.
     keys_by_basename: Dict[str, List[str]] = {}
     for module in modules:
-        keys_by_basename.setdefault(module.basename, []).append(module.key)
+        aliases = module.aliases or (
+            (module.architecture_path.resolve(), module.basename),
+        )
+        for scope_path, alias_basename in aliases:
+            scope_key = (scope_path.resolve(), alias_basename)
+            key_by_scope_basename.setdefault(scope_key, module.key)
+            basename_keys = keys_by_basename.setdefault(alias_basename, [])
+            if module.key not in basename_keys:
+                basename_keys.append(module.key)
     graph: Dict[str, List[str]] = {key: [] for key in target_keys}
     warnings: List[str] = []
 
@@ -829,52 +870,59 @@ def _build_scoped_global_dep_graph(
         module = module_by_key.get(key)
         if module is None:
             continue
-        deps = module.entry.get("dependencies", [])
-        if not isinstance(deps, list):
-            continue
-        for dep in deps:
-            dep_basename = _basename_from_architecture_filename(str(dep))
-            if not dep_basename:
+        dependency_groups = module.dependency_scopes
+        if not dependency_groups:
+            deps = module.entry.get("dependencies", [])
+            if not isinstance(deps, list):
                 continue
-            dep_key = key_by_scope_basename.get(
-                (module.architecture_path.resolve(), dep_basename)
+            dependency_groups = (
+                (module.architecture_path.resolve(), tuple(deps)),
             )
-            if dep_key is None:
-                # Same-architecture lookup missed. Fall back to a global
-                # basename lookup so cross-arch edges (preserved by the old
-                # combined-architecture builder) still resolve when the
-                # basename is unambiguous across the loaded modules.
-                candidate_keys = keys_by_basename.get(dep_basename, [])
-                if len(candidate_keys) == 1:
-                    dep_key = candidate_keys[0]
-                elif len(candidate_keys) > 1:
-                    warnings.append(
-                        f"combined architecture data under {project_root}: "
-                        f"module '{key}' declares ambiguous cross-arch "
-                        f"dependency '{dep}' (basename '{dep_basename}' "
-                        f"matches multiple modules: "
-                        f"{', '.join(sorted(candidate_keys))}); "
-                        "edge omitted from schedule"
-                    )
+        for dependency_scope, deps in dependency_groups:
+            for dep in deps:
+                dep_basename = _basename_from_architecture_filename(str(dep))
+                if not dep_basename:
                     continue
+                dep_key = key_by_scope_basename.get(
+                    (dependency_scope.resolve(), dep_basename)
+                )
+                if dep_key is None:
+                    # Same-architecture lookup missed. Fall back to a global
+                    # basename lookup so cross-arch edges (preserved by the old
+                    # combined-architecture builder) still resolve when the
+                    # basename is unambiguous across the loaded modules.
+                    candidate_keys = keys_by_basename.get(dep_basename, [])
+                    if len(candidate_keys) == 1:
+                        dep_key = candidate_keys[0]
+                    elif len(candidate_keys) > 1:
+                        warnings.append(
+                            f"combined architecture data under {project_root}: "
+                            f"module '{key}' declares ambiguous cross-arch "
+                            f"dependency '{dep}' (basename '{dep_basename}' "
+                            f"matches multiple modules: "
+                            f"{', '.join(sorted(candidate_keys))}); "
+                            "edge omitted from schedule"
+                        )
+                        continue
+                    else:
+                        warnings.append(
+                            f"combined architecture data under {project_root}: "
+                            f"module '{key}' declares unresolved dependency "
+                            f"'{dep}'; no module with that filename in the same "
+                            "architecture scope; edge omitted from schedule"
+                        )
+                        continue
+                if dep_key == key:
+                    continue
+                if dep_key in target_set:
+                    if dep_key not in graph[key]:
+                        graph[key].append(dep_key)
                 else:
                     warnings.append(
-                        f"combined architecture data under {project_root}: "
-                        f"module '{key}' declares unresolved dependency "
-                        f"'{dep}'; no module with that filename in the same "
-                        "architecture scope; edge omitted from schedule"
+                        f"combined architecture data under {project_root}: module "
+                        f"'{key}' depends on '{dep_key}' (via '{dep}'), which is not "
+                        "in the sync target set; edge omitted from schedule"
                     )
-                    continue
-            if dep_key == key:
-                continue
-            if dep_key in target_set:
-                graph[key].append(dep_key)
-            else:
-                warnings.append(
-                    f"combined architecture data under {project_root}: module "
-                    f"'{key}' depends on '{dep_key}' (via '{dep}'), which is not "
-                    "in the sync target set; edge omitted from schedule"
-                )
 
     return graph, warnings
 
