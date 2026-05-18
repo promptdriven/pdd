@@ -118,6 +118,30 @@ if [ -f "${PARENT_PDDRC}" ]; then
     rm /tmp/.pddrc_pddcloud
 fi
 
+# .git is excluded from the source tarball, so setuptools-scm cannot detect
+# the version inside the container. Reproduce setuptools-scm's default
+# `guess-next-dev` scheme with `local_scheme = "no-local-version"` (see
+# pyproject.toml [tool.setuptools_scm]) so tests/test_version.py keeps
+# accepting the stamped value (strict PEP 440, no local segment).
+_pdd_tag="$(git describe --tags --abbrev=0 --match 'v*' 2>/dev/null | sed 's/^v//' || true)"
+_pdd_tag="${_pdd_tag:-0.0.0}"
+_pdd_distance="$(git rev-list --count "v${_pdd_tag}..HEAD" 2>/dev/null || echo 0)"
+case "${_pdd_distance}" in ''|*[!0-9]*) _pdd_distance=0 ;; esac
+if [ "${_pdd_distance}" -eq 0 ]; then
+    PDD_PACKAGE_VERSION="${_pdd_tag}"
+else
+    _pdd_major="${_pdd_tag%%.*}"
+    _pdd_rest="${_pdd_tag#*.}"
+    _pdd_minor="${_pdd_rest%%.*}"
+    _pdd_patch="${_pdd_rest#*.}"
+    case "${_pdd_patch}" in ''|*[!0-9]*) _pdd_patch=0 ;; esac
+    _pdd_next_patch=$((_pdd_patch + 1))
+    PDD_PACKAGE_VERSION="${_pdd_major}.${_pdd_minor}.${_pdd_next_patch}.dev${_pdd_distance}"
+fi
+printf '%s\n' "${PDD_PACKAGE_VERSION}" > /tmp/.pdd-package-version
+tar -C /tmp -rf /tmp/pdd-source.tar .pdd-package-version
+rm /tmp/.pdd-package-version
+
 gzip -f /tmp/pdd-source.tar
 
 gcloud storage cp --quiet /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
