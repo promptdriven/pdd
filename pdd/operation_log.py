@@ -349,15 +349,12 @@ def log_operation(
             if prompt_file:
                 basename, language = infer_module_identity(prompt_file)
 
-            if basename and language and clears_run_report:
-                clear_run_report(basename, language)
-
             entry = create_manual_log_entry(operation=operation)
             start_time = time.time()
             success = False
             result = None
             error_msg = None
-            
+
             try:
                 result = func(*args, **kwargs)
                 success = True
@@ -380,6 +377,15 @@ def log_operation(
                 if basename and language:
                     append_log_entry(basename, language, entry)
                     if success:
+                        # Clear the stale run report only after the command
+                        # succeeds, so a failed run cannot erase existing
+                        # runtime verification state that still describes the
+                        # current code. The clear must happen before
+                        # save_fingerprint so a fresh fingerprint never
+                        # coexists with a stale per-module run report
+                        # (issue #1057).
+                        if clears_run_report:
+                            clear_run_report(basename, language)
                         if updates_fingerprint:
                             save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
                         if updates_run_report and isinstance(result, dict):

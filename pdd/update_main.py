@@ -1323,6 +1323,7 @@ def update_main(
                     if "Success" in result.get("status", ""):
                         from .operation_log import (
                             clear_run_report,
+                            get_run_report_path,
                             infer_module_identity,
                             save_fingerprint,
                         )
@@ -1335,12 +1336,42 @@ def update_main(
                             # the user knows runtime verification state may
                             # still describe the pre-mutation files.
                             try:
+                                _stale_report_path = get_run_report_path(basename, language)
+                            except Exception:
+                                _stale_report_path = None
+                            _pre_existed = bool(
+                                _stale_report_path is not None
+                                and _stale_report_path.exists()
+                            )
+                            try:
                                 clear_run_report(basename, language)
                             except Exception as exc:
                                 if not quiet:
                                     rprint(
                                         f"[warning][metadata] Run report clear failed for "
                                         f"{basename} ({language}): {exc}[/warning]"
+                                    )
+                            # Defensive: clear_run_report() in pdd.operation_log
+                            # silently swallows OSError on the actual unlink
+                            # (see pdd/operation_log.py:317-320), so if the
+                            # report file existed before the call but still
+                            # exists afterwards, the deletion failed silently.
+                            # Surface that as a non-fatal warning so the user
+                            # knows runtime verification state may still
+                            # describe the pre-mutation files.
+                            if _pre_existed and _stale_report_path is not None:
+                                try:
+                                    _still_there = _stale_report_path.exists()
+                                except Exception:
+                                    _still_there = False
+                                if _still_there and not quiet:
+                                    rprint(
+                                        f"[warning][metadata] Run report clear failed for "
+                                        f"{basename} ({language}): "
+                                        f"{_stale_report_path} still exists after "
+                                        f"clear_run_report; runtime verification state "
+                                        f"may still describe the pre-update files."
+                                        f"[/warning]"
                                     )
                             try:
                                 paths = {
