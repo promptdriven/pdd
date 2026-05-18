@@ -137,7 +137,7 @@ Supports three modes: true update, regeneration, and repository-wide updates. Ro
   <agentic_common_example><include>context/agentic_common_example.py</include></agentic_common_example>
   <sync_determine_operation_example><include>context/sync_determine_operation_example.py</include></sync_determine_operation_example>
   <architecture_sync_example><include select="def:example_update_single_prompt,def:example_get_entry,def:example_sync_all,def:example_find_architecture_for_project,def:example_update_architecture_from_prompt">context/architecture_sync_example.py</include></architecture_sync_example>
-  <operation_log_example><include select="def:example_save_fingerprint,def:example_infer_module_identity,def:example_clear_run_report">context/operation_log_example.py</include></operation_log_example>
+  <operation_log_example><include>context/operation_log_example.py</include></operation_log_example>
   <template_expander_example><include>context/template_expander_example.py</include></template_expander_example>
   <validate_prompt_includes><include select="def:sanitize_prompt_output">pdd/validate_prompt_includes.py</include></validate_prompt_includes>
   <pdd.agentic_update><include select="def:example_no_agents_available,def:example_successful_update,def:example_agent_runs_but_no_change,def:example_missing_input_files">context/agentic_update_example.py</include></pdd.agentic_update>

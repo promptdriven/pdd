@@ -5,6 +5,7 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from datetime import datetime
+from click.testing import CliRunner
 
 # Import the module under test
 from pdd import operation_log
@@ -414,6 +415,40 @@ def test_log_operation_decorator_failure_preserves_run_report(temp_pdd_env):
     assert not fp_path.exists(), (
         "updates_fingerprint must not run on failure"
     )
+
+
+def test_example_command_failure_preserves_run_report_and_fingerprint(temp_pdd_env):
+    """Regression for issue #1057: failed pdd example must not finalize metadata."""
+    import importlib
+
+    generate_module = importlib.import_module("pdd.commands.generate")
+    runner = CliRunner()
+
+    with runner.isolated_filesystem():
+        os.makedirs("prompts")
+        with open("prompts/foo_python.prompt", "w", encoding="utf-8") as f:
+            f.write("p")
+        with open("foo.py", "w", encoding="utf-8") as f:
+            f.write("c")
+
+        operation_log.save_run_report("foo", "python", {"tests": "previous-pass"})
+        rr_path = operation_log.get_run_report_path("foo", "python")
+        fp_path = operation_log.get_fingerprint_path("foo", "python")
+
+        with patch.object(
+            generate_module,
+            "context_generator_main",
+            side_effect=RuntimeError("example generation failed"),
+        ), patch.object(generate_module, "handle_error"):
+            result = runner.invoke(
+                generate_module.example,
+                ["prompts/foo_python.prompt", "foo.py"],
+                obj={"quiet": True},
+            )
+
+    assert result.exit_code == 1
+    assert rr_path.exists()
+    assert not fp_path.exists()
 
 
 def test_log_operation_decorator_success_clears_run_report(temp_pdd_env):

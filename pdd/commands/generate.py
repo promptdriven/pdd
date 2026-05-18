@@ -357,8 +357,8 @@ def example(
     except click.Abort:
         raise
     except Exception as exception:
-        handle_error(exception, "example", ctx.obj.get("quiet", False))
-        return None
+        handle_error(exception, "example", (ctx.obj or {}).get("quiet", False))
+        raise click.exceptions.Exit(1) from exception
 
 
 @click.command(name="test")

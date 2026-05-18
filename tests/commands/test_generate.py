@@ -447,6 +447,25 @@ def test_example_format_defaults_to_code(runner, mock_context_gen):
         )
 
 
+def test_example_generation_failure_exits_nonzero(runner, mock_context_gen):
+    """A failed pdd example run must not return normally."""
+    mock_context_gen.side_effect = RuntimeError("example generation failed")
+
+    with runner.isolated_filesystem():
+        with open("foo_python.prompt", "w") as f:
+            f.write("p")
+        with open("foo.py", "w") as f:
+            f.write("c")
+
+        result = runner.invoke(
+            generate_module.example,
+            ["foo_python.prompt", "foo.py"],
+            obj={"quiet": True},
+        )
+
+    assert result.exit_code == 1
+
+
 def test_example_command_declares_clears_run_report():
     """Regression test for issue #1057.
 

@@ -3787,6 +3787,19 @@ def test_repo_mode_clear_run_report_silent_unlink_failure_warns(
     assert stale_report.exists()
 
 
+def test_update_main_prompt_operation_log_include_has_no_invalid_selector():
+    repo_root = Path(__file__).resolve().parents[1]
+    content = (repo_root / "pdd/prompts/update_main_python.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def:example_clear_run_report" not in content
+    assert (
+        "<operation_log_example><include>context/operation_log_example.py</include>"
+        "</operation_log_example>"
+    ) in content
+
+
 @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
 @patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
 @patch("pdd.update_main.get_git_changed_files", return_value=set())
