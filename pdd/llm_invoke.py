@@ -2980,6 +2980,32 @@ def llm_invoke(
         },
     )
 
+    # Track chronological history of every model attempted across cloud and
+    # local fallback so callers (and `track_cost`) can record the full path.
+    attempted_models: List[str] = []
+
+    def _publish_attempted_models() -> None:
+        """Best-effort: mirror attempted_models onto Click ctx.obj for track_cost."""
+        try:
+            import click as _click  # local import; llm_invoke must work without click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                click_ctx.obj['attempted_models'] = list(attempted_models)
+        except Exception:
+            pass
+
+    def _record_attempt(model_label: str) -> None:
+        """Append a model attempt and publish to Click context."""
+        attempted_models.append(model_label)
+        _publish_attempted_models()
+
     if use_cloud:
         from rich.console import Console
         console = Console()
@@ -2989,7 +3015,12 @@ def llm_invoke(
 
         try:
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
-            return _llm_invoke_cloud(
+            # Record the cloud attempt BEFORE the request so cloud-then-local
+            # fallbacks preserve the cloud attempt in attempted_models even
+            # when the cloud raises before returning a model name.
+            _cloud_placeholder = f"cloud:{DEFAULT_BASE_MODEL}" if DEFAULT_BASE_MODEL else "cloud:default"
+            _record_attempt(_cloud_placeholder)
+            cloud_result = _llm_invoke_cloud(
                 prompt=prompt,
                 input_json=input_json,
                 strength=strength,
@@ -3002,6 +3033,18 @@ def llm_invoke(
                 messages=messages,
                 language=language,
             )
+            # On success, replace the placeholder with the cloud-returned
+            # modelName so the history reflects the actual model used.
+            try:
+                cloud_model_name = cloud_result.get("model_name") if isinstance(cloud_result, dict) else None
+            except Exception:
+                cloud_model_name = None
+            if cloud_model_name and attempted_models:
+                attempted_models[-1] = str(cloud_model_name)
+                _publish_attempted_models()
+            if isinstance(cloud_result, dict):
+                cloud_result.setdefault("attempted_models", list(attempted_models))
+            return cloud_result
         except CloudFallbackError as e:
             # Notify user and fall back to local execution
             console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
@@ -3148,6 +3191,12 @@ def llm_invoke(
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+
+        # Record this candidate before any pre-call validation/skip logic so
+        # models skipped mid-call (context window pre-check, missing api_key,
+        # github_copilot OAuth missing, auth-error skip, etc.) are still
+        # captured in the history.
+        _record_attempt(str(model_name_litellm))
 
         if verbose:
             logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
@@ -4350,6 +4399,7 @@ def llm_invoke(
                     'model_name': model_name_litellm, # Actual model used
                     'thinking_output': final_thinking if final_thinking else None,
                     'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
+                    'attempted_models': list(attempted_models),
                 }
 
             # --- 6b. Handle Invocation Errors ---
@@ -4499,7 +4549,12 @@ def llm_invoke(
         failure_reason="all_candidate_models_failed",
         last_error_type=type(last_exception).__name__ if last_exception else None,
     )
-    raise RuntimeError(error_message) from last_exception
+    terminal_error = RuntimeError(error_message)
+    try:
+        setattr(terminal_error, "attempted_models", list(attempted_models))
+    except Exception:
+        pass
+    raise terminal_error from last_exception
 
 # --- Example Usage (Optional) ---
 if __name__ == "__main__":
