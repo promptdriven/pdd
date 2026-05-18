@@ -1980,7 +1980,7 @@
         "commands": [
           {
             "name": "cmd_test_main",
-            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False) -> TestResult"
+            "signature": "(ctx: click.Context, prompt_file: str, code_file: str, output: str | None = None, language: str | None = None, coverage_report: str | None = None, existing_tests: list[str] | None = None, target_coverage: float | None = None, merge: bool = False, strength: float | None = None, temperature: float | None = None, manual: bool = False, *, repair_directive: str | None = None) -> TestResult"
           }
         ]
       }
@@ -2277,7 +2277,14 @@
     "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "auto_include_python.prompt",
-      "metadata_sync_python.prompt"
+      "metadata_sync_python.prompt",
+      "construct_paths_python.prompt",
+      "config_resolution_python.prompt",
+      "get_language_python.prompt",
+      "agentic_common_python.prompt",
+      "agentic_update_python.prompt",
+      "sync_determine_operation_python.prompt",
+      "operation_log_python.prompt"
     ],
     "priority": 62,
     "filename": "update_main_python.prompt",
@@ -6592,8 +6599,8 @@
         "functions": [
           {
             "name": "run_agentic_test_generate",
-            "signature": "(prompt_path: str, code_path: str, test_path: str, project_root: str) -> Tuple[bool, str, str]",
-            "returns": "Tuple[bool, str, str]",
+            "signature": "(prompt_file: Path, code_file: Path, output_test_file: Path, *, verbose: bool = False, quiet: bool = False, repair_directive: str | None = None) -> TestResult",
+            "returns": "TestResult",
             "sideEffects": [
               "None"
             ]
@@ -8252,6 +8259,8 @@
       "user_story_tests_python.prompt",
       "agentic_common_python.prompt",
       "auto_include_python.prompt",
+      "agentic_langtest_python.prompt",
+      "architecture_sync_python.prompt",
       "metadata_sync_python.prompt"
     ],
     "priority": 80,
