@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import glob
 import logging
 import os
+import subprocess
+import tempfile
 from collections import deque
 from pathlib import Path
-from typing import Deque, Dict, List, Optional, Set, Tuple
+from typing import Deque, Dict, Iterable, List, Optional, Set, Tuple
 
 from rich.console import Console
 from rich.markdown import Markdown
@@ -30,10 +33,12 @@ except ImportError:  # pragma: no cover - defensive
 
 logger = logging.getLogger(__name__)
 
-# Module-level project root. Exposed as a module attribute so callers (and
-# tests) can patch ``pdd.agentic_update.PROJECT_ROOT`` to point at a sandbox
-# instead of the real repository.
-PROJECT_ROOT: Path = Path.cwd()
+# Module-level project root override. Tests and legacy callers may patch
+# ``pdd.agentic_update.PROJECT_ROOT``; normal runs resolve the project root from
+# the prompt/code paths so invoking ``pdd update`` from a subdirectory still uses
+# the repository root.
+_DEFAULT_PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+PROJECT_ROOT: Path = _DEFAULT_PROJECT_ROOT
 
 console = Console()
 
@@ -41,6 +46,8 @@ console = Console()
 def _discover_test_files(
     code_path: Path,
     tests_dir: Optional[Path] = None,
+    *,
+    project_root: Optional[Path] = None,
 ) -> List[Path]:
     """Auto-discover test files for the given code file.
 
@@ -51,13 +58,17 @@ def _discover_test_files(
         4. Sibling ``../tests/`` directory.
         5. ``PROJECT_ROOT / "tests"``.
     """
+    code_path = Path(code_path).expanduser().resolve()
     stem = code_path.stem
     suffix = code_path.suffix
-    pattern = f"test_{stem}*{suffix}"
+    pattern = f"test_{glob.escape(stem)}*{glob.escape(suffix)}"
+    root = Path(project_root or PROJECT_ROOT).expanduser().resolve()
 
     search_dirs: List[Path] = []
-    if tests_dir is not None and tests_dir.exists():
-        search_dirs.append(tests_dir)
+    if tests_dir is not None:
+        resolved_tests_dir = Path(tests_dir).expanduser().resolve()
+        if resolved_tests_dir.exists():
+            search_dirs.append(resolved_tests_dir)
 
     rel_tests = code_path.parent / "tests"
     if rel_tests.exists():
@@ -69,7 +80,7 @@ def _discover_test_files(
     if sibling_tests.exists() and sibling_tests not in search_dirs:
         search_dirs.append(sibling_tests)
 
-    root_tests = PROJECT_ROOT / "tests"
+    root_tests = root / "tests"
     if root_tests.exists() and root_tests not in search_dirs:
         search_dirs.append(root_tests)
 
@@ -89,6 +100,8 @@ def _discover_test_files(
 
 def _compute_include_allowlist(
     prompt_path: Path,
+    *,
+    project_root: Optional[Path] = None,
 ) -> Set[Path]:
     """Cycle-safe BFS over <include> references from a prompt.
 
@@ -109,7 +122,7 @@ def _compute_include_allowlist(
     are silently skipped. The helper never raises on missing files or
     unreadable includes — it logs a debug message and continues.
     """
-    project_root_resolved = PROJECT_ROOT.resolve()
+    project_root_resolved = Path(project_root or PROJECT_ROOT).expanduser().resolve()
     prompt_resolved = prompt_path.resolve()
 
     allowed: Set[Path] = set()
@@ -134,10 +147,14 @@ def _compute_include_allowlist(
         for inc_str in includes:
             if not inc_str:
                 continue
-            candidates = [
-                (project_root_resolved / inc_str),
-                (current_file.parent / inc_str),
-            ]
+            inc_path = Path(inc_str).expanduser()
+            if inc_path.is_absolute():
+                candidates = [inc_path]
+            else:
+                candidates = [
+                    (project_root_resolved / inc_path),
+                    (current_file.parent / inc_path),
+                ]
             resolved_path: Optional[Path] = None
             for candidate in candidates:
                 try:
@@ -168,60 +185,27 @@ def _compute_include_allowlist(
     return allowed
 
 
-def _snapshot_mtimes(
-    root: Path,
-    extra_paths: Optional[List[Path]] = None,
-) -> Dict[Path, float]:
-    """Snapshot mtimes for every file under ``root`` (skipping .git).
-
-    Additional paths in ``extra_paths`` are also recorded, even if they lie
-    outside ``root`` — this lets us track the prompt/code/test files when
-    the caller passes paths outside ``PROJECT_ROOT`` (common in tests).
-    """
+def _snapshot_mtimes(paths: Iterable[Path]) -> Dict[Path, float]:
+    """Snapshot mtimes for a bounded set of candidate files."""
     mtimes: Dict[Path, float] = {}
-    if root.exists():
-        for p in root.rglob("*"):
+    for path in paths:
+        try:
+            resolved = Path(path).expanduser().resolve()
+        except OSError:
+            continue
+        if resolved.is_file():
             try:
-                rel = p.relative_to(root)
-            except ValueError:
-                continue
-            if rel.parts and rel.parts[0] == ".git":
-                continue
-            if p.is_file():
-                try:
-                    mtimes[p.resolve()] = p.stat().st_mtime
-                except OSError:
-                    pass
-    if extra_paths:
-        for ep in extra_paths:
-            try:
-                resolved = ep.resolve()
+                mtimes[resolved] = resolved.stat().st_mtime
             except OSError:
-                continue
-            if resolved.is_file():
-                try:
-                    mtimes[resolved] = resolved.stat().st_mtime
-                except OSError:
-                    pass
-            # Also scan one level for sibling test files that may appear.
-            parent = resolved.parent
-            if parent.is_dir():
-                for sib in parent.iterdir():
-                    if sib.is_file():
-                        try:
-                            mtimes.setdefault(sib.resolve(), sib.stat().st_mtime)
-                        except OSError:
-                            pass
+                pass
     return mtimes
 
 
 def _detect_changed_files(
-    root: Path,
     old_mtimes: Dict[Path, float],
-    extra_paths: Optional[List[Path]] = None,
+    new_mtimes: Dict[Path, float],
 ) -> List[Path]:
     """Detect created, modified, or deleted files since ``old_mtimes``."""
-    new_mtimes = _snapshot_mtimes(root, extra_paths=extra_paths)
     changed: Set[Path] = set()
 
     for p, old_t in old_mtimes.items():
@@ -236,6 +220,117 @@ def _detect_changed_files(
             changed.add(p)
 
     return sorted(changed)
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    """Return True when ``path`` is inside ``root`` or equal to it."""
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except ValueError:
+        return False
+
+
+def _is_ambient_marker_root(path: Path) -> bool:
+    """Skip user/global cache roots when looking for project markers."""
+    try:
+        if path.resolve() == Path.home().resolve():
+            return True
+    except (RuntimeError, OSError):
+        pass
+
+    for candidate in (tempfile.gettempdir(), os.environ.get("TMPDIR"), "/tmp"):
+        if not candidate:
+            continue
+        try:
+            if path.resolve() == Path(candidate).resolve():
+                return True
+        except (RuntimeError, OSError):
+            continue
+    return False
+
+
+def _nearest_project_root(start: Path) -> Path:
+    """Walk upward from ``start`` to the nearest PDD/git project boundary."""
+    current = Path(start).expanduser().resolve()
+    if current.is_file():
+        current = current.parent
+
+    for _ in range(40):
+        if not _is_ambient_marker_root(current):
+            if (
+                (current / ".git").exists()
+                or (current / ".pddrc").exists()
+                or (current / ".pdd").is_dir()
+                or (current / "architecture.json").is_file()
+            ):
+                return current
+        parent = current.parent
+        if parent == current:
+            break
+        current = parent
+
+    return Path(start).expanduser().resolve()
+
+
+def _resolve_project_root(prompt_path: Path, code_path: Path) -> Path:
+    """Resolve the effective project root for this update run."""
+    override = Path(PROJECT_ROOT).expanduser().resolve()
+    if override != _DEFAULT_PROJECT_ROOT:
+        return override
+
+    starts = [prompt_path.parent, code_path.parent, Path.cwd()]
+    candidates = [_nearest_project_root(start) for start in starts]
+    for candidate in candidates:
+        if _path_is_within(prompt_path, candidate) and _path_is_within(
+            code_path, candidate
+        ):
+            return candidate
+
+    try:
+        common = Path(os.path.commonpath([str(prompt_path.parent), str(code_path.parent)]))
+        return _nearest_project_root(common)
+    except ValueError:
+        return candidates[0]
+
+
+def _git_status_paths(project_root: Path) -> Set[Path]:
+    """Return paths currently dirty/untracked according to git, if available."""
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
+            cwd=project_root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+    except (OSError, ValueError):
+        return set()
+
+    if proc.returncode != 0:
+        return set()
+
+    paths: Set[Path] = set()
+    entries = proc.stdout.split(b"\0")
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        index += 1
+        if not entry:
+            continue
+
+        status = entry[:2].decode("ascii", errors="ignore")
+        raw_path = entry[3:]
+        if raw_path:
+            paths.add((project_root / os.fsdecode(raw_path)).resolve())
+
+        if ("R" in status or "C" in status) and index < len(entries):
+            raw_old_path = entries[index]
+            index += 1
+            if raw_old_path:
+                paths.add((project_root / os.fsdecode(raw_old_path)).resolve())
+
+    return paths
 
 
 def run_agentic_update(
@@ -262,8 +357,9 @@ def run_agentic_update(
         ``(success, message, cost, model_used, changed_files)``. ``success``
         is True only when the prompt file itself was modified during the run.
     """
-    prompt_path = Path(prompt_file).resolve()
-    code_path = Path(code_file).resolve()
+    prompt_path = Path(prompt_file).expanduser().resolve()
+    code_path = Path(code_file).expanduser().resolve()
+    project_root = _resolve_project_root(prompt_path, code_path)
 
     # 1. File existence checks.
     if not prompt_path.exists():
@@ -294,17 +390,23 @@ def run_agentic_update(
     # 3. Test file selection (Requirement 4).
     selected_tests: List[Path] = []
     if test_files is not None:
-        missing: List[Path] = [tf for tf in test_files if not tf.exists()]
+        normalized_tests = [Path(tf).expanduser().resolve() for tf in test_files]
+        missing: List[Path] = [tf for tf in normalized_tests if not tf.exists()]
         if missing:
             missing_str = ", ".join(str(m) for m in missing)
             msg = f"Test file(s) not found: {missing_str}"
             if not quiet:
                 console.print(f"[red]{msg}[/red]")
             return False, msg, 0.0, "", []
-        selected_tests = [tf.resolve() for tf in test_files]
+        selected_tests = normalized_tests
     else:
         selected_tests = [
-            t.resolve() for t in _discover_test_files(code_path, tests_dir)
+            t.resolve()
+            for t in _discover_test_files(
+                code_path,
+                tests_dir,
+                project_root=project_root,
+            )
         ]
 
     # 4. Template loading (Requirement 6).
@@ -340,11 +442,19 @@ def run_agentic_update(
             console.print(f"[red]{msg}[/red]")
         return False, msg, 0.0, "", []
 
-    # 5. Snapshot the project tree before the agent runs. Always include the
-    # explicit prompt/code/test paths so callers passing files outside
-    # ``PROJECT_ROOT`` (e.g. tests using ``tmp_path``) still see changes.
-    extra_tracked: List[Path] = [prompt_path, code_path] + list(selected_tests)
-    old_mtimes = _snapshot_mtimes(PROJECT_ROOT, extra_paths=extra_tracked)
+    # 5. Snapshot bounded candidate files before the agent runs. The explicit
+    # prompt/code/tests plus the current include graph cover the files this
+    # command is allowed to modify; git status deltas below catch newly-created
+    # untracked files without walking the whole repository in Python.
+    include_allowlist = _compute_include_allowlist(
+        prompt_path,
+        project_root=project_root,
+    )
+    tracked_candidates: Set[Path] = {prompt_path, code_path}
+    tracked_candidates.update(selected_tests)
+    tracked_candidates.update(include_allowlist)
+    old_mtimes = _snapshot_mtimes(tracked_candidates)
+    old_git_status_paths = _git_status_paths(project_root)
 
     if not quiet:
         console.print(
@@ -355,7 +465,7 @@ def run_agentic_update(
     try:
         agent_success, agent_message, cost, model = run_agentic_task(
             prompt_text,
-            PROJECT_ROOT,
+            project_root,
             verbose=verbose,
             quiet=quiet,
             label="agentic_update",
@@ -387,10 +497,10 @@ def run_agentic_update(
     # are about to be undone.
     allowed_paths: Set[Path] = {prompt_path, code_path}
     allowed_paths.update(p.resolve() for p in selected_tests)
-    allowed_paths.update(_compute_include_allowlist(prompt_path))
+    allowed_paths.update(include_allowlist)
 
     try:
-        _revert_out_of_scope_changes(PROJECT_ROOT, allowed_paths)
+        _revert_out_of_scope_changes(project_root, allowed_paths)
     except Exception as exc:  # pragma: no cover - defensive
         logger.debug("Scope guard raised: %s", exc)
 
@@ -398,21 +508,28 @@ def run_agentic_update(
     # to the caller (Requirement 8).
     if test_files is None:
         post_run_tests = [
-            t.resolve() for t in _discover_test_files(code_path, tests_dir)
+            t.resolve()
+            for t in _discover_test_files(
+                code_path,
+                tests_dir,
+                project_root=project_root,
+            )
         ]
     else:
-        post_run_tests = [tf.resolve() for tf in test_files if tf.exists()]
+        post_run_tests = [tf.resolve() for tf in selected_tests if tf.exists()]
 
-    # 9. Detect changed files via mtime comparison.
-    post_extras: List[Path] = (
-        [prompt_path, code_path] + list(selected_tests) + list(post_run_tests)
-    )
-    changed_paths = _detect_changed_files(
-        PROJECT_ROOT, old_mtimes, extra_paths=post_extras
-    )
+    # 9. Detect changed files via bounded mtime comparison plus git status
+    # delta for newly-created untracked files.
+    new_git_status_paths = _git_status_paths(project_root)
+    post_candidates = set(tracked_candidates)
+    post_candidates.update(post_run_tests)
+    post_candidates.update(new_git_status_paths - old_git_status_paths)
+    new_mtimes = _snapshot_mtimes(post_candidates)
+    changed_paths = _detect_changed_files(old_mtimes, new_mtimes)
     changed_set = {p for p in changed_paths}
+    changed_set.update(new_git_status_paths - old_git_status_paths)
 
-    # Make sure newly discovered tests are visible even if rglob missed them.
+    # Make sure newly discovered tests are visible even if git status missed them.
     for tp in post_run_tests:
         if tp.exists() and tp not in old_mtimes:
             changed_set.add(tp)

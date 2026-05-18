@@ -26,29 +26,35 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
 1. **Primary Function**: Implement `run_agentic_update(prompt_file: str, code_file: str, test_files: Optional[List[Path]] = None, *, tests_dir: Optional[Path] = None, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str, List[str]]`.
 2. **Return Contract**: Return a 5-tuple: `(success, message, cost, model_used, changed_files)`.
 3. **Agent Availability**: If no agentic CLIs are available (via `get_available_agents`), return `(False, "No agentic CLI available", 0.0, "", [])`.
-4. **Test Discovery**: 
+4. **Path Resolution**:
+    - Expand `~` in `prompt_file`, `code_file`, explicit `test_files`, and `tests_dir` before resolving or validating paths.
+    - Resolve the effective project root from the prompt/code file locations by walking upward to the nearest PDD/git project boundary (`.git`, `.pddrc`, `.pdd/`, or `architecture.json`). Do not use import-time `Path.cwd()` as the project root; `pdd update` may be invoked from a subdirectory.
+    - Keep the module-level `PROJECT_ROOT` as a test/legacy override only. When it differs from the module default, use it as the effective project root.
+5. **Test Discovery**:
     - If `test_files` is `None`, auto-discover tests using the pattern `test_{code_stem}*{code_suffix}`.
+    - Escape `code_stem` and `code_suffix` with `glob.escape()` before building the discovery glob so literal filenames such as `mod[1].py` discover `test_mod[1].py` instead of being interpreted as glob character classes.
     - If explicit `test_files` are provided, validate their existence and fail early with a descriptive error if any are missing.
-5. **Search Strategy**: Search for tests in the following order:
+6. **Search Strategy**: Search for tests in the following order:
     - `tests_dir` (if provided via config).
     - `tests/` relative to the code file.
     - The same directory as the code file.
     - Sibling `../tests/` directory.
-    - Project root `tests/`.
-6. **Prompt Templating**: Load the `agentic_update_LLM` template using `load_prompt_template()` and format it with `prompt_path`, `code_path`, and a formatted list of `test_paths`.
-7. **Execution**: Use `run_agentic_task()` from `agentic_common` to execute the update with `DEFAULT_MAX_RETRIES`.
-8. **Change Detection**: 
-    - Snapshot file modification times (mtimes) before and after the agent run.
+    - Effective project root `tests/`.
+7. **Prompt Templating**: Load the `agentic_update_LLM` template using `load_prompt_template()` and format it with `prompt_path`, `code_path`, and a formatted list of `test_paths`.
+8. **Execution**: Use `run_agentic_task()` from `agentic_common` to execute the update with `DEFAULT_MAX_RETRIES`, passing the effective project root as the agent cwd.
+9. **Change Detection**:
+    - Snapshot file modification times (mtimes) for a bounded candidate set only: prompt, code, selected tests, post-run discovered tests, and files reachable through the prompt's transitive `<include>` graph.
+    - Do not snapshot the entire project tree with a repo-wide Python `rglob()` before and after each update. Use git status deltas to surface newly-created dirty/untracked files without adding a full-tree Python walk.
     - Detect changed files (created, modified, or deleted).
     - Re-discover test files after the run to catch any newly created tests.
-9. **Success Criterion**: The operation is considered successful if the `prompt_file` itself was modified, regardless of the agent's internal success report.
-10. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(PROJECT_ROOT, allowed)` from `agentic_common`. The `allowed` set MUST be derived from the transitive `<include>` graph of `prompt_path` so that documents referenced by `<include>` tags are preserved, matching the Scope Boundaries documented in `agentic_update_LLM.prompt`. At minimum, `allowed` MUST contain:
+10. **Success Criterion**: The operation is considered successful if the `prompt_file` itself was modified, regardless of the agent's internal success report.
+11. **Scope Guard**: After `run_agentic_task` returns (before changed-files detection), call `_revert_out_of_scope_changes(project_root, allowed)` from `agentic_common`. The `allowed` set MUST be derived from the transitive `<include>` graph of `prompt_path` so that documents referenced by `<include>` tags are preserved, matching the Scope Boundaries documented in `agentic_update_LLM.prompt`. At minimum, `allowed` MUST contain:
     - `prompt_path.resolve()` and `code_path.resolve()`;
     - `{p.resolve() for p in selected_tests}`;
-    - every resolved file path returned by `_compute_include_allowlist(prompt_path)` (see Requirement 11).
+    - every resolved file path returned by `_compute_include_allowlist(prompt_path, project_root=project_root)` (see Requirement 12).
     Tracked files that the prompt does not include — including unrelated files under `context/` — MUST NOT be in `allowed`, so the scope guard reverts them if the agent mutated them. Newly-created (untracked) shared-include files under `context/` (or anywhere else) are already preserved by the scope guard because it uses ``git status -uno``, so they do not need an explicit allowance.
     Import `_revert_out_of_scope_changes` alongside the other `agentic_common` imports. This prevents the agent from accidentally deleting or modifying unrelated files while still allowing permitted included-doc edits to survive.
-11. **Include Allowlist Helper**: Implement a module-level helper `_compute_include_allowlist(prompt_path: Path) -> set[Path]` that performs a cycle-safe breadth-first walk of `<include>` references reachable from `prompt_path` until convergence, reusing `pdd.sync_order.extract_includes_from_file` as the single include parser so this module cannot disagree with PDD preprocessing/fingerprinting on what counts as an include. Traversal MUST be recursive without an arbitrary depth cap, mirroring `pdd.preprocess`, which expands nested includes until convergence — capping the walk leaves edits to deeply-nested included files (e.g. `prompt -> a -> b -> c -> d`) outside the allowlist so the scope guard reverts them. The parser must mirror `pdd.preprocess.process_include_tags` for body-form tags carrying a `path=` attribute — i.e. `<include path="docs/source.md">fallback.md</include>` resolves to `docs/source.md` (attribute wins over body), matching the preprocessor's `attrs.get('path') or content.strip()` rule. Resolution order for each raw include string: try `PROJECT_ROOT / include_str` first, then `current_file.parent / include_str`; silently skip includes that do not resolve to an existing file under `PROJECT_ROOT`. The helper MUST: (a) be cycle-safe (track a visited set of resolved paths so cyclic include graphs terminate), (b) return only resolved `Path` objects under `PROJECT_ROOT`, (c) never raise on missing files or unreadable includes (log a debug message and continue). The helper MUST NOT add unrelated tracked files (for example, every file under `PROJECT_ROOT / "context"`) to the allowlist — only files reachable via `<include>` from the prompt belong in the result. If `pdd.sync_order` cannot be imported, fall back to returning an empty set so the scope guard degrades gracefully rather than failing.
+12. **Include Allowlist Helper**: Implement a module-level helper `_compute_include_allowlist(prompt_path: Path, *, project_root: Optional[Path] = None) -> set[Path]` that performs a cycle-safe breadth-first walk of `<include>` references reachable from `prompt_path` until convergence, reusing `pdd.sync_order.extract_includes_from_file` as the single include parser so this module cannot disagree with PDD preprocessing/fingerprinting on what counts as an include. Traversal MUST be recursive without an arbitrary depth cap, mirroring `pdd.preprocess`, which expands nested includes until convergence — capping the walk leaves edits to deeply-nested included files (e.g. `prompt -> a -> b -> c -> d`) outside the allowlist so the scope guard reverts them. The parser must mirror `pdd.preprocess.process_include_tags` for body-form tags carrying a `path=` attribute — i.e. `<include path="docs/source.md">fallback.md</include>` resolves to `docs/source.md` (attribute wins over body), matching the preprocessor's `attrs.get('path') or content.strip()` rule. Resolution order for each raw include string: try `project_root / include_str` first, then `current_file.parent / include_str`; silently skip includes that do not resolve to an existing file under the effective project root. The helper MUST: (a) be cycle-safe (track a visited set of resolved paths so cyclic include graphs terminate), (b) return only resolved `Path` objects under the effective project root, (c) never raise on missing files or unreadable includes (log a debug message and continue). The helper MUST NOT add unrelated tracked files (for example, every file under `project_root / "context"`) to the allowlist — only files reachable via `<include>` from the prompt belong in the result. If `pdd.sync_order` cannot be imported, fall back to returning an empty set so the scope guard degrades gracefully rather than failing.
 
 % Dependencies
 <pdd.agentic_common>
@@ -67,7 +73,7 @@ The `agentic_update` module coordinates an "agentic" update of a prompt file usi
 
 % Instructions
 - Use `pathlib.Path` for all path manipulations and ensure paths are resolved/relativized appropriately for the prompt template.
-- Implement helper functions for `_snapshot_mtimes`, `_detect_changed_files`, and `_discover_test_files` to keep the main function clean.
+- Implement helper functions for `_snapshot_mtimes`, `_detect_changed_files`, `_discover_test_files`, project-root resolution, and git-status changed-path discovery to keep the main function clean.
 - Ensure robust error handling for file system operations and template formatting, providing clear feedback via `rich.console` unless `quiet` is True.
 - The `changed_files` return value should contain resolved string paths of all files modified during the agent's execution.
 

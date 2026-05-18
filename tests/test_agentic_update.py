@@ -353,6 +353,75 @@ def test_test_discovery(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> Non
     assert "test_code_global.py" in test_paths_str
 
 
+def test_discover_test_files_escapes_glob_metacharacters(tmp_path: Path) -> None:
+    """Code filenames with glob metacharacters should discover literal tests."""
+    from pdd.agentic_update import _discover_test_files
+
+    code_file = tmp_path / "mod[1].py"
+    code_file.write_text("def f(): return 1\n")
+    expected = tmp_path / "test_mod[1].py"
+    expected.write_text("def test_f(): pass\n")
+    noise = tmp_path / "test_mod1.py"
+    noise.write_text("def test_noise(): pass\n")
+
+    discovered = {
+        p.resolve()
+        for p in _discover_test_files(code_file, project_root=tmp_path)
+    }
+
+    assert expected.resolve() in discovered
+    assert noise.resolve() not in discovered
+
+
+def test_run_agentic_update_expands_user_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mock_deps: Tuple[MagicMock, ...],
+) -> None:
+    """Paths beginning with ~ should resolve before existence checks."""
+    _, _, mock_run, _ = mock_deps
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+
+    prompt_file = home / "feature.prompt"
+    code_file = home / "feature.py"
+    prompt_file.write_text("original prompt\n")
+    code_file.write_text("def feature(): return 1\n")
+
+    def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        prompt_file.write_text("updated prompt\n")
+        return True, "ok", 0.0, "claude"
+
+    mock_run.side_effect = simulate_agent
+
+    success, msg, _, _, changed = run_agentic_update(
+        "~/feature.prompt",
+        "~/feature.py",
+        test_files=[],
+        quiet=True,
+    )
+
+    assert success is True
+    assert "Prompt file updated successfully" in msg
+    assert str(prompt_file.resolve()) in changed
+
+
+def test_snapshot_mtimes_is_bounded_to_candidate_paths(tmp_path: Path) -> None:
+    """Change detection should not snapshot the whole project tree."""
+    from pdd.agentic_update import _snapshot_mtimes
+
+    tracked = tmp_path / "feature.prompt"
+    unrelated = tmp_path / "unrelated.txt"
+    tracked.write_text("tracked\n")
+    unrelated.write_text("unrelated\n")
+
+    mtimes = _snapshot_mtimes([tracked])
+
+    assert tracked.resolve() in mtimes
+    assert unrelated.resolve() not in mtimes
+
+
 def test_explicit_empty_tests(tmp_path: Path, mock_deps: Tuple[MagicMock, ...]) -> None:
     """
     Test that passing an empty list for test_files prevents auto-discovery.
@@ -819,6 +888,53 @@ def test_scope_guard_preserves_included_doc_edits(
         f"got {sorted(resolved_changed)!r}"
     )
     assert str(prompt.resolve()) in resolved_changed
+
+
+def test_run_agentic_update_resolves_repo_root_from_prompt_when_cwd_subdir(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    real_scope_guard_deps: Tuple[MagicMock, ...],
+) -> None:
+    """Running from a subdirectory must still use the actual git root."""
+    _, _, mock_run, _ = real_scope_guard_deps
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    nested_cwd = repo / "nested" / "cwd"
+    nested_cwd.mkdir(parents=True)
+    docs = repo / "docs"
+    docs.mkdir()
+    included = docs / "source.md"
+    included.write_text("original included\n")
+    prompt = repo / "prompts" / "feature_python.prompt"
+    prompt.parent.mkdir()
+    prompt.write_text("<include>docs/source.md</include>\noriginal prompt\n")
+    code = repo / "pdd" / "feature.py"
+    code.parent.mkdir()
+    code.write_text("def feature(): return 1\n")
+
+    _init_git_repo(repo)
+    monkeypatch.chdir(nested_cwd)
+
+    def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        assert Path(args[1]).resolve() == repo.resolve()
+        prompt.write_text("<include>docs/source.md</include>\nupdated prompt\n")
+        included.write_text("updated included\n")
+        return True, "ok", 0.0, "claude"
+
+    mock_run.side_effect = simulate_agent
+
+    success, _, _, _, changed_files = run_agentic_update(
+        str(prompt),
+        str(code),
+        test_files=[],
+        quiet=True,
+    )
+
+    assert success is True
+    assert included.read_text() == "updated included\n"
+    resolved_changed = {str(Path(p).resolve()) for p in changed_files}
+    assert str(included.resolve()) in resolved_changed
 
 
 def test_scope_guard_reverts_unrelated_context_dir_edits(
