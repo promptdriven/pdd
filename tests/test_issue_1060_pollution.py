@@ -302,3 +302,65 @@ def test_strict_discovery_returns_bundled_samples(tmp_path: Path) -> None:
         "architecture.json",
         "examples/arch/architecture.json",
     ]
+
+
+# ---------------------------------------------------------------------------
+# AC #7 (round 2): dict-wrapper preservation on correction
+# ---------------------------------------------------------------------------
+
+
+def test_dict_wrapper_arch_preserves_prd_files_on_correction(tmp_path: Path) -> None:
+    """When the owning architecture.json is in object/dict format
+    (``{prd_files, modules}``), a correction must preserve the dict
+    wrapper AND the prd_files list. The old write path wrote a bare list
+    and silently dropped prd_files (issue #1060 Layer 2 follow-up)."""
+    (tmp_path / ".git").mkdir()
+    root_arch = tmp_path / "architecture.json"
+    nested_arch = tmp_path / "services" / "api" / "architecture.json"
+
+    _write_json(
+        root_arch,
+        [{"filename": "root_mod_python.prompt", "dependencies": []}],
+    )
+    # Owning file is dict-shaped with real prd_files. The reproducer must
+    # also write the wrapper through json.dumps (not the test helper) so we
+    # can assert the wrapper shape survives.
+    nested_arch.parent.mkdir(parents=True, exist_ok=True)
+    nested_arch.write_text(
+        json.dumps(
+            {
+                "prd_files": ["docs/prd.md", "docs/spec.md"],
+                "modules": [
+                    {
+                        "filename": "api_python.prompt",
+                        "dependencies": ["models_python.prompt"],
+                    },
+                    {"filename": "models_python.prompt", "dependencies": []},
+                ],
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    corrections = [
+        {
+            "filename": "api_python.prompt",
+            "dependencies": ["models_python.prompt", "auth_python.prompt"],
+        }
+    ]
+    _apply_architecture_corrections(tmp_path, corrections, quiet=True)
+
+    reloaded = json.loads(nested_arch.read_text(encoding="utf-8"))
+    assert isinstance(reloaded, dict), (
+        "Owning dict-shaped architecture.json must remain a dict on write-back; "
+        "got a bare list — the {prd_files, modules} wrapper was dropped."
+    )
+    assert reloaded.get("prd_files") == ["docs/prd.md", "docs/spec.md"], (
+        f"prd_files must be preserved on correction; got {reloaded.get('prd_files')!r}"
+    )
+    modules_by_fn = {m["filename"]: m for m in reloaded["modules"]}
+    assert modules_by_fn["api_python.prompt"]["dependencies"] == [
+        "models_python.prompt",
+        "auth_python.prompt",
+    ]
