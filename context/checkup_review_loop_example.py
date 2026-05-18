@@ -66,6 +66,14 @@ class FixResult:
     raw_output: str = ""
     dispositions: Dict[str, str] = field(default_factory=dict)
     rationales: Dict[str, str] = field(default_factory=dict)
+    # SHA-backed trust boundary (#1062). The fixer's ``success`` is a
+    # process flag (subprocess returned 0). A finding is only fixed when
+    # the verifier confirms the actual pushed SHA. These fields are
+    # additive on ``final-state.json``; legacy consumers keep working.
+    push_status: str = "unattempted"  # unattempted|no_changes|pushed|failed
+    pushed_head_sha: Optional[str] = None
+    verified_head_sha: Optional[str] = None
+    verification_status: str = "unverified"  # unverified|verified|stale|skipped
 
 
 @dataclass
@@ -161,6 +169,13 @@ class ReviewLoopState:
     # can enforce the documented "must differ from --reviewer" rule even after
     # the active reviewer has rotated.
     original_reviewer: Optional[str] = None
+    # SHA-backed trust boundary (#1062). ``remote_pr_head_sha`` is the
+    # live PR head observed by ``_fetch_remote_pr_head_sha`` right
+    # before the final report renders; ``last_verified_head_sha`` is
+    # the most recent SHA the verifier reviewed clean. The stale-SHA
+    # gate compares those two before declaring fresh-final-review clean.
+    remote_pr_head_sha: Optional[str] = None
+    last_verified_head_sha: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------

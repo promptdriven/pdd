@@ -736,10 +736,21 @@ class ReviewLoopState:
     # the verified SHA can downgrade ``fresh_final_status`` to
     # ``"stale"`` instead of silently rendering ``clean``. ``None``
     # when the remote fetch failed (e.g. transient network/auth
-    # failure) — in that case the gate degrades gracefully and the
-    # report keeps the in-loop ``fresh_final_status`` rather than
-    # flipping to stale on every fetch hiccup. Added for #1062.
+    # failure) — combined with whether the metadata used to drive the
+    # fetch was complete, the stale-SHA gate may still downgrade to
+    # ``"stale"`` (fail-closed) or degrade gracefully (offline-test
+    # path with empty metadata). Added for #1062.
     remote_pr_head_sha: Optional[str] = None
+    # The most recent SHA the verifier reviewed clean. Overwritten on
+    # each verified round so the stale-SHA gate compares the live
+    # remote head against the LATEST verified SHA, not against the
+    # set of all historical verified SHAs (codex review-2 #1062): in
+    # a multi-round fix where round N verifies sha-B and the remote
+    # later resets to round N-1's sha-A, set-membership would let
+    # sha-A appear "still verified" even though the final clean state
+    # was at sha-B. Kept at the end of the field list so positional
+    # construction stays stable.
+    last_verified_head_sha: Optional[str] = None
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -1181,6 +1192,13 @@ def run_checkup_review_loop(
         fix.verified_head_sha = pushed_sha
         if fixed_findings:
             fix.verification_status = "verified"
+            # Track the LATEST verified SHA on the loop state so the
+            # stale-SHA gate compares against the most recent
+            # verifier-reviewed SHA (not against the set of every
+            # historical one). See codex review-2 finding on #1062:
+            # round-N verifies sha-B, remote resets to round-N-1's
+            # sha-A → set-membership would silently accept sha-A.
+            state.last_verified_head_sha = pushed_sha
         _record_reviewer_feedback(state, verify_open_findings, fix)
         pending_findings = verify_open_findings
         if _budget_exhausted(config, state, deadline):
@@ -1218,41 +1236,64 @@ def run_checkup_review_loop(
 
     # Stale-SHA gate (#1062): after the loop has set
     # ``fresh_final_status``, fetch the current remote PR head and
-    # confirm it still equals the last SHA the verifier reviewed. If
-    # the remote has advanced, downgrade to ``"stale"`` (a hard-not-
-    # clean state) and mark each verified fix's
-    # ``verification_status="stale"`` so the rendered report does not
-    # imply the live PR head is the SHA that was reviewed. A None
-    # remote SHA (transient fetch failure) degrades gracefully — we
-    # keep the in-loop status rather than flipping every report to
-    # stale on a network hiccup.
+    # confirm it still equals the LATEST SHA the verifier reviewed
+    # (``state.last_verified_head_sha``). Two ways the gate fires:
+    #   * ``remote_diverged`` — fetch succeeded and the live remote
+    #     SHA does not equal the latest verified SHA. Codex review-2:
+    #     compare against the latest verified SHA, NOT against the
+    #     set of every historical one — round-N verifies sha-B and
+    #     a remote reset to round-N-1's sha-A would otherwise pass
+    #     a set-membership check even though the final clean state
+    #     was at sha-B.
+    #   * ``remote_unknown`` — the fetch returned None even though
+    #     ``pr_metadata`` had everything needed to drive it
+    #     (``clone_url`` AND ``head_ref``). Fail closed: the loop
+    #     cannot prove the live remote matches the verified SHA, so
+    #     we refuse to render ``verification=verified``. When the
+    #     metadata is incomplete (offline-test path with empty
+    #     defaults), the gate stays quiet — there is nothing to
+    #     verify against and a stale-flip would be a false positive.
+    metadata_complete = bool(
+        pr_metadata
+        and pr_metadata.get("clone_url")
+        and pr_metadata.get("head_ref")
+    )
     if pr_metadata:
         state.remote_pr_head_sha = _fetch_remote_pr_head_sha(worktree, pr_metadata)
-    if (
+
+    remote_diverged = bool(
         state.remote_pr_head_sha
-        and state.fresh_final_status == "clean"
-    ):
-        verified_shas = {
-            fix.verified_head_sha
-            for fix in state.fixes
-            if fix.verification_status == "verified" and fix.verified_head_sha
-        }
-        if verified_shas and state.remote_pr_head_sha not in verified_shas:
-            state.fresh_final_status = "stale"
-            for fix in state.fixes:
-                if fix.verification_status == "verified":
-                    fix.verification_status = "stale"
-            # Reopen any findings the verifier marked fixed: the live
-            # PR head no longer carries the verified SHA, so those
-            # findings are no longer demonstrably fixed.
-            for finding in state.findings:
-                if finding.status == "fixed":
-                    finding.status = "open"
-            if state.stop_reason in {
-                _clean_stop_reason(fresh_final=True),
-                _clean_stop_reason(fresh_final=False),
-                "",
-            }:
+        and state.last_verified_head_sha
+        and state.remote_pr_head_sha != state.last_verified_head_sha
+    )
+    remote_unknown = bool(
+        metadata_complete
+        and state.remote_pr_head_sha is None
+        and state.last_verified_head_sha
+    )
+    if state.fresh_final_status == "clean" and (remote_diverged or remote_unknown):
+        state.fresh_final_status = "stale"
+        for fix in state.fixes:
+            if fix.verification_status == "verified":
+                fix.verification_status = "stale"
+        # Reopen any findings the verifier marked fixed: we can no
+        # longer prove the live PR head carries the verified SHA, so
+        # those findings are not demonstrably fixed at the head a
+        # human would merge.
+        for finding in state.findings:
+            if finding.status == "fixed":
+                finding.status = "open"
+        if state.stop_reason in {
+            _clean_stop_reason(fresh_final=True),
+            _clean_stop_reason(fresh_final=False),
+            "",
+        }:
+            if remote_unknown:
+                state.stop_reason = (
+                    "Could not fetch remote PR head to confirm the verified "
+                    "SHA is current; treating verification as stale."
+                )
+            else:
                 state.stop_reason = (
                     "Remote PR head advanced past the verified SHA after the "
                     "verifier ran; re-run review on the new head before merge."
@@ -4053,6 +4094,12 @@ def _write_final_state(
         # compatibility with existing ``final-state.json`` consumers).
         "fixes": [_fix_result_payload(fix) for fix in state.fixes],
         "remote_pr_head_sha": state.remote_pr_head_sha,
+        # The latest verifier-reviewed SHA the loop trusted (the one
+        # the stale-SHA gate compares against). Surfaced here so
+        # consumers can audit which SHA produced the clean final
+        # state without scraping individual fix rows. Added in
+        # response to codex review-2 on #1062.
+        "last_verified_head_sha": state.last_verified_head_sha,
     }
     _write_artifact(artifacts_dir / "final-state.json", json.dumps(payload, indent=2))
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from unittest.mock import patch
 
 import pytest
@@ -4679,3 +4679,244 @@ class TestReviewLoopShaVerification:
         assert "remote_pr_head_sha=sha-A" in report
         # And the finding is fixed (no remaining findings table row).
         assert "| info | fixed | - | No findings remain." in report
+
+    # ------------------------------------------------------------------
+    # Codex review-2 follow-ups on PR #1078 (#1062). These tests gate the
+    # tightened stale-SHA semantics: compare against the LATEST verified
+    # SHA only, and fail closed when a fetch could have been expected to
+    # succeed but did not.
+    # ------------------------------------------------------------------
+
+    def test_stale_check_uses_latest_verified_sha_not_set_membership(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Two-round fix: round 1 verifies sha-A, round 2 verifies sha-B.
+
+        The remote head is at sha-A (reset). The gate MUST fire because
+        sha-A is no longer the latest verified SHA — even though sha-A
+        is still in the historical set of verified SHAs. Pre-fix code
+        used set-membership and let this pass as "verified".
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        # Re-implement _patch_io but with a stateful push (sha-A on
+        # round 1, sha-B on round 2) and a remote that points back at
+        # sha-A.
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        pushes: List[str] = ["sha-A", "sha-B"]
+
+        def fake_push(*a: Any, **k: Any) -> Tuple[bool, str, str]:
+            sha = pushes.pop(0) if pushes else "sha-extra"
+            return True, "Pushed fixes to PR branch.", sha
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(
+            mod,
+            "_fetch_remote_pr_head_sha",
+            lambda *a, **k: "sha-A",
+            raising=False,
+        )
+
+        finding_round1 = self._finding()
+        finding_round2 = {
+            **self._finding(),
+            "location": "pdd/foo.py:42",
+            "evidence": "round-2-only blocker introduced after round 1",
+            "finding": (
+                "round-2 verifier surfaced a new blocker not present in "
+                "the round-1 review."
+            ),
+        }
+
+        # Sequencing across the loop:
+        #   round-1 review   -> finding_round1
+        #   round-1 fix      -> success
+        #   round-1 verify   -> NEW finding_round2 (loop continues; round-1
+        #                       fixed finding_round1 → last_verified=sha-A)
+        #   round-2 fix      -> success
+        #   round-2 verify   -> clean (last_verified=sha-B)
+        # Then the stale gate runs with remote=sha-A; it must fire.
+        call_order: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            call_order.append(label)
+            if "fix-" in label:
+                return True, self._fix_summary(), 1.0, role
+            if "verify-" in label:
+                # First verify (round 1) surfaces a NEW finding so the
+                # loop continues into round 2; the previously fixed
+                # round-1 finding is implicitly cleared.
+                round1_verify_done = sum(
+                    1 for entry in call_order if "verify-" in entry
+                )
+                if round1_verify_done == 1:
+                    return True, _json("findings", [finding_round2]), 0.1, role
+                return True, _json("clean"), 0.1, role
+            # Review pass (round 1).
+            return True, _json("findings", [finding_round1]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=3),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The latest verified SHA is sha-B, the remote is back at sha-A,
+        # so the gate MUST flip fresh-final-review to stale. Without the
+        # latest-verified-SHA fix, set-membership would silently accept
+        # the remote because sha-A was once verified in round 1.
+        assert "fresh-final-review: stale" in report
+        # Both SHAs surface so an operator can see which round's SHA the
+        # loop trusted vs. what the remote points at now.
+        assert "verified_head_sha=sha-B" in report
+        assert "remote_pr_head_sha=sha-A" in report
+        # An issue-aligned: true verdict would leak a verified-but-stale
+        # state — must not appear.
+        assert "issue_aligned: true" not in report
+        # ``final-state.json`` must surface the audit pointer so
+        # consumers can read which SHA the loop trusted without
+        # scraping fix rows. This is the new top-level field added
+        # for codex review-2 on #1062.
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        final_state = json.loads((artifacts_dir / "final-state.json").read_text())
+        assert final_state["last_verified_head_sha"] == "sha-B"
+        assert final_state["remote_pr_head_sha"] == "sha-A"
+        assert final_state["fresh_final_status"] == "stale"
+
+    def test_remote_head_fetch_failure_marks_stale_when_metadata_complete(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """If ``pr_metadata`` has ``clone_url`` + ``head_ref`` but
+        ``_fetch_remote_pr_head_sha`` returns ``None`` (auth/network/
+        missing-ref/etc), a clean loop with a verified fix MUST
+        downgrade to stale rather than render verification=verified
+        without proof that the live remote head matches the verified
+        SHA.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "Pushed fixes to PR branch.", "sha-A"),
+            remote_head=None,
+        )
+
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return True, self._fix_summary(), 1.0, role
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            return True, _json("findings", [finding]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The verifier reviewed sha-A clean, but the gate cannot prove
+        # the remote still carries it (fetch returned None despite
+        # complete metadata). Must fail closed.
+        assert "fresh-final-review: stale" in report
+        assert "verification=verified" not in report
+        # The downgrade body must explain WHY this is stale, distinct
+        # from the diverged-SHA case, so operators can triage.
+        assert "Could not fetch remote PR head" in report
+        # Verified SHA still appears for audit (we know what we tried
+        # to verify against), but issue-aligned must NOT be true.
+        assert "verified_head_sha=sha-A" in report
+        assert "issue_aligned: true" not in report
+
+    def test_remote_head_fetch_none_without_metadata_keeps_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """When ``pr_metadata`` lacks ``clone_url``/``head_ref`` (e.g.
+        offline-test path with an empty default), a ``None`` remote
+        head must NOT flip a clean loop to stale — there's nothing to
+        verify against, and false positives on every offline test run
+        would be a regression.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        # Empty pr_metadata: the metadata-complete branch must NOT fire
+        # because there is no head_ref/clone_url to drive a fetch.
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {},
+        )
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: (True, "Pushed fixes to PR branch.", "sha-A"),
+        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        # Even though the helper would never be called in this branch
+        # (the guard ``if pr_metadata`` is falsy on an empty dict), patch
+        # it so the test fails loudly if the gate semantics ever
+        # change to call it unconditionally with an empty dict.
+        called: Dict[str, int] = {"count": 0}
+
+        def fake_fetch(*a: Any, **k: Any) -> Optional[str]:
+            called["count"] += 1
+            return None
+
+        monkeypatch.setattr(
+            mod, "_fetch_remote_pr_head_sha", fake_fetch, raising=False
+        )
+
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return True, self._fix_summary(), 1.0, role
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            return True, _json("findings", [finding]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # No metadata to drive the fetch → the gate must stay quiet.
+        # The loop remains in its in-loop ``clean`` state and renders
+        # the verified row, because there was nothing to verify against.
+        assert "fresh-final-review: stale" not in report
