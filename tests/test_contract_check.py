@@ -324,7 +324,6 @@ class TestCheckVagueTerms:
         issues = _check_vague_terms(
             "R1: The system MUST return a valid response.",
             vocab_terms=set(),
-            strict=False,
         )
         assert any(i.code == "VAGUE_TERM" and i.term == "valid" for i in issues)
 
@@ -332,7 +331,6 @@ class TestCheckVagueTerms:
         issues = _check_vague_terms(
             "R1: The system MUST return a valid response.",
             vocab_terms={"valid", "response", "valid response"},
-            strict=False,
         )
         assert issues == []
 
@@ -593,14 +591,14 @@ class TestCheckStoryCovers:
     def test_known_rule_id_no_issue(self):
         text = self._story("- R1: duplicate upload rejection\n")
         issues = _check_story_covers(
-            text, Path("story.md"), {"test_prompt.prompt": {"R1", "R2"}}
+            text, {"test_prompt.prompt": {"R1", "R2"}}
         )
         assert issues == []
 
     def test_unknown_rule_id_warns(self):
         text = self._story("- R99: this does not exist\n")
         issues = _check_story_covers(
-            text, Path("story.md"), {"test_prompt.prompt": {"R1", "R2"}}
+            text, {"test_prompt.prompt": {"R1", "R2"}}
         )
         assert len(issues) == 1
         assert issues[0].code == "UNKNOWN_STORY_REF"
@@ -609,11 +607,11 @@ class TestCheckStoryCovers:
 
     def test_no_covers_section_returns_empty(self):
         text = "# Story\n## Acceptance Criteria\n1. Given X.\n"
-        assert _check_story_covers(text, Path("story.md"), {}) == []
+        assert _check_story_covers(text, {}) == []
 
     def test_no_linked_prompts_skips_id_check(self):
         text = self._story("- R99 from unknown.prompt\n")
-        issues = _check_story_covers(text, Path("story.md"), None)
+        issues = _check_story_covers(text, None)
         assert issues == []
 
     def test_fixture_valid_story(self):
@@ -648,14 +646,14 @@ class TestCrossModuleCovers:
     def test_cross_module_known_id_no_issue(self):
         text = self._story("- test_prompt.prompt#R1: Reject duplicates\n")
         issues = _check_story_covers(
-            text, Path("story.md"), {"test_prompt.prompt": {"R1", "R2"}}
+            text, {"test_prompt.prompt": {"R1", "R2"}}
         )
         assert issues == []
 
     def test_cross_module_unknown_id_warns(self):
         text = self._story("- test_prompt.prompt#R99: does not exist\n")
         issues = _check_story_covers(
-            text, Path("story.md"), {"test_prompt.prompt": {"R1", "R2"}}
+            text, {"test_prompt.prompt": {"R1", "R2"}}
         )
         assert len(issues) == 1
         assert issues[0].code == "UNKNOWN_STORY_REF"

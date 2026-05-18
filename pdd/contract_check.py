@@ -1,3 +1,4 @@
+# pylint: disable=too-many-lines,duplicate-code
 """
 Contract authoring check engine.
 
@@ -95,7 +96,7 @@ class Rule:
 
 
 @dataclass
-class Waiver:
+class Waiver:  # pylint: disable=too-many-instance-attributes
     """One parsed waiver block from <waivers>."""
 
     raw_id: str                        # e.g. "W1"
@@ -109,7 +110,7 @@ class Waiver:
 
 
 @dataclass
-class ContractIssue:
+class ContractIssue:  # pylint: disable=too-many-instance-attributes
     """A single contract-check finding."""
 
     level: str       # "warn" | "error"
@@ -123,6 +124,7 @@ class ContractIssue:
     interpretations: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
+        """Serialise this issue to a JSON-safe dictionary."""
         return {
             "level": self.level,
             "code": self.code,
@@ -145,13 +147,16 @@ class ContractResult:
 
     @property
     def warn_count(self) -> int:
+        """Count of warning-level issues."""
         return sum(1 for i in self.issues if i.level == "warn")
 
     @property
     def error_count(self) -> int:
+        """Count of error-level issues."""
         return sum(1 for i in self.issues if i.level == "error")
 
     def as_dict(self) -> dict:
+        """Serialise this result to a JSON-safe dictionary."""
         return {
             "path": str(self.path),
             "warn_count": self.warn_count,
@@ -164,7 +169,7 @@ class ContractResult:
 # Rule extraction (multi-line block parser)
 # ---------------------------------------------------------------------------
 
-def _extract_rules(rules_text: str) -> list[Rule]:
+def _extract_rules(rules_text: str) -> list[Rule]:  # pylint: disable=too-many-locals
     """
     Parse <contract_rules> text into a list of Rule objects.
 
@@ -188,10 +193,10 @@ def _extract_rules(rules_text: str) -> list[Rule]:
     """
     rules: list[Rule] = []
     lines = rules_text.splitlines()
-    n = len(lines)
+    line_count = len(lines)
     i = 0
 
-    while i < n:
+    while i < line_count:
         stripped = lines[i].strip()
         i += 1
 
@@ -224,7 +229,7 @@ def _extract_rules(rules_text: str) -> list[Rule]:
         block_lines = [stripped]
         blank_run = 0
 
-        while i < n:
+        while i < line_count:
             next_raw = lines[i]
             next_stripped = next_raw.strip()
 
@@ -293,7 +298,7 @@ def _extract_waivers(waivers_text: str) -> list[Waiver]:
     def _flush() -> None:
         if current_id is None:
             return
-        w = Waiver(
+        waiver = Waiver(
             raw_id=current_id,
             rule_id=current_fields.get("rule", ""),
             status=current_fields.get("status", ""),
@@ -305,10 +310,10 @@ def _extract_waivers(waivers_text: str) -> list[Waiver]:
         expires_str = current_fields.get("expires", "")
         if expires_str:
             try:
-                w.expires = date.fromisoformat(expires_str.strip())
+                waiver.expires = date.fromisoformat(expires_str.strip())
             except ValueError:
                 pass
-        waivers.append(w)
+        waivers.append(waiver)
 
     for line in waivers_text.splitlines():
         stripped = line.strip()
@@ -321,9 +326,9 @@ def _extract_waivers(waivers_text: str) -> list[Waiver]:
             continue
         if current_id is not None:
             current_block_lines.append(stripped)
-            kv = re.match(r"^([A-Za-z][A-Za-z\s\-]*?):\s*(.+)$", stripped)
-            if kv:
-                current_fields[kv.group(1).strip().lower()] = kv.group(2).strip()
+            kv_match = re.match(r"^([A-Za-z][A-Za-z\s\-]*?):\s*(.+)$", stripped)
+            if kv_match:
+                current_fields[kv_match.group(1).strip().lower()] = kv_match.group(2).strip()
 
     _flush()
     return waivers
@@ -447,8 +452,6 @@ def _check_missing_modal(rules: list[Rule], *, strict: bool) -> list[ContractIss
 def _check_vague_terms(
     rules_text: str,
     vocab_terms: set[str],
-    *,
-    strict: bool,
 ) -> list[ContractIssue]:
     """
     Warn when a rule line uses a known vague phrase not covered by <vocabulary>.
@@ -529,7 +532,7 @@ def _check_coverage_entries(
             ))
             continue
 
-        # TODO entry
+        # Coverage placeholder: evidence text begins with "TODO"
         if evidence.upper().startswith("TODO"):
             issues.append(ContractIssue(
                 level="warn",
@@ -542,8 +545,8 @@ def _check_coverage_entries(
                     f"Add a story, test, or waiver before production use."
                 ),
                 suggestion=(
-                    f"Replace 'TODO' with: a story filename, an executable test name, "
-                    f"or 'WAIVED W<N>' with a corresponding <waivers> entry."
+                    "Replace 'TODO' with: a story filename, an executable test name, "
+                    "or 'WAIVED W<N>' with a corresponding <waivers> entry."
                 ),
             ))
             continue
@@ -582,8 +585,8 @@ def _check_must_not_coverage(
     """
     issues: list[ContractIssue] = []
     covered_ids: set[str] = set()
-    for m in _COVERAGE_REF_RE.finditer(coverage_text):
-        covered_ids.add(m.group(1).upper())
+    for coverage_match in _COVERAGE_REF_RE.finditer(coverage_text):
+        covered_ids.add(coverage_match.group(1).upper())
 
     for rule in rules:
         if not rule.is_must_not:
@@ -692,9 +695,41 @@ def _check_capabilities_modals(capabilities_text: str) -> list[ContractIssue]:
     return issues
 
 
+def _check_non_responsibilities_modals(non_resp_text: str) -> list[ContractIssue]:
+    """
+    Emit MISSING_MODAL warn for <non_responsibilities> lines that lack a modal verb.
+
+    Non-responsibility lines should use DOES NOT / MUST NOT / MAY NOT to make
+    the exclusion explicit rather than just stating scope informally.
+    Comment/blank lines and lines starting with '#' are skipped.
+    """
+    issues: list[ContractIssue] = []
+    for line in non_resp_text.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if not _MODAL_PATTERN.search(stripped):
+            issues.append(ContractIssue(
+                level="warn",
+                code="MISSING_MODAL",
+                rule_id="",
+                section="non_responsibilities",
+                line=stripped,
+                message=(
+                    f'Non-responsibility line has no modal verb '
+                    f'(DOES NOT / MUST NOT / MAY NOT / WILL NOT): '
+                    f'"{stripped[:80]}"'
+                ),
+                suggestion=(
+                    'Use an explicit modal: "- DOES NOT handle …", '
+                    '"- MUST NOT be called for …".'
+                ),
+            ))
+    return issues
+
+
 def _check_story_covers(
     story_text: str,
-    story_path: Path,
     linked_prompt_rules: Optional[dict[str, set[str]]],
 ) -> list[ContractIssue]:
     """
@@ -724,9 +759,9 @@ def _check_story_covers(
         # Cross-module format: prompts/foo.prompt#R3
         cross_matches = list(_CROSS_MODULE_REF_RE.finditer(stripped))
         if cross_matches:
-            for m in cross_matches:
-                prompt_file = m.group(1).rsplit("/", 1)[-1]  # basename
-                ref_id = m.group(2).upper()
+            for cross_match in cross_matches:
+                prompt_file = cross_match.group(1).rsplit("/", 1)[-1]  # basename
+                ref_id = cross_match.group(2).upper()
                 prompt_ids = linked_prompt_rules.get(prompt_file, set())
                 if not prompt_ids:
                     # Try matching any prompt in the map
@@ -754,8 +789,8 @@ def _check_story_covers(
                     ))
         else:
             # Single-prompt format: - R1: rule name
-            for m in _COVERAGE_REF_RE.finditer(stripped):
-                ref_id = m.group(1).upper()
+            for ref_match in _COVERAGE_REF_RE.finditer(stripped):
+                ref_id = ref_match.group(1).upper()
                 found_in_any = any(ref_id in ids for ids in linked_prompt_rules.values())
                 if not found_in_any:
                     issues.append(ContractIssue(
@@ -781,7 +816,7 @@ def _check_story_covers(
 # Top-level check functions
 # ---------------------------------------------------------------------------
 
-def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:
+def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:  # pylint: disable=too-many-locals
     """
     Run all deterministic checks on a single prompt file.
 
@@ -817,6 +852,7 @@ def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:
     coverage_text = sections.get("coverage", "")
     waivers_text = sections.get("waivers", "")
     capabilities_text = sections.get("capabilities", "")
+    non_resp_text = sections.get("non_responsibilities", "")
 
     # Build vocabulary terms from all vocabulary sections
     vocab_terms: set[str] = set()
@@ -836,7 +872,7 @@ def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:
         result.issues.extend(_check_malformed_ids(rules_text))
         result.issues.extend(_check_sequential_ids(rules))
         result.issues.extend(_check_missing_modal(rules, strict=strict))
-        result.issues.extend(_check_vague_terms(rules_text, vocab_terms, strict=strict))
+        result.issues.extend(_check_vague_terms(rules_text, vocab_terms))
 
     if coverage_text:
         result.issues.extend(
@@ -850,6 +886,9 @@ def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:
     if capabilities_text:
         result.issues.extend(_check_capabilities_modals(capabilities_text))
 
+    if non_resp_text:
+        result.issues.extend(_check_non_responsibilities_modals(non_resp_text))
+
     # Escalate warns to errors in strict mode
     if strict:
         for issue in result.issues:
@@ -861,12 +900,12 @@ def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:
 def check_directory(directory: Path, *, strict: bool = False) -> list[ContractResult]:
     """Run check_prompt on every *.prompt file under a directory (recursive)."""
     results: list[ContractResult] = []
-    for p in sorted(directory.rglob("*.prompt")):
-        results.append(check_prompt(p, strict=strict))
+    for prompt_path in sorted(directory.rglob("*.prompt")):
+        results.append(check_prompt(prompt_path, strict=strict))
     return results
 
 
-def check_stories(
+def check_stories(  # pylint: disable=too-many-locals
     stories_dir: Path,
     prompts_dir: Optional[Path] = None,
     *,
@@ -885,25 +924,25 @@ def check_stories(
     # Build prompt ID map if prompts_dir given
     prompt_id_map: dict[str, set[str]] = {}
     if prompts_dir and prompts_dir.exists():
-        for p in prompts_dir.rglob("*.prompt"):
+        for prompt_path in prompts_dir.rglob("*.prompt"):
             try:
-                text = p.read_text(encoding="utf-8")
+                text = prompt_path.read_text(encoding="utf-8")
                 secs = _extract_sections(text)
                 rules_text = secs.get("contract_rules", "")
                 if rules_text:
                     rules = _extract_rules(rules_text)
-                    prompt_id_map[p.name] = {
+                    prompt_id_map[prompt_path.name] = {
                         r.raw_id.upper() for r in rules
                         if r.raw_id not in ("(unnumbered)",)
                     }
-            except Exception:  # noqa: BLE001
+            except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                 pass
 
     for story_path in sorted(stories_dir.rglob("story__*.md")):
         result = ContractResult(path=story_path)
         try:
             story_text = story_path.read_text(encoding="utf-8")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
             continue
 
         linked: Optional[dict[str, set[str]]] = None
@@ -918,7 +957,7 @@ def check_stories(
             else:
                 linked = prompt_id_map  # check against all known prompts
 
-        issues = _check_story_covers(story_text, story_path, linked)
+        issues = _check_story_covers(story_text, linked)
         if strict:
             for issue in issues:
                 issue.level = "error"
@@ -932,7 +971,7 @@ def check_stories(
 # Optional LLM ambiguity pass
 # ---------------------------------------------------------------------------
 
-def run_llm_ambiguity_pass(
+def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
     path: Path,
     strength: float = 0.5,
     temperature: float = 0.0,
@@ -947,8 +986,8 @@ def run_llm_ambiguity_pass(
     is returned so that CI is never blocked.
     """
     try:
-        from .llm_invoke import llm_invoke
-        from .preprocess import preprocess
+        from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
+        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
     except ImportError:
         logger.warning("LLM dependencies not available; skipping ambiguity pass.")
         return []
@@ -999,6 +1038,6 @@ def run_llm_ambiguity_pass(
                 interpretations=entry.get("interpretations", []),
             ))
         return issues
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
         logger.warning("LLM ambiguity pass failed: %s", exc)
         return []

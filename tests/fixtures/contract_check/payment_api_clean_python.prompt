@@ -78,7 +78,7 @@ the system MUST return a JSON body with at minimum {"code": "<string>", "message
 </capabilities>
 
 <non_responsibilities>
-- Currency conversion.
-- Issuer-side dispute resolution.
-- PCI DSS key management (handled by the vault service).
+- DOES NOT perform currency conversion.
+- DOES NOT handle issuer-side dispute resolution.
+- DOES NOT manage PCI DSS keys (handled by the vault service).
 </non_responsibilities>
