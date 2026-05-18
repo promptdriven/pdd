@@ -95,7 +95,7 @@ def track_cost(func):
 
                         file_exists = os.path.isfile(output_cost_path)
                         file_has_content = file_exists and os.path.getsize(output_cost_path) > 0
-                        
+
                         legacy_fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files']
                         new_fieldnames = legacy_fieldnames + ['attempted_models']
 
