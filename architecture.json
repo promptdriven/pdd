@@ -6602,13 +6602,21 @@
             "signature": "(prompt_file: Path, code_file: Path, output_test_file: Path, *, verbose: bool = False, quiet: bool = False, repair_directive: str | None = None) -> TestResult",
             "returns": "TestResult",
             "sideEffects": [
-              "None"
+              "Reads working-tree content of pre-existing test-like files (matching `_is_test_output_path`) under `project_root` BEFORE the agent runs so the alt-path churn check has a baseline that covers tracked-clean, tracked-dirty, and untracked alt-path tests uniformly; on `TestChurnError` restores the snapshotted pre-run content to the alt path so the repair loop sees the actual pre-sync state (NOT `git show HEAD`, which would clobber dirty local edits)."
             ]
           },
           {
             "name": "_get_file_mtimes",
             "signature": "(root: Path) -> dict[Path, float]",
             "returns": "dict[Path, float]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_snapshot_pre_test_contents",
+            "signature": "(project_root: Path, candidate_paths: Iterable[Path]) -> dict[Path, str]",
+            "returns": "dict[Path, str]",
             "sideEffects": [
               "None"
             ]
