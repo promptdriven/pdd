@@ -1371,8 +1371,8 @@ def update_main(
                                         rprint(
                                             f"[warning][metadata] Run report clear failed for "
                                             f"{basename} ({language}): "
-                                            f"{_stale_report_path} still exists after "
-                                            f"clear_run_report; skipping fingerprint update so a "
+                                            f"still exists after clear_run_report: "
+                                            f"{_stale_report_path}; skipping fingerprint update so a "
                                             f"fresh fingerprint does not coexist with a stale "
                                             f"run report (issue #1057)."
                                             f"[/warning]"

@@ -881,3 +881,29 @@ def test_save_fingerprint_warns_on_path_resolution_failure_issue_983(temp_pdd_en
         warning_args = str(mock_logger.warning.call_args)
         assert "badmod" in warning_args
         assert "python" in warning_args
+
+
+def test_log_operation_decorator_skips_fingerprint_when_clear_silently_fails(temp_pdd_env):
+    """
+    Regression for issue #1057: if a stale run report survives clear_run_report(),
+    the decorator must not write a fresh fingerprint next to stale runtime state.
+    """
+    operation_log.save_run_report("demo", "python", {"success": True})
+    run_report_path = operation_log.get_run_report_path("demo", "python")
+    assert run_report_path.exists()
+
+    @operation_log.log_operation(
+        operation="generate",
+        clears_run_report=True,
+        updates_fingerprint=True,
+    )
+    def successful_command(prompt_file):
+        return "ok", False, 0.0, "model"
+
+    with patch("pdd.operation_log.os.remove", lambda _path: None), patch(
+        "pdd.operation_log.save_fingerprint"
+    ) as mock_save_fingerprint:
+        successful_command(prompt_file="prompts/demo_python.prompt")
+
+    assert run_report_path.exists()
+    mock_save_fingerprint.assert_not_called()

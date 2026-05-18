@@ -152,8 +152,9 @@ def generate(prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
     3. Executes the wrapped function
     4. Updates log entry with results
     5. On success only: clears stale run report (clears_run_report=True)
-       before saving fingerprint, so a failed command never erases existing
-       runtime verification state (issue #1057)
+       and verifies deletion before saving fingerprint, so a failed command
+       never erases existing runtime verification state and a fresh fingerprint
+       cannot coexist with a stale run report (issue #1057)
     6. Saves fingerprint on success (updates_fingerprint=True)
     """
     # Simulate generation

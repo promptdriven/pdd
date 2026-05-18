@@ -340,6 +340,9 @@ def test_generate_unit_test_and_exclude_tests_forwarded(runner, mock_code_gen):
     with runner.isolated_filesystem():
         with open("p.txt", "w") as f:
             f.write("p")
+        os.makedirs("tests")
+        with open("tests/test_p.py", "w") as f:
+            f.write("def test_p(): pass\n")
 
         result = runner.invoke(
             generate_module.generate,
@@ -378,7 +381,7 @@ def test_generate_missing_prompt_file_fails_usage(runner, mock_code_gen):
         result = runner.invoke(generate_module.generate, ["missing.prompt"])
 
     assert result.exit_code != 0, result.output
-    assert "Input file not found" in result.output
+    assert "does not exist" in result.output
     mock_code_gen.assert_not_called()
 
 

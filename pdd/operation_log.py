@@ -320,6 +320,42 @@ def clear_run_report(basename: str, language: str) -> None:
             pass
 
 
+def _clear_run_report_before_fingerprint(basename: str, language: str) -> bool:
+    """Clear stale run report and verify it is gone before fingerprint update."""
+    path = get_run_report_path(basename, language)
+    console = Console()
+
+    try:
+        had_run_report = path.exists()
+    except OSError as e:
+        console.print(
+            f"[yellow]Warning: Could not inspect run report {path}: {e}. "
+            "Skipping fingerprint update.[/yellow]"
+        )
+        return False
+
+    clear_run_report(basename, language)
+    if not had_run_report:
+        return True
+
+    try:
+        if path.exists():
+            console.print(
+                f"[yellow]Warning: Run report {path} still exists after clear; "
+                "skipping fingerprint update to avoid pairing a fresh "
+                "fingerprint with stale runtime state.[/yellow]"
+            )
+            return False
+    except OSError as e:
+        console.print(
+            f"[yellow]Warning: Could not verify run report deletion for {path}: {e}. "
+            "Skipping fingerprint update.[/yellow]"
+        )
+        return False
+
+    return True
+
+
 def log_operation(
     operation: str,
     updates_fingerprint: bool = False,
@@ -377,6 +413,7 @@ def log_operation(
                 if basename and language:
                     append_log_entry(basename, language, entry)
                     if success:
+                        fingerprint_allowed = True
                         # Clear the stale run report only after the command
                         # succeeds, so a failed run cannot erase existing
                         # runtime verification state that still describes the
@@ -384,42 +421,11 @@ def log_operation(
                         # save_fingerprint so a fresh fingerprint never
                         # coexists with a stale per-module run report
                         # (issue #1057).
-                        stale_run_report_remains = False
                         if clears_run_report:
-                            try:
-                                clear_run_report(basename, language)
-                            except Exception as cr_exc:  # noqa: BLE001
-                                stale_run_report_remains = True
-                                Console().print(
-                                    f"[yellow]Warning: Failed to clear run "
-                                    f"report for {basename}_{language}: "
-                                    f"{cr_exc}[/yellow]"
-                                )
-                            # Defensive: clear_run_report() swallows OSError
-                            # on the actual unlink, so verify the report is
-                            # really gone before we write a fresh fingerprint
-                            # that would otherwise coexist with stale runtime
-                            # verification state (issue #1057).
-                            try:
-                                _stale_path = get_run_report_path(basename, language)
-                                if _stale_path.exists():
-                                    stale_run_report_remains = True
-                                    Console().print(
-                                        f"[yellow]Warning: clear_run_report "
-                                        f"did not remove {_stale_path}; "
-                                        f"skipping fingerprint update so a "
-                                        f"fresh fingerprint does not coexist "
-                                        f"with a stale run report.[/yellow]"
-                                    )
-                            except Exception as _vrf_exc:  # noqa: BLE001
-                                stale_run_report_remains = True
-                                Console().print(
-                                    f"[yellow]Warning: could not verify "
-                                    f"run-report removal for "
-                                    f"{basename}_{language}: "
-                                    f"{_vrf_exc}[/yellow]"
-                                )
-                        if updates_fingerprint and not stale_run_report_remains:
+                            fingerprint_allowed = _clear_run_report_before_fingerprint(
+                                basename, language
+                            )
+                        if updates_fingerprint and fingerprint_allowed:
                             save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)
