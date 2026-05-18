@@ -749,11 +749,9 @@ def _analyze_global_sync_modules(
 
         sync_candidates = module.sync_candidates or ((basename, cwd),)
         candidate_errors: List[str] = []
-        selected_context: Optional[str] = None
-        selected_prompts_dir: Optional[Path] = None
-        selected_lang_to_path: Dict[str, Path] = {}
-        selected_basename = basename
-        selected_cwd = cwd
+        out_of_scope_skips: List[str] = []
+        has_prompt_backed_candidate = False
+        multiple_candidates = len(sync_candidates) > 1
 
         for candidate_basename, candidate_cwd in sync_candidates:
             try:
@@ -765,14 +763,55 @@ def _analyze_global_sync_modules(
                 continue
             if not lang_to_path:
                 continue
-            selected_context = context_name
-            selected_prompts_dir = prompts_dir
-            selected_lang_to_path = lang_to_path
-            selected_basename = candidate_basename
-            selected_cwd = candidate_cwd
-            break
+            has_prompt_backed_candidate = True
 
-        if not selected_lang_to_path:
+            operations: List[str] = []
+            needs_sync = False
+            candidate_cost = 0.0
+            for language in lang_to_path:
+                label = f"{candidate_basename}: {language}" if multiple_candidates else language
+                try:
+                    decision = _run_readonly_sync_determine_in_cwd(
+                        candidate_cwd,
+                        basename=candidate_basename,
+                        language=language,
+                        target_coverage=effective_coverage,
+                        budget=effective_budget,
+                        log_mode=True,
+                        prompts_dir=str(prompts_dir),
+                        skip_tests=skip_tests,
+                        skip_verify=skip_verify,
+                        context_override=context_name,
+                    )
+                except Exception as exc:
+                    needs_sync = True
+                    operations.append(
+                        f"{label}: analysis-error ({exc}); queued for sync"
+                    )
+                    continue
+
+                operations.append(f"{label}: {decision.operation} - {decision.reason}")
+                if decision.operation in _GLOBAL_SYNC_TIER1_OPERATIONS:
+                    needs_sync = True
+                    candidate_cost += float(decision.estimated_cost or 0.0)
+                elif decision.operation not in _GLOBAL_SYNC_NOOP_OPERATIONS:
+                    out_of_scope_skips.append(
+                        f"{key}: {label} requires {decision.operation}; "
+                        "outside Tier 1 prompt-staleness scope"
+                    )
+
+            if needs_sync:
+                modules_to_sync.append(key)
+                module_operations[key] = operations
+                module_cwds[key] = candidate_cwd
+                module_targets[key] = candidate_basename
+                estimated_cost += candidate_cost
+                break
+
+        if key in module_operations:
+            continue
+
+        if not has_prompt_backed_candidate:
             if candidate_errors and len(candidate_errors) == len(sync_candidates):
                 modules_to_sync.append(key)
                 module_operations[key] = [
@@ -784,51 +823,7 @@ def _analyze_global_sync_modules(
             skipped_modules.append(f"{key}: no syncable prompt file found")
             continue
 
-        basename = selected_basename
-        cwd = selected_cwd
-        context_name = selected_context
-        assert selected_prompts_dir is not None
-        prompts_dir = selected_prompts_dir
-        lang_to_path = selected_lang_to_path
-        module_cwds[key] = cwd
-        module_targets[key] = basename
-
-        operations: List[str] = []
-        needs_sync = False
-        for language in lang_to_path:
-            try:
-                decision = _run_readonly_sync_determine_in_cwd(
-                    cwd,
-                    basename=basename,
-                    language=language,
-                    target_coverage=effective_coverage,
-                    budget=effective_budget,
-                    log_mode=True,
-                    prompts_dir=str(prompts_dir),
-                    skip_tests=skip_tests,
-                    skip_verify=skip_verify,
-                    context_override=context_name,
-                )
-            except Exception as exc:
-                needs_sync = True
-                operations.append(
-                    f"{language}: analysis-error ({exc}); queued for sync"
-                )
-                continue
-
-            operations.append(f"{language}: {decision.operation} - {decision.reason}")
-            if decision.operation in _GLOBAL_SYNC_TIER1_OPERATIONS:
-                needs_sync = True
-                estimated_cost += float(decision.estimated_cost or 0.0)
-            elif decision.operation not in _GLOBAL_SYNC_NOOP_OPERATIONS:
-                skipped_modules.append(
-                    f"{key}: {language} requires {decision.operation}; "
-                    "outside Tier 1 prompt-staleness scope"
-                )
-
-        if needs_sync:
-            modules_to_sync.append(key)
-            module_operations[key] = operations
+        skipped_modules.extend(out_of_scope_skips)
 
     if not quiet:
         skipped_count = len(modules) - len(modules_to_sync)
