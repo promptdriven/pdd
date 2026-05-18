@@ -9,10 +9,12 @@ a prompt template, discovers relevant test files, runs the agent, and reports
 whether the prompt file was modified, along with cost and provider details.
 """
 
+from collections import deque
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Deque, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import glob
+import logging
 import os
 import traceback
 
@@ -21,6 +23,8 @@ from rich.markdown import Markdown
 
 from .agentic_common import get_available_agents, run_agentic_task, DEFAULT_MAX_RETRIES, _revert_out_of_scope_changes
 from .load_prompt_template import load_prompt_template
+
+_logger = logging.getLogger(__name__)
 
 # Optional globals from package root; ignore if not present.
 try:  # pragma: no cover - purely optional integration
@@ -190,6 +194,105 @@ def _normalize_explicit_tests(
     return normalized, None
 
 
+def _compute_include_allowlist(
+    prompt_path: Path,
+    *,
+    max_depth: int = 3,
+) -> set[Path]:
+    """
+    Compute the transitive ``<include>`` allowlist reachable from ``prompt_path``.
+
+    Performs a depth-bounded, cycle-safe breadth-first walk of include
+    references, reusing ``pdd.sync_order.extract_includes_from_file`` so this
+    module cannot disagree with PDD preprocessing on what counts as an include.
+
+    Resolution order for each raw include string:
+        1. ``PROJECT_ROOT / include_str``
+        2. ``current_file.parent / include_str``
+
+    Includes that do not resolve to an existing file under ``PROJECT_ROOT`` are
+    silently skipped (a debug log line is emitted but no error is raised).
+
+    In addition, every existing file under ``PROJECT_ROOT / "context"`` is
+    added to the returned set so that edits to shared-include staging files
+    survive the scope guard even when not yet referenced from the prompt being
+    updated. Newly-created files under ``context/`` are already untracked and
+    unaffected by the scope guard.
+
+    Args:
+        prompt_path: Root prompt file from which to walk includes.
+        max_depth: Maximum BFS levels to expand (root is depth 0).
+
+    Returns:
+        Set of resolved ``Path`` objects (existing files under ``PROJECT_ROOT``)
+        that the agent is permitted to modify in addition to the prompt and
+        code paths. Returns an empty set if ``pdd.sync_order`` is unavailable
+        or if the prompt file itself cannot be read.
+    """
+    project_root = PROJECT_ROOT.resolve()
+    allowlist: set[Path] = set()
+
+    try:
+        from .sync_order import extract_includes_from_file  # local import to avoid cycles
+    except Exception as exc:  # pragma: no cover - defensive
+        _logger.debug("Scope guard: sync_order import failed; include walk disabled: %s", exc)
+        extract_includes_from_file = None  # type: ignore[assignment]
+
+    visited: set[Path] = set()
+    root = prompt_path.resolve()
+    if extract_includes_from_file is not None and root.is_file():
+        visited.add(root)
+
+        # Each queue entry: (file_path, depth_already_consumed)
+        queue: Deque[Tuple[Path, int]] = deque([(root, 0)])
+        while queue:
+            current, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+            try:
+                raw_includes = extract_includes_from_file(current)
+            except Exception as exc:  # pragma: no cover - defensive
+                _logger.debug("Scope guard: extract_includes_from_file failed for %s: %s", current, exc)
+                continue
+            for include_str in raw_includes:
+                candidate: Optional[Path] = None
+                for base in (project_root, current.parent):
+                    try:
+                        cand = (base / include_str).resolve()
+                    except (OSError, ValueError) as exc:
+                        _logger.debug("Scope guard: cannot resolve include %r from %s: %s", include_str, base, exc)
+                        continue
+                    if not cand.is_file():
+                        continue
+                    try:
+                        cand.relative_to(project_root)
+                    except ValueError:
+                        # Outside the project tree — refuse to allow.
+                        continue
+                    candidate = cand
+                    break
+                if candidate is None:
+                    _logger.debug("Scope guard: include %r from %s did not resolve to a project file", include_str, current)
+                    continue
+                allowlist.add(candidate)
+                if candidate not in visited:
+                    visited.add(candidate)
+                    queue.append((candidate, depth + 1))
+
+    # Add every existing file under PROJECT_ROOT/context/ so that edits to
+    # shared-include staging files survive the scope guard.
+    context_dir = project_root / "context"
+    if context_dir.is_dir():
+        try:
+            for path in context_dir.rglob("*"):
+                if path.is_file():
+                    allowlist.add(path.resolve())
+        except OSError as exc:  # pragma: no cover - defensive
+            _logger.debug("Scope guard: failed to enumerate %s: %s", context_dir, exc)
+
+    return allowlist
+
+
 def run_agentic_update(
     prompt_file: str,
     code_file: str,
@@ -348,9 +451,13 @@ def run_agentic_update(
                 console.print(traceback.format_exc())
         return False, message, 0.0, "", []
 
-    # Scope guard: revert out-of-scope file changes
+    # Scope guard: revert out-of-scope file changes.
+    # The allowlist must include any file reachable via <include> from the
+    # prompt (transitively) so that intentional edits to included source
+    # documents are preserved. See issue #1054.
     _allowed = {prompt_path.resolve(), code_path.resolve()}
     _allowed.update(p.resolve() for p in selected_tests)
+    _allowed.update(_compute_include_allowlist(prompt_path))
     _revert_out_of_scope_changes(PROJECT_ROOT, _allowed)
 
     # After running the agent, re-discover tests to include any newly created ones

@@ -129,19 +129,24 @@ def test_z3_logic_verification() -> None:
 def mock_deps() -> Generator[Tuple[MagicMock, MagicMock, MagicMock, MagicMock], None, None]:
     """
     Mock external dependencies: agents, template loader, agent runner, console.
+
+    Also stubs out ``_revert_out_of_scope_changes`` to a no-op so tests that
+    leave ``PROJECT_ROOT`` pointing at the real repository do not accidentally
+    revert tracked working-tree changes when the scope guard runs.
     """
     with patch("pdd.agentic_update.get_available_agents") as mock_agents, \
          patch("pdd.agentic_update.load_prompt_template") as mock_load, \
          patch("pdd.agentic_update.run_agentic_task") as mock_run, \
-         patch("pdd.agentic_update.console") as mock_console:
-        
+         patch("pdd.agentic_update.console") as mock_console, \
+         patch("pdd.agentic_update._revert_out_of_scope_changes", return_value=[]):
+
         # Default happy path setup
         mock_agents.return_value = ["claude"]
         mock_template = MagicMock()
         mock_template.format.return_value = "Rendered template with placeholders"
         mock_load.return_value = mock_template
         mock_run.return_value = (True, "Task complete", 0.01, "claude-3-opus")
-        
+
         yield mock_agents, mock_load, mock_run, mock_console
 
 
@@ -634,3 +639,262 @@ def test_quiet_suppresses_output(tmp_path: Path, mock_deps: Tuple[MagicMock, ...
 
     # Console should NOT have been called when quiet=True
     mock_console.print.assert_not_called()
+
+
+# -----------------------------------------------------------------------------
+# Issue #1054 regression coverage: scope guard must preserve <include> graph
+# edits and shared context/ files while still reverting unrelated tracked
+# mutations.
+# -----------------------------------------------------------------------------
+
+
+@pytest.fixture
+def real_scope_guard_deps() -> Generator[Tuple[MagicMock, MagicMock, MagicMock, MagicMock], None, None]:
+    """Like ``mock_deps`` but lets ``_revert_out_of_scope_changes`` run for real.
+
+    The acceptance regressions need the actual scope guard so they can prove
+    the allowlist is honored. They run against a throwaway git repo under
+    ``tmp_path`` and patch ``PROJECT_ROOT`` to point there.
+    """
+    with patch("pdd.agentic_update.get_available_agents") as mock_agents, \
+         patch("pdd.agentic_update.load_prompt_template") as mock_load, \
+         patch("pdd.agentic_update.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_update.console") as mock_console:
+
+        mock_agents.return_value = ["claude"]
+        mock_template = MagicMock()
+        mock_template.format.return_value = "Rendered template with placeholders"
+        mock_load.return_value = mock_template
+        mock_run.return_value = (True, "Task complete", 0.01, "claude-3-opus")
+
+        yield mock_agents, mock_load, mock_run, mock_console
+
+
+def _init_git_repo(repo: Path) -> None:
+    """Initialize a git repo with a baseline commit suitable for the scope guard."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "user.name", "Test"], cwd=repo, check=True)
+    subprocess.run(["git", "config", "commit.gpgsign", "false"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "baseline"],
+        cwd=repo,
+        check=True,
+    )
+
+
+def test_compute_include_allowlist_transitive(tmp_path: Path) -> None:
+    """Helper must transitively resolve <include> tags from PROJECT_ROOT."""
+    from pdd.agentic_update import _compute_include_allowlist
+
+    root_prompt = tmp_path / "main.prompt"
+    sub_prompt = tmp_path / "sub.prompt"
+    leaf_doc = tmp_path / "docs" / "leaf.md"
+    leaf_doc.parent.mkdir()
+    leaf_doc.write_text("leaf")
+    sub_prompt.write_text("<include>docs/leaf.md</include>")
+    root_prompt.write_text("<include>sub.prompt</include>")
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", tmp_path):
+        allowed = _compute_include_allowlist(root_prompt)
+
+    assert sub_prompt.resolve() in allowed
+    assert leaf_doc.resolve() in allowed
+
+
+def test_compute_include_allowlist_is_cycle_safe(tmp_path: Path) -> None:
+    """Helper must terminate even when includes form a cycle."""
+    from pdd.agentic_update import _compute_include_allowlist
+
+    a = tmp_path / "a.prompt"
+    b = tmp_path / "b.prompt"
+    a.write_text("<include>b.prompt</include>")
+    b.write_text("<include>a.prompt</include>")
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", tmp_path):
+        allowed = _compute_include_allowlist(a)
+
+    # Termination is the key invariant; we also expect b to be reached.
+    assert b.resolve() in allowed
+
+
+def test_compute_include_allowlist_skips_missing_targets(tmp_path: Path) -> None:
+    """Missing include targets must be silently skipped, not raised."""
+    from pdd.agentic_update import _compute_include_allowlist
+
+    prompt = tmp_path / "p.prompt"
+    prompt.write_text("<include>does/not/exist.md</include>")
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", tmp_path):
+        allowed = _compute_include_allowlist(prompt)
+
+    # Only real files may appear in the allowlist.
+    assert all(p.exists() for p in allowed)
+
+
+def test_compute_include_allowlist_includes_context_dir(tmp_path: Path) -> None:
+    """Existing tracked files under PROJECT_ROOT/context/ must be allowlisted."""
+    from pdd.agentic_update import _compute_include_allowlist
+
+    prompt = tmp_path / "p.prompt"
+    prompt.write_text("nothing to include")
+    context_dir = tmp_path / "context"
+    context_dir.mkdir()
+    shared_a = context_dir / "shared_a.md"
+    shared_a.write_text("shared a")
+    shared_b = context_dir / "nested" / "shared_b.md"
+    shared_b.parent.mkdir()
+    shared_b.write_text("shared b")
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", tmp_path):
+        allowed = _compute_include_allowlist(prompt)
+
+    assert shared_a.resolve() in allowed
+    assert shared_b.resolve() in allowed
+
+
+def test_scope_guard_preserves_included_doc_edits(
+    tmp_path: Path,
+    real_scope_guard_deps: Tuple[MagicMock, ...],
+) -> None:
+    """
+    Regression for issue #1054: an agent-modified file referenced via
+    <include> from the prompt must NOT be reverted by the scope guard.
+    """
+    _, _, mock_run, _ = real_scope_guard_deps
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    docs = repo / "docs"
+    docs.mkdir()
+    included = docs / "source.md"
+    included.write_text("original included content\n")
+
+    prompt = repo / "feature.prompt"
+    prompt.write_text("<include>docs/source.md</include>\noriginal prompt body\n")
+    code = repo / "feature.py"
+    code.write_text("def feature():\n    return 1\n")
+
+    _init_git_repo(repo)
+
+    new_included = "agent-rewritten included content\n"
+    new_prompt = "<include>docs/source.md</include>\nagent-updated prompt body\n"
+
+    def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        prompt.write_text(new_prompt)
+        included.write_text(new_included)
+        return True, "ok", 0.0, "claude"
+
+    mock_run.side_effect = simulate_agent
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", repo):
+        success, _, _, _, _ = run_agentic_update(
+            str(prompt), str(code), test_files=[], quiet=True
+        )
+
+    assert success is True
+    # The included doc edit must survive the scope guard.
+    assert included.read_text() == new_included, (
+        "Included <include> doc was reverted by the scope guard "
+        "(issue #1054 regression)"
+    )
+    # The prompt edit must also survive.
+    assert prompt.read_text() == new_prompt
+
+
+def test_scope_guard_preserves_context_dir_edits(
+    tmp_path: Path,
+    real_scope_guard_deps: Tuple[MagicMock, ...],
+) -> None:
+    """
+    Tracked files under PROJECT_ROOT/context/ must be preserved even when the
+    prompt does not yet reference them — this is the "intentional new shared
+    include" criterion from issue #1054.
+    """
+    _, _, mock_run, _ = real_scope_guard_deps
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    context_dir = repo / "context"
+    context_dir.mkdir()
+    shared = context_dir / "shared.md"
+    shared.write_text("baseline shared content\n")
+
+    prompt = repo / "feature.prompt"
+    prompt.write_text("original prompt\n")
+    code = repo / "feature.py"
+    code.write_text("x = 1\n")
+
+    _init_git_repo(repo)
+
+    new_shared = "agent-edited shared content\n"
+
+    def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        prompt.write_text("agent-updated prompt\n")
+        shared.write_text(new_shared)
+        return True, "ok", 0.0, "claude"
+
+    mock_run.side_effect = simulate_agent
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", repo):
+        success, _, _, _, _ = run_agentic_update(
+            str(prompt), str(code), test_files=[], quiet=True
+        )
+
+    assert success is True
+    assert shared.read_text() == new_shared, (
+        "Tracked context/ file was reverted by the scope guard"
+    )
+
+
+def test_scope_guard_still_reverts_unrelated_mutations(
+    tmp_path: Path,
+    real_scope_guard_deps: Tuple[MagicMock, ...],
+) -> None:
+    """
+    The scope guard must still revert tracked mutations to files that are
+    neither the prompt/code/tests, nor reachable via <include>, nor under
+    context/. Paired assertion for the include-allowlist behavior.
+    """
+    _, _, mock_run, _ = real_scope_guard_deps
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    docs = repo / "docs"
+    docs.mkdir()
+    included = docs / "source.md"
+    included.write_text("original included\n")
+
+    unrelated_dir = repo / "unrelated"
+    unrelated_dir.mkdir()
+    unrelated = unrelated_dir / "elsewhere.md"
+    unrelated.write_text("untouchable baseline\n")
+
+    prompt = repo / "feature.prompt"
+    prompt.write_text("<include>docs/source.md</include>\nprompt body\n")
+    code = repo / "feature.py"
+    code.write_text("def f(): return 1\n")
+
+    _init_git_repo(repo)
+
+    def simulate_agent(*args: Any, **kwargs: Any) -> Tuple[bool, str, float, str]:
+        prompt.write_text("<include>docs/source.md</include>\nupdated prompt\n")
+        included.write_text("updated included\n")
+        unrelated.write_text("AGENT WENT OUT OF BOUNDS\n")
+        return True, "ok", 0.0, "claude"
+
+    mock_run.side_effect = simulate_agent
+
+    with patch("pdd.agentic_update.PROJECT_ROOT", repo):
+        run_agentic_update(str(prompt), str(code), test_files=[], quiet=True)
+
+    # Include-graph edit is preserved.
+    assert included.read_text() == "updated included\n"
+    # Unrelated tracked mutation is reverted to HEAD.
+    assert unrelated.read_text() == "untouchable baseline\n", (
+        "Scope guard failed to revert an out-of-scope mutation"
+    )
