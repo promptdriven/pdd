@@ -12,6 +12,7 @@
 </pdd-interface>
 
 <pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>
+<pdd-dependency>sync_order_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>
 
