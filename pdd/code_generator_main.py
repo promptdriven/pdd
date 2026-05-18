@@ -505,11 +505,24 @@ def _is_test_output_path(output_path: Optional[str]) -> bool:
         "_test.rb",
         "_spec.rb",
     )
+    # Java/Kotlin/Scala PascalCase test suffixes: `FooTest.java`,
+    # `BarTests.kt`, `WidgetSpec.kt`. The agentic test prompt names
+    # `Test.java` as a recognised convention, so the churn gate has to
+    # match. Case-sensitive — lowercasing would false-positive on
+    # `latest.kt`, `manifest.java`, `request.scala` etc.
+    pascal_test_suffixes = (
+        "Test.java",
+        "Tests.java",
+        "Test.kt",
+        "Tests.kt",
+        "Spec.kt",
+    )
     return (
         name.startswith("test_")
         or name.endswith("_test.py")
         or lower_name.endswith(js_like_test_suffixes)
         or lower_name.endswith(sibling_test_suffixes)
+        or name.endswith(pascal_test_suffixes)
         or any(part in {"tests", "__tests__"} for part in path.parts)
     )
 
@@ -1728,6 +1741,15 @@ def _snapshot_public_signatures(code_text: str, language: str) -> Dict[str, str]
             # ``from X import *`` does NOT bind a fixed name (the
             # surface helper already skips these) so it contributes
             # nothing to the signatures dict either.
+            # Mirror ``_snapshot_public_surface``: ``from __future__
+            # import …`` is a compiler directive, not a runtime
+            # attribute callers would import. Without this skip a
+            # follow-up generation that drops the directive and adds a
+            # real ``annotations = …`` would falsely diff as a
+            # signature change (``[import:from __future__]`` →
+            # ``[assignment]``) on the same name.
+            if node.module == "__future__":
+                continue
             module = node.module or ""
             for alias in node.names:
                 if alias.name == "*":
