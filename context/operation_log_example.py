@@ -117,7 +117,7 @@ def demonstrate_state_management():
     save_run_report(basename, language, run_report)
     print("Saved run report")
 
-    # Clear stale run report before regeneration
+    # Clear stale run report after a successful regeneration (never on failure)
     clear_run_report(basename, language)
     print("Cleared run report")
 
@@ -133,10 +133,12 @@ def generate(prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
 
     The decorator automatically:
     1. Infers module identity from prompt_file
-    2. Clears stale run report (clears_run_report=True)
-    3. Creates initial log entry
-    4. Executes the wrapped function
-    5. Updates log entry with results
+    2. Creates initial log entry
+    3. Executes the wrapped function
+    4. Updates log entry with results
+    5. On success only: clears stale run report (clears_run_report=True)
+       before saving fingerprint, so a failed command never erases existing
+       runtime verification state (issue #1057)
     6. Saves fingerprint on success (updates_fingerprint=True)
     """
     # Simulate generation
