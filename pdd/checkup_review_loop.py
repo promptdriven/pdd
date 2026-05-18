@@ -3881,30 +3881,48 @@ def _check_prompt_source_guard(
     for code_path, prompt_path in code_to_prompt.items():
         if code_path not in changed_norm:
             continue
-        # The prompt is part of THIS change set (modified, added, or
-        # deleted alongside the code) - the source-of-truth contract is
-        # satisfied because the user/bot is explicitly editing the
-        # prompt too. Module deletion (code + prompt both removed
-        # intentionally) also lands here. This check MUST come before
-        # the on-disk existence check so a same-change-set deletion is
-        # not misclassified as a stale registry.
+        # Disk-state checks distinguish six cases against the
+        # POST-change worktree state. Deletion and rename both leave
+        # the registered path absent on disk - the prompt's fate is
+        # the discriminator for "legitimate retirement / refactor"
+        # vs "drift via rename" (the reconciliation between Finding
+        # A's rename-blocking intent and Finding 1's retirement-
+        # allowing intent).
+        code_still_exists = (worktree / code_path).is_file()
+        prompt_still_exists = (worktree / prompt_path).is_file()
+
+        if not code_still_exists:
+            # Code is gone from disk: either retired (deletion) or
+            # moved (rename). Allow only when the prompt is also
+            # part of this change - either deleted alongside (full
+            # retirement) or co-edited / co-renamed (refactor). If
+            # the prompt is unchanged and still present, the
+            # registered file moved out from under its source of
+            # truth without telling the prompt: that is drift via
+            # rename (review pass #2 Finding A).
+            if not prompt_still_exists or prompt_path in changed_norm:
+                continue
+            offenders.append((code_path, prompt_path))
+            continue
+        if not prompt_still_exists:
+            # Code persists on disk but the prompt has been
+            # destroyed. STRICTLY WORSE drift than the original
+            # #1063 case because the source of truth is gone
+            # entirely - subsequent regeneration would have nothing
+            # to regenerate from. Block unconditionally, even when
+            # the prompt deletion is part of the same change set:
+            # that's a same-commit attack, not a legitimate
+            # retirement (review pass #3 Finding 1).
+            offenders.append((code_path, prompt_path))
+            continue
+        # Both files still exist. If the prompt is also part of
+        # this change set, the source-of-truth contract is
+        # satisfied - the user/bot is explicitly co-editing the
+        # prompt with the code. Allow.
         if prompt_path in changed_norm:
             continue
-        # Code changed, prompt NOT in the change set. If the prompt
-        # also doesn't exist on disk, the registry is stale (a prior
-        # deletion that was never reflected in architecture.json) -
-        # warn and skip rather than block, otherwise we brick auto-heal
-        # on a registry-drift state we did not cause.
-        if not (worktree / prompt_path).is_file():
-            logger.warning(
-                "prompt-source guard: registered prompt %s for %s is "
-                "missing on disk and not in this change set; treating "
-                "as stale registry and skipping that pair.",
-                prompt_path,
-                code_path,
-            )
-            continue
-        # Code changed, prompt unchanged AND present on disk = DRIFT.
+        # Both files exist, code changed, prompt unchanged = DRIFT
+        # (the original #1063 failure mode).
         offenders.append((code_path, prompt_path))
 
     if not offenders:

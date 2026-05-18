@@ -4347,11 +4347,26 @@ class TestPromptSourceGuardHelper:
         prompt_path.write_text("prompt body\n", encoding="utf-8")
         return prompt_path
 
+    @staticmethod
+    def _seed_code(worktree: Path, rel_code: str) -> Path:
+        """Place a non-empty code file at ``worktree / rel_code``.
+
+        Required for tests of the original-#1063 drift case (code
+        modified, prompt unchanged) after review pass #3 Finding 1:
+        the guard now distinguishes "code persists on disk" from
+        "code retired" via ``Path.is_file()``.
+        """
+        code_path = worktree / rel_code
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text("# generated code\n", encoding="utf-8")
+        return code_path
+
     def test_registered_code_changed_without_prompt_is_refused(
         self, tmp_path: Path
     ) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
         self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
         _write_arch_json(
             tmp_path,
@@ -4374,6 +4389,7 @@ class TestPromptSourceGuardHelper:
     ) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
         self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
         _write_arch_json(
             tmp_path,
@@ -4413,6 +4429,8 @@ class TestPromptSourceGuardHelper:
     def test_multiple_offenders_are_enumerated(self, tmp_path: Path) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
         self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
         self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
         _write_arch_json(
@@ -4447,6 +4465,8 @@ class TestPromptSourceGuardHelper:
     ) -> None:
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
         self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
         self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
         _write_arch_json(
@@ -4515,31 +4535,65 @@ class TestPromptSourceGuardHelper:
             "architecture.json" in rec.getMessage() for rec in caplog.records
         )
 
-    def test_missing_prompt_file_on_disk_degrades_gracefully(
-        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    def test_code_missing_with_prompt_missing_is_allowed(
+        self, tmp_path: Path
     ) -> None:
+        """When the registered code path is in the change set but the
+        code file is absent from disk after the change, there is
+        nothing to drift from. Allow regardless of the prompt's fate.
+
+        Replaces the round-2 stale-registry-skip-with-warning test:
+        review pass #3 Finding 1 swapped the "prompt missing on disk"
+        warn-and-skip branch for an unconditional block (because the
+        same disk-state shape with code PRESENT is the worst-drift
+        attack). The graceful-degradation guarantee now hinges on
+        ``code_still_exists``: when the code is gone, the contract is
+        irrelevant.
+        """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        # Register a module but DO NOT create the prompt file.  A stale
-        # registry entry must not brick auto-heal: the guard logs and
-        # skips that pair, allowing the push to proceed.  The bug we
-        # are fixing is silent prompt drift, not the inverse.
         _write_arch_json(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
+        # Neither file on disk.
 
-        with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
-            reason = _check_prompt_source_guard(
-                tmp_path, ["pdd/agentic_update.py"]
-            )
+        reason = _check_prompt_source_guard(
+            tmp_path, ["pdd/agentic_update.py"]
+        )
 
         assert reason is None
-        # Operator visibility on the stale-registry skip.
-        assert any(
-            "pdd/prompts/agentic_update_python.prompt" in rec.getMessage()
-            for rec in caplog.records
+
+    def test_code_present_with_prompt_missing_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """The disk-state attack: code persists on disk, prompt is
+        missing, and the prompt is NOT in the change set (a pre-
+        existing stale-registry state, or a separate deletion the
+        fixer is exploiting). Round-2 logged a warning and skipped;
+        review pass #3 Finding 1 rejects that as too permissive and
+        requires this to BLOCK.
+
+        Rationale: a code edit against a destroyed source of truth
+        cannot be regenerated from the prompt later. Brick auto-heal
+        on this state rather than let the bot's edits ride.
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _write_arch_json(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
+        # Code present, prompt absent.
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+
+        reason = _check_prompt_source_guard(
+            tmp_path, ["pdd/agentic_update.py"]
+        )
+
+        assert reason is not None
+        assert "pdd/agentic_update.py" in reason
+        assert "pdd/prompts/agentic_update_python.prompt" in reason
 
     def test_guard_reads_architecture_from_worktree_not_repo_root(
         self, tmp_path: Path
@@ -4549,9 +4603,17 @@ class TestPromptSourceGuardHelper:
         test deliberately seeds a registry shape that has no parallel
         in the real repo (a bogus module) and confirms the guard reads
         and enforces it.
+
+        Note: this test exercises the no-git-repo fallback path. The
+        HEAD-read flow (review pass #3 Finding 2) returns None when
+        ``git show HEAD:architecture.json`` fails (no repo, no
+        commit), but the helper then attempts the worktree fallback.
+        ``TestPromptSourceGuardRegistryFromHead`` covers the in-repo
+        HEAD-precedence contract directly.
         """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
+        self._seed_code(tmp_path, "pdd/bogus.py")
         self._seed_prompt(tmp_path, "pdd/prompts/bogus_python.prompt")
         _write_arch_json(
             tmp_path,
@@ -4577,26 +4639,29 @@ class TestPromptSourceGuardHelper:
     def test_code_changed_with_prompt_deleted_in_same_change_set_is_allowed(
         self, tmp_path: Path
     ) -> None:
-        """Module deletion is a legitimate, contract-respecting change.
+        """Module retirement is a legitimate, contract-respecting change.
 
-        When the fixer/user deletes both the registered code file AND
-        its owning prompt in the same change set, the source-of-truth
-        contract is explicitly satisfied — the bot is not silently
-        producing drift, it is retiring the module. The guard MUST
-        allow this rather than treat the missing prompt file as a
-        stale-registry skip (codex review pass #2 Finding B).
+        When the fixer/user deletes BOTH the registered code file AND
+        its owning prompt in the same change set (the code is gone
+        from disk, not just modified), the source of truth is
+        retired together with its generated artifact. The guard MUST
+        allow this rather than block on the missing prompt (codex
+        review pass #2 Finding B). The distinguishing detail from
+        the worse drift case (code persists, prompt deleted) is that
+        the code file is also absent on disk.
         """
         from pdd.checkup_review_loop import _check_prompt_source_guard
 
-        # Architecture still lists the module, but its prompt file is
-        # NOT on disk (the deletion just happened). Both the code path
-        # and the prompt path appear in the change set as deletions.
+        # Architecture still lists the module, but BOTH files are
+        # absent from disk - this is the retirement scenario where
+        # the next commit will drop the registry entry too.
         _write_arch_json(
             tmp_path,
             [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
         )
-        # Intentionally do NOT create the prompt file on disk - it has
-        # been deleted in this change set.
+        # Intentionally do NOT create either the code file or the
+        # prompt file on disk - both have been deleted in this change
+        # set.
 
         reason = _check_prompt_source_guard(
             tmp_path,
@@ -4606,10 +4671,52 @@ class TestPromptSourceGuardHelper:
             ],
         )
 
-        # Allowed: the source-of-truth contract is satisfied because
-        # the prompt is part of the change set, regardless of whether
-        # it ends up present or absent on disk after the change.
+        # Allowed: the code is gone, there is nothing to drift from.
         assert reason is None
+
+    def test_code_modified_with_prompt_deleted_only_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Finding 1 (review pass #3): code persists, prompt deleted.
+
+        The fixer modifies ``pdd/foo.py`` (code still on disk) AND
+        deletes ``pdd/prompts/foo_python.prompt`` in the same change
+        set. Both paths appear in the change set, but the source of
+        truth has been destroyed while the generated artifact
+        remains - this is strictly WORSE drift than the original
+        #1063 case. The guard MUST block this.
+
+        Round-2's "prompt-in-change-set → allow" branch was scoped to
+        module retirement only; this test pins the disk-state check
+        that distinguishes retirement (both gone) from the worse
+        drift (code persists, prompt gone).
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _write_arch_json(
+            tmp_path,
+            [_prompt_module("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Code persists on disk (modified, not deleted).
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "foo.py").write_text(
+            "modified code\n", encoding="utf-8"
+        )
+        # Prompt was deleted in this change set - intentionally NOT
+        # creating it on disk.
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            [
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+
+        assert reason is not None
+        # The refusal MUST name both paths so the operator can act.
+        assert "pdd/foo.py" in reason
+        assert "pdd/prompts/foo_python.prompt" in reason
 
 
 class TestPromptSourceGuardChangedFilesParsing:
@@ -4794,6 +4901,75 @@ class TestPromptSourceGuardChangedFilesParsing:
         # the new check order can see it.
         assert "pdd/agentic_update.py" in changed
         assert "pdd/prompts/agentic_update_python.prompt" in changed
+
+    def test_paired_rename_of_code_and_prompt_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Legitimate-refactor case (advisor reconciliation of
+        Findings 1 and A): the fixer renames BOTH the registered
+        code file AND its owning prompt in the same change set. The
+        registered code-path is no longer on disk (renamed away)
+        and the registered prompt-path is also no longer on disk
+        (renamed away). Both old paths surface in the change set
+        via the rename-detection emitted by ``_git_changed_files``.
+
+        Under the reconciled check order, the "code gone, prompt
+        also gone" branch hits the legitimate-retirement / paired-
+        refactor allow branch.
+        """
+        from pdd.checkup_review_loop import (
+            _check_prompt_source_guard,
+            _git_changed_files,
+        )
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "code\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+        _write_arch_json(
+            tmp_path,
+            [
+                _prompt_module(
+                    "agentic_update_python.prompt", "pdd/agentic_update.py"
+                )
+            ],
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Paired rename: BOTH code and prompt move to new paths.
+        subprocess.run(
+            ["git", "mv", "pdd/agentic_update.py", "pdd/agentic_update_v2.py"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "mv",
+                "pdd/prompts/agentic_update_python.prompt",
+                "pdd/prompts/agentic_update_v2_python.prompt",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+        # Sanity: both old paths appear in the change set via the
+        # ``-z`` rename-detection emit.
+        assert "pdd/agentic_update.py" in changed
+        assert "pdd/prompts/agentic_update_python.prompt" in changed
+
+        reason = _check_prompt_source_guard(tmp_path, changed)
+
+        # Allowed: this is a legitimate paired refactor, not drift.
+        assert reason is None
 
 
 class TestPromptSourceGuardIntegration:
