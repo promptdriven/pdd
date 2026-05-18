@@ -38,7 +38,6 @@ tiktoken>=0.7.0
 
 # Dev dependencies
 build
-commitizen
 httpx==0.28.1
 pytest-asyncio
 pytest-mock

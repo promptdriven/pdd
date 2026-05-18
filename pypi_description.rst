@@ -1,5 +1,5 @@
-.. image:: https://img.shields.io/badge/pdd--cli-v0.0.241-blue
-   :alt: PDD-CLI Version
+.. image:: https://img.shields.io/pypi/v/pdd-cli.svg
+   :alt: PyPI version
 
 .. image:: https://img.shields.io/badge/Discord-join%20chat-7289DA.svg?logo=discord&logoColor=white&link=https://discord.gg/Yp4RTh8bG7
    :alt: Join us on Discord
@@ -75,7 +75,7 @@ After installation, verify:
 
    pdd --version
 
-You'll see the current PDD version (e.g., 0.0.241).
+You'll see the current PDD version.
 
 Getting Started with Examples
 -----------------------------
