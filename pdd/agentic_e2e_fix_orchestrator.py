@@ -1792,6 +1792,7 @@ def run_agentic_e2e_fix_orchestrator(
     # Issue #1001: deferred action computed during resume that must be applied
     # after `success`/`final_message` are initialized below. Default: no-op.
     _resume_deferred_action: Optional[str] = None
+    _cached_step9_resume_action: Optional[str] = None
     # On resume, restore the current cycle's start snapshot so the resume-time
     # cycle-waste-breaker can prove no in-cycle progress before authorizing
     # terminal success. None when the saved state is legacy (no snapshot) or
@@ -1875,8 +1876,25 @@ def run_agentic_e2e_fix_orchestrator(
             # the helper returns NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME to signal
             # the inline cycle-waste-breaker terminal-success path (mirrors
             # lines 2127-2134 of the inner loop) instead of a demotion.
+            has_cached_failed_output = any(
+                isinstance(output, str) and output.startswith("FAILED:")
+                for output in step_outputs.values()
+            )
+            if last_completed_step >= 9 and not has_cached_failed_output:
+                step9_cached = _resolve_cached_step9_output(step_outputs)
+                _cached_step9_resume_action = _post_step9_resume_action(
+                    step9_cached, current_cycle, max_cycles, console
+                )
+
             cached_step3 = step_outputs.get("3")
-            if cached_step3:
+            # A cached Step 9 success is authoritative for a completed inner
+            # loop. Step 3's cached raw output was already guarded during the
+            # original run, and demoting it here would rewind last_completed_step
+            # before the Step 9 success branch can re-verify and fall through.
+            skip_step3_resume_reeval = (
+                _cached_step9_resume_action == "SUCCESS_FALL_THROUGH"
+            )
+            if cached_step3 and not skip_step3_resume_reeval:
                 demoted = _reevaluate_step3_not_a_bug_on_resume(
                     cached_step3,
                     dev_unit_states=dev_unit_states,
@@ -1912,10 +1930,13 @@ def run_agentic_e2e_fix_orchestrator(
             # before the post-Step-9 pause could be misread as a tokenless "9"
             # and silently advance into a fresh cycle.
             if last_completed_step >= 9:
-                step9_cached = _resolve_cached_step9_output(step_outputs)
-                resume_action = _post_step9_resume_action(
-                    step9_cached, current_cycle, max_cycles, console
-                )
+                if _cached_step9_resume_action is not None:
+                    resume_action = _cached_step9_resume_action
+                else:
+                    step9_cached = _resolve_cached_step9_output(step_outputs)
+                    resume_action = _post_step9_resume_action(
+                        step9_cached, current_cycle, max_cycles, console
+                    )
                 if resume_action == "ADVANCE_CYCLE":
                     current_cycle += 1
                     last_completed_step = 0

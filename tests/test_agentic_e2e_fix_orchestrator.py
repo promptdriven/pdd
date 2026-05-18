@@ -8719,6 +8719,87 @@ class TestPostStep9ResumeRoutesToCleanupNotStep1:
             "cached Step 9 success token."
         )
 
+    def test_resume_with_step3_not_a_bug_and_step9_success_preserves_step9_routing(
+        self, mock_deps, tmp_path
+    ):
+        """Greg review regression for PR #1035.
+
+        A completed cycle with cached Step 9 ``ALL_TESTS_PASS`` is authoritative.
+        The resume-time Step 3 NOT_A_BUG guard must not demote Step 3 first and
+        rewind ``last_completed_step`` before the Step 9 success branch can
+        re-verify and fall through to commit/cleanup/CI.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import run_agentic_e2e_fix_orchestrator
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_number": 1035,
+            "current_cycle": 2,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 done",
+                "2": "Step 2 done",
+                "3": "NOT_A_BUG",
+                "4": "Step 4 done",
+                "5": "Step 5 done",
+                "6": "Step 6 done",
+                "7": "Step 7 done",
+                "8": "Step 8 done",
+                "9": "ALL_TESTS_PASS — verification succeeded",
+            },
+            "total_cost": 1.0,
+            "model_used": "gpt-4",
+            "changed_files": ["src/app.py"],
+            "dev_unit_states": {},
+            "initial_file_hashes": {"src/app.py": "initial"},
+            "cycle_start_hashes": {"src/app.py": "cycle-start"},
+        }
+        mock_deps["load"].return_value = (resumed_state, None)
+        mock_deps["hashes"].return_value = {"src/app.py": "current"}
+
+        executed_labels = []
+
+        def fail_if_step_runs(*args, **kwargs):
+            executed_labels.append(kwargs.get("label", ""))
+            raise AssertionError(
+                f"Steps 1-9 must not run after cached Step 9 success: {executed_labels}"
+            )
+
+        mock_deps["run"].side_effect = fail_if_step_runs
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_ok.py"],
+        ) as extract_mock, patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "pytest exit code 0"),
+        ) as verify_mock:
+            success, final_message, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                issue_url="http://github.com/owner/repo/issues/1035",
+                issue_content="E2E failure",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1035,
+                issue_author="user",
+                issue_title="Resume with Step 3 NOT_A_BUG and Step 9 success",
+                cwd=tmp_path,
+                quiet=True,
+                max_cycles=3,
+                resume=True,
+                use_github_state=False,
+                skip_cleanup=True,
+                skip_ci=True,
+            )
+
+        assert extract_mock.called and verify_mock.called
+        executed_steps = self._executed_step_numbers(executed_labels)
+        assert executed_steps.isdisjoint({1, 2, 3, 4, 5, 6, 7, 8, 9}), (
+            f"Cached Step 9 success must route directly to post-success work; "
+            f"executed steps: {sorted(executed_steps)} labels={executed_labels}"
+        )
+        assert success is True, final_message
+        assert mock_deps["commit"].called
+
     def test_resume_reverify_failure_persists_failed_marker_before_advancing(
         self, mock_deps, tmp_path
     ):
