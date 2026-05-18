@@ -1514,7 +1514,9 @@
     "reason": "Coordinates agentic prompt updates through Claude, Gemini, Codex, or OpenCode CLIs.",
     "description": "Coordinates repository-aware prompt update runs through external agentic CLIs and reports prompt/test changes.",
     "dependencies": [
-      "agentic_update_LLM.prompt"
+      "agentic_update_LLM.prompt",
+      "agentic_common_python.prompt",
+      "sync_order_python.prompt"
     ],
     "priority": 43,
     "filename": "agentic_update_python.prompt",
