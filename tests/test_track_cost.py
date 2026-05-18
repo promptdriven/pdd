@@ -859,14 +859,17 @@ def _make_ctx_with_dict_obj(command_name: str, obj_dict: dict):
 def test_attempted_models_from_ctx_obj_joined_with_semicolons(
     mock_click_context, mock_open_file, mock_rprint
 ):
-    """attempted_models list from ctx.obj is serialized joined by ';'."""
+    """attempted_models list set during the wrapped call is serialized joined by ';'."""
     @track_cost
     def cmd(ctx, prompt_file: str) -> Tuple[str, float, str]:
+        # Simulate llm_invoke publishing fallback history during execution.
+        ctx.obj['attempted_models'] = [
+            'vertex_ai/gemini-2.5-pro', 'deepseek/deepseek-chat'
+        ]
         return ('/path/to/output', 0.1, 'deepseek/deepseek-chat')
 
     mock_ctx = _make_ctx_with_dict_obj('generate', {
         'output_cost': '/cost.csv',
-        'attempted_models': ['vertex_ai/gemini-2.5-pro', 'deepseek/deepseek-chat'],
     })
     mock_click_context.return_value = mock_ctx
 
@@ -890,11 +893,11 @@ def test_attempted_models_sanitizes_semicolons_to_colons(
     """Literal ';' in a model name must be replaced by ':' to keep the delimiter safe."""
     @track_cost
     def cmd(ctx, prompt_file: str) -> Tuple[str, float, str]:
+        ctx.obj['attempted_models'] = ['weird;name', 'good-model']
         return ('/o', 0.0, 'good-model')
 
     mock_ctx = _make_ctx_with_dict_obj('generate', {
         'output_cost': '/cost.csv',
-        'attempted_models': ['weird;name', 'good-model'],
     })
     mock_click_context.return_value = mock_ctx
 
@@ -948,11 +951,11 @@ def test_legacy_csv_without_attempted_models_header_is_not_rewritten(
 
     @track_cost
     def cmd(ctx, prompt_file: str) -> Tuple[str, float, str]:
+        ctx.obj['attempted_models'] = ['a', 'new-model']
         return ('/o', 0.02, 'new-model')
 
     mock_ctx = _make_ctx_with_dict_obj('gen', {
         'output_cost': str(cost_path),
-        'attempted_models': ['a', 'new-model'],
     })
     mock_click_context.return_value = mock_ctx
 
@@ -976,11 +979,11 @@ def test_new_csv_includes_attempted_models_header(
 
     @track_cost
     def cmd(ctx, prompt_file: str) -> Tuple[str, float, str]:
+        ctx.obj['attempted_models'] = ['m0', 'm1']
         return ('/o', 0.5, 'm1')
 
     mock_ctx = _make_ctx_with_dict_obj('gen', {
         'output_cost': str(cost_path),
-        'attempted_models': ['m0', 'm1'],
     })
     mock_click_context.return_value = mock_ctx
 
@@ -1007,3 +1010,61 @@ def test_looks_like_file_basic():
     assert looks_like_file(None) is False
     assert looks_like_file(123) is False
     assert looks_like_file('foo.py') is True  # has extension
+
+
+def test_attempted_models_does_not_leak_between_tracked_commands(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """Regression for #897: when two tracked commands share the same Click
+    ctx.obj, the second command's `attempted_models` must reflect only its
+    own attempts, not the first command's fallback history.
+
+    The first command simulates a fallback (failed-model -> success-model)
+    by setting ctx.obj['attempted_models'] from within. The second command
+    records no attempts, so the row must fall back to [model_name] and the
+    first command's history must not leak in.
+    """
+    cost_path = tmp_path / 'cost.csv'
+
+    # Shared ctx.obj — simulates Click's chained / batch-style invocation
+    # where the same context object is reused across multiple subcommands.
+    shared_obj = {'output_cost': str(cost_path)}
+
+    @track_cost
+    def first_command(ctx, prompt_file: str) -> Tuple[str, float, str]:
+        # Simulate llm_invoke recording a cloud failure + local fallback.
+        ctx.obj['attempted_models'] = ['failed-model', 'success-model']
+        return ('/out1', 0.1, 'success-model')
+
+    @track_cost
+    def second_command(ctx, prompt_file: str) -> Tuple[str, float, str]:
+        # Second command makes only one attempt and does NOT populate
+        # ctx.obj['attempted_models'] itself.
+        return ('/out2', 0.2, 'second-model')
+
+    # First invocation
+    mock_ctx1 = _make_ctx_with_dict_obj('first', shared_obj)
+    mock_click_context.return_value = mock_ctx1
+    first_command(mock_ctx1, '/p1.txt')
+
+    # Between invocations the leaked key must be gone from the shared obj.
+    assert 'attempted_models' not in shared_obj, (
+        f"attempted_models leaked into shared ctx.obj between commands: {shared_obj}"
+    )
+
+    # Second invocation reuses the SAME ctx.obj.
+    mock_ctx2 = _make_ctx_with_dict_obj('second', shared_obj)
+    mock_click_context.return_value = mock_ctx2
+    second_command(mock_ctx2, '/p2.txt')
+
+    lines = cost_path.read_text(encoding='utf-8').splitlines()
+    # header + 2 data rows
+    assert len(lines) == 3, lines
+    assert lines[0] == 'timestamp,model,command,cost,input_files,output_files,attempted_models'
+    # First row carries the simulated fallback history.
+    assert lines[1].endswith(',failed-model;success-model'), lines[1]
+    # Second row falls back to its own [model_name], not the first command's history.
+    assert lines[2].endswith(',second-model'), lines[2]
+    assert 'failed-model' not in lines[2], (
+        f"second row leaked first command's attempted_models: {lines[2]}"
+    )

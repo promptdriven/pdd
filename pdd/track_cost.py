@@ -23,6 +23,19 @@ def track_cost(func):
         result = None
         exception_raised = None
 
+        # Snapshot any prior `attempted_models` so it cannot leak from an
+        # earlier tracked command into this one. We clear it before invoking
+        # the wrapped command and restore the prior value (or remove the key)
+        # after the row is written.
+        prior_attempted_models = None
+        had_prior_attempted_models = False
+        try:
+            if ctx.obj is not None and isinstance(ctx.obj, dict) and 'attempted_models' in ctx.obj:
+                prior_attempted_models = ctx.obj.pop('attempted_models')
+                had_prior_attempted_models = True
+        except Exception:
+            pass
+
         try:
             try:
                 if not os.environ.get('PYTEST_CURRENT_TEST'):
@@ -102,6 +115,17 @@ def track_cost(func):
 
             except Exception as e:
                 rprint(f"[red]Error tracking cost: {e}[/red]")
+
+            # Always clear/restore `attempted_models` so it cannot leak into a
+            # subsequent tracked command sharing the same ctx.obj.
+            try:
+                if ctx.obj is not None and isinstance(ctx.obj, dict):
+                    if had_prior_attempted_models:
+                        ctx.obj['attempted_models'] = prior_attempted_models
+                    else:
+                        ctx.obj.pop('attempted_models', None)
+            except Exception:
+                pass
 
         if exception_raised is not None:
             raise exception_raised
