@@ -269,6 +269,8 @@ EXAMPLE_NORMALIZED_FINDING: Dict[str, str] = {
 
 
 EXAMPLE_FIX_RESULT_PAYLOAD: Dict[str, object] = {
+    "fixer": "claude",
+    "success": True,
     "summary": "Added regression test and tightened the assertion.",
     "changed_files": ["tests/test_foo.py", "pdd/foo.py"],
     "dispositions": {
@@ -277,6 +279,15 @@ EXAMPLE_FIX_RESULT_PAYLOAD: Dict[str, object] = {
     "rationales": {
         EXAMPLE_NORMALIZED_FINDING["key"]: "Added the missing regression coverage.",
     },
+    # SHA-backed trust boundary keys (#1062). ``push_status`` records
+    # the outcome of ``_commit_and_push_if_changed``; ``verification_status``
+    # records what the verifier said about ``pushed_head_sha``. The
+    # happy path has all four set to the verified pair below; see
+    # ``EXAMPLE_FINAL_STATE_PAYLOAD_STALE`` for the stale shape.
+    "push_status": "pushed",
+    "pushed_head_sha": "sha-A",
+    "verified_head_sha": "sha-A",
+    "verification_status": "verified",
 }
 
 
@@ -316,6 +327,42 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "dispute_notes_by_key": {},
     "reviewer_feedback_by_key": {},
     "findings": [EXAMPLE_NORMALIZED_FINDING],
+    # SHA-backed trust boundary additions (#1062). ``fixes`` mirrors
+    # ``_fix_result_payload`` for every fixer attempt; ``remote_pr_head_sha``
+    # is the live PR head observed by ``_fetch_remote_pr_head_sha`` right
+    # before the report renders; ``last_verified_head_sha`` is the SHA the
+    # loop trusted as the latest verifier-reviewed head. On the happy path
+    # all three SHAs match, so the stale-SHA gate stays quiet.
+    "fixes": [EXAMPLE_FIX_RESULT_PAYLOAD],
+    "remote_pr_head_sha": "sha-A",
+    "last_verified_head_sha": "sha-A",
+}
+
+
+# Stale-state illustration (#1062). When the live remote PR head no
+# longer matches ``last_verified_head_sha`` — or when the fetch failed
+# despite complete ``pr_metadata`` — the loop downgrades
+# ``fresh_final_status`` to ``"stale"`` (a ``HARD_NOT_CLEAN_STATES``
+# member), flips matching ``FixResult.verification_status`` to
+# ``"stale"``, and reopens any fixed findings so the report cannot
+# present an unverified head as clean. Consumers can grep for
+# ``fresh_final_status: "stale"`` and use this shape as a reference.
+EXAMPLE_FINAL_STATE_PAYLOAD_STALE: Dict[str, object] = {
+    **EXAMPLE_FINAL_STATE_PAYLOAD,
+    "fresh_final_status": "stale",
+    "stop_reason": (
+        "Remote PR head advanced past the verified SHA after the verifier "
+        "ran; re-run review on the new head before merge."
+    ),
+    "fixes": [
+        {
+            **EXAMPLE_FIX_RESULT_PAYLOAD,
+            "verification_status": "stale",
+        }
+    ],
+    # The live remote diverged from what the verifier last reviewed.
+    "remote_pr_head_sha": "sha-B",
+    "last_verified_head_sha": "sha-A",
 }
 
 

@@ -937,6 +937,16 @@ def run_checkup_review_loop(
                         state.active_reviewer = fallback_result.reviewer
                         if fallback_result.status == "clean":
                             state.fresh_final_status = "clean"
+                            # Record the SHA the fallback reviewer
+                            # reviewed clean so the stale-SHA gate
+                            # can compare against the live remote
+                            # head. Without this, an initial-clean
+                            # fallback exit leaves
+                            # ``last_verified_head_sha=None`` and the
+                            # gate silently passes even when the
+                            # remote advances post-review (codex
+                            # review-3 on #1062).
+                            state.last_verified_head_sha = _git_head_sha(worktree)
                             state.stop_reason = (
                                 f"Primary reviewer {reviewer} unavailable "
                                 f"({review.status}); secondary reviewer {fixer} "
@@ -973,6 +983,15 @@ def run_checkup_review_loop(
                     _mark_reviewer_findings_fixed(state, reviewer)
                     state.reviewer_status[reviewer] = "clean"
                     state.fresh_final_status = "clean"
+                    # Stale-SHA gate (codex review-3 on #1062): record
+                    # the SHA the reviewer reviewed clean so the gate
+                    # has something to compare the live remote head
+                    # against. Without this, a clean review-only exit
+                    # leaves ``last_verified_head_sha=None`` and the
+                    # gate's ``remote_unknown``/``remote_diverged``
+                    # predicates both short-circuit, so a remote that
+                    # advanced post-review still renders as clean.
+                    state.last_verified_head_sha = _git_head_sha(worktree)
                     state.stop_reason = (
                         "Review-only mode: primary reviewer reported no findings."
                     )
@@ -980,11 +999,26 @@ def run_checkup_review_loop(
             if not fix_findings:
                 _mark_reviewer_findings_fixed(state, reviewer)
                 state.reviewer_status[reviewer] = "clean"
+                # Stale-SHA gate (codex review-3 on #1062): the
+                # initial review came back clean without going
+                # through the fixer/verify path that normally sets
+                # ``last_verified_head_sha``. Capture worktree HEAD
+                # so the gate can compare against the live remote.
+                state.last_verified_head_sha = _git_head_sha(worktree)
                 break
         else:
             fix_findings = _actionable_findings(state, pending_findings)
             if not fix_findings:
                 state.reviewer_status[reviewer] = "clean"
+                # Round 2+ pending findings filtered down to nothing
+                # actionable. ``last_verified_head_sha`` may already
+                # be set by the prior round's verify-clean path, but
+                # if the prior round produced no ``fixed_findings``
+                # (verifier rejected every claim) it would be None.
+                # Either way, worktree HEAD is the SHA the prior
+                # verifier inspected, so overwriting is correct
+                # (codex review-3 on #1062).
+                state.last_verified_head_sha = _git_head_sha(worktree)
                 break
 
         state.reviewer_status[reviewer] = "findings"

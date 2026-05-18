@@ -4920,3 +4920,83 @@ class TestReviewLoopShaVerification:
         # The loop remains in its in-loop ``clean`` state and renders
         # the verified row, because there was nothing to verify against.
         assert "fresh-final-review: stale" not in report
+
+    def test_initial_clean_review_with_advanced_remote_marks_stale(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review-3 follow-up on #1078.
+
+        When round 1's reviewer returns clean (no findings), the loop
+        breaks before the fixer/verify path that normally captures
+        ``state.last_verified_head_sha``. If the remote PR head
+        advances between the review and the final-report render, the
+        stale-SHA gate has nothing to compare against and silently
+        renders ``fresh-final-review: clean``.
+
+        After the fix, every clean-exit path captures worktree HEAD
+        as the verified SHA, so the gate fires on a divergent remote
+        just like the post-fix path does.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        # Default _patch_io: complete metadata, remote=sha-Advanced.
+        self._patch_io(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "Pushed fixes to PR branch.", "sha-pushed"),
+            remote_head="sha-Advanced",
+        )
+        # The worktree HEAD is sha-Initial — what the reviewer saw and
+        # approved. ``_git_head_sha`` is the seam used by the
+        # clean-exit paths to capture this. Use ``raising=False`` so
+        # the patch only fires when the seam exists.
+        monkeypatch.setattr(
+            mod,
+            "_git_head_sha",
+            lambda *a, **k: "sha-Initial",
+            raising=False,
+        )
+
+        labels: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            labels.append(label)
+            if "fix-" in label:
+                pytest.fail(
+                    "fixer must NOT run when round-1 reviewer is clean"
+                )
+            if "verify-" in label:
+                pytest.fail(
+                    "verifier must NOT run when round-1 reviewer is clean"
+                )
+            # Initial review returns clean (no findings).
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=2),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The reviewer reviewed sha-Initial clean, but the remote has
+        # advanced to sha-Advanced. The gate must fire even though
+        # the fixer/verify path never ran.
+        assert "fresh-final-review: stale" in report
+        assert "remote_pr_head_sha=sha-Advanced" in report
+        # An issue-aligned: true verdict would say the live remote
+        # head is verified — it isn't. Must not appear.
+        assert "issue_aligned: true" not in report
+        # ``final-state.json`` audit pointer: the SHA the loop trusted
+        # is the initial worktree HEAD, not the advanced remote.
+        artifacts_dir = tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        final_state = json.loads((artifacts_dir / "final-state.json").read_text())
+        assert final_state["last_verified_head_sha"] == "sha-Initial"
+        assert final_state["remote_pr_head_sha"] == "sha-Advanced"
+        assert final_state["fresh_final_status"] == "stale"
