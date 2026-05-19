@@ -1366,10 +1366,10 @@ def update_main(
                                     _still_there = False
                                 if _still_there and not quiet:
                                     rprint(
-                                        f"[warning][metadata] Run report clear failed for "
-                                        f"{basename} ({language}): "
-                                        f"{_stale_report_path} still exists after "
-                                        f"clear_run_report; runtime verification state "
+                                        f"[warning][metadata] Run report clear failed: "
+                                        f"still exists after clear_run_report for "
+                                        f"{basename} ({language}): {_stale_report_path}; "
+                                        f"runtime verification state "
                                         f"may still describe the pre-update files."
                                         f"[/warning]"
                                     )

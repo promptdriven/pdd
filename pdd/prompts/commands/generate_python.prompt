@@ -28,16 +28,20 @@
 
 % Requirements
   1. **generate**:
-     - **Interface**: `prompt_file` (arg, `click.UNPROCESSED`), `--template`, `-e/--env` (multiple), `--output`, `--original-prompt`, `--incremental` (flag), `--experimental-prd` (flag), `--dry-run` (flag), `--unit-test`, `--exclude-tests` (flag), `--skip-prompts` (flag), `--output-dir`, `--force-single` (flag), `--no-github-state`, `--project-root` (path, optional).
+     - **Interface**: `prompt_file` (arg, `click.UNPROCESSED`), `--template`, `-e/--env` (multiple), `--output`, `--original-prompt`, `--incremental` (flag), `--experimental-prd` (flag), `--dry-run` (flag), `--unit-test` (path string, optional; do not require the path to pre-exist at Click parse time), `--exclude-tests` (flag), `--skip-prompts` (flag), `--output-dir`, `--force-single` (flag), `--no-github-state`, `--project-root` (path, optional).
      - **`--project-root`**: Optional explicit project root override for agentic and incremental PRD modes. When supplied, this path is used as the resolved project root instead of walking up from cwd to find the nearest project boundary (`.pddrc`/`.pdd/`, `sources/` + PRD/spec markdown, or `.git`). Useful when the cwd is a self-contained pdd project nested inside an unrelated outer git repo. Forwarded as the `project_root` keyword argument to both `run_agentic_architecture` and `run_incremental_architecture`. Standard prompt-file mode does not support `--project-root`; passing it there must raise `click.UsageError` so users learn the flag is mode-specific instead of silently no-opping.
      - **Experimental Incremental PRD Mode**: Only if both `--incremental` and `--experimental-prd` are set and `prompt_file` is a GitHub issue URL, or is a PRD-like file (`.md`, `.markdown`, `.txt`, `.rst`, `.adoc`) without code-generation-only options (`--output`, `--original-prompt`, `--env`, `--template`, `--unit-test`, `--exclude-tests`), call `run_incremental_architecture(prd_source=prompt_file, dry_run=dry_run, target_dir=output_dir, use_github_state=not no_github_state, strength=<global strength>, temperature=<global temperature>, time=<global time>, project_root=project_root, ...)`.
      - **Explicit PRD opt-in**: If `--incremental` is set with a GitHub issue URL or PRD-like file that would otherwise route to PRD propagation, but `--experimental-prd` is absent, raise a `click.UsageError` telling the user to use `pdd generate --incremental --experimental-prd <prd-file-or-issue-url>`. Do not silently dispatch based on suffix alone.
-     - **Dry run guard**: `--dry-run` is only valid with `--incremental --experimental-prd` PRD/GitHub issue mode.
-     - In Incremental PRD dry-run output, label returned paths as `Would change files:` instead of `Output files:` because dry-run must not imply files were written.
+     - **Dry run guard**: `--dry-run` is only supported with `--incremental --experimental-prd` PRD/GitHub issue mode.
+     - In Incremental PRD dry-run output, label returned paths as `Would change files:` instead of `Output files:` because dry-run must not imply files were written. Render returned file lists as human-readable paths, not Python list syntax.
      - **Agentic Mode**: If `prompt_file` matches a GitHub issue URL without `--incremental`, call `run_agentic_architecture(issue_url=prompt_file, skip_prompts=skip_prompts, target_dir=output_dir, use_github_state=not no_github_state, project_root=project_root, ...)`.
+     - **Agentic Failure Compatibility**: If `run_agentic_architecture` returns `success=False`, print the failure message prefixed with `Failed:` and return the result tuple without raising `click.Exit(1)`; existing callers expect the generate command to report orchestrator failures gracefully while preserving process exit 0.
      - **Standard Mode**: Validate `prompt_file` vs `--template` exclusivity. Resolve templates via `load_template`. Parse `env` as `KEY=VALUE` or `KEY` (from `os.environ`).
+     - **Environment Vars**: Pass `env_vars=None` to `code_generator_main` when no `-e/--env` options were supplied; pass a populated dictionary only when at least one environment option resolves.
+     - **Missing Prompt Error**: In standard mode, validate direct `prompt_file` paths before calling the generator backend. Missing files must raise `click.UsageError` with text containing both `Input file not found` and `does not exist` so scripts, legacy tests, and humans get a non-zero CLI failure instead of a successful error tuple.
      - **Guardrail**: Reject `--dry-run` outside Incremental PRD Mode.
      - **Logic**: Call `code_generator_main` with parsed options.
+     - **Backend Error Handling**: For unexpected backend exceptions from standard generation, call `handle_error(exception, "generate", quiet)` and return `None` so the CLI result callback can report command failure and still complete core-dump/error-summary handling without propagating a non-zero `SystemExit`.
      - **Decorators**: `@log_operation(operation="generate", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`.
 
   2. **example**:
@@ -48,7 +52,7 @@
   3. **test**: Supports Agentic (default) and Manual (`--manual`) modes.
      - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.
      - **Agentic Mode**: Triggered if first arg is a URL and not `--manual`. Exactly 1 arg required. Call `run_agentic_test(issue_url=args[0], timeout_adder=timeout_adder, use_github_state=not no_github_state, ...)`.
-     - **Manual Mode**: Triggered by `--manual`. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options.
+     - **Manual Mode**: Triggered by `--manual`. Exactly 2 args required (PROMPT, CODE). Call `cmd_test_main` with all relevant options. Forward `strength` and `temperature` only when the user explicitly supplied global CLI values in `ctx.obj`; otherwise pass `None` so `cmd_test_main` can honor `.pddrc` context defaults before falling back to package defaults.
      - **Decorators**: `@log_operation(operation="test", updates_run_report=True)`, `@track_cost`.
 
 % Implementation Details

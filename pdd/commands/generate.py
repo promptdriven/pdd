@@ -105,6 +105,13 @@ def _ctx_value(ctx: click.Context, key: str, default: Any) -> Any:
     return default
 
 
+def _format_file_list(paths: Any) -> str:
+    """Render returned file paths for CLI output without Python list syntax."""
+    if isinstance(paths, (list, tuple)):
+        return ", ".join(str(path) for path in paths)
+    return str(paths)
+
+
 # ---------------------------------------------------------------------------
 # generate
 # ---------------------------------------------------------------------------
@@ -184,18 +191,27 @@ def generate(
         target = prompt_file if prompt_file else template
         is_issue = _is_github_issue_url(target) if prompt_file else False
         is_prd = _is_prd_like(target) if prompt_file else False
+        has_code_generation_options = any((
+            output,
+            original_prompt,
+            env,
+            template,
+            unit_test,
+            exclude_tests,
+        ))
+        is_prd_candidate = is_prd and not has_code_generation_options
 
         # ----- dry-run guard ------------------------------------------------
         if dry_run and not (incremental and experimental_prd):
             raise click.UsageError(
-                "--dry-run is only valid with --incremental --experimental-prd."
+                "--dry-run is only supported with --incremental --experimental-prd."
             )
 
         # ----- explicit PRD opt-in -----------------------------------------
         # An --incremental run pointing at a GitHub issue URL or PRD-like file
         # must say so explicitly via --experimental-prd; we refuse to dispatch
         # based on suffix alone.
-        if incremental and (is_issue or is_prd) and not experimental_prd:
+        if incremental and (is_issue or is_prd_candidate) and not experimental_prd:
             raise click.UsageError(
                 "To use incremental PRD mode, run: "
                 f"pdd generate --incremental --experimental-prd {target}"
@@ -239,7 +255,7 @@ def generate(
 
             if not quiet:
                 label = "Would change files:" if dry_run else "Output files:"
-                console.print(f"[bold]{label}[/bold] {changed_files}")
+                console.print(f"[bold]{label}[/bold] {_format_file_list(changed_files)}")
                 style = "green" if success else "red"
                 console.print(f"[{style}]{message}[/{style}]")
 
@@ -265,11 +281,9 @@ def generate(
             )
             if not quiet:
                 style = "green" if success else "red"
-                console.print(f"[{style}]Agentic architecture: {message}[/{style}]")
-                console.print(f"Output files: {output_files}")
-
-            if not success:
-                raise click.exceptions.Exit(1)
+                prefix = "" if success else "Failed: "
+                console.print(f"[{style}]Agentic architecture: {prefix}{message}[/{style}]")
+                console.print(f"Output files: {_format_file_list(output_files)}")
 
             return ({"success": success, "message": message, "output_files": output_files},
                     cost, model)
@@ -311,7 +325,7 @@ def generate(
             prompt_path = Path(prompt_file)
             if not prompt_path.exists():
                 raise click.UsageError(
-                    f"Input file not found: {prompt_file}"
+                    f"Input file not found: {prompt_file} does not exist"
                 )
             if prompt_path.is_dir():
                 raise click.UsageError(
@@ -321,8 +335,10 @@ def generate(
         # Parse -e/--env into KEY=VALUE pairs and propagate into os.environ for
         # template / prompt-include resolution. Bare KEY entries are looked up
         # in the live environment.
-        env_vars: dict[str, str] = {}
+        env_vars: Optional[dict[str, str]] = None
         for entry in env:
+            if env_vars is None:
+                env_vars = {}
             if "=" in entry:
                 key, value = entry.split("=", 1)
                 env_vars[key.strip()] = value
@@ -358,7 +374,7 @@ def generate(
         raise
     except Exception as exception:  # noqa: BLE001 — centralised handling
         handle_error(exception, "generate", quiet)
-        raise click.exceptions.Exit(1) from exception
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -543,8 +559,8 @@ def test(
         from ..cmd_test_main import cmd_test_main
 
         prompt_file_arg, code_file_arg = args
-        strength = float(_ctx_value(ctx, "strength", DEFAULT_STRENGTH))
-        temperature = float(_ctx_value(ctx, "temperature", DEFAULT_TEMPERATURE))
+        strength = float(ctx.obj["strength"]) if isinstance(ctx.obj, dict) and "strength" in ctx.obj else None
+        temperature = float(ctx.obj["temperature"]) if isinstance(ctx.obj, dict) and "temperature" in ctx.obj else None
 
         result = cmd_test_main(
             ctx=ctx,
