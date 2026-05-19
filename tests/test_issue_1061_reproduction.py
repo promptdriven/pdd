@@ -1330,3 +1330,70 @@ def test_n1_iter2_ordered_extractor_in_sync_order(tmp_path: Path) -> None:
         "fourth.md",
         "fifth.md",
     ], f"Expected source-order with first-occurrence dedup; got {ordered!r}"
+
+
+def test_m1_iter3_prompts_prefixed_self_include_is_dropped(
+    tmp_path: Path,
+) -> None:
+    """[M1.iter3] A self-include spelled with the ``prompts/`` prefix
+    must be recognized as a self-edge and dropped during re-convergence.
+
+    iter-2's self-edge guard compared
+    ``_basename_from_architecture_filename(inc)`` directly against the
+    architecture filename key, so ``<include>prompts/self_python.prompt</include>``
+    inside ``self_python.prompt`` became ``prompts/self`` vs ``self`` —
+    not equal — and the dep was incorrectly written into the entry's own
+    ``dependencies``. The fix canonicalizes the include path (stripping
+    ``./`` and leading ``prompts/``) before the basename compare so the
+    common prompt-root-prefixed spelling is treated as a self-edge.
+    """
+    from pdd.agentic_sync import _module_prompt_include_dependencies
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    self_prompt = prompts_dir / "self_python.prompt"
+    self_prompt.write_text(
+        "% Self-include with ``prompts/`` prefix — must be dropped.\n"
+        "<include>prompts/self_python.prompt</include>\n",
+        encoding="utf-8",
+    )
+
+    deps = _module_prompt_include_dependencies(
+        self_prompt, self_filename="self_python.prompt"
+    )
+    assert "prompts/self_python.prompt" not in deps, (
+        "``prompts/`` prefixed self-include must be canonicalized and "
+        f"dropped as a self-edge; got {deps!r}"
+    )
+    assert deps == [], (
+        "No deps expected (only the self-edge was present); got "
+        f"{deps!r}"
+    )
+
+
+def test_m1_iter3_dot_slash_prefixed_self_include_is_dropped(
+    tmp_path: Path,
+) -> None:
+    """[M1.iter3] Symmetric coverage: a ``./``-prefixed self-include
+    must also be canonicalized and dropped. ``_normalize_prompt_filename``
+    strips both ``./`` and ``prompts/``, so the path-preserving basename
+    compare must work for either spelling.
+    """
+    from pdd.agentic_sync import _module_prompt_include_dependencies
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    self_prompt = prompts_dir / "owner_python.prompt"
+    self_prompt.write_text(
+        "% Self-include with ``./`` prefix — must be dropped.\n"
+        "<include>./owner_python.prompt</include>\n",
+        encoding="utf-8",
+    )
+
+    deps = _module_prompt_include_dependencies(
+        self_prompt, self_filename="owner_python.prompt"
+    )
+    assert deps == [], (
+        "``./``-prefixed self-include must be canonicalized and dropped; "
+        f"got {deps!r}"
+    )
