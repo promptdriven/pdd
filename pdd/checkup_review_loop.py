@@ -1027,6 +1027,10 @@ def run_checkup_review_loop(
         fix.fixer_result = "attempted" if fix.success else "failed"
         fix.push_status = "not_attempted"
         state.fixes.append(fix)
+        # Issue #1088: rewrite the on-disk artifact so it tracks the
+        # in-memory ``FixResult`` even if a break path below exits before
+        # the canonical post-push rewrite.
+        _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
         _record_fix_attempts(state, fix_findings, fix)
 
         if not fix.success:
@@ -1080,6 +1084,12 @@ def run_checkup_review_loop(
                     fallback_fix.fixer_result = "failed"
                     fallback_fix.push_status = "not_attempted"
                     state.fixes.append(fallback_fix)
+                    # Issue #1088: rewrite the failed-fallback artifact
+                    # so its trust-boundary fields are not left null
+                    # when this break exits before the post-push rewrite.
+                    _rewrite_fix_artifact_from_state(
+                        artifacts_dir, fallback_fix, reviewer
+                    )
                 # Preserve the existing stop_reason if the fallback path
                 # already wrote one (e.g. budget exhausted before fallback
                 # could run) — the operator-facing detail wins.
@@ -1105,6 +1115,10 @@ def run_checkup_review_loop(
             fix.fixer_result = "attempted"
             fix.push_status = "not_attempted"
             state.fixes.append(fix)
+            # Issue #1088: rewrite the fallback-takeover artifact so its
+            # trust-boundary fields track the in-memory ``FixResult`` if
+            # the prompt-source guard refuses the push below.
+            _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
             # NOTE: we deliberately do NOT call ``_record_fix_attempts``
             # again here. The primary attempt already incremented every
             # finding's ``fix_attempts_by_key`` counter; a second bump
@@ -2436,6 +2450,38 @@ def _write_fix_artifact(
             },
             indent=2,
         ),
+    )
+
+
+def _rewrite_fix_artifact_from_state(
+    artifacts_dir: Path,
+    fix: FixResult,
+    reviewer: str,
+) -> None:
+    """Rewrite the per-round fix ``findings.json`` artifact to match
+    the current in-memory ``FixResult`` trust-boundary fields.
+
+    Issue #1088: ``_run_fix`` writes the initial artifact with null
+    trust-boundary fields and relies on the round loop to rewrite
+    after push/SHA classification. Some break paths (failed primary +
+    failed fallback, prompt-source-guard refusal) exit before that
+    rewrite. Calling this helper after every in-memory stamp ensures
+    the on-disk audit trail tracks the FixResult regardless of which
+    break path the loop takes next.
+    """
+    _write_fix_artifact(
+        artifacts_dir,
+        f"round-{fix.round_number}-fix-{fix.fixer}-for-{reviewer}",
+        summary=fix.summary,
+        changed_files=fix.changed_files,
+        success=fix.success,
+        dispositions=fix.dispositions,
+        rationales=fix.rationales,
+        round_number=fix.round_number,
+        fixer_result=fix.fixer_result,
+        push_status=fix.push_status,
+        local_fixer_commit_sha=fix.local_fixer_commit_sha,
+        pushed_head_sha=fix.pushed_head_sha,
     )
 
 

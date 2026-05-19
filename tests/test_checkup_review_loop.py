@@ -3907,6 +3907,112 @@ class TestShaBackedVerificationTrustBoundary:
         assert len(fixed_findings) == 1, final_state["findings"]
         assert len(open_findings) == 1, final_state["findings"]
 
+    def test_failed_primary_fixer_writes_trust_boundary_artifact_no_fallback(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 audit-trail completeness: when the primary fixer
+        fails and no ``fixer_fallback`` is configured, the loop breaks
+        BEFORE the canonical post-push artifact rewrite. The per-round
+        ``round-N-fix-...findings.json`` artifact MUST still carry the
+        in-memory ``FixResult`` trust-boundary fields (rather than the
+        ``null`` placeholders ``_run_fix`` initially writes), so the
+        on-disk audit shows ``fixer_result=failed`` and
+        ``push_status=not_attempted``.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_common(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-" in label:
+                return False, "primary fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        artifact = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "round-1-fix-claude-for-codex.findings.json"
+            ).read_text()
+        )
+        assert artifact["fixer_result"] == "failed", artifact
+        assert artifact["push_status"] == "not_attempted", artifact
+        assert artifact["local_fixer_commit_sha"] is None, artifact
+        assert artifact["pushed_head_sha"] is None, artifact
+        assert artifact["round_number"] == 1, artifact
+
+    def test_failed_primary_and_failed_fallback_write_trust_boundary_artifacts(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 audit-trail completeness: when both the primary
+        fixer and the configured ``fixer_fallback`` fail, the loop breaks
+        BEFORE the canonical post-push artifact rewrite. Both per-round
+        ``round-N-fix-...findings.json`` artifacts (primary's and
+        fallback's) MUST carry their in-memory ``FixResult``
+        trust-boundary fields — ``fixer_result=failed`` and
+        ``push_status=not_attempted`` on each.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_common(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "primary fixer failed", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return False, "fallback fixer also failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        artifacts_dir = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        )
+        primary_artifact = json.loads(
+            (artifacts_dir / "round-1-fix-claude-for-codex.findings.json").read_text()
+        )
+        fallback_artifact = json.loads(
+            (artifacts_dir / "round-1-fix-gemini-for-codex.findings.json").read_text()
+        )
+        for artifact in (primary_artifact, fallback_artifact):
+            assert artifact["fixer_result"] == "failed", artifact
+            assert artifact["push_status"] == "not_attempted", artifact
+            assert artifact["local_fixer_commit_sha"] is None, artifact
+            assert artifact["pushed_head_sha"] is None, artifact
+            assert artifact["round_number"] == 1, artifact
+
 
 class TestPromptInjection:
     """Reviewer and fixer prompts must reflect the configured gate, not the
@@ -6828,3 +6934,76 @@ class TestPromptSourceGuardIntegration:
         # Reviewer-status reflects the refusal, not "clean".
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
+
+    def test_prompt_source_guard_refusal_writes_trust_boundary_artifact(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 audit-trail completeness: when the prompt-source
+        guard refuses the push (fixer succeeded but changed only
+        generated code), the loop breaks BEFORE the canonical post-push
+        artifact rewrite. The per-round ``round-N-fix-...findings.json``
+        artifact MUST still carry the in-memory ``FixResult``
+        trust-boundary fields — ``fixer_result=attempted`` (the
+        subprocess returned success) and ``push_status=not_attempted``
+        (the policy layer refused before invoking the push helper).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._seed_registry(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+
+        # The fake fixer "edits" agentic_update.py without touching its
+        # prompt — exactly the failure mode the guard catches.
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/agentic_update.py"]
+        )
+
+        def fake_push(*_a: Any, **_kw: Any) -> Tuple[bool, str]:
+            pytest.fail("push helper must not be invoked when guard refuses")
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        artifact = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "round-1-fix-claude-for-codex.findings.json"
+            ).read_text()
+        )
+        # The fixer subprocess succeeded, so ``fixer_result`` is
+        # ``attempted``; the guard refused the push so
+        # ``push_status`` stays ``not_attempted`` and both SHA fields
+        # remain null.
+        assert artifact["fixer_result"] == "attempted", artifact
+        assert artifact["push_status"] == "not_attempted", artifact
+        assert artifact["local_fixer_commit_sha"] is None, artifact
+        assert artifact["pushed_head_sha"] is None, artifact
+        assert artifact["round_number"] == 1, artifact
