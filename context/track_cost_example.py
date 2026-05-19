@@ -32,11 +32,6 @@ from click.testing import CliRunner  # noqa: E402
 from pdd.track_cost import track_cost  # noqa: E402
 
 
-# When running under pytest, track_cost intentionally skips CSV writing.
-# Clear that env var so this standalone example actually writes the CSV.
-os.environ.pop("PYTEST_CURRENT_TEST", None)
-
-
 @click.group()
 @click.option(
     "--output-cost",
@@ -110,6 +105,13 @@ def _print_csv(path):
 
 
 def main():
+    # When running under pytest, track_cost intentionally skips CSV writing.
+    # Clear that env var so this standalone example actually writes the CSV.
+    # IMPORTANT: do this inside main() — NOT at module top-level — so that
+    # `import context.track_cost_example` from a pytest session does not
+    # silently disable track_cost's CSV-skip guard for the rest of the run.
+    os.environ.pop("PYTEST_CURRENT_TEST", None)
+
     # Work in an isolated temp directory so the example never writes into the
     # project tree and is fully reproducible.
     workdir = tempfile.mkdtemp(prefix="track_cost_example_")
