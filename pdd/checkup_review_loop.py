@@ -801,22 +801,22 @@ def run_checkup_review_loop(
         if config.review_only
         else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
     )
-    # Capture the SHA the reviewer will see in the worktree. This is the
-    # comparison target for the R-V5 re-fetch when a reviewer path
-    # returns ``clean`` without ever invoking a fixer (initial reviewer
-    # clean, fallback reviewer clean, review-only clean) — the verifier
-    # never gets to pin ``state.verified_head_sha`` on those paths, so
-    # without a reviewed SHA the final report cannot prove the remote
-    # head still matches what was reviewed (issue #1088). Prefer the
-    # value already returned by ``_fetch_pr_metadata`` because that is
-    # the same lookup the rest of the loop already paid for; fall back
-    # to ``git rev-parse HEAD`` in the worktree (the only signal
-    # available under ``review_only``, where rule 16a forbids the
-    # push-metadata fetch).
-    metadata_head_sha = str((pr_metadata or {}).get("head_sha") or "")
-    state.reviewed_head_sha = metadata_head_sha or (
-        _git_rev_parse_head(worktree) or None
-    )
+    # Capture the SHA the reviewer will actually see in the worktree.
+    # This is the comparison target for the R-V5 re-fetch when a
+    # reviewer path returns ``clean`` without ever invoking a fixer
+    # (initial reviewer clean, fallback reviewer clean, review-only
+    # clean) — the verifier never gets to pin ``state.verified_head_sha``
+    # on those paths, so without a reviewed SHA the final report cannot
+    # prove the remote head still matches what was reviewed
+    # (issue #1088). Read it directly from the worktree via
+    # ``git rev-parse HEAD`` rather than from ``pr_metadata``: the
+    # metadata fetch runs after ``_setup_pr_worktree`` and can return a
+    # newer remote SHA than what the reviewer actually inspects if the
+    # PR advances between checkout and that lookup. If the worktree
+    # rev-parse fails we fail closed (``None``) so ``_finalize`` cannot
+    # render ``fresh-final-review: clean`` against a SHA we never
+    # observed.
+    state.reviewed_head_sha = _git_rev_parse_head(worktree) or None
     if not quiet:
         mode_label = "review-only" if config.review_only else "review-loop"
         console.print(
@@ -3550,15 +3550,26 @@ def _record_reviewer_feedback(
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
+    # Issue #1088 trust boundary: the fixer's self-reported
+    # disposition/rationale is an unverified claim. Qualify every
+    # rendering so a bare ``claude: fixed - <text>`` line can never
+    # appear in the report — downstream readers must see that this is
+    # the fixer's claim, not the verifier's verdict.
     disposition = fix.dispositions.get(finding.key, "").strip()
     rationale = fix.rationales.get(finding.key, "").strip()
     if disposition and rationale:
-        return f"{fix.fixer}: {disposition} - {rationale}"
+        return (
+            f"fixer={fix.fixer} fixer_disposition={disposition} "
+            f"fixer_rationale={rationale!r}"
+        )
     if disposition:
-        return f"{fix.fixer}: {disposition}"
+        return f"fixer={fix.fixer} fixer_disposition={disposition}"
     if rationale:
-        return f"{fix.fixer}: {rationale}"
-    return fix.summary.strip()
+        return f"fixer={fix.fixer} fixer_rationale={rationale!r}"
+    summary = fix.summary.strip()
+    if summary:
+        return f"fixer={fix.fixer} fixer_summary={summary!r}"
+    return ""
 
 
 def _budget_exhausted(
@@ -4382,23 +4393,46 @@ def _finalize(
     # render boundary so the rendered report observes the stale-head
     # case described by issue #1088. The re-fetch fires whenever there
     # is anything to verify — either a verifier pass pinned a SHA
-    # (``state.verified_head_sha``) or a reviewer path returned
-    # ``clean`` against a worktree SHA we recorded as
-    # ``state.reviewed_head_sha``. Without this, a path where the
-    # initial reviewer (or review-only mode, or a reviewer fallback)
-    # returns clean without ever invoking a fixer would render
-    # ``fresh-final-review: clean`` without proving the remote PR head
-    # still matches what was reviewed.
-    needs_refetch = bool(state.verified_head_sha) or (
-        state.fresh_final_status == "clean"
+    # (``state.verified_head_sha``), a reviewer path returned ``clean``
+    # against a worktree SHA we recorded as ``state.reviewed_head_sha``,
+    # OR a verifier partially accepted a pushed fix (some findings
+    # marked ``fixed`` even though the round itself was not clean). The
+    # third trigger closes the gap where ``_mark_findings_fixed`` writes
+    # ``status='fixed'`` for findings the verifier omitted without
+    # advancing ``state.verified_head_sha``, leaving the canonical
+    # ``final-state.json`` to claim a fix without proof that the
+    # current remote PR head still matches the SHA the verifier
+    # examined.
+    last_pushed_fix_sha: Optional[str] = None
+    for past_fix in reversed(state.fixes):
+        if past_fix.pushed_head_sha:
+            last_pushed_fix_sha = past_fix.pushed_head_sha
+            break
+    has_fixed_finding = any(
+        finding.status == "fixed" for finding in state.findings_by_key.values()
+    )
+    needs_refetch = (
+        bool(state.verified_head_sha)
+        or state.fresh_final_status == "clean"
+        or has_fixed_finding
+        or bool(last_pushed_fix_sha)
     )
     if needs_refetch:
         state.final_refetch_attempted = True
-        # Comparison target: the verifier-pinned SHA wins when set,
-        # because the verifier examined the post-push head directly.
-        # Otherwise fall back to the SHA the reviewer saw in the
-        # worktree.
-        compare_sha = state.verified_head_sha or state.reviewed_head_sha
+        # Comparison target priority:
+        #  1. The verifier-pinned SHA (``verified_head_sha``) wins when
+        #     set, because the verifier examined the post-push head
+        #     directly and returned clean.
+        #  2. Otherwise the most recently pushed fix SHA — that is the
+        #     SHA the verifier saw when it partially accepted fixes,
+        #     even though the round did not end clean.
+        #  3. Otherwise the SHA the reviewer observed in the worktree
+        #     before any fixer ran.
+        compare_sha = (
+            state.verified_head_sha
+            or last_pushed_fix_sha
+            or state.reviewed_head_sha
+        )
         metadata = _fetch_pr_metadata(
             context.pr_owner, context.pr_repo, context.pr_number
         )
@@ -4678,12 +4712,19 @@ def _render_final_report(
         finding for finding in remaining_findings if finding.key in state.dispute_notes_by_key
     ]
     if findings_with_rationale:
+        # Issue #1088 trust boundary: remaining findings are, by
+        # definition, still open after the verifier's last word — so
+        # every Fixer Rationale bullet here is an unverified fixer
+        # claim. Tag each line with ``verification=unverified`` to make
+        # the trust state explicit alongside the qualified
+        # ``fixer_disposition=`` / ``fixer_rationale=`` note produced by
+        # ``_fix_dispute_note``.
         for finding in findings_with_rationale:
             note = state.dispute_notes_by_key.get(finding.key, "No fixer rationale captured.")
             location = finding.location or "-"
             lines.append(
                 f"- {_escape_table(location)}: {_escape_table(finding.finding)} "
-                f"({_escape_table(note)})"
+                f"({_escape_table(note)}; verification=unverified)"
             )
     else:
         lines.append("- none")

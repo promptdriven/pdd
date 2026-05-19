@@ -348,6 +348,84 @@ class TestCheckupReviewLoopRuntime:
         assert "The API accepts invalid input." in report
         assert "verification=unverified" in report
 
+    def test_budget_exhausted_with_fixer_claim_does_not_show_unverified_fixed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 regression: the fixer can claim
+        ``disposition='fixed'`` with a rationale (``"Added test..."``)
+        even when verification is skipped (budget exhausted after the
+        fixer pushed). The rendered Fixer Rationale section must not
+        contain a bare ``claude: fixed - <prose>`` line — every fixer
+        disposition has to be qualified (``fixer_disposition=fixed``)
+        and tagged ``verification=unverified`` so the report cannot be
+        read as a verifier verdict.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = {
+            "severity": "critical",
+            "area": "api",
+            "location": "pdd/api.py:5",
+            "evidence": "missing guard",
+            "finding": "The API accepts invalid input.",
+            "required_fix": "Validate the input before use.",
+        }
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                key = mod._normalize_findings([finding], "codex", 1)[0].key
+                return (
+                    True,
+                    json.dumps(
+                        {
+                            "summary": "Added regression test.",
+                            "changed_files": ["pdd/api.py"],
+                            "findings": [
+                                {
+                                    "key": key,
+                                    "disposition": "fixed",
+                                    "rationale": "Added test covering the validation path.",
+                                }
+                            ],
+                        }
+                    ),
+                    1.0,
+                    role,
+                )
+            return True, _json("findings", [finding]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: (True, "pushed"),
+        )
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "max-cost-reached: true" in report
+        # The trust-boundary contract: bare ``claude: fixed - ...``
+        # must never appear in the final report, regardless of which
+        # section the prose ended up in.
+        assert "claude: fixed - " not in report
+        # The qualified form must appear instead, alongside the
+        # explicit verification state.
+        assert "fixer=claude fixer_disposition=fixed" in report
+        assert "verification=unverified" in report
+        # The rationale text still surfaces — qualification, not
+        # suppression — so reviewers see what the fixer claimed.
+        assert "Added test covering the validation path." in report
+
     def test_unparseable_review_at_cost_cap_skips_parse_repair(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -1081,7 +1159,13 @@ class TestCheckupReviewLoopRuntime:
         assert "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
         assert "| blocker | open | pdd/review.py:9 |" in report
         assert "### Fixer Rationale" in report
-        assert "not_valid - The existing behavior matches the API contract." in report
+        assert "fixer=claude fixer_disposition=not_valid" in report
+        assert "The existing behavior matches the API contract." in report
+        assert "verification=unverified" in report
+        # The bare "claude: <disposition> - <text>" form is the
+        # exact trust-boundary confusion issue #1088 forbids — the
+        # rendered prose must always qualify the disposition.
+        assert "claude: not_valid - " not in report
 
     def test_artifacts_are_persisted_per_round(
         self, monkeypatch: Any, tmp_path: Path

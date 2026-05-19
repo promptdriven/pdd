@@ -192,9 +192,21 @@ class ReviewLoopState:
     # render time via a single ``_fetch_pr_metadata`` re-fetch (R-V5).
     # ``verification_status_by_round``: per-round verifier outcome,
     # values in ``{"verified", "unverified", "stale", "skipped"}``.
+    # ``reviewed_head_sha``: PR head SHA observed in the worktree at
+    # the time the reviewer (primary, fallback, or review-only) ran.
+    # Recorded directly from ``git rev-parse HEAD`` in the worktree
+    # rather than from PR metadata, so a PR that advances between
+    # checkout and the metadata fetch cannot poison the comparison
+    # target ``_finalize`` uses at the R-V5 re-fetch.
+    # ``final_refetch_attempted``: True when ``_finalize`` actually
+    # ran the render-time remote-head re-fetch. Lets the render layer
+    # distinguish a missing re-fetch (``remote-pr-head-sha: none``)
+    # from a failed re-fetch (``remote-pr-head-sha: unknown``).
     verified_head_sha: Optional[str] = None
     remote_pr_head_sha: Optional[str] = None
     verification_status_by_round: Dict[int, str] = field(default_factory=dict)
+    reviewed_head_sha: Optional[str] = None
+    final_refetch_attempted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -339,6 +351,7 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     # on the schema rather than feature-detecting.
     "verified_head_sha": "0123456789abcdef0123456789abcdef01234567",
     "remote_pr_head_sha": "0123456789abcdef0123456789abcdef01234567",
+    "reviewed_head_sha": "0123456789abcdef0123456789abcdef01234567",
     "verification_status_by_round": {"1": "verified"},
     "findings": [EXAMPLE_NORMALIZED_FINDING],
     # Each fix entry in ``final-state.json`` carries the structured
