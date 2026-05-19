@@ -1321,23 +1321,77 @@ def update_main(
                 if not sync_metadata:
                     # Save fingerprint so the file isn't detected as changed next run
                     if "Success" in result.get("status", ""):
-                        from .operation_log import save_fingerprint, infer_module_identity
+                        from .operation_log import (
+                            clear_run_report,
+                            get_run_report_path,
+                            infer_module_identity,
+                            save_fingerprint,
+                        )
                         basename, language = infer_module_identity(prompt_path)
                         if basename and language:
+                            # Clear stale run report first so it can't outlive
+                            # the prompt/code pair it described. Best-effort:
+                            # never fail the update because of metadata I/O,
+                            # but surface failures as a non-fatal warning so
+                            # the user knows runtime verification state may
+                            # still describe the pre-mutation files.
                             try:
-                                paths = {
-                                    "prompt": Path(prompt_path),
-                                    "code": Path(code_path),
-                                }
-                                save_fingerprint(
-                                    basename, language,
-                                    operation="update",
-                                    paths=paths,
-                                    cost=result.get("cost", 0.0),
-                                    model=result.get("model", "unknown"),
-                                )
+                                _stale_report_path = get_run_report_path(basename, language)
                             except Exception:
-                                pass  # Best-effort; don't fail the update
+                                _stale_report_path = None
+                            _pre_existed = bool(
+                                _stale_report_path is not None
+                                and _stale_report_path.exists()
+                            )
+                            try:
+                                clear_run_report(basename, language)
+                            except Exception as exc:
+                                if not quiet:
+                                    rprint(
+                                        f"[warning][metadata] Run report clear failed for "
+                                        f"{basename} ({language}): {exc}[/warning]"
+                                    )
+                            # Defensive: clear_run_report() in pdd.operation_log
+                            # silently swallows OSError on the actual unlink
+                            # (see pdd/operation_log.py:317-320), so if the
+                            # report file existed before the call but still
+                            # exists afterwards, the deletion failed silently.
+                            # Surface that as a non-fatal warning so the user
+                            # knows runtime verification state may still
+                            # describe the pre-mutation files.
+                            _stale_remains = False
+                            if _pre_existed and _stale_report_path is not None:
+                                try:
+                                    _still_there = _stale_report_path.exists()
+                                except Exception:
+                                    _still_there = False
+                                if _still_there:
+                                    _stale_remains = True
+                                    if not quiet:
+                                        rprint(
+                                            f"[warning][metadata] Run report clear failed for "
+                                            f"{basename} ({language}): "
+                                            f"still exists after clear_run_report: "
+                                            f"{_stale_report_path}; skipping fingerprint update so a "
+                                            f"fresh fingerprint does not coexist with a stale "
+                                            f"run report (issue #1057)."
+                                            f"[/warning]"
+                                        )
+                            if not _stale_remains:
+                                try:
+                                    paths = {
+                                        "prompt": Path(prompt_path),
+                                        "code": Path(code_path),
+                                    }
+                                    save_fingerprint(
+                                        basename, language,
+                                        operation="update",
+                                        paths=paths,
+                                        cost=result.get("cost", 0.0),
+                                        model=result.get("model", "unknown"),
+                                    )
+                                except Exception:
+                                    pass  # Best-effort; don't fail the update
                 else:
                     if "Success" in result.get("status", ""):
                         try:
