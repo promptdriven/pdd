@@ -7304,6 +7304,46 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.pyd" in reason
 
+    def test_guard_refuses_windows_pyw_source_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-8 follow-up: a ``pdd/foo_v2.pyw`` is Windows-only Python
+        source — on Windows ``importlib.machinery.SOURCE_SUFFIXES``
+        includes ``.pyw`` so ``SourceFileLoader`` imports it as
+        ``pdd.foo_v2`` exactly like a ``.py`` file. The R8 suffix tuple
+        missed it; the follow-up adds ``.pyw`` so the same retirement +
+        wipe + add bypass shape is blocked.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.pyw").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.pyw",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.pyw" in reason
+
     def test_guard_allows_pdd_fixture_txt_under_broadened_filter(
         self, tmp_path: Path
     ) -> None:

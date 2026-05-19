@@ -67,8 +67,12 @@ DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
 # imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
 # file (see ``importlib.machinery.all_suffixes()``). ``.cpython-*-*.so``
 # and ``.abi3.so`` variants end with ``.so`` so the simple suffix covers
-# them. ``str.endswith`` accepts a tuple of suffixes.
-_IMPORTABLE_SUFFIXES: Tuple[str, ...] = (".py", ".pyc", ".pyo", ".so", ".pyd")
+# them. ``.pyw`` is Windows-only Python source — on Windows
+# ``importlib.machinery.SOURCE_SUFFIXES`` includes ``.pyw`` so a
+# ``pdd/foo_v2.pyw`` is importable as ``pdd.foo_v2`` via
+# ``SourceFileLoader`` (the same loader as ``.py``, not the sourceless
+# bytecode loader). ``str.endswith`` accepts a tuple of suffixes.
+_IMPORTABLE_SUFFIXES: Tuple[str, ...] = (".py", ".pyw", ".pyc", ".pyo", ".so", ".pyd")
 ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
