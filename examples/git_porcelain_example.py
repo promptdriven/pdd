@@ -57,11 +57,12 @@ def example_path_with_spaces_and_literal_arrow() -> None:
 
 
 def example_iter_changed_paths() -> None:
-    """``iter_changed_paths`` yields both sides of a rename."""
+    """``iter_changed_paths`` yields rename old paths, not copy sources."""
     print("=== iter_changed_paths ===")
     entries = [
         PorcelainEntry(status=" M", path="pdd/module.py"),
         PorcelainEntry(status="R ", path="pdd/new_name.py", old_path="pdd/old_name.py"),
+        PorcelainEntry(status="C ", path="pdd/copied.py", old_path="templates/base.py"),
     ]
     for path in iter_changed_paths(entries):
         print(f"  {path}")

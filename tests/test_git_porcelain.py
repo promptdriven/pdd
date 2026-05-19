@@ -90,6 +90,18 @@ def test_parse_porcelain_z_preserves_paths_with_spaces_and_quotes():
     assert not rec.path.endswith('"')
 
 
+def test_iter_changed_paths_excludes_copy_source():
+    """Copy sources are referenced by git but are not changed paths."""
+    from pdd.git_porcelain import iter_changed_paths, parse_porcelain_z
+
+    raw = b"C  pdd/copied.py\x00scripts/template.py\x00"
+    entries = list(parse_porcelain_z(raw))
+
+    assert entries[0].path == "pdd/copied.py"
+    assert entries[0].old_path == "scripts/template.py"
+    assert list(iter_changed_paths(entries)) == ["pdd/copied.py"]
+
+
 # ---------------------------------------------------------------------------
 # Test 12: checkup_review_loop rename regression (issue #1063 / PR #1076)
 # ---------------------------------------------------------------------------

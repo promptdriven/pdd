@@ -2289,22 +2289,33 @@ def _revert_out_of_scope_changes(
     paths_to_unlink: List[str] = []    # paths to remove from the worktree
     for entry in entries:
         new_resolved = (cwd / entry.path).resolve()
-        if entry.old_path is not None:
+        is_rename = entry.old_path is not None and "R" in entry.status
+        is_copy = entry.old_path is not None and "C" in entry.status
+        if is_rename:
             old_resolved = (cwd / entry.old_path).resolve()
             in_scope = (
                 new_resolved in allowed_paths
                 and old_resolved in allowed_paths
             )
+        elif is_copy:
+            in_scope = new_resolved in allowed_paths
         else:
             in_scope = new_resolved in allowed_paths
         if in_scope:
             continue
-        if entry.old_path is not None:
+        if is_rename:
             # Rename: restore old path from HEAD, unstage + delete new path.
             paths_to_checkout.append(entry.old_path)
             paths_to_reset.extend([entry.path, entry.old_path])
             paths_to_unlink.append(entry.path)
             reverted.append(old_resolved)
+            reverted.append(new_resolved)
+        elif is_copy:
+            # Copy: only the destination is changed. The source old_path
+            # is informational and must not be reset, checked out, or
+            # reported as reverted.
+            paths_to_reset.append(entry.path)
+            paths_to_unlink.append(entry.path)
             reverted.append(new_resolved)
         else:
             paths_to_checkout.append(entry.path)

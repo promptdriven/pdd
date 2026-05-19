@@ -20,7 +20,8 @@ The :func:`parse_porcelain_z` helper returns a sequence of
   ``" M"``, ``"??"``).
 * ``path``  — the new-or-only path (verbatim, no quoting artifacts).
 * ``old_path`` — the previous path for renames/copies, or ``None`` for
-  every other status.
+  every other status. For copies this is the source path only; it is
+  not itself a changed path.
 
 Callers then decide per-call-site whether they need the new path only,
 both old + new paths, or true rename-aware scope-guard semantics.
@@ -56,8 +57,9 @@ class PorcelainEntry:
         path: The new-or-only path, decoded with :func:`os.fsdecode`
             so byte paths round-trip on platforms where filenames are
             not UTF-8.
-        old_path: The previous path for ``R``/``C`` records. ``None``
-            for every other status.
+        old_path: The previous path for ``R``/``C`` records. For copy
+            records this is the source path only; it is not itself
+            changed. ``None`` for every other status.
     """
 
     status: str
@@ -165,6 +167,7 @@ def run_porcelain_z(
             cwd=str(cwd),
             capture_output=True,
             timeout=timeout,
+            check=False,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return None
@@ -174,13 +177,13 @@ def run_porcelain_z(
 
 
 def iter_changed_paths(entries: Iterable[PorcelainEntry]) -> Iterator[str]:
-    """Yield every path mentioned by *entries* — new side and (for
-    renames/copies) the old side too.
+    """Yield changed paths from *entries*.
 
-    Provided as a convenience for callers that want a flat ``List[str]``
-    of every changed path (e.g. for staging or audit logging).
+    For renames, yield both the new and old path because both sides are
+    part of the change. For copies, yield only the copied destination:
+    the source path is referenced by git but is not itself modified.
     """
     for entry in entries:
         yield entry.path
-        if entry.old_path is not None:
+        if entry.old_path is not None and "R" in entry.status:
             yield entry.old_path

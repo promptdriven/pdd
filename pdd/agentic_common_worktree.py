@@ -428,13 +428,21 @@ def revert_out_of_scope_changes_with_dirs(
         new_rel = entry.path
         old_rel = entry.old_path
 
-        # For renames/copies, the change is out-of-scope if EITHER side
-        # is out of scope. The new path is what currently exists on
-        # disk; the old path is what the staged rename removes.
-        if old_rel is not None:
+        is_rename = old_rel is not None and "R" in status
+        is_copy = old_rel is not None and "C" in status
+
+        # Renames are out-of-scope if EITHER side is out of scope: the
+        # new path currently exists on disk, and the old path is removed
+        # by the staged rename. Copies are different: the old path is a
+        # source reference only, not a modified path, so scope and revert
+        # decisions are based on the copied destination.
+        if is_rename:
             new_in = _path_in_scope(new_rel)
             old_in = _path_in_scope(old_rel)
             if new_in and old_in:
+                continue
+        elif is_copy:
+            if _path_in_scope(new_rel):
                 continue
         else:
             if _path_in_scope(new_rel):
@@ -449,7 +457,7 @@ def revert_out_of_scope_changes_with_dirs(
                 reverted.append(Path(new_rel))
             except OSError as exc:
                 logger.warning("Failed to remove %s: %s", new_rel, exc)
-        elif old_rel is not None:
+        elif is_rename:
             # Rename: unstage both sides, restore the old path from HEAD,
             # and delete the new path so the rename is fully undone.
             paths_to_reset = [new_rel, old_rel]
@@ -488,6 +496,28 @@ def revert_out_of_scope_changes_with_dirs(
                 logger.warning("Timed out reverting rename %s -> %s", old_rel, new_rel)
             except OSError as exc:
                 logger.warning("OS error reverting rename %s -> %s: %s", old_rel, new_rel, exc)
+        elif is_copy:
+            # Copy: only the destination is changed. The source path is
+            # informational and must not be reset/restored/removed.
+            try:
+                subprocess.run(
+                    ["git", "reset", "HEAD", "--", new_rel],
+                    cwd=str(cwd),
+                    capture_output=True,
+                    timeout=30,
+                )
+                try:
+                    (cwd / new_rel).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    logger.warning("Failed to remove copy destination %s: %s", new_rel, exc)
+                logger.info("Reverted out-of-scope copy destination: %s", new_rel)
+                reverted.append(Path(new_rel))
+            except subprocess.TimeoutExpired:
+                logger.warning("Timed out reverting copy destination %s", new_rel)
+            except OSError as exc:
+                logger.warning("OS error reverting copy destination %s: %s", new_rel, exc)
         else:
             try:
                 checkout = subprocess.run(

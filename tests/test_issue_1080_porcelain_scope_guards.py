@@ -174,6 +174,36 @@ class TestRevertOutOfScopeRenames1080:
             f"Allowed rename should produce empty revert list, got {reverted!r}"
         )
 
+    def test_preserves_in_scope_copy_from_out_of_scope_source(self, tmp_path):
+        """A copy source is not modified, so only the destination controls
+        scope for ``C`` records.
+
+        ``C  pdd/copied.py\\0scripts/template.py\\0`` must not be
+        treated like a rename from scripts/ to pdd/. The copied
+        destination is allowed, so the guard must leave it alone.
+        """
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        (proj / "pdd").mkdir(parents=True)
+        (proj / "scripts").mkdir()
+        copied = proj / "pdd" / "copied.py"
+        source = proj / "scripts" / "template.py"
+        copied.write_text("copied\n")
+        source.write_text("template\n")
+
+        raw = b"C  pdd/copied.py\x00scripts/template.py\x00"
+        with patch("pdd.agentic_common.subprocess.run", return_value=_completed(raw)):
+            reverted = _revert_out_of_scope_changes(
+                proj,
+                {(proj / "pdd" / "copied.py").resolve()},
+            )
+
+        assert reverted == []
+        assert copied.exists()
+        assert copied.read_text() == "copied\n"
+        assert source.exists()
+
 
 # ===========================================================================
 # Tests 5, 6, 7 — pdd.agentic_common_worktree.revert_out_of_scope_changes_with_dirs
@@ -296,6 +326,40 @@ class TestRevertWithDirsRenames1080:
         assert any(
             str(p).endswith("bogus -> file.txt") for p in result
         ), f"Reverted list missing real path: {result!r}"
+
+    def test_preserves_in_scope_copy_from_out_of_scope_source(self, tmp_path):
+        """For copy records, the old path is a source reference only.
+
+        A copy from scripts/template.py into allowed pdd/copied.py must
+        not be reverted just because the source path is outside
+        ``allowed_dirs``.
+        """
+        from pdd.agentic_common_worktree import (
+            revert_out_of_scope_changes_with_dirs,
+        )
+
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "scripts").mkdir()
+        copied = tmp_path / "pdd" / "copied.py"
+        source = tmp_path / "scripts" / "template.py"
+        copied.write_text("copied\n")
+        source.write_text("template\n")
+
+        raw = b"C  pdd/copied.py\x00scripts/template.py\x00"
+        with patch(
+            "pdd.agentic_common_worktree.subprocess.run",
+            return_value=_completed(raw),
+        ):
+            result = revert_out_of_scope_changes_with_dirs(
+                tmp_path,
+                allowed_dirs={"pdd/"},
+                allowed_files=set(),
+            )
+
+        assert result == []
+        assert copied.exists()
+        assert copied.read_text() == "copied\n"
+        assert source.exists()
 
 
 # ===========================================================================

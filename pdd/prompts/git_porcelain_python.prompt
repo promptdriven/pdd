@@ -12,7 +12,7 @@
     "classes": [
       {
         "name": "PorcelainEntry",
-        "description": "Frozen dataclass: status (two-char XY), path (new-or-only path, fsdecoded), old_path (Optional[str] for R/C records).",
+        "description": "Frozen dataclass: status (two-char XY), path (new-or-only path, fsdecoded), old_path (Optional[str] for R/C records; copy old_path is source-only, not changed).",
         "fields": ["status: str", "path: str", "old_path: Optional[str]"]
       }
     ]
@@ -34,7 +34,7 @@ The text-mode `git status --porcelain` output is lossy for any path with shell-m
 1. **`PorcelainEntry`**: A frozen dataclass with three fields:
    - `status: str` — the two-character `XY` status field (first char = index/staging state, second char = worktree state). For renames/copies this is `"R "`, `"RM"`, etc.; for untracked files this is `"??"`.
    - `path: str` — the new-or-only path, decoded via `os.fsdecode` so byte paths round-trip on platforms where filenames are not valid UTF-8.
-   - `old_path: Optional[str]` — the previous path for `R`/`C` records; `None` for every other status.
+   - `old_path: Optional[str]` — the previous path for `R`/`C` records; `None` for every other status. For `C` copy records this is the source path only and MUST NOT be treated as a modified path.
 
 2. **`parse_porcelain_z(stdout: Union[bytes, str]) -> List[PorcelainEntry]`**: Parse `git status --porcelain=v1 -z` output.
    - Accept either raw `bytes` (preferred — preserves non-UTF-8 filenames) or a pre-decoded `str`.
@@ -48,7 +48,7 @@ The text-mode `git status --porcelain` output is lossy for any path with shell-m
    - When `include_untracked` is `True` (default), pass `--untracked-files=all`; otherwise pass `-uno` (matches the behavior of `revert_out_of_scope_changes_with_dirs`, which only cares about tracked changes).
    - Return `None` on `subprocess.TimeoutExpired`, `FileNotFoundError`, `OSError`, or non-zero exit so callers can degrade gracefully.
 
-4. **`iter_changed_paths(entries) -> Iterator[str]`**: Yield every path mentioned by *entries* — the new side and (for renames/copies) the old side too. Convenience for callers that want a flat list of every changed path (e.g. for staging or audit logging).
+4. **`iter_changed_paths(entries) -> Iterator[str]`**: Yield changed paths from *entries*: the path for every entry, plus the old path for renames only. Do NOT yield copy old paths because a copy source is referenced by git but is not itself modified. Convenience for callers that want a flat list of changed paths (e.g. for staging or audit logging).
 
 5. **Decoding**: An internal `_decode_path` helper should call `os.fsdecode` on bytes and return strings unchanged. This preserves non-UTF-8 filenames via the surrogate-escape mechanism while keeping the public API typed as `str`.
 
