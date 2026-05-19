@@ -45,6 +45,7 @@ from .agentic_change import _run_gh_command
 from .agentic_checkup_orchestrator import _get_git_root, _setup_pr_worktree
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
+from .architecture_registry import extract_modules
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -1033,6 +1034,47 @@ def run_checkup_review_loop(
             # would represent the SAME logical fix round as two attempts
             # and would prematurely trip the oscillation/no-progress
             # guards downstream.
+
+        # Issue #1063: deterministic prompt-source guard. The fixer can
+        # produce a code-only patch on a prompt-owned module (e.g.
+        # editing ``pdd/agentic_update.py`` while leaving
+        # ``pdd/prompts/agentic_update_python.prompt`` untouched). That
+        # silently violates PDD's source-of-truth contract and the next
+        # ``pdd sync`` overwrites the bot's edits. Refuse the push here
+        # rather than at the helper layer so the policy lives at the
+        # policy boundary, and DO NOT reset the worktree so the artifacts
+        # remain available for debugging.
+        #
+        # Scope: this guard catches drift introduced by the FIXER in the
+        # current loop iteration. Pre-existing PR-head drift (drift that
+        # landed before the review loop started) is structurally #1062's
+        # territory ("verify final PR head"); widening this guard to
+        # inspect the full PR diff would muddle the boundary #1063
+        # explicitly drew.
+        #
+        # Ship-gate contract: this break leaves ``state.reviewer_status``
+        # at ``findings`` (set at line ~925 before the fixer ran),
+        # ``state.fresh_final_status`` at ``missing``, and the affected
+        # findings at ``status="open"`` because ``_mark_reviewer_findings
+        # _fixed`` is only reached after a clean verify pass. Those three
+        # markers are what the downstream ``checkup_verdict_adapter``
+        # parses out of the rendered report to decide ship/non-ship —
+        # NOT the loop's ``success`` return flag, which per the
+        # ``run_checkup_review_loop`` docstring (lines ~706-708) signals
+        # "loop completed with a trustworthy report" and is True on all
+        # three return paths. The analogous failed-push refusal path
+        # (line ~1068) follows the same contract and is exercised by
+        # ``test_failed_push_aborts_loop_without_running_verifier``.
+        guard_changed_files = _git_changed_files(worktree)
+        guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
+        if guard_refusal:
+            _write_artifact(
+                artifacts_dir
+                / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                guard_refusal + "\n",
+            )
+            state.stop_reason = guard_refusal
+            break
 
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
@@ -3695,19 +3737,230 @@ def _redact_secret(text: str, secret: str) -> str:
 
 
 def _git_changed_files(worktree: Path) -> List[str]:
+    """Return the list of changed paths in ``worktree``.
+
+    Uses ``git status --porcelain=v1 -z`` so renames and copies report
+    BOTH the new path AND the old path as discrete entries. The earlier
+    ``--porcelain`` (non-``-z``) parser collapsed a rename into the
+    literal string ``"old -> new"``, which never matched any registered
+    code-path key (issue #1063 rename-handling gap). Tracking both paths
+    is the right answer for every existing caller:
+
+      - ``_check_prompt_source_guard`` MUST see the old path so a rename
+        of a registered code file without its prompt is treated as
+        drift.
+      - ``_run_fix`` records the change set in the FixResult artifact
+        for auditing; a rename's old + new paths is strictly more
+        informative than the ``"a -> b"`` literal.
+      - ``_commit_and_push_if_changed`` only uses the truthiness of the
+        list to decide whether to stage; semantics unchanged.
+
+    Untracked files ARE surfaced (as ``?? path`` records); this matches
+    the original ``--porcelain`` default and lets the guard catch a fixer
+    that adds a NEW registered code module without its prompt.
+    ``_git_untracked_files`` exists separately for the staging path,
+    which needs the explicit untracked list to feed into ``git add --``.
+    """
     result = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain=v1", "-z"],
         cwd=worktree,
         capture_output=True,
         text=True,
     )
     if result.returncode != 0:
         return []
+    # ``-z`` emits records joined by NUL with no trailing NUL on the
+    # last record. Splitting on NUL is correct; drop any empty tail.
+    raw_entries = [e for e in result.stdout.split("\0") if e]
     files: List[str] = []
-    for line in result.stdout.splitlines():
-        if len(line) > 3:
-            files.append(line[3:].strip())
+    i = 0
+    while i < len(raw_entries):
+        entry = raw_entries[i]
+        # Each record begins with a two-char status XY plus a space,
+        # followed by the path. ``-z`` preserves paths exactly (no
+        # quoting), so ``entry[3:]`` is the literal new-or-only path.
+        if len(entry) < 4:
+            i += 1
+            continue
+        status = entry[:2]
+        path = entry[3:]
+        files.append(path)
+        # Rename ('R') and copy ('C') in either column emit a SECOND
+        # record carrying the old path. Consume it as a separate changed
+        # path so callers see both sides of the rename.
+        if "R" in status or "C" in status:
+            i += 1
+            if i < len(raw_entries):
+                files.append(raw_entries[i])
+        i += 1
     return files
+
+
+def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
+    """Build the ``code_path -> prompt_path`` mapping from ``architecture.json`` AS OF HEAD.
+
+    Reads from ``git show HEAD:architecture.json`` rather than the
+    worktree filesystem so a fixer cannot remove its own registry
+    entry in the same change set and slip past the guard (review pass
+    #3 Finding 2). The pre-fixer ``HEAD`` is the canonical registry
+    for enforcing the source-of-truth contract.
+
+    Returns ``None`` when the registry is missing/unreadable/unparseable
+    or lists no prompt-owned modules so the caller can degrade
+    gracefully. Logs a WARNING describing the skip in every such case so
+    operators can spot a temporarily-broken registry. Does NOT fall
+    back to reading from the worktree filesystem - that would re-open
+    the registry-evasion hole.
+    """
+    result = subprocess.run(
+        ["git", "show", "HEAD:architecture.json"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # ``git show HEAD:architecture.json`` returns non-zero when
+        # the worktree is not a git repo, HEAD does not exist (no
+        # commits), or architecture.json is not in the HEAD tree.
+        # Degrade gracefully rather than block, but emit enough
+        # diagnostic for the operator to recognize a misconfigured
+        # worktree.
+        logger.warning(
+            "prompt-source guard: architecture.json missing at HEAD "
+            "in %s (git show exit=%s, stderr=%s); skipping prompt-"
+            "drift enforcement for this round.",
+            worktree,
+            result.returncode,
+            (result.stderr or "").strip(),
+        )
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "prompt-source guard: architecture.json at HEAD in %s is "
+            "unparseable (%s); skipping prompt-drift enforcement for "
+            "this round.",
+            worktree,
+            exc,
+        )
+        return None
+
+    mapping: Dict[str, str] = {}
+    for entry in extract_modules(data):
+        filepath = entry.get("filepath")
+        filename = entry.get("filename")
+        if not (isinstance(filepath, str) and isinstance(filename, str)):
+            continue
+        if not filepath or not filename:
+            continue
+        mapping[Path(filepath).as_posix()] = (
+            Path("pdd") / "prompts" / filename
+        ).as_posix()
+
+    if not mapping:
+        logger.warning(
+            "prompt-source guard: architecture.json at HEAD in %s "
+            "lists no prompt-owned modules; skipping prompt-drift "
+            "enforcement.",
+            worktree,
+        )
+        return None
+    return mapping
+
+
+def _check_prompt_source_guard(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Refuse commits that touch generated code without their owning prompt.
+
+    PDD's contract is that prompts are source of truth and generated code
+    is regenerated. The review-loop fixer can patch a registered code
+    file without updating its prompt, and the result silently survives
+    until the next ``pdd sync`` overwrites it (issue #1063). This guard
+    enforces the contract deterministically before the push step.
+
+    Returns ``None`` when the push should proceed, or a refusal string
+    (suitable for ``state.stop_reason``) when at least one offending
+    (code_path, prompt_path) pair is present in the change set.
+
+    Degrades gracefully (allow + warn) when:
+      - ``architecture.json`` is missing or unparseable;
+      - the registry yields no prompt-owned modules;
+      - a registered prompt file no longer exists on disk.
+
+    Failing closed on those cases would brick auto-heal on a temporarily
+    broken registry, which is the inverse of the bug we are fixing.
+    """
+    if not changed_files:
+        return None
+
+    code_to_prompt = _load_prompt_source_map(worktree)
+    if code_to_prompt is None:
+        return None
+
+    changed_norm = {Path(p).as_posix() for p in changed_files if p}
+
+    offenders: List[Tuple[str, str]] = []
+    for code_path, prompt_path in code_to_prompt.items():
+        if code_path not in changed_norm:
+            continue
+        # Disk-state checks distinguish six cases against the
+        # POST-change worktree state. Deletion and rename both leave
+        # the registered path absent on disk - the prompt's fate is
+        # the discriminator for "legitimate retirement / refactor"
+        # vs "drift via rename" (the reconciliation between Finding
+        # A's rename-blocking intent and Finding 1's retirement-
+        # allowing intent).
+        code_still_exists = (worktree / code_path).is_file()
+        prompt_still_exists = (worktree / prompt_path).is_file()
+
+        if not code_still_exists:
+            # Code is gone from disk: either retired (deletion) or
+            # moved (rename). Allow only when the prompt is also
+            # part of this change - either deleted alongside (full
+            # retirement) or co-edited / co-renamed (refactor). If
+            # the prompt is unchanged and still present, the
+            # registered file moved out from under its source of
+            # truth without telling the prompt: that is drift via
+            # rename (review pass #2 Finding A).
+            if not prompt_still_exists or prompt_path in changed_norm:
+                continue
+            offenders.append((code_path, prompt_path))
+            continue
+        if not prompt_still_exists:
+            # Code persists on disk but the prompt has been
+            # destroyed. STRICTLY WORSE drift than the original
+            # #1063 case because the source of truth is gone
+            # entirely - subsequent regeneration would have nothing
+            # to regenerate from. Block unconditionally, even when
+            # the prompt deletion is part of the same change set:
+            # that's a same-commit attack, not a legitimate
+            # retirement (review pass #3 Finding 1).
+            offenders.append((code_path, prompt_path))
+            continue
+        # Both files still exist. If the prompt is also part of
+        # this change set, the source-of-truth contract is
+        # satisfied - the user/bot is explicitly co-editing the
+        # prompt with the code. Allow.
+        if prompt_path in changed_norm:
+            continue
+        # Both files exist, code changed, prompt unchanged = DRIFT
+        # (the original #1063 failure mode).
+        offenders.append((code_path, prompt_path))
+
+    if not offenders:
+        return None
+
+    pairs_text = "; ".join(
+        f"{code} is generated from {prompt}" for code, prompt in offenders
+    )
+    return (
+        "generated-code-only fix refused: "
+        f"{pairs_text}. Update the prompt source or run the proper PDD "
+        "sync path before re-running the review loop."
+    )
 
 
 def _git_untracked_files(worktree: Path) -> List[str]:
