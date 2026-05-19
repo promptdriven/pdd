@@ -3490,6 +3490,165 @@ class TestShaBackedVerificationTrustBoundary:
         assert artifact["fixer_result"] == "attempted"
         assert artifact["round_number"] == 1
 
+    def test_initial_reviewer_clean_then_remote_head_advances_downgrades(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V5 (round 2): when the FIRST reviewer returns ``clean`` the
+        loop never runs a fixer or verifier, so the old
+        ``if state.verified_head_sha`` gate in ``_finalize`` skipped the
+        render-time re-fetch entirely. The fix records the reviewed PR
+        head SHA on every clean reviewer path and the re-fetch now fires
+        whenever ``fresh_final_status == "clean"``. If the remote PR
+        head has advanced past what the reviewer saw, the report MUST
+        NOT render ``fresh-final-review: clean``."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha_a = "a" * 40
+        sha_b = "b" * 40
+        # First metadata fetch (loop start) returns SHA-A — that's what
+        # the reviewer sees in the worktree. The render-time re-fetch
+        # in ``_finalize`` returns SHA-B — the remote head advanced.
+        metadata_calls: List[int] = []
+
+        def fake_metadata(*_a: Any, **_kw: Any):
+            metadata_calls.append(1)
+            return {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_sha": sha_a if len(metadata_calls) == 1 else sha_b,
+            }
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
+        # No fixer should run. Fail loudly if push/rev-parse is touched.
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pytest.fail("fixer must not run when reviewer clean"),
+        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            # First reviewer is clean — no fixer, no verifier.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Only one reviewer call — no verifier, no fixer.
+        assert not any("verify-" in lbl for lbl in calls), calls
+        assert not any("fix-" in lbl for lbl in calls), calls
+        # The render-time re-fetch must have fired exactly once.
+        assert len(metadata_calls) == 2, metadata_calls
+        # The rendered report must no longer claim a clean fresh-final.
+        assert "fresh-final-review: clean" not in report
+        assert "fresh-final-review: missing" in report
+        # ``verified-head-sha:`` is ``none`` (no verifier ran), but the
+        # remote head was observed at the render boundary.
+        assert "verified-head-sha: none" in report
+        assert f"remote-pr-head-sha: {sha_b}" in report
+        assert "PR head advanced after review" in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["fresh_final_status"] == "missing"
+        assert final_state["remote_pr_head_sha"] == sha_b
+        assert final_state["verified_head_sha"] is None
+
+    def test_initial_reviewer_clean_refetch_failure_downgrades(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V5 fail-closed for the no-verifier path: when the first
+        reviewer is clean and the render-time PR-head re-fetch returns
+        no ``head_sha``, the report MUST downgrade fresh-final to
+        ``missing`` and render ``remote-pr-head-sha: unknown`` (the
+        re-fetch was attempted but failed)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha_a = "a" * 40
+        metadata_calls: List[int] = []
+
+        def fake_metadata(*_a: Any, **_kw: Any):
+            metadata_calls.append(1)
+            base: Dict[str, str] = {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+            }
+            if len(metadata_calls) == 1:
+                base["head_sha"] = sha_a
+            # Second call (from ``_finalize``) drops head_sha to model
+            # a failed re-fetch.
+            return base
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pytest.fail("fixer must not run when reviewer clean"),
+        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(
+            mod,
+            "_run_role_task",
+            lambda role, instruction, cwd, **kwargs: (
+                True, _json("clean"), 0.1, role
+            ),
+        )
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert len(metadata_calls) == 2
+        assert "fresh-final-review: clean" not in report
+        assert "fresh-final-review: missing" in report
+        assert "remote-pr-head-sha: unknown" in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["fresh_final_status"] == "missing"
+        assert final_state["remote_pr_head_sha"] is None
+
 
 class TestPromptInjection:
     """Reviewer and fixer prompts must reflect the configured gate, not the

@@ -717,6 +717,23 @@ class ReviewLoopState:
     verified_head_sha: Optional[str] = None
     remote_pr_head_sha: Optional[str] = None
     verification_status_by_round: Dict[int, str] = field(default_factory=dict)
+    # ``reviewed_head_sha``: PR head SHA observed in the worktree at the
+    # time a reviewer (primary, fallback, or review-only) returned a
+    # ``clean`` status without a subsequent fixer push. ``_finalize``
+    # uses this as the comparison target for the R-V5 re-fetch when no
+    # verifier ever pinned a SHA, so a clean reviewer-only path still
+    # has to prove the remote PR head matches what was actually
+    # reviewed before the report can render ``fresh-final-review:
+    # clean`` (issue #1088).
+    reviewed_head_sha: Optional[str] = None
+    # ``final_refetch_attempted``: set by ``_finalize`` when the
+    # render-time PR-head re-fetch actually fired. The render layer
+    # uses this to distinguish a missing re-fetch (``none``) from a
+    # failed re-fetch (``unknown``) in the ``remote-pr-head-sha:``
+    # line. Without this, a downgraded ``fresh_final_status`` (clean
+    # → missing on stale head) would erase the only signal that the
+    # re-fetch was attempted.
+    final_refetch_attempted: bool = False
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -783,6 +800,22 @@ def run_checkup_review_loop(
         {}
         if config.review_only
         else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
+    )
+    # Capture the SHA the reviewer will see in the worktree. This is the
+    # comparison target for the R-V5 re-fetch when a reviewer path
+    # returns ``clean`` without ever invoking a fixer (initial reviewer
+    # clean, fallback reviewer clean, review-only clean) — the verifier
+    # never gets to pin ``state.verified_head_sha`` on those paths, so
+    # without a reviewed SHA the final report cannot prove the remote
+    # head still matches what was reviewed (issue #1088). Prefer the
+    # value already returned by ``_fetch_pr_metadata`` because that is
+    # the same lookup the rest of the loop already paid for; fall back
+    # to ``git rev-parse HEAD`` in the worktree (the only signal
+    # available under ``review_only``, where rule 16a forbids the
+    # push-metadata fetch).
+    metadata_head_sha = str((pr_metadata or {}).get("head_sha") or "")
+    state.reviewed_head_sha = metadata_head_sha or (
+        _git_rev_parse_head(worktree) or None
     )
     if not quiet:
         mode_label = "review-only" if config.review_only else "review-loop"
@@ -4287,6 +4320,7 @@ def _write_final_state(
         # than feature-detecting.
         "verified_head_sha": state.verified_head_sha,
         "remote_pr_head_sha": state.remote_pr_head_sha,
+        "reviewed_head_sha": state.reviewed_head_sha,
         "verification_status_by_round": {
             str(round_number): status
             for round_number, status in state.verification_status_by_round.items()
@@ -4344,12 +4378,27 @@ def _finalize(
     artifacts_dir: Path,
 ) -> str:
     """Render the final report, persist final-report.md and final-state.json."""
-    # R-V5: re-fetch current remote PR head SHA exactly once at the
+    # R-V5: re-fetch the current remote PR head SHA exactly once at the
     # render boundary so the rendered report observes the stale-head
-    # case described by issue #1088. We only perform the re-fetch when
-    # a verifier pass actually pinned a SHA (``state.verified_head_sha``
-    # is set) — otherwise there is nothing to compare against.
-    if state.verified_head_sha:
+    # case described by issue #1088. The re-fetch fires whenever there
+    # is anything to verify — either a verifier pass pinned a SHA
+    # (``state.verified_head_sha``) or a reviewer path returned
+    # ``clean`` against a worktree SHA we recorded as
+    # ``state.reviewed_head_sha``. Without this, a path where the
+    # initial reviewer (or review-only mode, or a reviewer fallback)
+    # returns clean without ever invoking a fixer would render
+    # ``fresh-final-review: clean`` without proving the remote PR head
+    # still matches what was reviewed.
+    needs_refetch = bool(state.verified_head_sha) or (
+        state.fresh_final_status == "clean"
+    )
+    if needs_refetch:
+        state.final_refetch_attempted = True
+        # Comparison target: the verifier-pinned SHA wins when set,
+        # because the verifier examined the post-push head directly.
+        # Otherwise fall back to the SHA the reviewer saw in the
+        # worktree.
+        compare_sha = state.verified_head_sha or state.reviewed_head_sha
         metadata = _fetch_pr_metadata(
             context.pr_owner, context.pr_repo, context.pr_number
         )
@@ -4357,22 +4406,50 @@ def _finalize(
         stale_head = False
         if remote_sha:
             state.remote_pr_head_sha = remote_sha
-            if remote_sha != state.verified_head_sha:
-                # The PR head advanced after verification. Downgrade
-                # any otherwise-clean fresh-final to ``missing`` so
-                # downstream verdict adapters do not treat the stale
-                # verifier verdict as ship-ready.
+            if not compare_sha:
+                # Clean reviewer status but we never observed the
+                # reviewed SHA (worktree rev-parse failed AND PR
+                # metadata had no head_sha). Fail-closed: we cannot
+                # prove the remote head matches the reviewed head.
                 stale_head = True
                 if state.fresh_final_status == "clean":
                     state.fresh_final_status = "missing"
-                    short_verified = state.verified_head_sha[:7]
-                    short_remote = remote_sha[:7]
                     if not state.stop_reason or "could not" not in state.stop_reason.lower():
                         state.stop_reason = (
-                            f"PR head advanced after verification "
-                            f"(verified={short_verified} remote={short_remote}); "
-                            "rerun the review loop."
+                            "Reviewed PR head SHA was not observable; "
+                            "cannot prove remote head matches review. "
+                            "Rerun the review loop."
                         )
+            elif remote_sha != compare_sha:
+                # The PR head advanced after the review/verify pass.
+                # Downgrade any otherwise-clean fresh-final to
+                # ``missing`` so downstream verdict adapters do not
+                # treat the stale verdict as ship-ready.
+                stale_head = True
+                if state.fresh_final_status == "clean":
+                    state.fresh_final_status = "missing"
+                    short_reviewed = compare_sha[:7]
+                    short_remote = remote_sha[:7]
+                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                        # Pick the verb that matches what actually
+                        # cleared the SHA. When the verifier was the
+                        # one that cleared it, keep the existing
+                        # "advanced after verification" message so
+                        # downstream parsers and the regression tests
+                        # that grep for it keep working. Otherwise
+                        # explain that the reviewer's SHA is stale.
+                        if state.verified_head_sha:
+                            state.stop_reason = (
+                                f"PR head advanced after verification "
+                                f"(verified={short_reviewed} remote={short_remote}); "
+                                "rerun the review loop."
+                            )
+                        else:
+                            state.stop_reason = (
+                                f"PR head advanced after review "
+                                f"(reviewed={short_reviewed} remote={short_remote}); "
+                                "rerun the review loop."
+                            )
         else:
             # Re-fetch failed or returned no head_sha. Per R-V5,
             # fail-closed: downgrade a clean fresh-final to ``missing``
@@ -4443,9 +4520,16 @@ def _render_final_report(
     verified_sha_line = state.verified_head_sha or "none"
     if state.remote_pr_head_sha:
         remote_sha_line = state.remote_pr_head_sha
-    elif any((fix.pushed_head_sha for fix in state.fixes)):
-        # A fix was pushed but the render-time re-fetch could not
-        # observe a SHA. Render ``unknown`` per R-V5.
+    elif state.final_refetch_attempted or any(
+        fix.pushed_head_sha for fix in state.fixes
+    ):
+        # The render-time re-fetch was attempted but did not observe a
+        # remote head. Render ``unknown`` per R-V5 so the rendered
+        # report is honest about the failed observation rather than
+        # implying nothing was attempted. The legacy
+        # ``any(pushed_head_sha)`` branch is preserved so a hand-off
+        # path that records a pushed SHA without going through
+        # ``_finalize``'s flag still renders ``unknown``.
         remote_sha_line = "unknown"
     else:
         remote_sha_line = "none"
