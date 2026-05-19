@@ -1397,3 +1397,85 @@ def test_m1_iter3_dot_slash_prefixed_self_include_is_dropped(
         "``./``-prefixed self-include must be canonicalized and dropped; "
         f"got {deps!r}"
     )
+
+
+def test_m2_iter3_path_attribute_wins_over_body_in_auto_deps() -> None:
+    """[M2.iter3] ``<include path="X">Y</include>`` must resolve to ``X``
+    (the validator/preprocessor contract), not ``Y``. iter-2's
+    ``extract_include_paths_from_prompt_text`` ignored ``path=`` and used
+    the body, so an include like
+    ``<include path="pdd/source.py">b_python.prompt</include>`` caused
+    auto-deps to add ``b_python.prompt`` as a module dependency while the
+    validator/preprocessor resolved the include to ``pdd/source.py`` —
+    fabricating the exact kind of dependency #1061 is meant to prevent.
+    """
+    from pdd.auto_deps_architecture import extract_include_paths_from_prompt_text
+
+    text = '<include path="pdd/source.py">b_python.prompt</include>\n'
+    paths = extract_include_paths_from_prompt_text(text)
+
+    assert "b_python.prompt" not in paths, (
+        "Body content must NOT be returned as an architecture dep when "
+        f"path= is set; got {paths!r}"
+    )
+    # ``pdd/source.py`` with no selector/interface attrs is a full
+    # source-file include, so it remains a candidate (handled later by
+    # ``_architecture_filename_for_module_include`` if it maps to a
+    # module entry).
+    assert paths == {"pdd/source.py"}, (
+        "path= attribute must be the effective include target; got "
+        f"{paths!r}"
+    )
+
+
+def test_m2_iter3_path_attribute_context_include_skipped_for_module_dep(
+    tmp_path: Path,
+) -> None:
+    """[M2.iter3] End-to-end: a ``<include path="pdd/source.py" select=...>``
+    that names ``b_python.prompt`` in its body must NOT cause
+    ``merge_auto_deps_includes_into_architecture`` to add
+    ``b_python.prompt`` as a fabricated dep, and must NOT add
+    ``pdd/source.py`` either (it's a context-only source-file include
+    with a selector, not a full source dep).
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    src = tmp_path / "pdd"
+    src.mkdir()
+    (src / "source.py").write_text("def foo(): ...\n", encoding="utf-8")
+    (prompts / "a_python.prompt").write_text("%\n", encoding="utf-8")
+    (prompts / "b_python.prompt").write_text("%\n", encoding="utf-8")
+    arch = [
+        {"filename": "a_python.prompt", "dependencies": []},
+        {"filename": "b_python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    old = "%\n"
+    # path= attribute resolves to pdd/source.py; the body b_python.prompt
+    # is a human-readable hint to the LLM but is NOT the include target.
+    new = (
+        '%\n<include path="pdd/source.py" select="def:foo">'
+        "b_python.prompt</include>\n"
+    )
+
+    report = merge_auto_deps_includes_into_architecture(
+        tmp_path, prompts / "a_python.prompt", old, new
+    )
+
+    data = json.loads(arch_path.read_text(encoding="utf-8"))
+    a = next(e for e in data if e["filename"] == "a_python.prompt")
+    assert "b_python.prompt" not in a["dependencies"], (
+        "Body content of a path= include must NOT be added as a "
+        f"fabricated dep; got {a['dependencies']!r}"
+    )
+    # The path= target pdd/source.py has a selector, so it's a
+    # context-only include and not a module dep either.
+    assert report["added_dependencies"] == [], (
+        "No module deps should be added for a context-only path= "
+        f"include; got {report['added_dependencies']!r}"
+    )

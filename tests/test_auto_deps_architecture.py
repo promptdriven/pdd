@@ -16,10 +16,20 @@ from pdd.json_atomic import atomic_write_json
 
 
 def test_extract_include_paths_supports_attributes() -> None:
+    # ``path=`` attribute wins over body, matching the validator/preprocessor
+    # contract (codex iter-3 finding M2.iter3). The body is treated as a
+    # fallback only when no ``path=`` is set.
     text = '<include path="x">foo/bar.prompt</include>\n<include>plain.prompt</include>'
     paths = extract_include_paths_from_prompt_text(text)
-    assert "foo/bar.prompt" in paths
-    assert "plain.prompt" in paths
+    assert "x" in paths, (
+        f"path= attribute must be the effective include target; got {paths!r}"
+    )
+    assert "foo/bar.prompt" not in paths, (
+        f"body must not be returned when path= is set; got {paths!r}"
+    )
+    assert "plain.prompt" in paths, (
+        f"body is the fallback when path= is unset; got {paths!r}"
+    )
 
 
 def test_merge_adds_architecture_dependency_for_new_module_include(tmp_path: Path) -> None:
