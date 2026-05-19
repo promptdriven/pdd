@@ -83,9 +83,15 @@ def extract_include_paths_from_prompt_text(text: str) -> Set[str]:
     body, so a ``path=`` attribute is required to produce a target —
     codex iter-4 finding M1.iter4 (matches the two-branch pattern in
     ``architecture_include_validation._INCLUDE_RE``).
+    The body-form branch carries a ``(?<!/)`` negative lookbehind on
+    its closing ``>`` so a self-closing ``<include path="x" />``
+    followed on a later line by ``<include>y</include>`` is not
+    swallowed as one body-form match (which would lose ``y``). This
+    mirrors ``pdd/sync_order.py::extract_includes_from_file`` and
+    closes codex iter-5 finding M1.iter5.
     """
     pattern = (
-        r"<include(?P<attrs>\s+[^>]*?)?>(?P<body>.*?)</include>"
+        r"<include(?P<attrs>\s+[^>]*?)?(?<!/)>(?P<body>.*?)</include>"
         r"|<include(?P<attrs_self>\s+[^>]*?)\s*/>"
     )
     paths: Set[str] = set()

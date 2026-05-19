@@ -1540,3 +1540,110 @@ def test_m1_iter4_self_closing_path_include_adds_architecture_dep(
         "architecture.json must list b_python.prompt as a dep of "
         f"a_python.prompt; got {a['dependencies']!r}"
     )
+
+
+def test_m1_iter5_self_closing_followed_by_body_form_both_extracted() -> None:
+    """[M1.iter5] A self-closing ``<include path="b" />`` immediately
+    followed by a body-form ``<include>c</include>`` must extract BOTH
+    targets.
+
+    Iter-4 added a self-closing branch alongside the body-form branch,
+    but the body-form regex lacked the ``(?<!/)>`` negative lookbehind
+    that ``pdd/sync_order.py::extract_includes_from_file`` uses. As a
+    result, the body-form pattern would greedily span from the
+    self-closing ``<include ... />`` opener to a later ``</include>``,
+    swallowing the inner body-form include and silently dropping its
+    target.
+
+    ``cross_validate_architecture_with_prompt_includes`` uses
+    ``sync_order``'s extractor, so the validator sees both includes
+    but architecture deps only get one — recreating the exact
+    auto-deps/validator drift #1061 is supposed to close.
+
+    The plain ``<include>...</include>`` assertion is intentional: the
+    new lookbehind is applied to a position that previously had no
+    guard, so we sanity-check that bare body-form includes still
+    extract correctly.
+    """
+    from pdd.auto_deps_architecture import extract_include_paths_from_prompt_text
+
+    text = (
+        '<include path="b_python.prompt" />\n'
+        "<include>c_python.prompt</include>\n"
+    )
+    paths = extract_include_paths_from_prompt_text(text)
+    assert paths == {"b_python.prompt", "c_python.prompt"}, (
+        "Self-closing include followed by a body-form include must "
+        f"extract both targets; got {paths!r}"
+    )
+
+    # Sanity: a bare body-form include (no attrs) still extracts.
+    bare = extract_include_paths_from_prompt_text(
+        "<include>plain.prompt</include>\n"
+    )
+    assert bare == {"plain.prompt"}, (
+        "Bare body-form <include>plain.prompt</include> must still "
+        f"extract after adding the lookbehind; got {bare!r}"
+    )
+
+
+def test_m1_iter5_self_closing_then_body_form_both_added_as_deps(
+    tmp_path: Path,
+) -> None:
+    """[M1.iter5] End-to-end: with adjacent self-closing and body-form
+    includes naming two different module prompts,
+    ``merge_auto_deps_includes_into_architecture`` must add BOTH as
+    architecture dependencies.
+
+    Without the self-closing guard on the body-form branch, the
+    extractor returned only the self-closing target, so the body-form
+    module dep was silently dropped and the validator would then
+    report missing-dep drift on the next checkup pass.
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "a_python.prompt").write_text("%\n", encoding="utf-8")
+    (prompts / "b_python.prompt").write_text("%\n", encoding="utf-8")
+    (prompts / "c_python.prompt").write_text("%\n", encoding="utf-8")
+    arch = [
+        {"filename": "a_python.prompt", "dependencies": []},
+        {"filename": "b_python.prompt", "dependencies": []},
+        {"filename": "c_python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    old = "%\n"
+    # Adjacent self-closing + body-form. Iter-4 dropped c_python.prompt
+    # because the body-form regex absorbed the self-closing opener.
+    new = (
+        "%\n"
+        '<include path="b_python.prompt" />\n'
+        "<include>c_python.prompt</include>\n"
+    )
+
+    report = merge_auto_deps_includes_into_architecture(
+        tmp_path, prompts / "a_python.prompt", old, new
+    )
+
+    assert report["updated"] is True, (
+        "Both adjacent includes must drive an architecture update; "
+        f"got report={report!r}"
+    )
+    assert sorted(report["added_dependencies"]) == [
+        "b_python.prompt",
+        "c_python.prompt",
+    ], (
+        "Both module-prompt includes must be added as deps; "
+        f"got {report['added_dependencies']!r}"
+    )
+
+    data = json.loads(arch_path.read_text(encoding="utf-8"))
+    a = next(e for e in data if e["filename"] == "a_python.prompt")
+    assert sorted(a["dependencies"]) == ["b_python.prompt", "c_python.prompt"], (
+        "architecture.json must list both b_python.prompt and "
+        f"c_python.prompt as deps of a_python.prompt; got {a['dependencies']!r}"
+    )
