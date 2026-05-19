@@ -30,8 +30,34 @@ def _parse_include_attrs(attrs_text: str) -> Dict[str, str]:
     return attrs
 
 
-def _include_is_architecture_dependency_candidate(attrs: Dict[str, str]) -> bool:
-    """Return False for context-only include selectors."""
+def _is_module_prompt_include_target(body: str) -> bool:
+    """Return True when an ``<include>`` body names another module prompt.
+
+    Mirrors ``architecture_include_validation._module_prompt_include_target``:
+    any include whose target ends in ``.prompt`` and resolves to a recognizable
+    module basename is a module-prompt dep, regardless of ``mode``/``select``/
+    ``query``/``lines`` attributes — the validator still treats it as a required
+    architecture edge in that case.
+    """
+    target = (body or "").strip()
+    if not target.lower().endswith(".prompt"):
+        return False
+    return extract_module_from_include(target) is not None
+
+
+def _include_is_architecture_dependency_candidate(
+    attrs: Dict[str, str], body: str = ""
+) -> bool:
+    """Return False for context-only include selectors targeting source files.
+
+    Selector/interface filtering only applies to non-prompt source-file
+    includes. ``<include select="def:x">b_python.prompt</include>`` MUST still
+    register as an architecture edge because
+    ``cross_validate_architecture_with_prompt_includes`` treats any module-
+    prompt include as a required dependency.
+    """
+    if _is_module_prompt_include_target(body):
+        return True
     if attrs.get("mode", "").strip().lower() == "interface":
         return False
     return not any(attrs.get(name, "").strip() for name in ("select", "query", "lines"))
@@ -43,11 +69,12 @@ def extract_include_paths_from_prompt_text(text: str) -> Set[str]:
     paths: Set[str] = set()
     for match in re.finditer(pattern, text, re.DOTALL):
         attrs = _parse_include_attrs(match.group("attrs") or "")
-        if not _include_is_architecture_dependency_candidate(attrs):
-            continue
         body = match.group("body").strip()
-        if body:
-            paths.add(body)
+        if not body:
+            continue
+        if not _include_is_architecture_dependency_candidate(attrs, body):
+            continue
+        paths.add(body)
     return paths
 
 
