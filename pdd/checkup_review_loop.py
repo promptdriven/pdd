@@ -1159,12 +1159,61 @@ def run_checkup_review_loop(
                 if local_after_failed_push and local_after_failed_push != pre_fix_sha
                 else None
             )
+        # Issue #1088: rewrite the per-round fix ``findings.json``
+        # artifact now that the trust-boundary fields have been
+        # classified. The initial write in ``_run_fix`` rendered these
+        # as ``null``; this rewrite ensures the on-disk audit trail
+        # matches the prompt contract regardless of which break path
+        # the loop takes next.
+        _write_fix_artifact(
+            artifacts_dir,
+            f"round-{round_number}-fix-{fix.fixer}-for-{reviewer}",
+            summary=fix.summary,
+            changed_files=fix.changed_files,
+            success=fix.success,
+            dispositions=fix.dispositions,
+            rationales=fix.rationales,
+            round_number=fix.round_number,
+            fixer_result=fix.fixer_result,
+            push_status=fix.push_status,
+            local_fixer_commit_sha=fix.local_fixer_commit_sha,
+            pushed_head_sha=fix.pushed_head_sha,
+        )
         if not pushed:
             # Failed push aborts the loop. We deliberately do NOT run the
             # verifier here — the local worktree contains a commit that the
             # PR does not, so a verify pass would falsely report "fixed".
             state.verification_status_by_round[round_number] = "skipped"
             state.stop_reason = push_message
+            break
+
+        # Issue #1088 R-V1/R-V2: the verifier may only run when the fixer
+        # produced a commit that actually landed on the PR head. Two
+        # fail-open paths exist if we don't check the trust-boundary
+        # fields explicitly:
+        #   * ``no_commit_pushed`` — ``_commit_and_push_if_changed``
+        #     returned ``(True, "No changes to push.")`` because the
+        #     fixer left the worktree unchanged, so no SHA was pushed.
+        #   * pushed-but-no-SHA — ``_git_rev_parse_head`` returned ``""``
+        #     so we cannot prove which SHA the PR head points at.
+        # In both cases ``pushed`` is True, so the ``if not pushed`` guard
+        # above does not fire. Without this check the loop would invoke
+        # ``_run_review(... mode="verify")`` and a clean verify on the
+        # pre-fix head would then promote the findings to ``fixed``.
+        if fix.push_status != "pushed" or not fix.pushed_head_sha:
+            state.verification_status_by_round[round_number] = "skipped"
+            if fix.push_status == "not_attempted":
+                state.stop_reason = (
+                    f"Fixer {active_fixer} produced no commit to push "
+                    f"({push_message or 'no changes detected'}); "
+                    "verification skipped."
+                )
+            else:
+                state.stop_reason = (
+                    f"Push reported success but pushed head SHA could "
+                    f"not be captured ({push_message or 'unknown'}); "
+                    "verification skipped."
+                )
             break
 
         if _budget_exhausted(config, state, deadline):
@@ -2274,18 +2323,25 @@ def _run_fix(
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     changed_files = _git_changed_files(worktree)
     summary, dispositions, rationales = _parse_fix_output(output, findings)
-    _write_artifact(
-        artifacts_dir / f"{base}.findings.json",
-        json.dumps(
-            {
-                "summary": summary,
-                "changed_files": changed_files,
-                "success": success,
-                "dispositions": dispositions,
-                "rationales": rationales,
-            },
-            indent=2,
-        ),
+    # Issue #1088: the per-round fix artifact's contract (see
+    # ``pdd/prompts/checkup_review_loop_python.prompt`` §"Per-round
+    # findings.json") requires the trust-boundary fields even when they
+    # are not yet known. Render them as null here; the round loop
+    # rewrites this artifact with concrete values after push/SHA
+    # classification via ``_write_fix_artifact``.
+    _write_fix_artifact(
+        artifacts_dir,
+        base,
+        summary=summary,
+        changed_files=changed_files,
+        success=success,
+        dispositions=dispositions,
+        rationales=rationales,
+        round_number=round_number,
+        fixer_result=None,
+        push_status=None,
+        local_fixer_commit_sha=None,
+        pushed_head_sha=None,
     )
     return FixResult(
         fixer=fixer,
@@ -2295,6 +2351,46 @@ def _run_fix(
         raw_output=output,
         dispositions=dispositions,
         rationales=rationales,
+    )
+
+
+def _write_fix_artifact(
+    artifacts_dir: Path,
+    base: str,
+    *,
+    summary: str,
+    changed_files: Sequence[str],
+    success: bool,
+    dispositions: Dict[str, str],
+    rationales: Dict[str, str],
+    round_number: int,
+    fixer_result: Optional[str],
+    push_status: Optional[str],
+    local_fixer_commit_sha: Optional[str],
+    pushed_head_sha: Optional[str],
+) -> None:
+    """Write a per-round fix ``findings.json`` artifact (issue #1088).
+
+    The trust-boundary fields are rendered explicitly — even as ``null``
+    — so the audit trail on disk matches the prompt contract.
+    """
+    _write_artifact(
+        artifacts_dir / f"{base}.findings.json",
+        json.dumps(
+            {
+                "summary": summary,
+                "changed_files": list(changed_files),
+                "success": success,
+                "dispositions": dict(dispositions),
+                "rationales": dict(rationales),
+                "round_number": round_number,
+                "fixer_result": fixer_result,
+                "push_status": push_status,
+                "local_fixer_commit_sha": local_fixer_commit_sha,
+                "pushed_head_sha": pushed_head_sha,
+            },
+            indent=2,
+        ),
     )
 
 
@@ -4258,6 +4354,7 @@ def _finalize(
             context.pr_owner, context.pr_repo, context.pr_number
         )
         remote_sha = (metadata or {}).get("head_sha") or ""
+        stale_head = False
         if remote_sha:
             state.remote_pr_head_sha = remote_sha
             if remote_sha != state.verified_head_sha:
@@ -4265,6 +4362,7 @@ def _finalize(
                 # any otherwise-clean fresh-final to ``missing`` so
                 # downstream verdict adapters do not treat the stale
                 # verifier verdict as ship-ready.
+                stale_head = True
                 if state.fresh_final_status == "clean":
                     state.fresh_final_status = "missing"
                     short_verified = state.verified_head_sha[:7]
@@ -4279,8 +4377,26 @@ def _finalize(
             # Re-fetch failed or returned no head_sha. Per R-V5,
             # fail-closed: downgrade a clean fresh-final to ``missing``
             # and leave ``remote_pr_head_sha`` as ``None``.
+            stale_head = True
             if state.fresh_final_status == "clean":
                 state.fresh_final_status = "missing"
+        if stale_head:
+            # Issue #1088: the rendered report alone is not enough — the
+            # canonical machine-readable ``final-state.json`` must also
+            # stop claiming the round was verified and the findings
+            # fixed once the remote head is known to be stale (or
+            # unobservable). Downgrade ``verified`` rounds to ``stale``
+            # and revert any ``fixed`` findings to ``open`` so downstream
+            # consumers cannot read the untrusted fixer attempt as
+            # completed against the current remote head.
+            for round_number, status in list(
+                state.verification_status_by_round.items()
+            ):
+                if status == "verified":
+                    state.verification_status_by_round[round_number] = "stale"
+            for finding in state.findings_by_key.values():
+                if finding.status == "fixed":
+                    finding.status = "open"
     report = _render_final_report(context, state, reviewers)
     issue_aligned = _resolve_issue_aligned(state)
     _write_artifact(artifacts_dir / "final-report.md", report)
