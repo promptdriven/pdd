@@ -5548,6 +5548,65 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "code still present" in reason
         assert "pdd/foo.py" in reason
 
+    def test_registry_wiped_with_renamed_new_code_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # This is the registry-wipe variant of #1081: 10a sees the old
+        # code and prompt as legitimately retired, but a new generated
+        # code path still lands with no prompt source.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "registry wiped to empty" in reason
+        assert "pdd/foo_v2.py" in reason
+
+    def test_registry_wiped_for_full_retirement_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is None
+
     def test_added_pair_with_prompt_on_disk_and_in_changeset_is_allowed(
         self, tmp_path: Path
     ) -> None:
