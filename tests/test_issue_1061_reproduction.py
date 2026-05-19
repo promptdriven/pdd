@@ -1009,3 +1009,141 @@ def test_m1_auto_deps_merge_preserves_select_include_of_module_prompt(
         "auto-deps must promote a select= include of a module prompt to an "
         f"architecture dep; got {report!r}"
     )
+
+
+def test_b1_iter2_same_tail_path_qualified_correction_rejected_for_flat_scope(
+    tmp_path: Path,
+) -> None:
+    """[B1.iter2] A correction for the path-qualified module
+    ``core/cli_python.prompt`` must be REJECTED when
+    ``modules_to_sync=['cli']`` even though the tail basename matches.
+
+    Reason: iter-1 added a bare-stem alias for every correction filename,
+    which turned ``core/cli_python.prompt`` into the alias set
+    ``{"core/cli", "cli"}``. That collision let an out-of-scope correction
+    cross scope boundaries and mutate an unrelated path-qualified module
+    that merely shared the same tail basename. The gate must be
+    path-preserving: only fall back to the bare stem when both sides are
+    unqualified (no ``/``).
+    """
+    from pdd.agentic_sync import _apply_architecture_corrections
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    core_prompts = project_root / "prompts" / "core"
+    core_prompts.mkdir(parents=True)
+    flat_prompts = project_root / "prompts"
+    (core_prompts / "cli_python.prompt").write_text(
+        "<pdd-dependency>cli_LLM.prompt</pdd-dependency>\n", encoding="utf-8"
+    )
+    (flat_prompts / "cli_python.prompt").write_text(
+        "<pdd-dependency>cli_LLM.prompt</pdd-dependency>\n", encoding="utf-8"
+    )
+    (flat_prompts / "cli_LLM.prompt").write_text("%", encoding="utf-8")
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {
+            "filename": "core/cli_python.prompt",
+            "dependencies": ["cli_LLM.prompt", "stale_core.prompt"],
+        },
+        {
+            "filename": "cli_python.prompt",
+            "dependencies": ["cli_LLM.prompt"],
+        },
+        {"filename": "cli_LLM.prompt", "dependencies": []},
+        {"filename": "stale_core.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    # A correction targeting the OUT-of-scope path-qualified module.
+    corrections = [
+        {
+            "filename": "core/cli_python.prompt",
+            "dependencies": ["cli_LLM.prompt"],
+        }
+    ]
+    _apply_architecture_corrections(
+        project_root,
+        corrections,
+        architecture,
+        quiet=True,
+        modules_to_sync=["cli"],  # flat — must NOT match core/cli
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    core_entry = next(
+        e for e in final if e["filename"] == "core/cli_python.prompt"
+    )
+    assert "stale_core.prompt" in core_entry["dependencies"], (
+        "Out-of-scope path-qualified correction (core/cli) MUST NOT be "
+        "applied when modules_to_sync targets the flat 'cli' module; "
+        f"got core entry deps {core_entry['dependencies']!r}"
+    )
+
+
+def test_b1_iter2_symmetric_bare_correction_rejected_for_path_qualified_scope(
+    tmp_path: Path,
+) -> None:
+    """[B1.iter2 — symmetric] The mirror case must also reject: a
+    correction for flat ``cli_python.prompt`` must NOT be accepted when
+    ``modules_to_sync=['core/cli']`` even though the tail basename
+    matches. Without the path-qualified guard on
+    ``_normalise_sync_module_names``, the iter-1 bare-stem alias on the
+    sync entry made the allowed set contain ``"cli"``, which then matched
+    the unqualified correction's bare-stem alias.
+    """
+    from pdd.agentic_sync import _apply_architecture_corrections
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    flat_prompts = project_root / "prompts"
+    flat_prompts.mkdir()
+    core_prompts = flat_prompts / "core"
+    core_prompts.mkdir()
+    (flat_prompts / "cli_python.prompt").write_text(
+        "<pdd-dependency>cli_LLM.prompt</pdd-dependency>\n", encoding="utf-8"
+    )
+    (core_prompts / "cli_python.prompt").write_text(
+        "<pdd-dependency>cli_LLM.prompt</pdd-dependency>\n", encoding="utf-8"
+    )
+    (flat_prompts / "cli_LLM.prompt").write_text("%", encoding="utf-8")
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {
+            "filename": "cli_python.prompt",
+            "dependencies": ["cli_LLM.prompt", "stale_flat.prompt"],
+        },
+        {
+            "filename": "core/cli_python.prompt",
+            "dependencies": ["cli_LLM.prompt"],
+        },
+        {"filename": "cli_LLM.prompt", "dependencies": []},
+        {"filename": "stale_flat.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    corrections = [
+        {
+            "filename": "cli_python.prompt",
+            "dependencies": ["cli_LLM.prompt"],
+        }
+    ]
+    _apply_architecture_corrections(
+        project_root,
+        corrections,
+        architecture,
+        quiet=True,
+        modules_to_sync=["core/cli"],  # path-qualified — must NOT match flat
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    flat_entry = next(
+        e for e in final if e["filename"] == "cli_python.prompt"
+    )
+    assert "stale_flat.prompt" in flat_entry["dependencies"], (
+        "Out-of-scope flat correction MUST NOT be applied when "
+        "modules_to_sync targets the path-qualified 'core/cli' module; "
+        f"got flat entry deps {flat_entry['dependencies']!r}"
+    )
