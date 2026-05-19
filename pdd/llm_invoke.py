@@ -3025,6 +3025,14 @@ def llm_invoke(
         },
     )
 
+    # Chronological chain of every model PDD attempts during this invocation.
+    # Hoisted above the cloud-vs-local split so cloud attempts are recorded
+    # even when control later falls through to the local execution path.
+    # Per the prompt contract, append "cloud:<model_name>" the moment we
+    # attempt a cloud HTTP call; rewrite the entry with the cloud-reported
+    # model on success.
+    attempted_models_chain: List[str] = []
+
     if use_cloud:
         from rich.console import Console
         console = Console()
@@ -3032,9 +3040,17 @@ def llm_invoke(
         if verbose:
             logger.debug("Attempting cloud execution...")
 
+        # Record the cloud attempt up-front so the chain captures it even if
+        # the cloud call raises a fallback / invocation error and we drop
+        # through to local execution below. The exact model the cloud picks
+        # isn't known until the response returns; use the documented
+        # "cloud:auto" sentinel from the prompt contract until then.
+        cloud_sentinel = "cloud:auto"
+        attempted_models_chain.append(cloud_sentinel)
+
         try:
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
-            return _llm_invoke_cloud(
+            cloud_result = _llm_invoke_cloud(
                 prompt=prompt,
                 input_json=input_json,
                 strength=strength,
@@ -3047,6 +3063,26 @@ def llm_invoke(
                 messages=messages,
                 language=language,
             )
+            # Replace the "cloud:auto" placeholder with whatever the cloud
+            # actually reported, prefixed so callers can tell cloud and
+            # local attempts apart in the cost CSV.
+            cloud_reported = cloud_result.get("attempted_models") if isinstance(cloud_result, dict) else None
+            if cloud_reported:
+                attempted_models_chain = []
+                for entry in cloud_reported:
+                    text = str(entry)
+                    if not text:
+                        continue
+                    if not text.startswith("cloud:"):
+                        text = f"cloud:{text}"
+                    if not attempted_models_chain or attempted_models_chain[-1] != text:
+                        attempted_models_chain.append(text)
+            elif isinstance(cloud_result, dict) and cloud_result.get("model_name"):
+                attempted_models_chain = [f"cloud:{cloud_result['model_name']}"]
+            if isinstance(cloud_result, dict):
+                cloud_result["attempted_models"] = list(attempted_models_chain)
+            _propagate_attempted_models_to_ctx(attempted_models_chain)
+            return cloud_result
         except CloudFallbackError as e:
             # Notify user and fall back to local execution
             console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
@@ -3056,10 +3092,17 @@ def llm_invoke(
                 "llm_invoke.cloud_fallback",
                 **_safe_error_fields(e),
             )
-            # Continue to local execution below
-        except InsufficientCreditsError:
-            # Re-raise credit errors - user needs to know
+            # Continue to local execution below; cloud_sentinel stays in
+            # attempted_models_chain so the failed cloud attempt is recorded.
+        except InsufficientCreditsError as e:
+            # Re-raise credit errors - user needs to know.  Attach the
+            # cloud attempt so callers / track_cost can still record it.
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
+            try:
+                e.attempted_models = list(attempted_models_chain)
+            except Exception:
+                pass
+            _propagate_attempted_models_to_ctx(attempted_models_chain)
             raise
         except CloudInvocationError as e:
             # Non-recoverable cloud error - notify and fall back
@@ -3070,7 +3113,8 @@ def llm_invoke(
                 "llm_invoke.cloud_error",
                 **_safe_error_fields(e),
             )
-            # Continue to local execution below
+            # Continue to local execution below; cloud_sentinel stays in
+            # attempted_models_chain so the failed cloud attempt is recorded.
 
     # --- 2. Local execution uses already-validated formatted_messages ---
 
@@ -3176,11 +3220,13 @@ def llm_invoke(
     # --- 3. Iterate Through Candidates and Invoke LLM ---
     last_exception = None
     newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
-    # Chronological chain of models attempted for this invocation. Each candidate
-    # is appended exactly once when we first try it; this is later included in
-    # the returned dict (and the failure path) so callers / cost tracking can
-    # see the full fallback chain — including the final successful model.
-    attempted_models_chain: List[str] = []
+    # attempted_models_chain is initialized above the cloud try block so any
+    # cloud attempts already recorded are preserved when execution falls
+    # through to local. Each local candidate is appended exactly once when
+    # we actually attempt a provider call (i.e., after _ensure_api_key
+    # succeeds); the chain is returned with the result and attached to
+    # exceptions on total failure so callers / cost tracking can see the
+    # full fallback chain — including the final successful model.
 
     # Initialize variables for retry section
     response_format = None
@@ -3199,12 +3245,6 @@ def llm_invoke(
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
 
-        # Record this candidate in the chronological chain. Use the candidate's
-        # configured model name so the chain reflects what we *intended* to use
-        # for each attempt, regardless of whether the call ultimately succeeds.
-        if model_name_litellm and (not attempted_models_chain or attempted_models_chain[-1] != model_name_litellm):
-            attempted_models_chain.append(str(model_name_litellm))
-
         if verbose:
             logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
 
@@ -3220,7 +3260,10 @@ def llm_invoke(
 
             # --- 4. API Key Check & Acquisition ---
             if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
-                # Problem getting key, break inner loop, try next model candidate
+                # Problem getting key, break inner loop, try next model candidate.
+                # NOTE: do NOT record this candidate in attempted_models_chain
+                # because no provider call was made — the prompt contract
+                # requires only attempted calls to appear in the chain.
                 _emit_llm_attribution(
                     attribution_context,
                     "llm_invoke.model_skipped",
@@ -3233,6 +3276,12 @@ def llm_invoke(
                 if verbose:
                     logger.info(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
                 break # Breaks the 'while retry_with_same_model' loop
+
+            # Credentials checked out — record this candidate in the
+            # chronological chain just before we issue the provider call.
+            # Dedup against same-model cache-bypass retries.
+            if model_name_litellm and (not attempted_models_chain or attempted_models_chain[-1] != model_name_litellm):
+                attempted_models_chain.append(str(model_name_litellm))
 
             # --- 5. Prepare LiteLLM Arguments ---
             litellm_kwargs: Dict[str, Any] = {
@@ -4563,7 +4612,16 @@ def llm_invoke(
         failure_reason="all_candidate_models_failed",
         last_error_type=type(last_exception).__name__ if last_exception else None,
     )
-    raise RuntimeError(error_message) from last_exception
+    # Surface the chain on the active Click context so the track_cost
+    # decorator records the abandoned attempts even on total failure, and
+    # attach it to the raised exception so direct callers can introspect.
+    _propagate_attempted_models_to_ctx(attempted_models_chain)
+    exhaustion_error = RuntimeError(error_message)
+    try:
+        exhaustion_error.attempted_models = list(attempted_models_chain)
+    except Exception:
+        pass
+    raise exhaustion_error from last_exception
 
 # --- Example Usage (Optional) ---
 if __name__ == "__main__":

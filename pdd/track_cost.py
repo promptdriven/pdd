@@ -72,8 +72,24 @@ def track_cost(func):
                                 files_set.add(abs_path)
                     ctx.obj['core_dump_files'] = files_set
 
-                # Check if we need to write cost tracking (only on success)
-                if exception_raised is None:
+                # Decide whether to write a cost-tracking row. On success we
+                # always write. On failure we still write a row when there's
+                # any recorded fallback history to surface (either on the
+                # raised exception or on ctx.obj) so users can see which
+                # candidate models were attempted before the command failed.
+                exception_attempted: List[str] = []
+                if exception_raised is not None:
+                    raw = getattr(exception_raised, 'attempted_models', None)
+                    if isinstance(raw, list):
+                        exception_attempted = [str(m) for m in raw if m]
+
+                should_write = (
+                    exception_raised is None
+                    or bool(exception_attempted)
+                    or bool(ctx.obj and ctx.obj.get('attempted_models'))
+                )
+
+                if should_write:
                     if ctx.obj and hasattr(ctx.obj, 'get'):
                         output_cost_path = ctx.obj.get('output_cost') or os.getenv('PDD_OUTPUT_COST_PATH')
                     else:
@@ -81,7 +97,13 @@ def track_cost(func):
 
                     if output_cost_path and os.environ.get('PYTEST_CURRENT_TEST') is None:
                         command_name = ctx.command.name if ctx.command else "unknown"
-                        cost, model_name, result_attempted = extract_cost_and_model(result)
+                        if exception_raised is None:
+                            cost, model_name, result_attempted = extract_cost_and_model(result)
+                        else:
+                            # On total failure there is no successful result
+                            # to mine, but ctx/exception may still carry the
+                            # attempted chain.
+                            cost, model_name, result_attempted = '', '', exception_attempted
 
                         # Determine attempted_models chain
                         attempted_models_list = []
@@ -89,7 +111,7 @@ def track_cost(func):
                             attempted_models_list = ctx.obj.get('attempted_models')
                         elif result_attempted:
                             attempted_models_list = result_attempted
-                        
+
                         attempted_models_str = ';'.join(attempted_models_list) if attempted_models_list else ''
 
                         timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
