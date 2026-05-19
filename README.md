@@ -626,6 +626,7 @@ graph TB
 ### Utility Commands
 - **[`auth`](#19-auth)**: Manages authentication with PDD Cloud
 - **[`sessions`](#20-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
+- **`coverage --contracts`**: Build a static contract-rule matrix from `<contract_rules>`, story `## Covers`, explicit test references, `<coverage>`, and `<waivers>`
 
 ### User Story Prompt Tests
 PDD can validate prompt changes against user stories stored as Markdown files. This uses `detect` under the hood: a story **passes** when `detect` returns no required prompt changes.
@@ -640,6 +641,7 @@ Overrides:
 
 Commands:
 - `pdd detect --stories` runs the validation suite.
+- `pdd coverage --contracts` reports rule coverage status (`checked`, `story-only`, `test-only`, `unchecked`, `waived`, `failed`) without calling an LLM.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file and links those prompts.

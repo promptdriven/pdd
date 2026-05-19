@@ -1,0 +1,13 @@
+# Legacy Utility Module
+
+This is an older module that predates the contract rules convention.
+It does not define any <contract_rules> section.
+
+## Purpose
+
+Provides basic string formatting utilities for the payment pipeline.
+
+## Functions
+
+- format_currency(amount, currency_code): formats a decimal as "$0.00"
+- format_date(dt): formats a datetime as "YYYY-MM-DD"

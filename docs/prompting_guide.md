@@ -687,13 +687,23 @@ The exact log message wording is not important.
 
 For non-trivial modules, maintain a lightweight coverage map from contract rules to stories, tests, and waivers. The purpose is not bureaucracy. The purpose is to make missing evidence visible.
 
-Today, `<coverage>` is a PDD authoring convention, not a special preprocessor directive. It is visible to the model and useful for review, generation, and validation prompts. Tooling may later parse this section, but do not assume PDD enforces coverage automatically unless your project adds a checker.
+`<coverage>` is a PDD authoring convention, not a special preprocessor directive. It is visible to the model and useful for review, generation, and validation prompts. `pdd coverage --contracts` parses `<contract_rules>`, story `## Covers` sections, conservative test rule-ID references, `<coverage>`, and `<waivers>` to build an inspectable rule-to-evidence matrix.
+
+Run the checker locally or in CI:
+
+```bash
+pdd coverage --contracts prompts/refund_payment_python.prompt
+pdd coverage --contracts --json prompts/
+```
+
+The command is legacy-safe: prompts without `<contract_rules>` report `no contract coverage data` rather than failing. Rules are reported as `checked`, `story-only`, `test-only`, `unchecked`, `waived`, or `failed`. `failed` is deterministic v1 validation failure, such as a linked story covering a rule without `## Acceptance Criteria`, or a syntax-invalid `test_*.py` file that explicitly references the rule ID.
 
 Coverage source of truth:
 
 - Story files are the primary place to declare `## Covers`.
 - The prompt's `<coverage>` section is an optional summary for non-trivial modules.
 - If both exist, keep them synchronized during prompt review.
+- Test names/comments may reference rule IDs explicitly, for example `test_R3_no_provider_call_invalid`; this is a conservative heuristic, not semantic test analysis.
 
 ```xml
 <coverage>
