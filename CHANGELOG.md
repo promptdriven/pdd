@@ -1,11 +1,5 @@
 > Historical record up to v0.0.241. See [GitHub Releases](https://github.com/promptdriven/pdd/releases) for current release notes.
 
-## Unreleased
-
-### Fix
-
-- **checkup**: enforce a SHA-backed verification trust boundary in `pdd checkup --pr --review-loop` so unverified fixer attempts are never rendered as completed fixes. `FixResult` now carries `fixer_result`/`push_status`/`local_fixer_commit_sha`/`pushed_head_sha`, `ReviewLoopState` carries `verified_head_sha`/`remote_pr_head_sha`/`verification_status_by_round`, and the final report renders fixed-field `### Fixes Attempted` bullets plus header `verified-head-sha:` / `remote-pr-head-sha:` lines. Before promoting `fresh-final-review: clean` or `verification=verified`, the loop re-fetches the remote PR head and downgrades to `verification=unverified` on mismatch or budget exhaustion (#1088).
-
 ## v0.0.241 (2026-05-17)
 
 ### Fix
