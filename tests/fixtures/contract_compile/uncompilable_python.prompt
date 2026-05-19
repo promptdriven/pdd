@@ -1,0 +1,8 @@
+<contract_rules>
+R1 - Vague rule
+The service MUST handle invalid refunds.
+
+R2 - Missing outcome
+When a refund request has amount_cents equal to 0,
+the service MUST behave safely.
+</contract_rules>

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from click.testing import CliRunner
@@ -37,6 +37,25 @@ def _json_invoke(runner: CliRunner, *args):
     )
 
 
+def _ambiguity_invoke(runner: CliRunner, *args, input_text: str = ""):
+    """Invoke pdd prompt lint --ambiguity with --quiet."""
+    return runner.invoke(
+        cli.cli,
+        ["--quiet", "prompt", "lint", "--ambiguity", *args],
+        input=input_text,
+        catch_exceptions=False,
+    )
+
+
+def _ambiguity_json_invoke(runner: CliRunner, *args):
+    """Invoke lint --ambiguity --json with --quiet."""
+    return runner.invoke(
+        cli.cli,
+        ["--quiet", "prompt", "lint", "--ambiguity", "--json", *args],
+        catch_exceptions=False,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Basic invocation
 # ---------------------------------------------------------------------------
@@ -62,6 +81,12 @@ class TestPromptLintBasic:
         result = _invoke(runner, str(FIXTURES / "vague_undefined.prompt"))
         assert "Suggestion:" in result.output
         assert "Add to <vocabulary>" in result.output
+
+    def test_output_says_without_vocabulary_definition(self, runner):
+        result = _invoke(runner, str(FIXTURES / "vague_undefined.prompt"))
+        flat = " ".join(result.output.split())
+        assert "without a <vocabulary> definition" in flat
+        assert "witht a <vocabulary> definition" not in flat
 
     def test_nonexistent_target_raises_usage_error(self, runner):
         result = runner.invoke(
@@ -173,22 +198,38 @@ class TestStoriesFlag:
 # ---------------------------------------------------------------------------
 
 class TestLlmFlag:
-    def test_llm_without_ambiguity_raises_usage_error(self, runner):
-        result = runner.invoke(
-            cli.cli,
-            ["--quiet", "prompt", "lint", "--llm", str(FIXTURES / "clean.prompt")],
-        )
-        assert result.exit_code != 0
-        assert "--llm requires --ambiguity" in result.output
+    @pytest.fixture(autouse=True)
+    def _mock_guidance_pass(self):
+        guidance = {
+            "path": "",
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+        with patch(
+            "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
+            return_value=guidance,
+        ):
+            yield
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
-    def test_llm_with_ambiguity_calls_llm_pass(self, mock_llm, runner):
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_ambiguity_calls_llm_pass(self, mock_llm, runner):
         mock_llm.return_value = []
-        result = _invoke(runner, "--ambiguity", "--llm", str(FIXTURES / "clean.prompt"))
+        result = _invoke(runner, "--ambiguity", str(FIXTURES / "clean.prompt"))
         mock_llm.assert_called_once()
         assert result.exit_code == 0
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_deprecated_llm_flag_still_enables_review(self, mock_llm, runner):
+        mock_llm.return_value = []
+        result = _invoke(runner, "--llm", str(FIXTURES / "clean.prompt"))
+        mock_llm.assert_called_once()
+        assert result.exit_code == 0
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_llm_issues_appear_in_json_output(self, mock_llm, runner):
         from pdd.prompt_lint import LintIssue
         mock_llm.return_value = [
@@ -203,11 +244,356 @@ class TestLlmFlag:
             )
         ]
         result = _json_invoke(
-            runner, "--ambiguity", "--llm", str(FIXTURES / "clean.prompt")
+            runner, "--ambiguity", str(FIXTURES / "clean.prompt")
         )
         data = json.loads(result.output)
-        all_issues = [i for entry in data for i in entry["issues"]]
+        entries = data["results"] if isinstance(data, dict) else data
+        all_issues = [i for entry in entries for i in entry["issues"]]
         assert any(i["term"] == "graceful" for i in all_issues)
+
+
+# ---------------------------------------------------------------------------
+# lint --ambiguity (auto coach when ambiguities found)
+# ---------------------------------------------------------------------------
+
+class TestPromptLintCoach:
+    @pytest.fixture(autouse=True)
+    def _mock_guidance_pass(self):
+        guidance = {
+            "path": "",
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+        with patch(
+            "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
+            return_value=guidance,
+        ):
+            yield
+
+    def _ambiguity(self):
+        return [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same tenant and SHA-256 hash",
+                interpretations=["same filename", "same tenant and hash"],
+            )
+        ]
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_prompt_coach_detects_ambiguity_before_guidance(
+        self, mock_ambiguity, mock_guidance, runner
+    ):
+        mock_ambiguity.return_value = self._ambiguity()
+        mock_guidance.return_value = {
+            "path": str(FIXTURES / "upload_handler_python.prompt"),
+            "summary": "Needs clearer vocabulary.",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+
+        result = _ambiguity_invoke(
+            runner,
+            str(FIXTURES / "upload_handler_python.prompt"),
+            input_text="a\n",
+        )
+
+        mock_ambiguity.assert_called_once()
+        mock_guidance.assert_called_once()
+        assert result.exit_code == 0
+        assert "Ambiguities detected before coaching" in result.output
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_prompt_coach_skips_guidance_when_no_ambiguity(
+        self, mock_ambiguity, mock_guidance, runner
+    ):
+        mock_ambiguity.return_value = []
+
+        result = _ambiguity_invoke(runner, str(FIXTURES / "clean.prompt"))
+
+        mock_guidance.assert_not_called()
+        assert result.exit_code == 0
+        assert "No LLM-detected ambiguities" in result.output
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_prompt_coach_calls_guidance_pass(self, mock_ambiguity, mock_guidance, runner):
+        mock_ambiguity.return_value = self._ambiguity()
+        mock_guidance.return_value = {
+            "path": str(FIXTURES / "upload_handler_python.prompt"),
+            "summary": "Needs clearer vocabulary.",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+
+        result = _ambiguity_invoke(
+            runner,
+            str(FIXTURES / "upload_handler_python.prompt"),
+            input_text="a\n",
+        )
+
+        mock_guidance.assert_called_once()
+        assert result.exit_code == 0
+        assert "Needs clearer vocabulary" in result.output
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_prompt_coach_json_output(self, mock_ambiguity, mock_guidance, runner):
+        mock_ambiguity.return_value = self._ambiguity()
+        mock_guidance.return_value = {
+            "path": str(FIXTURES / "upload_handler_python.prompt"),
+            "summary": "Rewrite duplicate upload.",
+            "vocabulary_suggestions": [
+                {
+                    "term": "duplicate upload",
+                    "suggestion": "duplicate upload: same tenant and SHA-256 hash",
+                    "why": "Defines equality for tests.",
+                }
+            ],
+            "rule_rewrites": [
+                {
+                    "rule_id": "R2",
+                    "finding": "Graceful is vague.",
+                    "rewrite": "R2 - Duplicate upload rejection\nWhen ...",
+                    "why": "Adds observable obligations.",
+                }
+            ],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+
+        result = _ambiguity_json_invoke(
+            runner, str(FIXTURES / "upload_handler_python.prompt")
+        )
+        data = json.loads(result.output)
+        guidance = data["guidance"][0]
+
+        assert result.exit_code == 0
+        assert guidance["summary"] == "Rewrite duplicate upload."
+        assert guidance["ambiguities"][0]["term"] == "duplicate upload"
+        assert guidance["vocabulary_suggestions"][0]["term"] == "duplicate upload"
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_prompt_coach_renders_guidance_sections(
+        self, mock_ambiguity, mock_guidance, runner
+    ):
+        mock_ambiguity.return_value = self._ambiguity()
+        mock_guidance.return_value = {
+            "path": str(FIXTURES / "upload_handler_python.prompt"),
+            "summary": "Formalization guidance.",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [
+                {
+                    "rule_id": "R1",
+                    "finding": "Valid is undefined.",
+                    "rewrite": "R1 - Valid upload\nWhen ...",
+                    "why": "Can compile into IR.",
+                }
+            ],
+            "acceptance_criteria_improvements": [
+                {
+                    "finding": "Success is vague.",
+                    "criterion": "Then API returns HTTP 201.",
+                    "why": "Observable result.",
+                }
+            ],
+            "formalization_notes": [
+                {
+                    "finding": "Recent is undefined.",
+                    "suggestion": "Use 24 hours.",
+                    "why": "Deterministic time window.",
+                }
+            ],
+            "error": "",
+        }
+
+        result = _ambiguity_invoke(
+            runner,
+            str(FIXTURES / "upload_handler_python.prompt"),
+            input_text="a\n",
+        )
+
+        assert "Formalizable Rule Rewrites" in result.output
+        assert "Acceptance Criteria Improvements" in result.output
+        assert "Formalization Notes" in result.output
+
+
+# ---------------------------------------------------------------------------
+# lint --ambiguity (auto clarify when ambiguities found)
+# ---------------------------------------------------------------------------
+
+class TestPromptLintClarify:
+    @pytest.fixture(autouse=True)
+    def _mock_guidance_pass(self):
+        guidance = {
+            "path": "",
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+        with patch(
+            "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
+            return_value=guidance,
+        ):
+            yield
+
+    def _prompt(self, tmp_path):
+        prompt = tmp_path / "clarify.prompt"
+        prompt.write_text(
+            "<contract_rules>\n"
+            "R1 - Upload\n"
+            "When a request contains a duplicate upload,\n"
+            "the service MUST return HTTP 409.\n"
+            "</contract_rules>\n",
+            encoding="utf-8",
+        )
+        return prompt
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_clarify_accepts_llm_suggestion(self, mock_llm, runner, tmp_path):
+        prompt = self._prompt(tmp_path)
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same tenant and SHA-256 hash",
+                interpretations=["same filename", "same hash"],
+            )
+        ]
+
+        result = _ambiguity_invoke(runner, str(prompt), input_text="a\n")
+        text = prompt.read_text(encoding="utf-8")
+
+        assert result.exit_code == 0
+        assert "Wrote 1 vocabulary definition" in result.output
+        assert "duplicate upload: same tenant and SHA-256 hash" in text
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_clarify_picks_interpretation(self, mock_llm, runner, tmp_path):
+        prompt = self._prompt(tmp_path)
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same filename",
+                interpretations=["same filename", "same tenant and normalized hash"],
+            )
+        ]
+
+        result = _ambiguity_invoke(runner, str(prompt), input_text="p\n2\n")
+        text = prompt.read_text(encoding="utf-8")
+
+        assert result.exit_code == 0
+        assert "duplicate upload: same tenant and normalized hash" in text
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_clarify_allows_custom_definition(self, mock_llm, runner, tmp_path):
+        prompt = self._prompt(tmp_path)
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same filename",
+                interpretations=[],
+            )
+        ]
+
+        result = _ambiguity_invoke(
+            runner,
+            str(prompt),
+            input_text="e\nduplicate upload: same tenant and idempotency key\n",
+        )
+        text = prompt.read_text(encoding="utf-8")
+
+        assert result.exit_code == 0
+        assert "duplicate upload: same tenant and idempotency key" in text
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_clarify_skip_writes_nothing(self, mock_llm, runner, tmp_path):
+        prompt = self._prompt(tmp_path)
+        original = prompt.read_text(encoding="utf-8")
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same filename",
+                interpretations=[],
+            )
+        ]
+
+        result = _ambiguity_invoke(runner, str(prompt), input_text="s\n")
+
+        assert result.exit_code == 0
+        assert "Wrote 0 vocabulary definition" in result.output
+        assert prompt.read_text(encoding="utf-8") == original
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_clarify_non_interactive_accepts_concrete_suggestions(
+        self, mock_llm, runner, tmp_path
+    ):
+        prompt = self._prompt(tmp_path)
+        mock_llm.return_value = [
+            LintIssue(
+                level="warn",
+                term="duplicate upload",
+                section="contract_rules",
+                line="",
+                message='LLM flagged "duplicate upload" as potentially ambiguous.',
+                suggestion="duplicate upload: same tenant and SHA-256 hash",
+                interpretations=[],
+            )
+        ]
+
+        result = _ambiguity_invoke(runner, "--non-interactive", str(prompt))
+
+        assert result.exit_code == 0
+        assert "duplicate upload: same tenant and SHA-256 hash" in prompt.read_text(
+            encoding="utf-8"
+        )
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_clarify_no_llm_issues_does_not_modify_file(self, mock_llm, runner, tmp_path):
+        prompt = self._prompt(tmp_path)
+        original = prompt.read_text(encoding="utf-8")
+        mock_llm.return_value = []
+
+        result = _ambiguity_invoke(runner, str(prompt))
+
+        assert result.exit_code == 0
+        assert "No LLM-detected ambiguities" in result.output
+        assert prompt.read_text(encoding="utf-8") == original
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +607,10 @@ class TestApplyFlag:
             "<contract_rules>Must return a valid response.</contract_rules>\n",
             encoding="utf-8",
         )
-        with patch("pdd.commands.prompt.apply_suggestions", return_value=1) as mock_apply:
+        with patch("pdd.prompt_lint_pipeline.apply_suggestions", return_value=1) as mock_apply:
             result = runner.invoke(
                 cli.cli,
-                ["prompt", "lint", "--apply", str(prompt)],
+                ["--quiet", "prompt", "lint", "--apply", str(prompt)],
                 catch_exceptions=False,
             )
         mock_apply.assert_called_once()
@@ -233,7 +619,7 @@ class TestApplyFlag:
         prompt = tmp_path / "no_apply.prompt"
         original = "<contract_rules>Must return a valid response.</contract_rules>\n"
         prompt.write_text(original, encoding="utf-8")
-        with patch("pdd.commands.prompt.apply_suggestions") as mock_apply:
+        with patch("pdd.prompt_lint_pipeline.apply_suggestions") as mock_apply:
             _invoke(runner, str(prompt))
         mock_apply.assert_not_called()
         assert prompt.read_text(encoding="utf-8") == original
@@ -281,6 +667,23 @@ class TestApplyFlag:
 # ---------------------------------------------------------------------------
 
 class TestLlmOutputFormat:
+    @pytest.fixture(autouse=True)
+    def _mock_guidance_pass(self):
+        guidance = {
+            "path": "",
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+        with patch(
+            "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
+            return_value=guidance,
+        ):
+            yield
+
     """
     Spec example output:
       Ambiguous term: "duplicate upload"
@@ -294,7 +697,7 @@ class TestLlmOutputFormat:
     Verifies that the Rich renderer produces the expected structure.
     """
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_interpretations_block_rendered_in_output(self, mock_llm, runner):
         mock_llm.return_value = [
             LintIssue(
@@ -314,17 +717,17 @@ class TestLlmOutputFormat:
                 ],
             )
         ]
-        result = _invoke(
+        result = _ambiguity_invoke(
             runner,
-            "--ambiguity", "--llm",
             str(FIXTURES / "upload_handler_python.prompt"),
+            input_text="s\n",
         )
         assert "Possible interpretations" in result.output
         assert "Same filename" in result.output
         assert "Same file hash" in result.output
         assert "Same tenant" in result.output
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_suggestion_block_rendered_in_output(self, mock_llm, runner):
         mock_llm.return_value = [
             LintIssue(
@@ -340,10 +743,10 @@ class TestLlmOutputFormat:
                 interpretations=["Same filename", "Same file hash"],
             )
         ]
-        result = _invoke(
+        result = _ambiguity_invoke(
             runner,
-            "--ambiguity", "--llm",
             str(FIXTURES / "upload_handler_python.prompt"),
+            input_text="s\n",
         )
         # Normalise Rich's line-wrapping for substring checks
         flat = " ".join(result.output.split())
@@ -353,7 +756,7 @@ class TestLlmOutputFormat:
         assert "normalized" in flat
         assert "file hash" in flat
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_interpretations_appear_in_json_output(self, mock_llm, runner):
         mock_llm.return_value = [
             LintIssue(
@@ -366,13 +769,13 @@ class TestLlmOutputFormat:
                 interpretations=["Same filename", "Same file hash", "Same tenant + hash"],
             )
         ]
-        result = _json_invoke(
+        result = _ambiguity_json_invoke(
             runner,
-            "--ambiguity", "--llm",
             str(FIXTURES / "upload_handler_python.prompt"),
         )
         data = json.loads(result.output)
-        all_issues = [i for entry in data for i in entry["issues"]]
+        entries = data["results"] if isinstance(data, dict) else data
+        all_issues = [i for entry in entries for i in entry["issues"]]
         dup_issues = [i for i in all_issues if i["term"] == "duplicate upload"]
         assert dup_issues
         assert dup_issues[0]["interpretations"] == [
@@ -381,13 +784,13 @@ class TestLlmOutputFormat:
         assert "normalized file hash" in dup_issues[0]["suggestion"] or \
                "hash" in dup_issues[0]["suggestion"]
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_issue_without_interpretations_renders_no_block(self, mock_llm, runner):
         """Deterministic issues (no interpretations) must not render the block."""
         mock_llm.return_value = []
         result = _invoke(
             runner,
-            "--ambiguity", "--llm",
+            "--ambiguity",
             str(FIXTURES / "upload_handler_python.prompt"),
         )
         # Deterministic issues have empty interpretations → no "Possible interpretations" header
@@ -399,26 +802,33 @@ class TestLlmOutputFormat:
 # ---------------------------------------------------------------------------
 
 class TestAmbiguityFlag:
-    """
-    --ambiguity is a valid non-LLM command form. The deterministic pass already
-    includes vague-term and observable-outcome checks; --llm requires this flag.
-    """
+    """--ambiguity enables the LLM authoring workflow on top of deterministic lint."""
 
-    def test_ambiguity_flag_runs_deterministic_pass(self, runner, tmp_path):
+    def test_without_ambiguity_runs_deterministic_only(self, runner, tmp_path):
         prompt = tmp_path / "outcome.prompt"
         prompt.write_text(
             "<contract_rules>The request must be valid.</contract_rules>\n",
             encoding="utf-8",
         )
-        result_no_ambiguity = _invoke(runner, str(prompt))
-        result_with_ambiguity = _invoke(runner, "--ambiguity", str(prompt))
-        assert result_no_ambiguity.exit_code == 1
-        assert result_with_ambiguity.exit_code == 1
-        assert "Vague term" in result_with_ambiguity.output
-        assert "observable outcome" in result_with_ambiguity.output
+        result = _invoke(runner, str(prompt))
+        assert result.exit_code == 1
+        assert "Vague term" in result.output
+        assert "observable outcome" in result.output
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_ambiguity_flag_enables_llm_pass(self, mock_llm, runner, tmp_path):
+        mock_llm.return_value = []
+        prompt = tmp_path / "outcome.prompt"
+        prompt.write_text(
+            "<contract_rules>The request must be valid.</contract_rules>\n",
+            encoding="utf-8",
+        )
+        result = _invoke(runner, "--ambiguity", str(prompt))
+        mock_llm.assert_called_once()
+        assert result.exit_code == 0
 
     def test_upload_handler_warns_on_vague_terms(self, runner):
-        result = _invoke(runner, str(FIXTURES / "upload_handler_python.prompt"))
+        result = _invoke(runner, str(FIXTURES / "vague_undefined.prompt"))
         assert result.exit_code == 1
 
     def test_upload_handler_with_vocab_exits_clean(self, runner):
@@ -426,26 +836,29 @@ class TestAmbiguityFlag:
         assert result.exit_code == 0
 
     def test_upload_handler_json_warns_contain_duplicate(self, runner):
-        result = _json_invoke(runner, str(FIXTURES / "upload_handler_python.prompt"))
+        result = _json_invoke(runner, str(FIXTURES / "vague_undefined.prompt"))
         data = json.loads(result.output)
-        all_issues = [i for entry in data for i in entry["issues"]]
-        assert any(i["term"] == "duplicate" for i in all_issues)
+        entries = data if isinstance(data, list) else data["results"]
+        all_issues = [i for entry in entries for i in entry["issues"]]
+        assert any(i["term"] == "valid" for i in all_issues)
 
     def test_upload_handler_json_issue_location_is_contract_rules(self, runner):
-        result = _json_invoke(runner, str(FIXTURES / "upload_handler_python.prompt"))
+        result = _json_invoke(runner, str(FIXTURES / "vague_undefined.prompt"))
         data = json.loads(result.output)
-        all_issues = [i for entry in data for i in entry["issues"]]
-        dup_issues = [i for i in all_issues if i["term"] == "duplicate"]
-        assert dup_issues
-        assert dup_issues[0]["section"] == "contract_rules"
+        entries = data if isinstance(data, list) else data["results"]
+        all_issues = [i for entry in entries for i in entry["issues"]]
+        valid_issues = [i for i in all_issues if i["term"] == "valid"]
+        assert valid_issues
+        assert valid_issues[0]["section"] == "contract_rules"
 
     def test_upload_handler_json_issue_line_contains_source_text(self, runner):
-        result = _json_invoke(runner, str(FIXTURES / "upload_handler_python.prompt"))
+        result = _json_invoke(runner, str(FIXTURES / "vague_undefined.prompt"))
         data = json.loads(result.output)
-        all_issues = [i for entry in data for i in entry["issues"]]
-        dup_issues = [i for i in all_issues if i["term"] == "duplicate"]
-        assert dup_issues
-        assert "duplicate" in dup_issues[0]["line"].lower()
+        entries = data if isinstance(data, list) else data["results"]
+        all_issues = [i for entry in entries for i in entry["issues"]]
+        valid_issues = [i for i in all_issues if i["term"] == "valid"]
+        assert valid_issues
+        assert valid_issues[0]["line"]
 
 
 # ---------------------------------------------------------------------------

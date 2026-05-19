@@ -122,15 +122,15 @@ diff "$VAGUE" "$TMPFILE" | head -30 || true
 rm "$TMPFILE"
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "⑧ Optional LLM ambiguity review  (--ambiguity --llm)"
+hdr "⑧ Optional LLM ambiguity review  (--ambiguity)"
 echo "Requires a configured LLM provider. Skip this step if no API key is set."
 echo "Shows 'Possible interpretations' and richer suggestions per term."
 echo
-echo "▶  $PDD prompt lint --ambiguity --llm $VAGUE"
-echo "   (skipping live call in demo — use the command above manually)"
+echo "▶  $PDD prompt lint --ambiguity $VAGUE"
+echo "   (skipping live call in demo — coach + clarify run automatically when needed)"
 
 # ─────────────────────────────────────────────────────────────────────────────
-hdr "⑨ --strict mode — exit 2 for CI hard-failure"
+hdr "⑩ --strict mode — exit 2 for CI hard-failure"
 echo "Escalates all warnings to errors. Useful as a pre-commit / CI gate."
 echo
 echo "▶  $PDD prompt lint --strict $VAGUE"

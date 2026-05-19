@@ -1,244 +1,390 @@
-# Prompt lint for ambiguous contracts
+# Prompt Lint
 
-`pdd prompt lint` checks prompt contracts and user-story acceptance criteria for
-undefined vague terms. The default pass is deterministic, does not call an LLM,
-and does not modify files — safe to use in CI.
+`pdd prompt lint` checks prompt files and user stories for ambiguity that makes
+requirements hard to test, implement, or formalize. Its default mode is
+deterministic: it does not call an LLM, does not modify files, and is safe to
+use in CI.
 
-## Quick start
+The command is about **prompt/story authoring quality**, not source-code lint.
+For Python source lint command discovery, see `pdd/get_lint_commands.py`. For
+contract rule structure and coverage, use `pdd contracts check` and
+`pdd coverage --contracts`.
+
+## Implementation Boundary
+
+`pdd/prompt_lint.py` and `pdd/prompt_lint_pipeline.py` implement `pdd prompt lint`.
+Product code and tests should use those modules and the single CLI command under
+`pdd prompt`.
+
+The LLM ambiguity prompt is `pdd/prompts/prompt_lint_LLM.prompt`. The
+formalization coach prompt is `pdd/prompts/prompt_guidance_LLM.prompt`.
+Keep this document synchronized with those `.prompt` files when changing
+the authoring workflow, expected JSON fields, or clarify/coaching behavior.
+
+`examples/prompt_lint_demo/` is the runnable demo for this workflow.
+
+## One Command, Layered Depth
+
+All authoring modes run through `pdd prompt lint`. Deterministic checks always
+run first; pass `--ambiguity` for the LLM authoring workflow.
+
+| Depth | Flags | LLM? | Purpose |
+|-------|-------|------|---------|
+| 0 — CI gate | *(none)* or `--strict` | No | Vague terms, missing vocabulary, weak outcomes, story criteria |
+| 1 — Ambiguity review | `--ambiguity` | Yes | Advisory interpretations; auto coach + clarify when ambiguities are found |
+
+The deterministic layer is the gate. LLM layers are local authoring aids only.
+
+## Quick Start
 
 ```bash
 # Scan one prompt file.
 pdd prompt lint prompts/foo_python.prompt
 
-# Scan all *.prompt files in a directory (recursive).
+# Scan all *.prompt files in a directory recursively.
 pdd prompt lint prompts/
 
-# Scan a directory of user stories.
+# Scan user stories.
 pdd prompt lint --stories user_stories/
 
-# Scan a prompt and its stories together.
+# Scan one prompt and a story directory together.
 pdd prompt lint --stories user_stories/ prompts/foo_python.prompt
 
-# Run the deterministic ambiguity pass explicitly.
-pdd prompt lint --ambiguity prompts/foo_python.prompt
-
-# Emit JSON (stdout only — informational messages go to stderr).
+# Emit machine-readable JSON.
 pdd prompt lint --json prompts/foo_python.prompt
 
-# Escalate all warnings to errors (CI gate).
+# Treat warnings as errors for CI.
 pdd prompt lint --strict prompts/foo_python.prompt
 
-# Run the optional LLM ambiguity review.
-pdd prompt lint --ambiguity --llm prompts/foo_python.prompt
+# LLM ambiguity review (coaching + clarification run automatically when needed).
+pdd prompt lint --ambiguity prompts/foo_python.prompt
 
-# Write vocabulary suggestions back into the file.
-pdd prompt lint --ambiguity --llm --apply prompts/foo_python.prompt
+# Apply concrete vocabulary suggestions. Read-only unless --apply is passed.
+pdd prompt lint --ambiguity --apply prompts/foo_python.prompt
+
+# Accept LLM vocabulary suggestions without interactive prompts.
+pdd prompt lint --ambiguity --non-interactive prompts/foo_python.prompt
+
+# JSON includes results and guidance when ambiguities are found.
+pdd prompt lint --ambiguity --json prompts/foo_python.prompt
 ```
+
+## Paths
+
+Example commands use paths relative to your repo. If a path is missing:
+
+| Example path | Try instead |
+|--------------|-------------|
+| `prompts/refund_payment_python.prompt` | `tests/fixtures/contract_compile/refund_payment_python.prompt` |
+| `prompts/foo_python.prompt` | `examples/prompt_lint_demo/prompts/payment_api_vague_python.prompt` |
+
+## CI vs Authoring
+
+| Context | Command |
+|---------|---------|
+| CI / pre-commit | `pdd prompt lint --strict <target>` |
+| Local ambiguity review | `pdd prompt lint --ambiguity <target>` |
+
+Do not pass `--ambiguity` in CI unless you explicitly want non-deterministic LLM
+checks in that job.
 
 Exit codes:
 
 | Code | Meaning |
 |------|---------|
-| `0`  | No issues |
-| `1`  | Warnings present (and `--strict` not set) |
-| `2`  | Errors present, OR any warning when `--strict` is set |
+| `0` | No issues |
+| `1` | Warnings found |
+| `2` | Errors found, or any issue with `--strict` |
 
-## Argument syntax
+## What It Checks
 
-```
+The deterministic linter checks prompt/story text for objective authoring
+problems:
+
+- known vague terms without vocabulary definitions
+- acceptance criteria that depend on undefined terms
+- contract rules or criteria with undefined vague terms but no observable outcome
+- story `## Covers`, `## Glossary`, and `## Definitions` terms that can suppress warnings
+- legacy safety: files without recognized contract/story sections do not fail
+
+It does not judge whether the whole prompt is “good.” That broader guidance is
+what the optional LLM review is for.
+
+## What It Does Not Check
+
+`pdd prompt lint` is not:
+
+- a source-code linter like `ruff` or `mypy`
+- a full contract structure validator
+- a rule-to-test coverage matrix
+- a formal verifier
+- an LLM writing coach by default
+
+Use related tools for those jobs:
+
+| Need | Tool |
+|------|------|
+| Source-code lint commands | `pdd/get_lint_commands.py` and workflow lint steps |
+| Contract rule syntax, rule IDs, modals, waivers | `pdd contracts check` |
+| Rule/story/test coverage matrix | `pdd coverage --contracts` |
+| LLM ambiguity, coaching, and clarification | `pdd prompt lint --ambiguity` |
+
+## Argument Syntax
+
+```text
 pdd prompt lint [OPTIONS] [TARGET]
 ```
 
-`TARGET` is optional when `--stories` is supplied; required otherwise.
-It may be a single `.prompt` file or a directory — directories are scanned
+`TARGET` may be one `.prompt` file or a directory. Directories are scanned
 recursively for `*.prompt` files.
 
-`--stories` always takes a **directory** of `story__*.md` files, never a
-prompt path. Story files are scanned **recursively** — subdirectories are
-included automatically. To scan both a prompt and stories together, keep them
-as separate arguments:
+`TARGET` is optional only when `--stories` is supplied.
+
+`--stories` always takes a directory containing `story__*.md` files:
 
 ```bash
-# Correct — story directory after --stories, prompt as TARGET
-pdd prompt lint --stories user_stories/prompt_lint_samples/ prompts/foo_python.prompt
+# Correct: --stories receives a story directory, TARGET receives the prompt.
+pdd prompt lint --stories user_stories/ prompts/foo_python.prompt
 
-# Wrong — passes the prompt path as the --stories value
-pdd prompt lint --stories user_stories/prompt_lint_samples/prompts/foo_python.prompt
+# Wrong: --stories receives a prompt path.
+pdd prompt lint --stories user_stories/prompts/foo_python.prompt
 ```
 
-## Vague terms
+## Prompt And Markdown Scope
 
-The linter maintains hardcoded vocabularies of terms that are commonly
-under-specified in contracts. Default mode checks this core list:
+`pdd prompt lint` has two file scopes:
 
-`active`, `authorized`, `complete`, `duplicate`, `graceful`, `inactive`, `invalid`,
-`reasonable`, `recent`, `safe`, `successful`, `trusted`, `unauthorized`,
-`unsafe`, `untrusted`, `valid`
+- `.prompt` files are scanned from `TARGET`.
+- `story__*.md` files are scanned only from the directory passed to `--stories`.
 
-`--strict` also checks this extended list:
+Ordinary Markdown documentation such as `README.md`, PRDs, design docs, and this
+file are not scanned by `pdd prompt lint` unless they are named `story__*.md`
+inside the story directory. A prompt may still `<include>` Markdown docs for
+generation or sync workflows, but prompt lint does not expand those includes and
+does not try to keep included docs synchronized.
 
-`appropriate`, `correct`, `expected`, `incomplete`, `incorrect`, `necessary`,
-`normal`, `proper`, `sufficient`, `unexpected`
+When `--ambiguity` writes accepted definitions, it writes to the scanned
+`.prompt` file's `<vocabulary>` block. Story Markdown is used as lint input for
+acceptance criteria and vocabulary sources (`## Covers`, `## Glossary`,
+`## Definitions`); the current authoring write-back path is prompt-focused.
 
-Terms are matched as whole words. For example, `graceful` is checked, but the
-word `gracefully` is not a match unless an LLM review flags it.
+## Scanned Sections
 
-## Sections scanned
+Prompt files:
 
-### Scanned sections (prompt files)
+| Section | Purpose |
+|---------|---------|
+| `<contract_rules>` | Behavioral obligations |
+| `<requirements>` | Functional requirements |
+| `<acceptance_tests>` | Acceptance-test criteria |
+| `%` prose lines | PDD prompt comments, only when the prompt also has a contract-like section |
 
-| Section tag | Example |
-|-------------|---------|
-| `<contract_rules>` | Numbered rules the implementation must satisfy |
-| `<requirements>` | Bullet-point functional requirements |
-| `<acceptance_tests>` | Explicit acceptance test criteria |
-| `% prose lines` | Any line beginning with `%` (PDD comment convention) |
+Story files:
 
-### Scanned sections (story / markdown files)
+| Section | Purpose |
+|---------|---------|
+| `## Acceptance Criteria` | Story pass/fail criteria |
 
-| Markdown heading | Example |
-|------------------|---------|
-| `## Acceptance Criteria` | Gherkin-style acceptance criteria |
+The following are intentionally not scanned as behavioral contract text:
 
-### Not scanned (architecture metadata)
+```text
+<pdd-reason>
+<pdd-interface>
+<pdd-dependency>
+<waivers>
+<deliverables>
+<dependencies>
+```
 
-The following sections are intentionally excluded — they describe structure,
-not observable behaviour, so vague terms inside them do not raise warnings:
+## Vocabulary Sources
 
-`<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`,
-`<waivers>`, `<deliverables>`, `<dependencies>`
+Defined terms suppress vague-term warnings. The linter recognizes definitions
+from:
 
-Prompts that contain none of the scanned sections (legacy format) produce zero
-issues and are silently skipped.
+| Source | Typical file |
+|--------|--------------|
+| `<vocabulary>` | `.prompt` files |
+| `## Glossary` | story markdown |
+| `## Definitions` | story markdown |
+| `## Covers` | story markdown |
 
-## Vocabulary sources
+Definition extraction is intentionally generous. A definition like:
 
-Defining a term suppresses its warning wherever it appears in scanned sections.
-Any of these sources are recognised:
+```text
+- valid response: HTTP 200 with non-empty data
+```
 
-| Source | Used in |
-|--------|---------|
-| `<vocabulary>` block | Prompt files |
-| `## Glossary` heading | Story files |
-| `## Definitions` heading | Story files |
-| `## Covers` heading | Story files |
+marks both `valid response` and `valid` as defined.
 
-Term extraction is generous: when you define `valid response`, both the full
-phrase `valid response` **and** the individual word `valid` are treated as
-known, so a rule that uses `valid` anywhere is suppressed.
-
-### Cross-module `## Covers` entries
-
-Stories may reference rules from other prompt files using the `#rule-id`
-format. The descriptive text after the colon is extracted as a known phrase:
+Cross-module story covers are also recognized:
 
 ```md
 ## Covers
 - prompts/payment_python.prompt#R3: No provider call before validation
 ```
 
-## Observable-outcome check
+## Vague Terms
 
-For `<contract_rules>`, `<acceptance_tests>`, and `## Acceptance Criteria`
-sections only, the linter also checks whether each line that contains an
-undefined vague term includes at least one observable outcome verb. If it does
-not, an additional `(no observable outcome)` warning is emitted.
+Default mode checks the core terms most likely to hide contract ambiguity:
 
-Observable outcome verbs include: `return`, `raise`, `write`, `emit`, `log`,
-`exit`, `reject`, `produce`, `store`, `increment`, `decrement`, `set`, `clear`,
-`yield`, `throw`, `save`, `delete`, `output`, `append`, `insert`, `update`,
-`remove`, `send`, `publish` (and common inflections of each).
+```text
+active
+authorized
+complete
+duplicate
+graceful
+inactive
+invalid
+reasonable
+recent
+safe
+successful
+trusted
+unauthorized
+unsafe
+untrusted
+valid
+```
 
-Note: `<requirements>` and `% prose` sections are scanned for vague terms but
-do **not** trigger the observable-outcome check.
+`--strict` also checks broader words that can be noisy in normal prose:
 
-## Prompt example
+```text
+appropriate
+correct
+expected
+incomplete
+incorrect
+necessary
+normal
+proper
+sufficient
+unexpected
+```
+
+Terms are matched as whole words. For example, deterministic mode catches
+`graceful`, but not `gracefully`.
+
+## Observable Outcomes
+
+For `<contract_rules>`, `<acceptance_tests>`, and `## Acceptance Criteria`, the
+linter adds a second warning when a line has an undefined vague term and no
+observable outcome verb.
+
+Observable verbs include common forms of:
+
+```text
+return, raise, write, emit, log, exit, reject, produce, store,
+increment, decrement, set, clear, yield, throw, save, delete,
+output, append, insert, update, remove, send, publish
+```
+
+Example:
+
+```text
+Only authorized users may call this endpoint.
+```
+
+This flags:
+
+- `authorized` is undefined
+- no observable outcome is stated
+
+Better:
+
+```text
+When the caller lacks an unexpired token with scope="upload:write",
+the endpoint MUST return HTTP 403 and MUST NOT write an upload record.
+```
+
+## Prompt Example
+
+Problematic prompt:
 
 ```text
 <contract_rules>
-1. The function must return a valid response within a reasonable time.
-2. Duplicate requests must be rejected gracefully.
-3. Only authorized users may call this endpoint.
-</contract_rules>
+R1 - Upload validation
+The service MUST accept valid uploads from active users.
 
-<requirements>
-- Accept file uploads from active users only.
-- Mark complete when all required fields are present.
-</requirements>
+R2 - Duplicate upload
+Duplicate uploads must be rejected gracefully.
+</contract_rules>
 ```
 
-Running `pdd prompt lint prompts/foo_python.prompt` against this produces:
+Deterministic findings:
 
-- Warnings for `valid`, `reasonable`, `duplicate`, `authorized`, `active`, and
-  `complete` (all undefined core vague terms).
-- An extra `(no observable outcome)` warning for rule 3 — it uses `authorized`
-  but has no observable verb such as `returns` or `rejects`.
-- A `suggestion` entry for each term, ready to paste into `<vocabulary>`.
+- `valid` is undefined
+- `active` is undefined
+- `duplicate` is undefined
+- `R1` has no precise observable outcome
 
-No warnings for rule 2 — `rejected` is an observable outcome verb, so the
-observable-outcome check passes even though `duplicate` is still flagged as
-vague. The word `gracefully` is not flagged by the deterministic default pass
-because the core term is `graceful`.
-
-### Fixing the warnings with `<vocabulary>`
+Improved prompt:
 
 ```text
 <vocabulary>
-- valid response: HTTP 200 with a JSON body containing a non-empty "data" field
-- reasonable time: completes within 500 ms at p99 under standard load
-- duplicate request: a request whose idempotency key matches a previously accepted request within the last 24 hours
-- graceful rejection: returns HTTP 409 with a JSON error body {"code":"DUPLICATE","message":"..."}
-- authorized user: a user whose JWT token is present, unexpired, and carries the "write" scope
-- active user: a user whose account.status field equals "active" in the accounts table
-- complete: all required fields (name, email, role) are non-empty strings
+- valid upload: a file whose MIME type is in the allowlist and whose size is at most 10 MB
+- active user: a user whose account.status field equals "active"
+- duplicate upload: an upload whose tenant ID and SHA-256 hash match a previously accepted upload
 </vocabulary>
+
+<contract_rules>
+R1 - Upload validation
+When a request contains a valid upload from an active user,
+the service MUST return HTTP 201 and MUST write one upload record.
+
+R2 - Duplicate upload
+When a request is a duplicate upload,
+the service MUST return HTTP 409 and MUST NOT write a new upload record.
+</contract_rules>
 ```
 
-After adding this block, the same prompt produces zero issues in default mode.
+## Story Example
 
-## Story example
+Problematic story:
 
 ```md
 ## Acceptance Criteria
-1. Given an authorized user, when they upload a valid file, the server returns HTTP 201.
-2. Given a duplicate upload, when submitted by the same tenant, the server returns HTTP 409.
-3. Given an active user who has reached their limit, when they upload, the server returns HTTP 429.
-
-## Covers
-- authorized user: a user whose Bearer JWT is present, unexpired, and carries the "upload" scope
-- valid file: a file whose MIME type is in the allowlist and whose size is ≤ 10 MB
-- duplicate upload: an upload whose SHA-256 hash and tenant ID match a previously accepted upload
-- active user: a user whose account.status field equals "active" in the accounts table
+- Given an authorized user uploads a valid file, then upload succeeds.
+- Given a duplicate upload, then it is handled gracefully.
 ```
 
-Running `pdd prompt lint --stories <directory-containing-this-story>` produces
-zero issues in default mode — all core vague terms in the acceptance criteria
-are defined in `## Covers`.
+Improved story:
 
-Without the `## Covers` section, `authorized`, `valid`, `duplicate`, and
-`active` would each produce a warning.
+```md
+## Acceptance Criteria
+- Given a Bearer JWT with scope="upload:write" and exp in the future,
+  when a user uploads a file whose MIME type is image/png and size is 2 MB,
+  then the server returns HTTP 201 and writes one upload record.
 
-## JSON output
+- Given an upload whose tenant ID and SHA-256 hash match a previously accepted upload,
+  when the same tenant submits it again,
+  then the server returns HTTP 409 and writes no new upload record.
+
+## Covers
+- authorized user: a user with a Bearer JWT whose exp is in the future and whose scope includes "upload:write"
+- valid file: a file whose MIME type is in the allowlist and whose size is at most 10 MB
+- duplicate upload: an upload whose tenant ID and SHA-256 hash match a previously accepted upload
+```
+
+## JSON Output
 
 ```bash
 pdd prompt lint --json prompts/foo_python.prompt
-pdd prompt lint --json --stories user_stories/prompt_lint_samples/
 ```
 
-Output is a JSON array. Each element corresponds to one file:
+Output is a JSON array, one entry per scanned file:
 
 ```json
 [
   {
     "path": "prompts/foo_python.prompt",
-    "warn_count": 7,
+    "warn_count": 1,
     "error_count": 0,
     "issues": [
       {
         "level": "warn",
         "term": "valid",
         "section": "contract_rules",
-        "line": "1. The function must return a valid response within a reasonable time.",
+        "line": "The service MUST accept valid uploads from active users.",
         "message": "Vague term \"valid\" used in [contract_rules] without a <vocabulary> definition.",
         "suggestion": "valid: <add a precise, observable definition here>",
         "interpretations": []
@@ -248,32 +394,37 @@ Output is a JSON array. Each element corresponds to one file:
 ]
 ```
 
-`--json` writes only the JSON array to **stdout**; all informational messages
-(e.g. update checks) go to **stderr**, so the output is safe to pipe or parse
-without filtering.
+Deterministic findings always use an empty `interpretations` list. LLM findings
+may populate it.
 
-## `--strict` mode
+## Strict Mode
 
 ```bash
 pdd prompt lint --strict prompts/foo_python.prompt
 ```
 
-Escalates every warning to an error and exits with code 2 if any issue is
-found. Use as a hard CI gate when you want to enforce zero vague-term debt.
+`--strict` does two things:
 
-## Optional LLM pass
+- escalates findings to errors
+- enables the extended vague-term list
 
-The LLM pass is opt-in and requires both flags:
+Use this for a hard CI gate when prompt ambiguity debt must be zero.
+
+## Optional LLM Ambiguity Review
 
 ```bash
-pdd prompt lint --ambiguity --llm prompts/foo_python.prompt
+pdd prompt lint --ambiguity prompts/foo_python.prompt
 ```
 
-`--ambiguity` is valid by itself and runs the deterministic pass. The additional
-LLM review is only run when both `--ambiguity` and `--llm` are supplied. Using
-`--llm` without `--ambiguity` is an error.
+The LLM pass is advisory. It can identify contextual ambiguity that deterministic
+term matching cannot reliably catch:
 
-The LLM pass may return richer suggestions and possible interpretations:
+- multi-word phrases such as `duplicate upload`
+- weak definitions that exist but are still not precise
+- bundled requirements that should be split
+- missing fixtures, state, or oracle details in acceptance criteria
+
+Example LLM output:
 
 ```text
 Possible interpretations:
@@ -285,49 +436,159 @@ Suggestion: Add to <vocabulary>:
   duplicate upload: an upload whose tenant ID and normalized file hash match a previously accepted upload
 ```
 
-The `interpretations` field in JSON output is populated only by the LLM pass;
-the deterministic pass always returns an empty array.
+Important properties:
 
-LLM failures are non-fatal — the deterministic pass remains the CI-safe
-baseline.
+- `--ambiguity` enables the LLM pass; coaching and clarification follow automatically when ambiguities are found
+- LLM failures are non-fatal
+- deterministic lint remains the CI baseline
+- LLM output should be reviewed by a human
 
-## Applying suggestions (`--apply`)
+## Formalization Coaching (automatic)
 
-The linter is read-only by default. Pass `--apply` to write suggestions back:
+When the LLM ambiguity pass finds issues, coaching runs automatically before
+clarification. If no ambiguous terms or phrases are found, coaching is skipped.
 
-```bash
-pdd prompt lint --ambiguity --llm --apply prompts/foo_python.prompt
+Coaching suggests:
+
+- precise `<vocabulary>` additions
+- formalizable `<contract_rules>` rewrites with stable IDs
+- acceptance-criteria improvements with observable outcomes
+- notes explaining why each change helps reproducibility or future formal verification
+
+With `--json`, output includes both lint `results` and a `guidance` array:
+
+```json
+{
+  "results": [],
+  "guidance": [
+    {
+      "path": "prompts/foo_python.prompt",
+      "summary": "The prompt needs clearer duplicate-upload semantics.",
+  "vocabulary_suggestions": [
+    {
+      "term": "duplicate upload",
+      "suggestion": "duplicate upload: an upload whose tenant ID and SHA-256 hash match a previously accepted upload",
+      "why": "Defines the equality relation used by code and tests."
+    }
+  ],
+  "rule_rewrites": [],
+  "acceptance_criteria_improvements": [],
+      "formalization_notes": [],
+      "error": ""
+    }
+  ]
+}
 ```
 
-`--apply` appends entries to the file's `<vocabulary>` block (creating one at
-the end of the file if absent). It writes only **concrete** suggestions — LLM-
-supplied definitions with real content. Placeholder suggestions from the
-deterministic pass (`valid: <add a precise, observable definition here>`) are
-shown for review but never written automatically.
-
-`--apply` may be combined with or without `--llm`. Without `--llm`, the current
-deterministic suggestions are placeholders, so nothing is written.
-
-## Fixture files and demo
-
-The repository ships runnable fixtures under `tests/fixtures/prompt_lint/`:
-
-| File | Description |
-|------|-------------|
-| `vague_undefined.prompt` | Vague terms with no vocabulary — produces warnings |
-| `vague_defined.prompt` | Same terms, all defined — produces zero issues |
-| `clean.prompt` | Concrete, observable language throughout — zero issues |
-| `upload_handler_python.prompt` | Real-world upload handler with flagged terms |
-| `upload_handler_with_vocab_python.prompt` | Same handler with full vocabulary — zero issues |
-| `story__vague_criteria.md` | Story with undefined vague acceptance criteria |
-| `story__covers.md` | Same story with `## Covers` definitions — zero issues |
-
-A standalone demo script is also available:
+After coaching during authoring, run deterministic gates:
 
 ```bash
-bash examples/prompt_lint_demo/demo.sh
+pdd prompt lint --strict prompts/foo_python.prompt
+pdd contracts check prompts/foo_python.prompt
+pdd coverage --contracts prompts/foo_python.prompt
+pdd contracts compile --json prompts/foo_python.prompt
 ```
 
-The demo covers: deterministic prompt linting, vocabulary suppression, story
-linting, JSON output, read-only guarantee, `--apply`, optional LLM review, and
-strict mode.
+## Interactive Clarification (automatic)
+
+After coaching, when ambiguities were found, the command prompts you to resolve
+each term (unless `--non-interactive` or `--json` is set):
+
+```bash
+pdd prompt lint --ambiguity prompts/foo_python.prompt
+pdd prompt lint --ambiguity --non-interactive prompts/foo_python.prompt
+```
+
+The clarification loop:
+
+1. Runs the LLM ambiguity detector.
+2. Shows each ambiguous term, possible interpretations, and suggested definition.
+3. Lets the author accept, pick an interpretation, enter a custom definition, or skip.
+4. Writes accepted definitions to `<vocabulary>`.
+5. Reruns deterministic `prompt lint`, `contracts check`, and `contracts compile` summaries.
+
+Use this when the LLM can identify ambiguity but only the author can choose the
+intended meaning. `--non-interactive` accepts concrete LLM suggestions without
+prompting, but it still writes only vocabulary definitions; it does not rewrite
+contract rules.
+
+Example interaction:
+
+```text
+Ambiguous term: duplicate upload
+Possible interpretations:
+  1. Same filename
+  2. Same file hash
+  3. Same tenant ID and normalized file hash
+Suggested definition: duplicate upload: an upload whose tenant ID and normalized file hash match a previously accepted upload
+Choose: [a]ccept suggestion, [p]ick interpretation, [e]dit, [s]kip
+```
+
+## Applying Suggestions
+
+The linter is read-only by default.
+
+```bash
+pdd prompt lint --ambiguity --apply prompts/foo_python.prompt
+```
+
+`--apply` appends concrete suggestions to `<vocabulary>`, creating the block if
+needed. Placeholder deterministic suggestions such as:
+
+```text
+valid: <add a precise, observable definition here>
+```
+
+are never written automatically.
+
+## Formalizability Guidance
+
+Prompt lint is not a formal verifier, but it helps make prompts formalizable.
+A rule is easier to compile into tests or formal checks when it has:
+
+- a stable rule ID
+- defined domain terms
+- a clear condition
+- a modal verb (`MUST`, `MUST NOT`, `SHOULD`)
+- an observable outcome
+- explicit forbidden outcomes for negative rules
+
+Weak:
+
+```text
+The system should handle recent duplicate uploads gracefully.
+```
+
+Better:
+
+```text
+R3 - Duplicate upload rejection
+When an upload has the same tenant ID and SHA-256 hash as an accepted upload
+created within the last 24 hours,
+the service MUST return HTTP 409 and MUST NOT write a new upload record.
+```
+
+Use `pdd contracts check` for stricter contract syntax checks and
+`pdd coverage --contracts` to see whether rule IDs are covered by stories,
+tests, or waivers. Use `pdd contracts compile` when rules should become
+machine-readable contract IR for future verification adapters.
+
+## Fixtures
+
+Runnable fixtures live under `tests/fixtures/prompt_lint/`:
+
+| File | Purpose |
+|------|---------|
+| `vague_undefined.prompt` | Undefined vague terms |
+| `vague_defined.prompt` | Same terms with vocabulary definitions |
+| `clean.prompt` | Concrete prompt with no findings |
+| `upload_handler_python.prompt` | Realistic vague upload handler |
+| `upload_handler_with_vocab_python.prompt` | Upload handler with vocabulary |
+| `story__vague_criteria.md` | Story with vague acceptance criteria |
+| `story__covers.md` | Story with `## Covers` definitions |
+
+Useful test command:
+
+```bash
+pytest tests/test_prompt_lint.py tests/commands/test_prompt.py tests/commands/test_prompt_comprehensive.py -q
+```

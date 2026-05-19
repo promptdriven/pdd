@@ -614,6 +614,9 @@ graph TB
 - **[`crash`](#12-crash)**: Fixes errors in a code module and its calling program that caused a crash
 
 ### Prompt Management
+- **`prompt lint`**: Checks prompts and stories for vague terms, missing vocabulary, and weak outcomes; `--ambiguity` runs LLM review with automatic coaching and clarification when ambiguities are found
+- **`contracts check`**: Deterministically checks contract structure, rule IDs, modal verbs, coverage references, and waivers
+- **`contracts compile`**: Compiles parseable `<contract_rules>` into JSON contract IR for future verification adapters
 - **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
@@ -628,6 +631,23 @@ graph TB
 - **[`sessions`](#20-pdd-sessions---manage-remote-sessions)**: Manage remote sessions for `connect`
 - **`coverage --contracts`**: Build a static contract-rule matrix from `<contract_rules>`, story `## Covers`, explicit test references, `<coverage>`, and `<waivers>`
 
+### Prompt Contracts And Formalization
+For reproducible prompt-to-code workflows, treat important behavior as
+structured contracts:
+
+```bash
+pdd prompt lint --strict prompts/foo_python.prompt
+pdd contracts check prompts/foo_python.prompt
+pdd coverage --contracts prompts/foo_python.prompt
+pdd contracts compile --json prompts/foo_python.prompt
+```
+
+During authoring, use `pdd prompt lint --ambiguity prompts/foo_python.prompt`.
+When the LLM finds ambiguous terms, formalization coaching and interactive
+clarification run automatically. Use `--non-interactive` to accept concrete LLM
+vocabulary suggestions without prompts. The `--ambiguity` path is advisory;
+lint/check/coverage/compile without it are deterministic and suitable for CI.
+
 ### User Story Prompt Tests
 PDD can validate prompt changes against user stories stored as Markdown files. This uses `detect` under the hood: a story **passes** when `detect` returns no required prompt changes.
 
@@ -640,8 +660,10 @@ Overrides:
 - `PDD_PROMPTS_DIR` sets the prompts directory.
 
 Commands:
+- `pdd prompt lint --stories user_stories/ prompts/foo_python.prompt` checks story acceptance criteria for undefined vague terms.
 - `pdd detect --stories` runs the validation suite.
 - `pdd coverage --contracts` reports rule coverage status (`checked`, `story-only`, `test-only`, `unchecked`, `waived`, `failed`) without calling an LLM.
+- `pdd contracts compile --json prompts/foo_python.prompt` emits contract IR when rules are structured enough to compile.
 - `pdd change` runs story validation after prompt modifications and fails if any story fails.
 - `pdd fix user_stories/story__*.md` applies a single story to prompts and re-validates it.
 - `pdd test <prompt_1.prompt> [prompt_2.prompt ...]` generates a `story__*.md` file and links those prompts.

@@ -1,0 +1,18 @@
+<vocabulary>
+- valid refund request: a request whose amount_cents is greater than 0 and not greater than the captured payment amount
+- duplicate refund: a request whose tenant ID and idempotency key match a previously accepted refund request
+</vocabulary>
+
+<contract_rules>
+R1 - Reject zero refund
+When a refund request has amount_cents equal to 0,
+the service MUST return HTTP 400 and MUST NOT call provider_client.
+
+R2 - Reject duplicate refund
+When a request is a duplicate refund,
+the service MUST return HTTP 409 and MUST NOT write a new refund record.
+
+R3 - Emit accepted event
+When a valid refund request is accepted,
+the service MUST return HTTP 201 and MUST emit refund.accepted.
+</contract_rules>

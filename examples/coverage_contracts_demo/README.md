@@ -30,3 +30,15 @@ Expected statuses:
 - `R6`: waived
 - `R7`: failed
 
+To verify that the same prompt is also structured enough for deterministic
+contract IR, run:
+
+```bash
+pdd contracts compile --json \
+  examples/coverage_contracts_demo/prompts/refund_payment_python.prompt
+```
+
+Coverage and compilation answer different questions:
+
+- `pdd coverage --contracts` shows whether rules have story/test/waiver evidence.
+- `pdd contracts compile` shows whether rules can become machine-readable IR.

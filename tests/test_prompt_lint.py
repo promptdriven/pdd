@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -799,3 +800,82 @@ class TestCrossModuleCovers:
         # Standard entry still works
         assert "valid response" in terms
         assert "valid" in terms
+
+
+# ---------------------------------------------------------------------------
+# LLM passes (local only — no PDD cloud / GitHub OAuth)
+# ---------------------------------------------------------------------------
+
+class TestPromptLintLlmLocal:
+    @patch("pdd.llm_invoke.llm_invoke")
+    def test_ambiguity_pass_uses_local_llm(self, mock_llm, tmp_path):
+        from pdd.prompt_lint import run_llm_ambiguity_pass
+
+        mock_llm.return_value = {"result": "[]"}
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text(
+            "<contract_rules>Handle requests appropriately.</contract_rules>\n",
+            encoding="utf-8",
+        )
+        run_llm_ambiguity_pass(prompt)
+        mock_llm.assert_called_once()
+        assert mock_llm.call_args.kwargs.get("use_cloud") is False
+
+    @patch("pdd.llm_invoke.llm_invoke")
+    def test_guidance_pass_uses_local_llm(self, mock_llm, tmp_path):
+        from pdd.prompt_lint import run_llm_guidance_pass
+
+        mock_llm.return_value = {
+            "result": (
+                '{"summary":"ok","vocabulary_suggestions":[],"rule_rewrites":[],'
+                '"acceptance_criteria_improvements":[],"formalization_notes":[]}'
+            )
+        }
+        prompt = tmp_path / "foo_python.prompt"
+        prompt.write_text(
+            "<contract_rules>Handle requests appropriately.</contract_rules>\n",
+            encoding="utf-8",
+        )
+        run_llm_guidance_pass(prompt)
+        mock_llm.assert_called_once()
+        assert mock_llm.call_args.kwargs.get("use_cloud") is False
+
+
+# ---------------------------------------------------------------------------
+# prompt_lint_pipeline
+# ---------------------------------------------------------------------------
+
+class TestPromptLintPipeline:
+    def test_iter_prompt_paths_directory(self, tmp_path):
+        from pdd.prompt_lint_pipeline import iter_prompt_paths
+
+        (tmp_path / "a.prompt").write_text("<contract_rules></contract_rules>\n")
+        sub = tmp_path / "nested"
+        sub.mkdir()
+        (sub / "b.prompt").write_text("<contract_rules></contract_rules>\n")
+        (tmp_path / "readme.txt").write_text("ignore\n")
+
+        paths = iter_prompt_paths(tmp_path)
+        assert [p.name for p in paths] == ["a.prompt", "b.prompt"]
+
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_pipeline_runs_llm_for_each_prompt_in_directory(self, mock_llm, tmp_path):
+        from pdd.prompt_lint_pipeline import (
+            PromptLintPipelineOptions,
+            run_prompt_lint_pipeline,
+        )
+
+        mock_llm.return_value = []
+        (tmp_path / "one.prompt").write_text(
+            "<contract_rules>Only authorized users may call this.</contract_rules>\n"
+        )
+        (tmp_path / "two.prompt").write_text(
+            "<contract_rules>Reject invalid requests.</contract_rules>\n"
+        )
+        options = PromptLintPipelineOptions(
+            target=tmp_path,
+            llm=True,
+        )
+        result = run_prompt_lint_pipeline(options)
+        assert len(result.results) == 2
+        assert mock_llm.call_count == 2

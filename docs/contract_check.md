@@ -24,6 +24,9 @@ pdd contracts check --stories user_stories/ prompts/foo_python.prompt
 
 # Run optional LLM ambiguity review on <contract_rules> terms.
 pdd contracts check --llm-ambiguity prompts/foo_python.prompt
+
+# Compile checked rules into deterministic contract IR.
+pdd contracts compile --json prompts/foo_python.prompt
 ```
 
 Exit codes:
@@ -49,6 +52,24 @@ The checker reads these XML-delimited sections when present in a prompt file:
 
 Prompts that contain **none** of the checked sections (legacy format) produce
 zero issues and are silently marked clean.
+
+## Relationship To Contract Compile
+
+`pdd contracts check` validates authoring structure: IDs, modal verbs,
+vocabulary, coverage references, waivers, and related contract hygiene.
+
+`pdd contracts compile` is the next deterministic step. It converts rules that
+use stable IDs, `When ...` conditions, and observable obligations into
+machine-readable contract IR:
+
+```bash
+pdd contracts check prompts/refund_payment_python.prompt
+pdd contracts compile --json prompts/refund_payment_python.prompt
+```
+
+Use both before relying on prompts as reproducible source-of-truth. `check`
+catches broad structural problems; `compile` verifies that rules are parseable
+enough for future verification adapters.
 
 ## Rule ID formats
 

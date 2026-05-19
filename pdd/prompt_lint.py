@@ -11,7 +11,9 @@ Public API
 scan_prompt(path, *, strict=False) -> LintResult
 scan_stories(stories_dir, *, strict=False) -> list[LintResult]
 apply_suggestions(path, issues) -> int
+append_vocabulary_definitions(path, suggestions) -> int
 run_llm_ambiguity_pass(path, strength, temperature, time, verbose) -> list[LintIssue]
+run_llm_guidance_pass(path, strength, temperature, time, verbose) -> dict
 """
 from __future__ import annotations
 
@@ -467,8 +469,34 @@ def apply_suggestions(path: Path, issues: list[LintIssue]) -> int:
     if not suggestions:
         return 0
 
+    return append_vocabulary_definitions(path, suggestions)
+
+
+def append_vocabulary_definitions(path: Path, suggestions: list[str]) -> int:
+    """
+    Append concrete vocabulary definitions to a prompt file.
+
+    Creates a <vocabulary> block when absent. Duplicate definition lines are
+    skipped. Returns the number of new entries written.
+    """
+    cleaned = [s.strip().lstrip("- ").strip() for s in suggestions if s.strip()]
+    if not cleaned:
+        return 0
+
     text = path.read_text(encoding="utf-8")
-    new_entries = "\n".join(f"- {s}" for s in suggestions)
+    existing = set()
+    sections = _extract_sections(text)
+    if "vocabulary" in sections:
+        for line in sections["vocabulary"].splitlines():
+            stripped = line.strip().lstrip("- ").strip()
+            if stripped:
+                existing.add(stripped)
+
+    new_suggestions = [s for s in cleaned if s not in existing]
+    if not new_suggestions:
+        return 0
+
+    new_entries = "\n".join(f"- {s}" for s in new_suggestions)
 
     if _VOCABULARY_OPEN in text and _VOCABULARY_CLOSE in text:
         text = text.replace(
@@ -481,7 +509,7 @@ def apply_suggestions(path: Path, issues: list[LintIssue]) -> int:
         )
 
     path.write_text(text, encoding="utf-8")
-    return len(suggestions)
+    return len(new_suggestions)
 
 
 # ---------------------------------------------------------------------------
@@ -527,6 +555,7 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
             temperature=temperature,
             time=time,
             verbose=verbose,
+            use_cloud=False,
         )
         response_text = result["result"]
 
@@ -553,3 +582,86 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
     except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
         logger.warning("prompt_lint LLM pass failed: %s", exc)
         return []
+
+
+def run_llm_guidance_pass(  # pylint: disable=too-many-locals
+    path: Path,
+    strength: float = 0.5,
+    temperature: float = 0.0,
+    time: Optional[float] = None,
+    verbose: bool = False,
+) -> dict:
+    """
+    Run the LLM-backed prompt coaching pass for one prompt file.
+
+    This is advisory author guidance, not a CI gate. It returns a structured
+    dictionary with vocabulary suggestions, rule rewrites, acceptance-criteria
+    improvements, and formalization notes. Failures return an error payload
+    rather than raising.
+    """
+    try:
+        from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
+        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
+
+        template_path = Path(__file__).parent / "prompts" / "prompt_guidance_LLM.prompt"
+        if not template_path.exists():
+            return _empty_guidance(path, "prompt_guidance_LLM.prompt not found")
+
+        prompt_content = path.read_text(encoding="utf-8", errors="replace")
+        vague_terms_list = ", ".join(sorted(VAGUE_TERMS | VAGUE_TERMS_STRICT))
+
+        template = template_path.read_text(encoding="utf-8")
+        filled = template.replace("{prompt_content}", prompt_content).replace(
+            "{vague_terms_list}", vague_terms_list
+        )
+        filled = preprocess(filled, recursive=False, double_curly_brackets=False)
+
+        result = llm_invoke(
+            messages=[{"role": "user", "content": filled}],
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+            use_cloud=False,
+        )
+        response_text = result["result"]
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+        raw_json = json_match.group(1) if json_match else response_text.strip()
+        parsed = json.loads(raw_json)
+        if not isinstance(parsed, dict):
+            return _empty_guidance(path, "LLM guidance response was not a JSON object")
+        return _normalize_guidance(path, parsed)
+
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        logger.warning("prompt guidance LLM pass failed: %s", exc)
+        return _empty_guidance(path, str(exc))
+
+
+def _empty_guidance(path: Path, error: str = "") -> dict:
+    """Return an empty guidance payload."""
+    return {
+        "path": str(path),
+        "summary": "",
+        "vocabulary_suggestions": [],
+        "rule_rewrites": [],
+        "acceptance_criteria_improvements": [],
+        "formalization_notes": [],
+        "error": error,
+    }
+
+
+def _normalize_guidance(path: Path, payload: dict) -> dict:
+    """Normalize an LLM guidance response into the public schema."""
+    result = _empty_guidance(path)
+    result["summary"] = str(payload.get("summary", ""))
+    for key in (
+        "vocabulary_suggestions",
+        "rule_rewrites",
+        "acceptance_criteria_improvements",
+        "formalization_notes",
+    ):
+        value = payload.get(key, [])
+        result[key] = value if isinstance(value, list) else []
+    if payload.get("error"):
+        result["error"] = str(payload["error"])
+    return result

@@ -2,6 +2,8 @@
 
 This directory demonstrates every acceptance criterion of the `pdd prompt lint` command.
 
+This is the canonical example for the built-in PDD prompt-lint workflow.
+
 ## Quick start
 
 ```bash
@@ -55,13 +57,14 @@ diff $VAGUE /tmp/demo.prompt   # empty — file unchanged
 
 # ⑦ --apply writes vocabulary suggestions into the file
 cp $VAGUE /tmp/demo.prompt
-pdd --quiet prompt lint --ambiguity --llm --apply /tmp/demo.prompt
+pdd --quiet prompt lint --ambiguity --apply /tmp/demo.prompt
 cat /tmp/demo.prompt   # <vocabulary> block written with LLM-sourced definitions
 
-# ⑧ Optional LLM review with interpretations
-pdd --quiet prompt lint --ambiguity --llm $VAGUE
+# ⑧ Optional LLM review (auto coach + clarify when ambiguities found)
+pdd --quiet prompt lint --ambiguity $VAGUE
+pdd --quiet prompt lint --ambiguity --json $VAGUE
 
-# ⑨ --strict mode (CI gate — exit 2 on any warning)
+# ⑪ --strict mode (CI gate — exit 2 on any warning)
 pdd --quiet prompt lint --strict $VAGUE
 echo $?   # 2
 ```
@@ -71,7 +74,8 @@ echo $?   # 2
 | Criterion | Command / behaviour |
 |-----------|---------------------|
 | Non-LLM default mode | `pdd prompt lint <file>` — no API key needed |
-| Optional LLM review | `--ambiguity --llm` — skipped if omitted, never breaks CI |
+| Optional LLM review | `--ambiguity` — skipped if omitted, never breaks CI |
+| Auto coaching + clarification | runs when `--ambiguity` finds LLM-detected ambiguities |
 | Works on prompts and stories | `--stories <dir>` scans `story__*.md` files; combine it with a prompt path to scan both |
 | Suggests `<vocabulary>` additions | every issue includes a `Suggestion:` line |
 | Emits JSON | `--json` flag produces a parseable array |

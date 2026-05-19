@@ -1,0 +1,16 @@
+% Bundled prompt-lint fixture with intentional vague terms.
+
+<contract_rules>
+R1 - Valid request handling
+The function MUST return a valid response for active users.
+
+R2 - Duplicate handling
+Duplicate requests MUST be rejected gracefully.
+</contract_rules>
+
+<vocabulary>
+- valid: A response with an HTTP 200 OK status code
+- active: user logged in within last 5 days
+- Duplicate: a request that contains an X-Idempotency-Key value that has already been processed within the last 24 hours
+- gracefully: returning an HTTP 409 status code and a JSON body containing a 'reason' field and the 'original_request_id'
+</vocabulary>

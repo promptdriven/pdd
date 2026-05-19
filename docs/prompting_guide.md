@@ -731,6 +731,54 @@ R6: WAIVED W1
 
 Unchecked rules are allowed during development, but they should be visible. Production-critical modules should not merge with unchecked high-risk MUST/MUST NOT rules unless there is an explicit waiver.
 
+### Contract Compilation
+
+Coverage answers whether a rule has evidence. Contract compilation answers
+whether a rule is structured enough to become machine-readable.
+
+Use `pdd contracts compile` after lint/check/coverage:
+
+```bash
+pdd prompt lint --strict prompts/refund_payment_python.prompt
+pdd contracts check prompts/refund_payment_python.prompt
+pdd coverage --contracts prompts/refund_payment_python.prompt
+pdd contracts compile --json prompts/refund_payment_python.prompt
+```
+
+The compiler produces `pdd.contract_ir.v1`, a JSON-safe intermediate
+representation containing rule IDs, titles, `When ...` conditions, modal verbs,
+observable obligations, and raw rule text.
+
+Rules compile best when written in this shape:
+
+```text
+R1 - Reject duplicate refund
+When a request has the same tenant ID and idempotency key as an accepted refund,
+the service MUST return HTTP 409 and MUST NOT write a new refund record.
+```
+
+The v1 compiler recognizes observable obligations such as:
+
+- `MUST return HTTP 409`
+- `MUST return a JSON object`
+- `MUST write one upload record`
+- `MUST NOT write a new record`
+- `MUST NOT call provider_client`
+- `MUST emit refund.accepted`
+- `MUST raise ValueError`
+
+Compile errors are deterministic:
+
+- `UNSTABLE_RULE_ID`: the rule lacks an explicit ID such as `R1`
+- `MISSING_CONDITION`: the rule lacks a parseable `When ...` condition
+- `NO_OBSERVABLE_OBLIGATION`: the rule lacks a recognized observable outcome
+
+`pdd contracts compile` is not a proof engine by itself. It creates the IR that
+future verification adapters can consume to generate property tests, runtime
+assertions, API checks, or formal models. During authoring, use
+`pdd prompt lint --ambiguity prompts/<module>_<language>.prompt` for LLM guidance on
+rewriting vague rules into compile-friendly contracts.
+
 Structured waivers are easier to review and expire:
 
 ```xml

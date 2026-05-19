@@ -29,3 +29,7 @@ The system MUST handle provider failures gracefully.
 - Log all charge attempts for audit purposes.
 - Validate idempotency_key presence on every request.
 </requirements>
+
+<vocabulary>
+- graceful failure: HTTP 502 with retry_after field
+</vocabulary>

@@ -1,0 +1,76 @@
+% You are an expert Python engineer implementing deterministic contract compilation for PDD.
+% The generated module is pdd/contract_compile.py.
+% This module supports the CLI command `pdd contracts compile`.
+% It is the deterministic IR stage after:
+%   1. `pdd prompt lint`
+%   2. `pdd contracts check`
+%   3. `pdd coverage --contracts`
+
+<requirements>
+- Provide a deterministic compiler from prompt <contract_rules> sections into a JSON-safe contract IR.
+- Do not call an LLM.
+- Preserve raw rule text for auditability.
+- Treat prompts without <contract_rules> as legacy-safe with zero compile errors.
+- Require stable explicit rule IDs such as R1 or R-001 for compiled rules.
+- Extract simple "When ..." conditions from rule text.
+- Extract observable obligations for:
+  - return HTTP status
+  - write/store/save/append/insert/update/delete/remove state changes
+  - call dependencies
+  - emit events
+  - raise exceptions
+- Preserve the modal verb on every obligation, including MUST NOT.
+- Report deterministic compile errors for missing rule IDs, missing conditions, and missing observable obligations.
+- The public IR version MUST be "pdd.contract_ir.v1".
+- The compiler MUST expose `compile_prompt(path: Path)` and `compile_directory(directory: Path)`.
+- The JSON-safe result MUST include path, has_contract_rules, rule_count, error_count, rules, and compile_errors.
+- This module MUST NOT perform coverage analysis, story parsing, test scanning, or implementation verification.
+</requirements>
+
+<contract_rules>
+R1 - Legacy-safe prompts
+When a prompt has no <contract_rules> section,
+the compiler MUST return an empty IR and MUST NOT raise an exception.
+
+R2 - Stable rule IDs
+When a rule does not use an explicit ID such as R1 or R-001,
+the compiler MUST emit an UNSTABLE_RULE_ID compile error.
+
+R3 - Conditions
+When a rule lacks a parseable "When ..." condition,
+the compiler MUST emit a MISSING_CONDITION compile error.
+
+R4 - Observable obligations
+When a rule has no parseable observable obligation,
+the compiler MUST emit a NO_OBSERVABLE_OBLIGATION compile error.
+
+R5 - JSON IR
+When a rule has an ID, condition, and observable obligations,
+the compiler MUST return a JSON-safe rule object containing id, title, modal, condition, obligations, and raw text.
+
+R6 - Directory compilation
+When a directory is compiled,
+the compiler MUST return one IR result per discovered *.prompt file.
+
+R7 - Partial compilation
+When a rule has a stable ID but has a missing condition or missing observable obligation,
+the compiler MAY include the partial rule in the IR and MUST emit the corresponding compile error.
+</contract_rules>
+
+<vocabulary>
+- contract IR: a JSON-safe intermediate representation of prompt contract rules for deterministic checks and future verification adapters
+- observable obligation: a required behavior with an externally checkable effect, such as returning an HTTP status, writing state, avoiding a dependency call, emitting an event, or raising an exception
+- legacy-safe: behavior that treats prompts without contract sections as clean rather than failing
+- partial rule: a rule that has enough structure to preserve in the IR but still has compile errors that make the compile fail
+</vocabulary>
+
+<acceptance_tests>
+- `pytest tests/test_contract_compile.py tests/commands/test_contracts_compile.py -q` MUST pass.
+- `pdd contracts compile --json <prompt>` MUST emit a JSON array containing contract IR results.
+- A prompt with no <contract_rules> MUST compile with error_count 0 and has_contract_rules false.
+- A prompt containing `MUST return HTTP 409` MUST produce a return obligation with value.http_status = 409.
+- A prompt containing `MUST NOT write a new refund record` MUST produce a write obligation with modal MUST NOT.
+- A prompt containing no parseable `When ...` condition MUST emit MISSING_CONDITION.
+- A prompt containing no parseable observable obligation MUST emit NO_OBSERVABLE_OBLIGATION.
+- A directory target MUST compile every discovered *.prompt file recursively.
+</acceptance_tests>

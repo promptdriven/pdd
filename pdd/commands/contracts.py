@@ -20,6 +20,7 @@ from ..contract_check import (
     check_stories,
     run_llm_ambiguity_pass,
 )
+from ..contract_compile import ContractIR, compile_directory, compile_prompt
 
 _console = Console(highlight=False)
 
@@ -71,6 +72,44 @@ def _render_result(result: ContractResult, *, quiet: bool = False) -> None:
     )
     for issue in result.issues:
         _render_issue(issue)
+
+
+def _render_ir(result: ContractIR, *, quiet: bool = False) -> None:
+    """Print a compiled ContractIR summary."""
+    if not result.has_contract_rules:
+        if not quiet:
+            _console.print(
+                f"[bold]{result.path}[/bold]  "
+                "[dim]No <contract_rules> section — no contract IR.[/dim]"
+            )
+        return
+
+    status = "[green]compiled[/green]" if result.error_count == 0 else "[red]failed[/red]"
+    _console.print(
+        f"[bold]{result.path}[/bold]  {status}  "
+        f"[cyan]{result.rule_count} rules[/cyan]  "
+        f"[red]{result.error_count} errors[/red]"
+    )
+    for rule in result.rules:
+        obligations = ", ".join(
+            f"{obligation.type}:{obligation.modal}"
+            for obligation in rule.obligations
+        ) or "-"
+        _console.print(
+            f"  [magenta]{escape(rule.id)}[/magenta]  "
+            f"{escape(rule.title or '-') }  "
+            f"[dim]condition:[/dim] {escape(rule.condition or '-') }  "
+            f"[dim]obligations:[/dim] {escape(obligations)}"
+        )
+    for error in result.compile_errors:
+        _console.print(
+            f"  [bold red]ERROR[/bold red]  "
+            f"[dim cyan]{escape(error.code)}[/dim cyan]  "
+            f"[dim magenta]{escape(error.rule_id)}[/dim magenta]  "
+            f"{escape(error.message)}"
+        )
+        if error.line:
+            _console.print(f"       [dim italic]{escape(error.line[:120])}[/dim italic]")
 
 
 # ---------------------------------------------------------------------------
@@ -214,3 +253,58 @@ def contracts_check(  # pylint: disable=too-many-arguments,too-many-locals,too-m
         raise click.exceptions.Exit(2)
     if total_warns > 0:
         raise click.exceptions.Exit(1)
+
+
+@contracts_group.command("compile")
+@click.argument("target", type=click.Path(exists=True))
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    default=False,
+    help="Output compiled contract IR as JSON.",
+)
+@click.pass_context
+def contracts_compile(
+    ctx: click.Context,
+    target: str,
+    as_json: bool,
+) -> None:
+    """Compile <contract_rules> into deterministic JSON contract IR.
+
+    \b
+    Examples:
+      pdd contracts compile prompts/foo_python.prompt
+      pdd contracts compile --json prompts/foo_python.prompt
+      pdd contracts compile prompts/
+
+    \b
+    The v1 compiler is intentionally conservative. It requires each rule to
+    have an explicit stable ID such as R1, a parseable "When ..." condition,
+    and at least one observable obligation such as:
+      MUST return HTTP 409
+      MUST write one upload record
+      MUST NOT write a new upload record
+      MUST NOT call provider_client
+      MUST emit refund_rejected
+      MUST raise ValueError
+
+    Prompts without <contract_rules> are legacy-safe and exit 0.
+    """
+    obj = ctx.obj or {}
+    quiet: bool = obj.get("quiet", False)
+    target_path = Path(target)
+
+    if target_path.is_file():
+        results = [compile_prompt(target_path)]
+    else:
+        results = compile_directory(target_path)
+
+    if as_json:
+        click.echo(_json.dumps([r.as_dict() for r in results], indent=2))
+    else:
+        for result in results:
+            _render_ir(result, quiet=quiet)
+
+    if any(result.error_count > 0 for result in results):
+        raise click.exceptions.Exit(2)

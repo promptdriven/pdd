@@ -24,11 +24,11 @@ Each test class maps to one of the documented usage patterns:
     # Strict mode (CI gate)
     pdd prompt lint --strict prompts/foo_python.prompt
 
-    # LLM ambiguity review
-    pdd prompt lint --ambiguity --llm prompts/foo_python.prompt
+    # LLM ambiguity review (auto coach + clarify when ambiguities found)
+    pdd prompt lint --ambiguity prompts/foo_python.prompt
 
     # Write vocabulary suggestions back into the file
-    pdd prompt lint --ambiguity --llm --apply prompts/foo_python.prompt
+    pdd prompt lint --ambiguity --apply prompts/foo_python.prompt
 """
 from __future__ import annotations
 
@@ -445,31 +445,31 @@ class TestStrictMode:
 
 
 # ---------------------------------------------------------------------------
-# Pattern 7: pdd prompt lint --ambiguity --llm prompts/foo_python.prompt
+# Pattern 7: pdd prompt lint --ambiguity prompts/foo_python.prompt
 # LLM ambiguity pass — mocked; verifies interpretations block, suggestion block
 # ---------------------------------------------------------------------------
 
 class TestLlmAmbiguityReview:
-    """pdd prompt lint --ambiguity --llm <file>"""
+    """pdd prompt lint --ambiguity <file>"""
 
-    def test_llm_without_ambiguity_is_usage_error(self, runner):
-        result = runner.invoke(
-            cli.cli,
-            ["--quiet", "prompt", "lint", "--llm",
-             str(FIXTURES / "payment_api_python.prompt")],
-        )
-        assert result.exit_code != 0
-        assert "--llm requires --ambiguity" in result.output
-
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_llm_pass_called_once(self, mock_llm, runner):
         mock_llm.return_value = []
-        _lint(runner, "--ambiguity", "--llm",
-              str(FIXTURES / "payment_api_python.prompt"))
+        _lint(runner, "--ambiguity", str(FIXTURES / "payment_api_python.prompt"))
         mock_llm.assert_called_once()
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
-    def test_llm_issues_appear_in_rich_output(self, mock_llm, runner):
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_llm_issues_appear_in_rich_output(self, mock_llm, mock_guidance, runner):
+        mock_guidance.return_value = {
+            "path": str(FIXTURES / "payment_api_python.prompt"),
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
         mock_llm.return_value = [
             LintIssue(
                 level="warn",
@@ -488,14 +488,31 @@ class TestLlmAmbiguityReview:
                 ],
             )
         ]
-        result = _lint(runner, "--ambiguity", "--llm",
-                       str(FIXTURES / "payment_api_python.prompt"))
+        result = runner.invoke(
+            cli.cli,
+            [
+                "--quiet", "prompt", "lint", "--ambiguity",
+                str(FIXTURES / "payment_api_python.prompt"),
+            ],
+            input="s\n",
+            catch_exceptions=False,
+        )
         assert "Possible interpretations" in result.output
         assert "Any positive number" in result.output
         assert "cents" in result.output
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
-    def test_llm_suggestion_rendered(self, mock_llm, runner):
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_llm_suggestion_rendered(self, mock_llm, mock_guidance, runner):
+        mock_guidance.return_value = {
+            "path": str(FIXTURES / "payment_api_python.prompt"),
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
         mock_llm.return_value = [
             LintIssue(
                 level="warn",
@@ -510,14 +527,31 @@ class TestLlmAmbiguityReview:
                 interpretations=["Same key only", "Same key + merchant"],
             )
         ]
-        result = _lint(runner, "--ambiguity", "--llm",
-                       str(FIXTURES / "payment_api_python.prompt"))
+        result = runner.invoke(
+            cli.cli,
+            [
+                "--quiet", "prompt", "lint", "--ambiguity",
+                str(FIXTURES / "payment_api_python.prompt"),
+            ],
+            input="s\n",
+            catch_exceptions=False,
+        )
         flat = " ".join(result.output.split())
         assert "Suggestion" in flat
         assert "idempotency_key" in flat
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
-    def test_llm_issues_in_json(self, mock_llm, runner):
+    @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
+    def test_llm_issues_in_json(self, mock_llm, mock_guidance, runner):
+        mock_guidance.return_value = {
+            "path": str(FIXTURES / "payment_api_python.prompt"),
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
         mock_llm.return_value = [
             LintIssue(
                 level="warn",
@@ -529,10 +563,10 @@ class TestLlmAmbiguityReview:
                 interpretations=["Silent swallow", "HTTP 502", "Client-visible 4xx"],
             )
         ]
-        result = _lint_json(runner, "--ambiguity", "--llm",
-                            str(FIXTURES / "payment_api_python.prompt"))
+        result = _lint_json(runner, "--ambiguity", str(FIXTURES / "payment_api_python.prompt"))
         data = json.loads(result.output)
-        all_issues = [i for e in data for i in e["issues"]]
+        entries = data["results"] if isinstance(data, dict) else data
+        all_issues = [i for e in entries for i in e["issues"]]
         # Filter for the LLM-sourced issue specifically (section="llm")
         llm_issues = [i for i in all_issues if i["term"] == "graceful" and i["section"] == "llm"]
         assert llm_issues, f"Expected LLM 'graceful' issue; got sections: {[i['section'] for i in all_issues if i['term']=='graceful']}"
@@ -540,31 +574,30 @@ class TestLlmAmbiguityReview:
             "Silent swallow", "HTTP 502", "Client-visible 4xx"
         ]
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_deterministic_issues_have_no_interpretations(self, mock_llm, runner):
         mock_llm.return_value = []
-        result = _lint_json(runner, "--ambiguity", "--llm",
-                            str(FIXTURES / "payment_api_python.prompt"))
+        result = _lint_json(runner, "--ambiguity", str(FIXTURES / "payment_api_python.prompt"))
         data = json.loads(result.output)
-        det_issues = [i for e in data for i in e["issues"]
+        entries = data["results"] if isinstance(data, dict) else data
+        det_issues = [i for e in entries for i in e["issues"]
                       if i["section"] != "llm"]
         assert all(i["interpretations"] == [] for i in det_issues)
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_interpretations_not_rendered_without_llm_issues(self, mock_llm, runner):
         mock_llm.return_value = []
-        result = _lint(runner, "--ambiguity", "--llm",
-                       str(FIXTURES / "payment_api_python.prompt"))
+        result = _lint(runner, "--ambiguity", str(FIXTURES / "payment_api_python.prompt"))
         assert "Possible interpretations" not in result.output
 
 
 # ---------------------------------------------------------------------------
-# Pattern 8: pdd prompt lint --ambiguity --llm --apply prompts/foo_python.prompt
+# Pattern 8: pdd prompt lint --ambiguity --apply prompts/foo_python.prompt
 # Apply: writes vocabulary suggestions back into the file
 # ---------------------------------------------------------------------------
 
 class TestApplyWriteback:
-    """pdd prompt lint --ambiguity --llm --apply <file>"""
+    """pdd prompt lint --ambiguity --apply <file>"""
 
     def test_apply_without_llm_writes_placeholder_only_if_suggestion_present(
         self, runner, tmp_path
@@ -585,7 +618,7 @@ class TestApplyWriteback:
         # Deterministic suggestions are all placeholders → nothing written
         assert prompt.read_text(encoding="utf-8") == original
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_apply_with_llm_writes_concrete_suggestion(self, mock_llm, runner, tmp_path):
         """--ambiguity --llm --apply: LLM-sourced suggestions are written into the file."""
         mock_llm.return_value = [
@@ -605,14 +638,14 @@ class TestApplyWriteback:
         )
         runner.invoke(
             cli.cli,
-            ["--quiet", "prompt", "lint", "--ambiguity", "--llm", "--apply", str(prompt)],
+            ["--quiet", "prompt", "lint", "--ambiguity", "--apply", str(prompt)],
             catch_exceptions=False,
         )
         text = prompt.read_text(encoding="utf-8")
         assert "<vocabulary>" in text
         assert "valid amount: positive integer" in text
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_apply_appends_to_existing_vocabulary_block(self, mock_llm, runner, tmp_path):
         mock_llm.return_value = [
             LintIssue(
@@ -632,7 +665,7 @@ class TestApplyWriteback:
         )
         runner.invoke(
             cli.cli,
-            ["--quiet", "prompt", "lint", "--ambiguity", "--llm", "--apply", str(prompt)],
+            ["--quiet", "prompt", "lint", "--ambiguity", "--apply", str(prompt)],
             catch_exceptions=False,
         )
         text = prompt.read_text(encoding="utf-8")
@@ -643,7 +676,7 @@ class TestApplyWriteback:
         # Only one vocabulary block (not duplicated)
         assert text.count("<vocabulary>") == 1
 
-    @patch("pdd.commands.prompt.run_llm_ambiguity_pass")
+    @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_apply_json_still_emits_valid_json(self, mock_llm, runner, tmp_path):
         mock_llm.return_value = [
             LintIssue(
@@ -662,7 +695,7 @@ class TestApplyWriteback:
         )
         result = runner.invoke(
             cli.cli,
-            ["--quiet", "prompt", "lint", "--ambiguity", "--llm", "--apply", "--json",
+            ["--quiet", "prompt", "lint", "--ambiguity", "--apply", "--json",
              str(prompt)],
             catch_exceptions=False,
         )
