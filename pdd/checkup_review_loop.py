@@ -3711,15 +3711,19 @@ def _rebase_onto_updated_pr_head(
         capture_output=True,
         text=True,
     )
+    token = _github_token_from_env()
+    rebase_tail = _redact_secret(
+        rebase.stderr.strip() or rebase.stdout.strip(), token
+    )
     abort_note = ""
     if abort.returncode != 0:
-        abort_note = (
-            " (rebase --abort also failed: "
-            f"{abort.stderr.strip() or abort.stdout.strip()})"
+        abort_tail = _redact_secret(
+            abort.stderr.strip() or abort.stdout.strip(), token
         )
+        abort_note = f" (rebase --abort also failed: {abort_tail})"
     return False, (
         "Failed to rebase fixes onto updated PR branch before retrying push: "
-        f"{rebase.stderr.strip() or rebase.stdout.strip()}{abort_note}"
+        f"{rebase_tail}{abort_note}"
     )
 
 
