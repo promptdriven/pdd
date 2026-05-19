@@ -61,6 +61,34 @@ def test_extract_includes_empty_file(tmp_path):
     f.write_text("", encoding="utf-8")
     assert sync_order.extract_includes_from_file(f) == set()
 
+def test_extract_includes_body_form_path_attr_takes_precedence(tmp_path):
+    """`<include path="X">Y</include>` must resolve to X, matching the preprocessor.
+
+    ``pdd.preprocess.process_include_tags`` does ``attrs.get('path') or content.strip()``
+    so the attribute wins when both are present. Mirror that here so downstream
+    consumers (notably the agentic-update scope guard) see the same include graph
+    the preprocessor would actually load.
+    """
+    f = tmp_path / "test.prompt"
+    f.write_text(
+        '<include path="docs/source.md">fallback.md</include>',
+        encoding="utf-8",
+    )
+
+    includes = sync_order.extract_includes_from_file(f)
+    assert includes == {"docs/source.md"}
+
+def test_extract_includes_body_form_no_path_attr_uses_body(tmp_path):
+    """Attributed body include without ``path=`` falls back to the body text."""
+    f = tmp_path / "test.prompt"
+    f.write_text(
+        '<include optional>docs/source.md</include>',
+        encoding="utf-8",
+    )
+
+    includes = sync_order.extract_includes_from_file(f)
+    assert includes == {"docs/source.md"}
+
 # ==============================================================================
 # Unit Tests: extract_module_from_include
 # ==============================================================================
