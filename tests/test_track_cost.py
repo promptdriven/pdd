@@ -1,3 +1,27 @@
+# Test plan for pdd.track_cost (spec: prompts/track_cost_python.prompt)
+# ---------------------------------------------------------------------
+# Existing tests (kept as-is) cover:
+#   * CSV row appended when file exists with content (no header rewrite)
+#   * CSV header written when file does not exist
+#   * CSV header written when file exists but is empty (regression)
+#   * output_cost path resolved via ctx.obj vs PDD_OUTPUT_COST_PATH env
+#   * cost and model name extracted from legacy result tuple
+#   * Short / non-tuple results -> empty cost & model
+#   * Input/output file collection (single, multiple, mixed types)
+#   * Exception during CSV logging surfaces via rprint
+#   * Missing Click context returns command result without logging
+#   * Files still tracked for core dump when the wrapped command raises
+#   * PYTEST_CURRENT_TEST env var skips CSV writing
+#   * _parse_cost_from_csv roundtrip with an empty pre-created CSV
+#
+# New tests appended below cover the spec additions for the
+# `attempted_models` column:
+#   * Header column order matches the spec exactly
+#   * Enriched result shape: dict last element supplies cost/model/attempted
+#   * Enriched dict attempted_models serialized as ';'-joined chain
+#   * ctx.obj['attempted_models'] takes precedence over the result dict
+#   * Empty string used in the CSV when no chain is recorded
+#   * Empty ctx.obj['attempted_models'] falls back to the result dict's chain
 import pytest
 import unittest.mock as mock
 from unittest.mock import MagicMock, mock_open, patch
@@ -5,7 +29,7 @@ import os
 import re
 from datetime import datetime
 from typing import Tuple
-from pdd.track_cost import track_cost
+from pdd.track_cost import track_cost, extract_cost_and_model
 from pdd.agentic_sync_runner import _parse_cost_from_csv
 
 # Sample command function to be decorated
@@ -115,7 +139,7 @@ def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_o
 
     handle = mock_open_file()
     assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] for call in handle.write.call_args_list)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     mock_rprint.assert_not_called()
@@ -148,9 +172,9 @@ def test_csv_header_written_if_file_exists_but_empty(mock_click_context, mock_op
 
     handle = mock_open_file()
     # Header MUST be written when file is empty
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     # Data row should follow (command name is 'sync' from mock context)
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,sync,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,sync,25.5,/path/to/prompt.txt,/path/to/output,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     mock_rprint.assert_not_called()
@@ -202,10 +226,10 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     
     # Use a regex pattern to match the row, ignoring the specific timestamp
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -241,10 +265,10 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     
     # Use a regex pattern to match the row, ignoring the specific timestamp
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -279,9 +303,9 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written first
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     # Data row should be written
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -318,9 +342,9 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     # Data row should have correct cost and model
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,bert-base,train,50.0,/path/to/input.txt,/path/to/output\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,bert-base,train,50.0,/path/to/input.txt,/path/to/output,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -358,9 +382,9 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     # Data row should have empty cost and model
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,short,,/path/to/prompt.txt,\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,short,,/path/to/prompt.txt,,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -399,9 +423,9 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     # Data row should have correct input and output files
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,custom-model,process,15.0,/path/to/input.txt,/path/to/output.txt\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,custom-model,process,15.0,/path/to/input.txt,/path/to/output.txt,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -445,9 +469,9 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Header should be written
-    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files\r\n')
+    handle.write.assert_any_call('timestamp,model,command,cost,input_files,output_files,attempted_models\r\n')
     # Data row should have multiple input and output files separated by semicolons
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,batch-model,batch,100.0,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,batch-model,batch,100.0,/path/to/input1.txt;/path/to/input2.txt,/path/to/output1.txt;/path/to/output2.txt,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -521,7 +545,7 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Data row should include only string file paths
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,mixed-model,mixed,30.0,/path/to/input.txt,/path/to/output.txt\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,mixed-model,mixed,30.0,/path/to/input.txt,/path/to/output.txt,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -575,7 +599,7 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
     # Retrieve the file handle to check written content
     handle = mock_open_file()
     # Data row should have empty cost and model
-    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,non_tuple,,/path/to/prompt.txt,\r\n')
+    row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,,non_tuple,,/path/to/prompt.txt,,\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
     # Ensure no error was printed
@@ -822,3 +846,211 @@ def test_empty_tempfile_roundtrip_with_parse_cost(tmp_path):
 
     # Clean up
     os.unlink(cost_file.name)
+
+
+# ---------------------------------------------------------------------------
+# Tests for the spec additions: enriched result shape and attempted_models.
+# ---------------------------------------------------------------------------
+
+
+def test_header_column_order_matches_spec(mock_click_context, mock_open_file, mock_rprint):
+    """The CSV header must be exactly:
+    timestamp,model,command,cost,input_files,output_files,attempted_models
+    """
+    mock_ctx = create_mock_context(
+        'generate',
+        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
+        obj={'output_cost': '/p/c.csv'},
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=False):
+        sample_command(mock_ctx, '/path/to/prompt.txt')
+
+    handle = mock_open_file()
+    handle.write.assert_any_call(
+        'timestamp,model,command,cost,input_files,output_files,attempted_models\r\n'
+    )
+
+
+def test_enriched_result_dict_supplies_cost_and_model(
+    mock_click_context, mock_open_file, mock_rprint
+):
+    """When the last tuple element is a dict, read cost/model_name from it."""
+    @track_cost
+    def enriched_command(ctx, prompt_file: str):
+        return ('/path/to/output', {
+            'cost': 0.42,
+            'model_name': 'claude-opus',
+            'attempted_models': ['claude-opus'],
+        })
+
+    mock_ctx = create_mock_context(
+        'enriched',
+        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
+        obj={'output_cost': '/p/c.csv'},
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=False):
+        result = enriched_command(mock_ctx, '/path/to/prompt.txt')
+
+    handle = mock_open_file()
+    row_pattern = re.compile(
+        r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,'
+        r'claude-opus,enriched,0\.42,/path/to/prompt\.txt,,claude-opus\r\n'
+    )
+    assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list), \
+        f"No matching row in: {[c.args[0] for c in handle.write.call_args_list]}"
+    assert result[0] == '/path/to/output'
+
+
+def test_enriched_attempted_models_serialized_chronologically(
+    mock_click_context, mock_open_file, mock_rprint
+):
+    """attempted_models chain is serialized as ';'-joined in chronological order."""
+    @track_cost
+    def chain_command(ctx, prompt_file: str):
+        return ('/path/to/output', {
+            'cost': 0.1,
+            'model_name': 'final-model',
+            'attempted_models': ['first-try', 'second-try', 'final-model'],
+        })
+
+    mock_ctx = create_mock_context(
+        'chain',
+        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
+        obj={'output_cost': '/p/c.csv'},
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=False):
+        chain_command(mock_ctx, '/path/to/prompt.txt')
+
+    handle = mock_open_file()
+    writes = [c.args[0] for c in handle.write.call_args_list]
+    assert any('first-try;second-try;final-model\r\n' in w for w in writes), \
+        f"Chain not serialized chronologically. writes={writes}"
+
+
+def test_ctx_obj_attempted_models_takes_precedence(
+    mock_click_context, mock_open_file, mock_rprint
+):
+    """ctx.obj['attempted_models'] (populated by llm_invoke) wins over result dict."""
+    @track_cost
+    def both_command(ctx, prompt_file: str):
+        return ('/path/to/output', {
+            'cost': 0.5,
+            'model_name': 'final',
+            'attempted_models': ['from-result-only'],
+        })
+
+    mock_ctx = create_mock_context(
+        'both',
+        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
+        obj={
+            'output_cost': '/p/c.csv',
+            'attempted_models': ['ctx-A', 'ctx-B'],
+        },
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=False):
+        both_command(mock_ctx, '/path/to/prompt.txt')
+
+    handle = mock_open_file()
+    writes = [c.args[0] for c in handle.write.call_args_list]
+    # The ctx.obj chain must be recorded, not the result dict chain.
+    assert any('ctx-A;ctx-B\r\n' in w for w in writes), \
+        f"ctx.obj chain not used. writes={writes}"
+    assert not any('from-result-only' in w for w in writes), \
+        f"result dict chain leaked despite ctx.obj precedence. writes={writes}"
+
+
+def test_attempted_models_empty_when_no_chain(
+    mock_click_context, mock_open_file, mock_rprint
+):
+    """Empty string used in the CSV when neither ctx.obj nor result supplies a chain."""
+    @track_cost
+    def no_chain_command(ctx, prompt_file: str):
+        # Legacy shape, no attempted_models anywhere.
+        return ('/path/to/output', 0.05, 'gpt-4')
+
+    mock_ctx = create_mock_context(
+        'no_chain',
+        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
+        obj={'output_cost': '/p/c.csv'},
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=False):
+        no_chain_command(mock_ctx, '/path/to/prompt.txt')
+
+    handle = mock_open_file()
+    writes = [c.args[0] for c in handle.write.call_args_list]
+    # Expect the row to END with `,\r\n` for the empty attempted_models cell.
+    data_rows = [w for w in writes if 'no_chain' in w]
+    assert data_rows, f"No data row found. writes={writes}"
+    assert data_rows[0].endswith(',\r\n'), \
+        f"Row should end with empty attempted_models, got: {data_rows[0]!r}"
+
+
+def test_empty_ctx_obj_attempted_models_falls_back_to_result_dict(
+    mock_click_context, mock_open_file, mock_rprint
+):
+    """Precedence: ctx.obj entry must be NON-EMPTY to win; otherwise result dict is used."""
+    @track_cost
+    def fallback_command(ctx, prompt_file: str):
+        return ('/path/to/output', {
+            'cost': 0.2,
+            'model_name': 'm',
+            'attempted_models': ['from-result'],
+        })
+
+    mock_ctx = create_mock_context(
+        'fallback',
+        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
+        obj={
+            'output_cost': '/p/c.csv',
+            'attempted_models': [],  # present but empty -> not preferred
+        },
+    )
+    mock_click_context.return_value = mock_ctx
+
+    with mock.patch('os.path.isfile', return_value=False):
+        fallback_command(mock_ctx, '/path/to/prompt.txt')
+
+    handle = mock_open_file()
+    writes = [c.args[0] for c in handle.write.call_args_list]
+    assert any('from-result\r\n' in w for w in writes), \
+        f"Did not fall back to result dict chain. writes={writes}"
+
+
+def test_extract_cost_and_model_enriched_shape():
+    """extract_cost_and_model reads cost/model/attempted from a dict last element."""
+    result = ('out', {
+        'cost': 0.33,
+        'model_name': 'modelX',
+        'attempted_models': ['a', 'b'],
+    })
+    cost, model, attempted = extract_cost_and_model(result)
+    assert cost == 0.33
+    assert model == 'modelX'
+    assert attempted == ['a', 'b']
+
+
+def test_extract_cost_and_model_legacy_shape():
+    """Legacy: (..., cost, model_name) returns no attempted_models chain."""
+    result = ('out', 0.07, 'gpt-4')
+    cost, model, attempted = extract_cost_and_model(result)
+    assert cost == 0.07
+    assert model == 'gpt-4'
+    assert attempted == []
+
+
+def test_extract_cost_and_model_non_tuple_returns_empty():
+    """Non-tuple result returns the empty-string sentinel for cost & model."""
+    cost, model, attempted = extract_cost_and_model('just a string')
+    assert cost == ''
+    assert model == ''
+    assert attempted == []
