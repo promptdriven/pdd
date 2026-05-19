@@ -4043,10 +4043,14 @@ def _check_architecture_registry_edit_guard(
         prompt in both with different filepath): BLOCK unconditionally.
         A repoint MUST be split into a retire-old + add-new with prompt
         sources actually present on disk.
-      - Registry wipe (HEAD has pairs, worktree has none): BLOCK when
-        the change set also leaves a new non-prompt, non-HEAD-registered
-        path on disk. Otherwise a rename + prompt delete + registry wipe
-        can masquerade as full retirement while landing new code.
+      - Unregistered new code on partial/full wipe: when ANY HEAD pair
+        is removed (full wipe is just the boundary), BLOCK if the change
+        set also leaves a new path on disk that is in ``changed_files``,
+        is not ``architecture.json``, is not under ``pdd/prompts/``, and
+        is registered in NEITHER HEAD nor the worktree registry.
+        Otherwise a rename + prompt delete + registry rewrite can
+        masquerade as legitimate retirement while landing new
+        unregistered code (the partial-wipe variant of #1081).
 
     Graceful degradation (allow + warn, never block) on:
       - ``git show HEAD:architecture.json`` non-zero exit
@@ -4186,31 +4190,47 @@ def _check_architecture_registry_edit_guard(
             continue
         offenders_removed.append((code, prompt))
 
-    registry_wipe_new_paths: List[str] = []
-    if head_pairs and not worktree_pairs:
+    # Partial-wipe variant of the registry-edit bypass: when ANY HEAD
+    # pair is removed (full wipe is just the boundary case), an
+    # unregistered new code path that lands in the same change set is
+    # the #1081 attack shape. The retirement-shape allowance above
+    # passes ``removed_only`` entries where the old code and prompt
+    # are gone — but it cannot see a separate new file that the fixer
+    # introduced under the cover of that "legitimate retirement".
+    # Restrict to paths actually in the change set, not under
+    # ``pdd/prompts/``, not the registry itself, and absent from BOTH
+    # registry sides (so legitimate retire-old + add-new module
+    # rewrites still pass).
+    unregistered_new_code_paths: List[str] = []
+    if removed_only:
         head_registered_paths = {path for pair in head_pairs for path in pair}
+        worktree_registered_paths = {
+            path for pair in worktree_pairs for path in pair
+        }
         for path in sorted(changed_norm):
             if path == "architecture.json":
                 continue
             if path in head_registered_paths:
                 continue
+            if path in worktree_registered_paths:
+                continue
             if path.startswith("pdd/prompts/"):
                 continue
             if (worktree / path).is_file():
-                registry_wipe_new_paths.append(path)
+                unregistered_new_code_paths.append(path)
 
     repointed_by_code.sort()
     repointed_by_prompt.sort()
 
     if not (offenders_added or offenders_removed
             or repointed_by_code or repointed_by_prompt
-            or registry_wipe_new_paths):
+            or unregistered_new_code_paths):
         return None
 
     parts: List[str] = []
-    for path in registry_wipe_new_paths:
+    for path in unregistered_new_code_paths:
         parts.append(
-            "registry wiped to empty while new code path "
+            "removed registered pair while new unregistered code path "
             f"{path} was added"
         )
     for code, prompt in offenders_added:

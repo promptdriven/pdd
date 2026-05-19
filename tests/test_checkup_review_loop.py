@@ -5579,7 +5579,7 @@ class TestArchitectureRegistryEditGuardHelper:
             ],
         )
         assert reason is not None
-        assert "registry wiped to empty" in reason
+        assert "removed registered pair while new unregistered code path" in reason
         assert "pdd/foo_v2.py" in reason
 
     def test_registry_wiped_for_full_retirement_is_allowed(
@@ -5816,6 +5816,109 @@ class TestArchitectureRegistryEditGuardIntegration:
         assert push_calls == []
         # Report carries the registry-edit refusal.
         assert "architecture.json registry edit refused" in report
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        # The original finding stays OPEN.
+        assert "### Findings" in report
+        findings_section = report.split("### Findings", 1)[1].split("### ", 1)[0]
+        assert "| blocker | open |" in findings_section
+        assert "| blocker | fixed |" not in findings_section
+
+    def test_loop_refuses_push_on_1081_partial_wipe_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 partial-wipe regression: the fixer drops ONE
+        HEAD pair under the cover of legitimate retirement while landing
+        a renamed `_v2.py` not registered in the post-change
+        ``architecture.json``. 10b must refuse the push.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # HEAD has TWO registered pairs; the partial-wipe attack drops
+        # one and leaves the other intact.
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+
+        # Apply the partial-wipe bypass:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. create pdd/foo_v2.py (unregistered)
+        #   4. rewrite architecture.json to keep ONLY the bar pair
+        # 10a's removed-pair check sees foo as legitimately retired
+        # (code gone + prompt gone), so the partial-wipe scan must
+        # still catch foo_v2.py.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2.py","pdd/foo.py",'
+                    '"pdd/prompts/foo_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Trustworthy report contract: success=True; ship gate is in
+        # the report markers.
+        assert success is True
+        # Push helper was NEVER invoked.
+        assert push_calls == []
+        # Report carries the registry-edit refusal with the partial-wipe
+        # diagnostic text.
+        assert "architecture.json registry edit refused" in report
+        assert (
+            "removed registered pair while new unregistered code path"
+            in report
+        )
+        assert "pdd/foo_v2.py" in report
         # Ship-gate markers signal non-clean.
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
