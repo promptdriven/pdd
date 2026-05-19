@@ -1316,25 +1316,37 @@ def run_checkup_review_loop(
         _mark_findings_fixed(state, fixed_findings)
         _record_reviewer_feedback(state, verify_open_findings, fix)
         pending_findings = verify_open_findings
+
+        # Pin per-round verification status BEFORE any break path so
+        # findings marked ``fixed`` by ``_mark_findings_fixed`` above
+        # always have a matching ``verification_status_by_round`` entry
+        # and (on clean rounds) a pinned ``verified_head_sha``. Without
+        # this, budget exhaustion between ``_mark_findings_fixed`` and
+        # the clean/pending branches below leaves ``status='fixed'``
+        # findings with no corresponding round status — breaking the
+        # ``final-state.json`` trust-boundary audit trail.
+        if pending_findings:
+            # R-V4: a ``findings`` verifier result leaves
+            # ``state.verified_head_sha`` unchanged (verification did
+            # not clear the head).
+            state.verification_status_by_round[round_number] = "unverified"
+        else:
+            # R-V4: only ``clean`` advances ``verified_head_sha``. The
+            # SHA the verifier reviewed is, by construction, the SHA
+            # that was just pushed.
+            if fix.pushed_head_sha:
+                state.verified_head_sha = fix.pushed_head_sha
+            state.verification_status_by_round[round_number] = "verified"
+
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
             break
         if pending_findings:
             state.reviewer_status[reviewer] = "findings"
-            # R-V4: a ``findings`` verifier result leaves
-            # ``state.verified_head_sha`` unchanged (verification did
-            # not clear the head).
-            state.verification_status_by_round[round_number] = "unverified"
             continue
 
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
-        # R-V4: only ``clean`` advances ``verified_head_sha``. The SHA
-        # the verifier reviewed is, by construction, the SHA that was
-        # just pushed.
-        if fix.pushed_head_sha:
-            state.verified_head_sha = fix.pushed_head_sha
-        state.verification_status_by_round[round_number] = "verified"
         state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
         break
 

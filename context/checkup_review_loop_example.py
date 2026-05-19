@@ -411,10 +411,13 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 # `verified-head-sha:` and `remote-pr-head-sha:` are the SHA-backed
 # verification trust boundary (issue #1088). They are always present.
 # `verified-head-sha` renders `none` when no verifier pass has cleared a
-# pushed head this loop. `remote-pr-head-sha` renders `none` when no
-# fixer was pushed this loop and `unknown` when the final-report
-# re-fetch of PR metadata failed (R-V5). When they differ, downstream
-# verdict adapters MUST treat the report as stale even if
+# pushed head this loop. `remote-pr-head-sha` renders `none` only when
+# the final-report re-fetch was not needed (no verifier pin, no clean
+# fresh-final reviewer status, no fixed findings, no recorded fixer
+# push), `unknown` when an attempted re-fetch returned no head SHA
+# (R-V5), and otherwise the observed remote PR head SHA. When the
+# observed remote head differs from the SHA the verifier cleared,
+# downstream verdict adapters MUST treat the report as stale even if
 # `fresh-final-review:` would otherwise be `clean`.
 #
 # Each `### Fixes Attempted` bullet MUST be rendered in the fixed-field

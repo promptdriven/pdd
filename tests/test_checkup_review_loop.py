@@ -3733,6 +3733,180 @@ class TestShaBackedVerificationTrustBoundary:
         assert final_state["fresh_final_status"] == "missing"
         assert final_state["remote_pr_head_sha"] is None
 
+    def test_budget_exhausted_after_verifier_clean_pins_round_and_sha(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Trust-boundary audit-trail regression: when the verifier
+        returns ``clean`` against the pushed head and the budget cap
+        trips on the post-verify ``_budget_exhausted`` check, the
+        per-round verification status and the verified head SHA must
+        already be pinned before the budget break-out — otherwise
+        ``final-state.json`` would render ``status='fixed'`` findings
+        without a matching ``verification_status_by_round`` entry."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha = "e" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
+        )
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "verify-" in label:
+                # Verifier returns clean AND pushes total_cost over the
+                # max so the post-verify ``_budget_exhausted`` check
+                # trips on the very next line.
+                return True, _json("clean"), 0.4, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            # review-: report a finding so the fixer/verifier path runs.
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # review (0.1) + fix (0.1) + verify (0.4) == 0.6 >= 0.5.
+        assert round(cost, 2) == 0.6
+        # The verifier MUST have run (this is the post-verify trip).
+        assert any("verify-" in lbl for lbl in calls), calls
+        assert "max-cost-reached: true" in report
+        assert f"verified-head-sha: {sha}" in report
+        assert f"remote-pr-head-sha: {sha}" in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        # The trust-boundary audit trail must be intact: verified SHA
+        # pinned, per-round status recorded as ``verified``, and the
+        # fixed-by-the-verifier findings carry ``status='fixed'``.
+        assert final_state["verified_head_sha"] == sha
+        assert final_state["verification_status_by_round"]["1"] == "verified"
+        assert final_state["max_cost_reached"] is True
+        statuses = {
+            f["key"]: f["status"] for f in final_state["findings"]
+        }
+        assert statuses, final_state["findings"]
+        assert all(status == "fixed" for status in statuses.values()), statuses
+
+    def test_budget_exhausted_after_verifier_partial_records_unverified(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Partial-acceptance audit-trail regression: when the verifier
+        accepts some findings but still reports others against the
+        pushed head, and the budget cap trips on the post-verify
+        ``_budget_exhausted`` check, the per-round verification status
+        must be recorded as ``unverified`` (partial does not advance
+        ``verified_head_sha``) — but the verifier-accepted findings
+        still carry ``status='fixed'`` from
+        ``_mark_findings_fixed``."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha = "9" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
+        )
+        # Two distinct findings — the verifier will accept (omit) the
+        # first and re-report the second.
+        accepted = self._finding()
+        accepted["location"] = "pdd/foo.py:1"
+        accepted["finding"] = "accepted finding"
+        remaining = {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:99",
+            "evidence": "ev2",
+            "finding": "remaining finding",
+            "required_fix": "fix it harder",
+        }
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "verify-" in label:
+                # Verifier accepts ``accepted`` (omits it) but still
+                # reports ``remaining``. Cost crosses the budget cap.
+                return True, _json("findings", [remaining]), 0.4, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            # review-: report both findings so both reach the fixer.
+            return (
+                True,
+                _json("findings", [accepted, remaining]),
+                0.1,
+                role,
+            )
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert round(cost, 2) == 0.6
+        assert any("verify-" in lbl for lbl in calls), calls
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        # Partial acceptance does NOT pin ``verified_head_sha``.
+        assert final_state["verified_head_sha"] is None
+        # But the per-round verification status MUST be recorded
+        # (previously this entry was absent after partial+budget-out).
+        assert final_state["verification_status_by_round"]["1"] == "unverified"
+        assert final_state["max_cost_reached"] is True
+        # Verifier-accepted finding flipped to ``fixed``; the other
+        # still-open finding remains ``open``. Discriminate by status
+        # count rather than serialized field name so the test does not
+        # depend on the specific finding-dict layout.
+        fixed_findings = [
+            f for f in final_state["findings"] if f["status"] == "fixed"
+        ]
+        open_findings = [
+            f for f in final_state["findings"] if f["status"] == "open"
+        ]
+        assert len(fixed_findings) == 1, final_state["findings"]
+        assert len(open_findings) == 1, final_state["findings"]
+
 
 class TestPromptInjection:
     """Reviewer and fixer prompts must reflect the configured gate, not the
