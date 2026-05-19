@@ -31,6 +31,7 @@ from .agentic_sync_runner import (
 )
 from .durable_sync_runner import DurableSyncRunner
 from .architecture_include_validation import (
+    _module_prompt_include_target,
     collect_architecture_include_validation_warnings,
     resolve_architecture_prompt_path,
     validate_prompt_contract_context,
@@ -52,7 +53,12 @@ from .json_atomic import atomic_write_json
 from .load_prompt_template import load_prompt_template
 from .sync_determine_operation import sync_determine_operation
 from .sync_main import _detect_languages_with_context
-from .sync_order import build_dependency_graph, extract_module_from_include, topological_sort
+from .sync_order import (
+    build_dependency_graph,
+    extract_includes_from_file,
+    extract_module_from_include,
+    topological_sort,
+)
 
 console = Console()
 
@@ -1788,19 +1794,69 @@ def _resolve_prompt_for_architecture_correction(
     return None
 
 
+def _module_prompt_include_dependencies(prompt_path: Path) -> List[str]:
+    """Return ``<include>`` targets that name another module prompt.
+
+    Mirrors the validator (``cross_validate_architecture_with_prompt_includes``):
+    any ``<include>`` whose body resolves to a module prompt — i.e.
+    ``_module_prompt_include_target(path)`` is non-None — is treated as proof
+    of an architecture edge, regardless of ``mode``/``select``/``query``/
+    ``lines`` attributes. Stripping these from re-converged dependencies would
+    re-create the inverse #1061 drift (``validate-arch-includes`` would warn
+    "<include>s module 'b' ... but architecture.json does not list it").
+    """
+    deps: List[str] = []
+    seen: set[str] = set()
+    for inc in extract_includes_from_file(prompt_path):
+        if _module_prompt_include_target(inc) is None:
+            continue
+        if inc not in seen:
+            deps.append(inc)
+            seen.add(inc)
+    return deps
+
+
 def _declared_prompt_dependencies(
     prompt_path: Path,
     arch_modules: List[Dict[str, Any]],
 ) -> Optional[List[str]]:
-    """Return dependencies declared by ``<pdd-dependency>`` tags, if present."""
+    """Return architecture-authoritative dependencies declared by the prompt.
+
+    The validator (``cross_validate_architecture_with_prompt_includes``)
+    accepts a forward dep when *either* the prompt declares it via a
+    ``<pdd-dependency>`` tag *or* the prompt ``<include>``s the module
+    prompt directly (even with ``mode="interface"`` / ``select=`` /
+    ``query=`` / ``lines=``). Re-convergence must use the same union so a
+    correction that re-writes the entry's ``dependencies`` cannot strip a
+    module-prompt include-backed edge and re-introduce a validation failure
+    in the reverse direction.
+
+    Returns ``None`` only when the prompt declares no dependencies at all
+    (no ``<pdd-dependency>`` tag *and* no module-prompt ``<include>``) — in
+    that case the caller should skip the correction rather than fabricate
+    an authoritative source.
+    """
     try:
         prompt_content = prompt_path.read_text(encoding="utf-8")
     except OSError:
         return None
     tags = parse_prompt_tags(prompt_content)
-    if not (tags.get("has_dependency_tags", False) or bool(tags.get("dependencies"))):
+    declared: List[str] = list(tags.get("dependencies", []) or [])
+    has_dep_tags = tags.get("has_dependency_tags", False) or bool(declared)
+
+    include_deps = _module_prompt_include_dependencies(prompt_path)
+    if not has_dep_tags and not include_deps:
         return None
-    return _normalize_dependency_filenames(tags.get("dependencies", []), arch_modules)
+
+    # Preserve declaration order: <pdd-dependency> tags first, then module-prompt
+    # includes that aren't already covered.
+    combined: List[str] = []
+    seen: set[str] = set()
+    for dep in declared + include_deps:
+        if dep and dep not in seen:
+            combined.append(dep)
+            seen.add(dep)
+    return _normalize_dependency_filenames(combined, arch_modules)
 
 
 def _apply_architecture_corrections(
