@@ -85,11 +85,12 @@ def parse_porcelain_z(
 ) -> List[PorcelainEntry]:
     """Parse ``git status --porcelain=v1 -z`` output.
 
-    ``-z`` records are NUL-separated with no trailing NUL guaranteed
-    on the last record. Each record starts with a two-character status
-    field, a single space, then the new-or-only path. For ``R`` or
-    ``C`` records the OLD path follows as a separate NUL-terminated
-    record.
+    ``-z`` terminates every record with a NUL (per ``git status`` docs:
+    "Terminate entries with NUL, instead of LF"), so a trailing NUL is
+    always present after the last record. Each record starts with a
+    two-character status field, a single space, then the new-or-only
+    path. For ``R`` or ``C`` records the OLD path follows as a separate
+    NUL-terminated record.
 
     Args:
         stdout: Raw stdout bytes (preferred — preserves filenames that
@@ -100,8 +101,10 @@ def parse_porcelain_z(
         emitted them. An empty input yields an empty list.
     """
     if isinstance(stdout, bytes):
-        # ``-z`` separator is NUL. Splitting and dropping empty tails
-        # is correct because git does not emit a trailing NUL.
+        # ``-z`` is NUL-TERMINATED (every record, including the last,
+        # ends with a NUL). Splitting on NUL therefore yields an empty
+        # trailing element which we drop here. Filtering empties also
+        # handles defensively if git ever changed to NUL-separated.
         records: Sequence[Union[bytes, str]] = [r for r in stdout.split(b"\x00") if r]
     else:
         records = [r for r in stdout.split("\x00") if r]

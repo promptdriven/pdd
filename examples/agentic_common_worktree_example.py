@@ -177,11 +177,14 @@ def example_get_modified_and_untracked() -> None:
 def example_check_target_file_unchanged() -> None:
     """Show check_target_file_unchanged for baseline and comparison."""
     print("=== check_target_file_unchanged ===")
-    # Establish baseline (no baseline_sha)
+    # Establish baseline (no baseline_sha). check_target_file_unchanged
+    # makes three subprocess calls: fetch, resolve_main_ref's rev-parse
+    # --verify, and the per-file rev-parse for the target SHA.
     with patch("pdd.agentic_common_worktree.subprocess.run") as mock_run:
         mock_run.side_effect = [
             _make_completed(returncode=0),  # git fetch
-            _make_completed(returncode=0, stdout="sha_abc123\n"),  # rev-parse
+            _make_completed(returncode=0, stdout="origin_main_sha\n"),  # resolve_main_ref rev-parse --verify origin/main
+            _make_completed(returncode=0, stdout="sha_abc123\n"),  # rev-parse <ref>:<file>
         ]
         unchanged, sha = check_target_file_unchanged(Path("/repo"), "pdd/module.py")
     print(f"Baseline — unchanged: {unchanged}, sha: {sha}")
@@ -190,7 +193,8 @@ def example_check_target_file_unchanged() -> None:
     with patch("pdd.agentic_common_worktree.subprocess.run") as mock_run:
         mock_run.side_effect = [
             _make_completed(returncode=0),  # git fetch
-            _make_completed(returncode=0, stdout="sha_abc123\n"),  # rev-parse
+            _make_completed(returncode=0, stdout="origin_main_sha\n"),  # resolve_main_ref rev-parse --verify origin/main
+            _make_completed(returncode=0, stdout="sha_abc123\n"),  # rev-parse <ref>:<file>
         ]
         unchanged, sha = check_target_file_unchanged(Path("/repo"), "pdd/module.py", baseline_sha="sha_abc123")
     print(f"Same SHA — unchanged: {unchanged}, sha: {sha}")
@@ -199,7 +203,8 @@ def example_check_target_file_unchanged() -> None:
     with patch("pdd.agentic_common_worktree.subprocess.run") as mock_run:
         mock_run.side_effect = [
             _make_completed(returncode=0),  # git fetch
-            _make_completed(returncode=0, stdout="sha_def456\n"),  # rev-parse
+            _make_completed(returncode=0, stdout="origin_main_sha\n"),  # resolve_main_ref rev-parse --verify origin/main
+            _make_completed(returncode=0, stdout="sha_def456\n"),  # rev-parse <ref>:<file>
         ]
         unchanged, sha = check_target_file_unchanged(Path("/repo"), "pdd/module.py", baseline_sha="sha_abc123")
     print(f"Different SHA — unchanged: {unchanged}, sha: {sha}")

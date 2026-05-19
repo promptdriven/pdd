@@ -6,6 +6,7 @@
 <pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_e2e_fix_orchestrator_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_registry_python.prompt</pdd-dependency>
+<pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 
 % Goal
 Add a PR-mode primary-reviewer/fixer review loop for `pdd checkup`.

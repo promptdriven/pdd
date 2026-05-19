@@ -38,7 +38,7 @@ The text-mode `git status --porcelain` output is lossy for any path with shell-m
 
 2. **`parse_porcelain_z(stdout: Union[bytes, str]) -> List[PorcelainEntry]`**: Parse `git status --porcelain=v1 -z` output.
    - Accept either raw `bytes` (preferred — preserves non-UTF-8 filenames) or a pre-decoded `str`.
-   - Split records on `NUL` (`\x00`); drop empty tails (git emits no trailing `NUL` after the last record).
+   - Split records on `NUL` (`\x00`); drop empty entries. `-z` is NUL-TERMINATED (every record, including the last, ends with `NUL`), so the split produces an empty trailing element that must be filtered out.
    - Each record begins with a two-character status field, a single space, then the new-or-only path.
    - Skip malformed records shorter than 4 bytes/chars defensively.
    - When `"R"` or `"C"` appears in either column of the status, consume the NEXT record as the bare old-path (no status prefix). The old path is decoded the same way as the new path.

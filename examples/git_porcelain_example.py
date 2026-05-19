@@ -22,8 +22,9 @@ from pdd.git_porcelain import (  # noqa: E402
 def example_basic_modify_and_untracked() -> None:
     """Plain modifications and untracked records."""
     print("=== parse_porcelain_z: modify + untracked ===")
-    # ``-z`` records are NUL-separated bytes with no C-quoting and no
-    # trailing NUL on the last record.
+    # ``-z`` records are NUL-TERMINATED bytes with no C-quoting; every
+    # record (including the last) ends with a NUL, so splitting on NUL
+    # yields a trailing empty element that ``parse_porcelain_z`` drops.
     stdout = b" M pdd/module.py\x00?? scratch.txt\x00"
     entries = parse_porcelain_z(stdout)
     for entry in entries:
