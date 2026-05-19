@@ -1746,8 +1746,14 @@ def _normalise_sync_module_names(
     ``{"commands/fix"}`` so a correction filename like
     ``"commands/fix_python.prompt"`` (resolved via
     ``_basename_from_architecture_filename`` → ``"commands/fix"``) matches.
-    The bare-stem form (``"fix"``) is also added so flat-layout sync runs
-    keep accepting basename-only entries.
+
+    The bare-stem form (``"fix"``) is only added when the input entry is
+    itself *unqualified* (no ``/`` separator). Adding a bare-stem alias for
+    an already path-qualified entry like ``"commands/fix"`` would let an
+    out-of-scope correction filename like ``"server/fix_python.prompt"``
+    (also normalising to bare ``"fix"``) cross scope boundaries and mutate
+    an unrelated path-qualified module that happens to share the same tail
+    basename — see codex iter-2 finding B1.iter2.
     """
     allowed: set[str] = set()
     for module in modules_to_sync or []:
@@ -1765,13 +1771,16 @@ def _normalise_sync_module_names(
         )
         if path_alias:
             allowed.add(path_alias)
-        # Bare-stem fallback for flat-layout runs that pass "commands/fix"
-        # but where corrections might cite just "fix_python.prompt".
-        bare = extract_module_from_include(
-            value if value.endswith(".prompt") else f"{value}.prompt"
-        )
-        if bare:
-            allowed.add(bare)
+        # Bare-stem fallback ONLY for unqualified entries (flat-layout runs)
+        # where the user passed e.g. ``"fix"`` and the on-disk correction
+        # may cite ``"fix_python.prompt"``. For path-qualified entries the
+        # bare-stem alias must NOT be added (see docstring above).
+        if "/" not in value and "\\" not in value:
+            bare = extract_module_from_include(
+                value if value.endswith(".prompt") else f"{value}.prompt"
+            )
+            if bare:
+                allowed.add(bare)
     return allowed
 
 
@@ -1939,14 +1948,22 @@ def _apply_architecture_corrections(
             continue
         # Use path-preserving normalization so corrections for
         # ``commands/fix_python.prompt`` match ``modules_to_sync=["commands/fix"]``.
-        # Fall back to the bare-stem form to keep flat-layout runs working.
+        #
+        # The bare-stem alias is only added when the correction filename is
+        # itself unqualified (no directory segment). For path-qualified
+        # filenames adding the bare stem would let an out-of-scope correction
+        # like ``core/cli_python.prompt`` slip through a flat
+        # ``modules_to_sync=["cli"]`` gate just because the tails match —
+        # see codex iter-2 finding B1.iter2.
         module_aliases: set[str] = set()
         path_alias = _basename_from_architecture_filename(filename)
         if path_alias:
             module_aliases.add(path_alias)
-        bare = extract_module_from_include(filename)
-        if bare:
-            module_aliases.add(bare)
+        norm_filename = filename.replace("\\", "/")
+        if "/" not in norm_filename:
+            bare = extract_module_from_include(filename)
+            if bare:
+                module_aliases.add(bare)
         if allowed_modules and module_aliases.isdisjoint(allowed_modules):
             if not quiet:
                 console.print(
