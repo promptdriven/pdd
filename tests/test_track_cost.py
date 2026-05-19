@@ -19,9 +19,9 @@
 #   * Header column order matches the spec exactly
 #   * Enriched result shape: dict last element supplies cost/model/attempted
 #   * Enriched dict attempted_models serialized as ';'-joined chain
-#   * ctx.obj['attempted_models'] takes precedence over the result dict
+#   * command-scoped ctx.obj['attempted_models'] takes precedence over the result dict
 #   * Empty string used in the CSV when no chain is recorded
-#   * Empty ctx.obj['attempted_models'] falls back to the result dict's chain
+#   * Empty command-scoped attempted_models falls back to the result dict's chain
 import pytest
 import unittest.mock as mock
 from unittest.mock import MagicMock, mock_open, patch
@@ -936,38 +936,38 @@ def test_enriched_attempted_models_serialized_chronologically(
         f"Chain not serialized chronologically. writes={writes}"
 
 
-def test_ctx_obj_attempted_models_takes_precedence(
-    mock_click_context, mock_open_file, mock_rprint
+def test_command_scoped_attempted_models_takes_precedence(
+    mock_click_context, mock_rprint, tmp_path
 ):
-    """ctx.obj['attempted_models'] (populated by llm_invoke) wins over result dict."""
+    """The chain populated during this command wins over the result dict."""
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    csv_path = tmp_path / "cost.csv"
+    shared_obj = {'output_cost': str(csv_path)}
+
     @track_cost
     def both_command(ctx, prompt_file: str):
+        _propagate_attempted_models_to_ctx(['ctx-A', 'ctx-B'])
         return ('/path/to/output', {
             'cost': 0.5,
             'model_name': 'final',
             'attempted_models': ['from-result-only'],
         })
 
-    mock_ctx = create_mock_context(
-        'both',
-        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
-        obj={
-            'output_cost': '/p/c.csv',
-            'attempted_models': ['ctx-A', 'ctx-B'],
-        },
-    )
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'both'
+    mock_ctx.params = {'prompt_file': '/path/to/prompt.txt'}
+    mock_ctx.obj = shared_obj
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
-        both_command(mock_ctx, '/path/to/prompt.txt')
+    both_command(mock_ctx, '/path/to/prompt.txt')
 
-    handle = mock_open_file()
-    writes = [c.args[0] for c in handle.write.call_args_list]
-    # The ctx.obj chain must be recorded, not the result dict chain.
-    assert any('ctx-A;ctx-B\r\n' in w for w in writes), \
-        f"ctx.obj chain not used. writes={writes}"
-    assert not any('from-result-only' in w for w in writes), \
-        f"result dict chain leaked despite ctx.obj precedence. writes={writes}"
+    import csv as _csv
+    with open(csv_path, newline='', encoding='utf-8') as fp:
+        rows = list(_csv.DictReader(fp))
+    assert rows[-1]['attempted_models'] == 'ctx-A;ctx-B'
+    assert rows[-1]['attempted_models'] != 'from-result-only'
+    assert 'attempted_models' not in shared_obj
 
 
 def test_attempted_models_empty_when_no_chain(
@@ -998,10 +998,13 @@ def test_attempted_models_empty_when_no_chain(
         f"Row should end with empty attempted_models, got: {data_rows[0]!r}"
 
 
-def test_empty_ctx_obj_attempted_models_falls_back_to_result_dict(
-    mock_click_context, mock_open_file, mock_rprint
+def test_empty_command_attempted_models_falls_back_to_result_dict(
+    mock_click_context, mock_rprint, tmp_path
 ):
-    """Precedence: ctx.obj entry must be NON-EMPTY to win; otherwise result dict is used."""
+    """Precedence: the command-scoped chain must be non-empty to win."""
+    csv_path = tmp_path / "cost.csv"
+    shared_obj = {'output_cost': str(csv_path), 'attempted_models': []}
+
     @track_cost
     def fallback_command(ctx, prompt_file: str):
         return ('/path/to/output', {
@@ -1010,23 +1013,19 @@ def test_empty_ctx_obj_attempted_models_falls_back_to_result_dict(
             'attempted_models': ['from-result'],
         })
 
-    mock_ctx = create_mock_context(
-        'fallback',
-        {'prompt_file': '/path/to/prompt.txt', 'output_cost': '/p/c.csv'},
-        obj={
-            'output_cost': '/p/c.csv',
-            'attempted_models': [],  # present but empty -> not preferred
-        },
-    )
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'fallback'
+    mock_ctx.params = {'prompt_file': '/path/to/prompt.txt'}
+    mock_ctx.obj = shared_obj
     mock_click_context.return_value = mock_ctx
 
-    with mock.patch('os.path.isfile', return_value=False):
-        fallback_command(mock_ctx, '/path/to/prompt.txt')
+    fallback_command(mock_ctx, '/path/to/prompt.txt')
 
-    handle = mock_open_file()
-    writes = [c.args[0] for c in handle.write.call_args_list]
-    assert any('from-result\r\n' in w for w in writes), \
-        f"Did not fall back to result dict chain. writes={writes}"
+    import csv as _csv
+    with open(csv_path, newline='', encoding='utf-8') as fp:
+        rows = list(_csv.DictReader(fp))
+    assert rows[-1]['attempted_models'] == 'from-result'
+    assert shared_obj['attempted_models'] == []
 
 
 def test_extract_cost_and_model_enriched_shape():
@@ -1074,21 +1073,25 @@ def test_existing_csv_without_attempted_models_is_migrated(
         encoding="utf-8",
     )
 
-    mock_ctx = create_mock_context(
-        'generate',
-        {
-            'prompt_file': '/path/to/prompt.txt',
-            'output_cost': str(csv_path),
-            'output': '/path/to/output',
-        },
-        obj={
-            'output_cost': str(csv_path),
-            'attempted_models': ['vertex_ai/gemini', 'deepseek/chat'],
-        },
-    )
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    shared_obj = {'output_cost': str(csv_path)}
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'generate'
+    mock_ctx.params = {
+        'prompt_file': '/path/to/prompt.txt',
+        'output_cost': str(csv_path),
+        'output': '/path/to/output',
+    }
+    mock_ctx.obj = shared_obj
     mock_click_context.return_value = mock_ctx
 
-    sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
+    @track_cost
+    def migrating_command(ctx, prompt_file: str, output: str):
+        _propagate_attempted_models_to_ctx(['vertex_ai/gemini', 'deepseek/chat'])
+        return (output, 25.5, 'deepseek/chat')
+
+    migrating_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     content = csv_path.read_text(encoding='utf-8')
     lines = content.strip().splitlines()
