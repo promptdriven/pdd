@@ -674,10 +674,13 @@ def _llm_invoke_cloud(
                     # Return raw result if validation fails
                     pass
 
-            # If the cloud reports its own fallback chain (e.g. via attemptedModels
-            # or modelChain), surface that to callers so cost tracking can
-            # record it. Otherwise, fall back to a single-element list
-            # containing the final model used.
+            # The cloud /llmInvoke contract REQUIRES `attemptedModels` so the
+            # local cost CSV can record any abandoned-then-retried chain that
+            # happened server-side (issue #1086). Accept the camelCase,
+            # snake_case, and legacy `modelChain` keys for backward
+            # compatibility with older / non-conforming servers; when none of
+            # those are present log a warning and degrade to `[modelName]` —
+            # a single-entry chain that loses any cloud-side fallback history.
             cloud_attempted = (
                 data.get("attemptedModels")
                 or data.get("attempted_models")
@@ -686,6 +689,12 @@ def _llm_invoke_cloud(
             if cloud_attempted and isinstance(cloud_attempted, list):
                 attempted_models_out = [str(m) for m in cloud_attempted if m]
             else:
+                logger.warning(
+                    "Cloud /llmInvoke success response omitted required field "
+                    "'attemptedModels' (issue #1086). Falling back to "
+                    "[modelName] — abandoned cloud-side model attempts will "
+                    "be lost from cost tracking."
+                )
                 model_name_out = data.get("modelName", "cloud_model")
                 attempted_models_out = [str(model_name_out)] if model_name_out else []
 
@@ -3281,11 +3290,13 @@ def llm_invoke(
                     logger.info(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
                 break # Breaks the 'while retry_with_same_model' loop
 
-            # Credentials checked out — record this candidate in the
-            # chronological chain just before we issue the provider call.
-            # Dedup against same-model cache-bypass retries.
-            if model_name_litellm and (not attempted_models_chain or attempted_models_chain[-1] != model_name_litellm):
-                attempted_models_chain.append(str(model_name_litellm))
+            # NOTE: The candidate is NOT recorded here. The prompt contract
+            # (llm_invoke_python.prompt: "Attempted-Model Tracking") requires
+            # the append to happen just before the actual provider call so
+            # context-window pre-validation rejections (and any other
+            # pre-call skips) do NOT pollute the chain. The append is
+            # performed immediately before each litellm.responses /
+            # litellm.batch_completion / litellm.completion invocation below.
 
             # --- 5. Prepare LiteLLM Arguments ---
             litellm_kwargs: Dict[str, Any] = {
@@ -3686,6 +3697,10 @@ def llm_invoke(
                                 "has_structured_text_format": text_block.get("format", {}).get("type") == "json_schema",
                             },
                         )
+                        # Record candidate in chronological chain just before the
+                        # actual provider call. Dedup against same-model cache-bypass retries.
+                        if model_name_litellm and (not attempted_models_chain or attempted_models_chain[-1] != model_name_litellm):
+                            attempted_models_chain.append(str(model_name_litellm))
                         resp = litellm.responses(**responses_kwargs)
                         call_duration = time_module.time() - call_start
 
@@ -3886,6 +3901,11 @@ def llm_invoke(
                     token_count=token_count_for_attribution,
                     context_limit=context_limit_for_attribution,
                 )
+
+                # Record candidate in chronological chain just before the
+                # actual provider call. Dedup against same-model cache-bypass retries.
+                if model_name_litellm and (not attempted_models_chain or attempted_models_chain[-1] != model_name_litellm):
+                    attempted_models_chain.append(str(model_name_litellm))
 
                 if use_batch_mode:
                     if verbose:

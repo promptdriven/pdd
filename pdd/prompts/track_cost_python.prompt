@@ -19,25 +19,27 @@
 
 % The decorator should perform the following steps:
 1. **Record the Start Time:** When the command function is called, record the current datetime as the start time.
-2. **Execute the Command Function:** Call the original command function and capture its result.
-3. **Record the End Time:** After the command completes, record the current datetime as the end time.
-4. **Access Command Context:** Retrieve the Click context using `click.get_current_context()`.
-5. **Retrieve Output Cost Option:** Check if the output cost option is specified directly via `ctx.obj` or via the `PDD_OUTPUT_COST_PATH` environment variable.
-6. **Prepare Cost Data:**
+2. **Scope `ctx.obj['attempted_models']` to this single invocation (issue #1086 regression guard):** Before calling `func`, retrieve the Click context with `click.get_current_context()`. If `ctx.obj` is a dict-like that supports `__setitem__`/`get`, snapshot any existing value of `ctx.obj['attempted_models']` (and whether the key was present at all) into local variables, then reset `ctx.obj['attempted_models']` to a fresh empty list. This guarantees that the chain `llm_invoke` aggregates on the shared `ctx.obj` during `func` belongs only to this `@track_cost` invocation, even when multiple `@track_cost`-decorated commands share the same `ctx.obj` in a chained / batched Click run. The reset must be best-effort: if `ctx` is `None`, `ctx.obj` is `None`, or the snapshot/reset raises, fall through to the unscoped behavior without aborting `func`.
+3. **Execute the Command Function:** Call the original command function and capture its result. Wrap the call in `try/except/finally` so the snapshot is always restored (next step) even when `func` raises.
+4. **Record the End Time:** After the command completes (success or exception), record the current datetime as the end time.
+5. **Capture the scoped chain and restore the snapshot:** Inside the `finally` block — before any CSV write logic — read whatever `llm_invoke` accumulated on `ctx.obj['attempted_models']` during `func` into a local list (`command_attempted_models`). Then restore the previous shared value: if a prior value was present in the snapshot, write it back to `ctx.obj['attempted_models']`; if no prior value was present, `pop`/`del` the `'attempted_models'` key entirely so the next sibling command starts with a clean slate. Restoration must also be best-effort and must not raise.
+6. **Access Command Context for CSV write:** Continue to use the Click context obtained in step 2.
+7. **Retrieve Output Cost Option:** Check if the output cost option is specified directly via `ctx.obj` or via the `PDD_OUTPUT_COST_PATH` environment variable.
+8. **Prepare Cost Data:**
 - Determine the command name from the context.
 - Extract the cost and model name from the command function's result if available. The result tuple may take one of two shapes:
   - **Legacy shape:** `(..., cost, model_name)` — second-to-last element is the cost, last element is the model name.
   - **Enriched shape:** the last element is a dict (e.g., `{"cost": ..., "model_name": ..., "attempted_models": [...]}`). When the last element is a dict, read cost from `dict["cost"]`, the final model from `dict["model_name"]`, and the ordered fallback chain from `dict["attempted_models"]`.
-- Determine the attempted-models chain using this precedence: (a) `ctx.obj['attempted_models']` if present and non-empty (preferred — populated by `llm_invoke`); otherwise (b) the `attempted_models` key on the result dict if the enriched shape was returned; otherwise (c) an empty list.
+- Determine the attempted-models chain using this precedence: (a) the locally captured `command_attempted_models` from step 5 if non-empty (preferred — this is the chain `llm_invoke` aggregated within THIS `@track_cost` invocation, NOT the live `ctx.obj['attempted_models']` which has already been restored to its prior value); otherwise (b) the `attempted_models` key on the result dict if the enriched shape was returned; otherwise (c) an empty list. Reading the live `ctx.obj['attempted_models']` here would re-introduce the cross-command leak this decorator now prevents.
 - Collect input and output file paths from the command arguments using `kwargs`. Input file paths should be validated to ensure they exist, and output file paths should be identified by their parameter names starting with 'output'.
-7. **Append Cost Data to CSV File:**
+9. **Append Cost Data to CSV File:**
 - Skip CSV writing entirely when running under pytest (`PYTEST_CURRENT_TEST` environment variable is set). This prevents mock return values from polluting the cost CSV during test runs.
 - If the output cost file does not exist, create it and write the header row.
 - If the file exists, append the cost data to the end of the file.
 - Ensure all columns are included in the CSV file in this exact order: `timestamp, model, command, cost, input_files, output_files, attempted_models`. The `attempted_models` column is appended at the end for backward compatibility with existing readers; serialize the chain as a semicolon-delimited string in chronological order (first attempt → last attempt). Use the empty string when no chain was recorded.
-8. **Handle Exceptions Gracefully:**
-- If any errors occur during cost logging, print an error message using Rich's `rprint` but do not interrupt the command execution.
-9. **Return the Command Result:** Return the result of the original command function.
+10. **Handle Exceptions Gracefully:**
+- If any errors occur during cost logging, print an error message using Rich's `rprint` but do not interrupt the command execution. If the wrapped `func` raised, re-raise that original exception AFTER the CSV row has been written (so the row that mines `exception.attempted_models` and the scoped `command_attempted_models` still lands on disk for failed commands).
+11. **Return the Command Result:** Return the result of the original command function.
 
 % The decorator should be robust and ensure that the main command functionality is not adversely affected by the cost tracking. Use the `functools.wraps` decorator to preserve the metadata of the original function.
 

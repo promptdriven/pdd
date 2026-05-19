@@ -2792,6 +2792,55 @@ def test_cloud_response_preserves_full_attempted_models_chain():
                 ], f"chain not preserved for response key {response_key!r}: {result['attempted_models']!r}"
 
 
+def test_cloud_response_missing_attempted_models_warns_and_degrades(caplog):
+    """Issue #1086: the cloud /llmInvoke success contract REQUIRES
+    `attemptedModels`. A non-conforming server that omits all three accepted
+    keys (`attemptedModels`, `attempted_models`, `modelChain`) MUST trigger a
+    client-side warning and degrade to a single-entry `[modelName]` chain
+    — preserving backward compatibility but flagging the loss of cloud-side
+    fallback history.
+    """
+    with patch("pdd.core.cloud.CloudConfig") as mock_config:
+        mock_config.get_jwt_token.return_value = "fake_token"
+        mock_config.get_endpoint_url.return_value = "https://example.com/llmInvoke"
+
+        with patch("requests.post") as mock_post:
+            mock_response = MagicMock()
+            mock_response.status_code = 200
+            mock_response.json.return_value = {
+                "result": "cloud result",
+                "totalCost": 0.001,
+                "modelName": "only-final",
+                # Deliberately omits attemptedModels / attempted_models / modelChain
+            }
+            mock_post.return_value = mock_response
+
+            from pdd.llm_invoke import _llm_invoke_cloud
+
+            with caplog.at_level(logging.WARNING, logger="pdd.llm_invoke"):
+                result = _llm_invoke_cloud(
+                    prompt="Test",
+                    input_json={},
+                    strength=0.5,
+                    temperature=0.1,
+                    verbose=False,
+                    output_pydantic=None,
+                    output_schema=None,
+                    time=0.25,
+                    use_batch_mode=False,
+                    messages=None,
+                    language=None,
+                )
+
+    # Backward-compat fallback: single-entry chain from modelName.
+    assert result["attempted_models"] == ["only-final"]
+    # And the client logs a warning so non-conforming servers are visible.
+    assert any(
+        "attemptedModels" in r.message and "issue #1086" in r.message
+        for r in caplog.records
+    ), f"Expected a warning about missing attemptedModels; got: {[r.message for r in caplog.records]}"
+
+
 # --- Issue #348: Auth Status Mismatch Tests ---
 
 def test_llm_invoke_cloud_401_clears_jwt_cache():
@@ -6014,6 +6063,65 @@ class TestContextWindowValidation:
                         )
                         assert result["result"] == "hello"
                         mock_comp.assert_called_once()
+
+    def test_context_window_skipped_model_not_in_attempted_models(self, mock_load_models, mock_set_llm_cache):
+        """A candidate rejected by pre-call context-window validation must NOT appear in attempted_models.
+
+        The prompt contract (llm_invoke_python.prompt 'Attempted-Model Tracking') requires that
+        only models for which an actual provider call was attempted are recorded. Candidates
+        skipped before any call (missing api_key, pre-call context-window overflow) must not be
+        appended to the chain.
+
+        Regression for PR #1087 finding: append moved from immediately after credential
+        check to immediately before litellm.completion / batch_completion / responses call.
+        """
+        all_keys = {
+            "OPENAI_API_KEY": "fake_key",
+            "ANTHROPIC_API_KEY": "fake_key",
+            "GOOGLE_API_KEY": "fake_key",
+        }
+
+        # Configure context limits per-model: gpt-5-nano has a tiny limit so the
+        # 200K-token prompt will trigger pre-call rejection. claude-3 has a huge
+        # limit so it accepts the prompt and the call actually goes through.
+        def context_limit_side_effect(model_name):
+            if "gpt-5-nano" in str(model_name):
+                return 50_000
+            return 1_000_000
+
+        successful_response = create_mock_litellm_response("ok", model_name="claude-3")
+
+        with patch.dict(os.environ, all_keys):
+            with patch.object(_llm_invoke_module.litellm, "token_counter", return_value=200_000):
+                with patch.object(
+                    _llm_invoke_module,
+                    "get_context_limit",
+                    side_effect=context_limit_side_effect,
+                ):
+                    with patch.object(
+                        _llm_invoke_module.litellm,
+                        "completion",
+                        return_value=successful_response,
+                    ) as mock_comp:
+                        result = _llm_invoke_module.llm_invoke(
+                            prompt="huge prompt",
+                            input_json={},
+                            strength=1.0,
+                            time=0.0,
+                            use_cloud=False,
+                        )
+
+        # Exactly one provider call: the second candidate. The first was skipped
+        # before any provider call was made.
+        assert mock_comp.call_count == 1
+        chain = result["attempted_models"]
+        assert "gpt-5-nano" not in chain, (
+            f"Context-window-skipped candidate must NOT appear in attempted_models, got {chain!r}"
+        )
+        # The candidate that was actually called must be present.
+        assert any("claude-3" in m for m in chain), (
+            f"Successful candidate must appear in attempted_models, got {chain!r}"
+        )
 
 
 # =============================================================================
