@@ -1731,54 +1731,119 @@ def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, 
 
 
 def _apply_architecture_corrections(
-    arch_path: Path,
-    architecture: List[Dict[str, Any]],
+    project_root: Path,
     corrections: List[Dict[str, Any]],
+    architecture: Optional[List[Dict[str, Any]]] = None,
     quiet: bool = False,
 ) -> List[Dict[str, Any]]:
     """
-    Apply LLM-suggested dependency corrections to architecture.json.
+    Apply LLM-suggested dependency corrections to the architecture.json file that
+    *owns* each corrected ``filename``.
+
+    Per issue #1060, combined architecture data is read-only analysis. Writes must
+    go back to the single architecture.json that lists the corrected filename,
+    never to the primary/root path with the combined list — that flattens nested
+    arch entries into root and pollutes app architecture with bundled samples.
 
     Args:
-        arch_path: Path to architecture.json.
-        architecture: Current architecture data.
-        corrections: List of correction dicts with 'filename' and 'dependencies'.
+        project_root: PDD project root used to discover architecture.json files.
+        corrections: List of correction dicts with ``filename`` and ``dependencies``.
+        architecture: Optional combined in-memory list; when provided, entries
+            matching successfully written corrections are mutated in place so the
+            downstream dependency-graph build sees the new dependencies without
+            re-reading from disk.
         quiet: Suppress output.
 
     Returns:
-        Updated architecture data.
+        The (possibly mutated) combined ``architecture`` list, or ``[]`` if none
+        was supplied.
     """
-    # Build lookup by filename
-    filename_to_idx: Dict[str, int] = {}
-    for idx, entry in enumerate(architecture):
-        filename_to_idx[entry.get("filename", "")] = idx
+    if architecture is None:
+        architecture = []
 
-    changes_made = 0
+    successful_changes = 0
     for correction in corrections:
         filename = correction.get("filename", "")
         new_deps = correction.get("dependencies", [])
-        if filename in filename_to_idx:
-            idx = filename_to_idx[filename]
-            old_deps = architecture[idx].get("dependencies", [])
-            architecture[idx]["dependencies"] = new_deps
-            changes_made += 1
-            if not quiet:
-                console.print(
-                    f"[yellow]Updated deps for {filename}: "
-                    f"{old_deps} -> {new_deps}[/yellow]"
-                )
+        if not filename:
+            continue
 
-    if changes_made > 0:
-        try:
-            atomic_write_json(arch_path, architecture)
+        # Locate every architecture.json under project_root that declares this
+        # filename. Use default discovery (skip bundled samples) so a root-level
+        # sync run cannot write to bundled-sample arch files.
+        #
+        # Carry the *raw* loaded JSON alongside the extracted modules list so
+        # write-back preserves the original on-disk shape (bare-list or
+        # ``{prd_files, modules}`` dict). ``extract_modules`` returns the same
+        # dict objects by reference (it does not deep-copy), so mutating
+        # ``modules[idx]["dependencies"]`` also mutates the corresponding entry
+        # in ``raw_data`` (whether ``raw_data`` is the bare list or the
+        # dict wrapper). See ``pdd/architecture_registry.py::extract_modules``.
+        owners: List[Tuple[Path, Any, List[Dict[str, Any]], int]] = []
+        for arch_path in find_architecture_for_project(project_root):
+            try:
+                data = json.loads(arch_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            modules = extract_modules(data)
+            for idx, entry in enumerate(modules):
+                if entry.get("filename") == filename:
+                    owners.append((arch_path, data, modules, idx))
+                    break  # one owner per file
+
+        if not owners:
             if not quiet:
                 console.print(
-                    f"[green]Wrote {changes_made} dependency correction(s) "
-                    f"to {arch_path}[/green]"
+                    f"[yellow]Skipping correction: filename '{filename}' "
+                    f"not found in any architecture.json[/yellow]"
+                )
+            continue
+
+        if len(owners) > 1:
+            paths = ", ".join(str(p) for p, _, _, _ in owners)
+            if not quiet:
+                console.print(
+                    f"[yellow]Skipping ambiguous correction: filename "
+                    f"'{filename}' appears in {len(owners)} architecture.json "
+                    f"files at: {paths} — refusing to write[/yellow]"
+                )
+            continue
+
+        arch_path, raw_data, modules, idx = owners[0]
+        old_deps = modules[idx].get("dependencies", [])
+        # Mutate the dict in place — because extract_modules returns the same
+        # dict objects (not copies), this propagates into ``raw_data`` whether
+        # the file was bare-list or ``{prd_files, modules}`` shaped.
+        modules[idx]["dependencies"] = new_deps
+        try:
+            # Write the raw loaded structure back so the original shape (and
+            # any sibling keys like ``prd_files``) is preserved on disk.
+            atomic_write_json(arch_path, raw_data)
+            successful_changes += 1
+            if not quiet:
+                console.print(
+                    f"[yellow]Updated deps for {filename} in {arch_path}: "
+                    f"{old_deps} -> {new_deps}[/yellow]"
                 )
         except OSError as e:
             if not quiet:
-                console.print(f"[red]Failed to write architecture.json: {e}[/red]")
+                console.print(
+                    f"[red]Failed to write {arch_path}: {e}[/red]"
+                )
+            continue
+
+        # Keep the combined in-memory list aligned with the on-disk write so
+        # the downstream graph build sees the new dependencies.
+        for entry in architecture:
+            if isinstance(entry, dict) and entry.get("filename") == filename:
+                entry["dependencies"] = new_deps
+                break
+
+    if successful_changes and not quiet:
+        console.print(
+            f"[green]Applied {successful_changes} dependency correction(s) "
+            f"across owning architecture.json files[/green]"
+        )
 
     return architecture
 
@@ -2034,7 +2099,9 @@ def run_agentic_sync(
         elif not quiet:
             console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
         if not dry_run:
-            architecture = _apply_architecture_corrections(arch_path, architecture, deps_corrections, quiet)
+            architecture = _apply_architecture_corrections(
+                project_root, deps_corrections, architecture, quiet
+            )
 
     # 11. Build dependency graph
     if architecture is not None:
