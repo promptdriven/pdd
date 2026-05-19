@@ -79,6 +79,6 @@ W1:
 </capabilities>
 
 <non_responsibilities>
-- OAuth 2.0 client registration.
-- Multi-tenant user namespace isolation (handled by the API gateway).
+- DOES NOT handle OAuth 2.0 client registration.
+- DOES NOT enforce multi-tenant user namespace isolation (handled by the API gateway).
 </non_responsibilities>

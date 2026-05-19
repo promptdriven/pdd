@@ -45,7 +45,7 @@ The checker reads these XML-delimited sections when present in a prompt file:
 | `<capabilities>` | Modal verb presence on each capability line |
 | `<coverage>` | Rule ID validity; MUST NOT rule coverage; waiver cross-references |
 | `<waivers>` | Required fields; expiry dates |
-| `<non_responsibilities>` | Parsed but not checked (informational only) |
+| `<non_responsibilities>` | Modal verb presence on each non-responsibility line |
 
 Prompts that contain **none** of the checked sections (legacy format) produce
 zero issues and are silently marked clean.
@@ -116,18 +116,28 @@ R1, R2, R4   ← R3 is missing
 
 ### `MISSING_MODAL` — warning (error in `--strict`)
 
-A `<contract_rules>` block or `<capabilities>` line contains no recognised
-modal verb.
+A `<contract_rules>` block, `<capabilities>` line, or `<non_responsibilities>`
+line contains no recognised modal verb.
 
 Required modals: `MUST`, `MUST NOT`, `MAY`, `MAY NOT`, `SHOULD`, `SHOULD NOT`,
-`SHALL`, `SHALL NOT`, `DOES NOT`.
+`SHALL`, `SHALL NOT`, `DOES NOT`, `WILL NOT`.
 
 ```text
 R4 - Fraud gate
 The system reject suspicious transactions.    ← no modal verb
 ```
 
-**Fix:** Add a modal: `"The system MUST NOT process suspicious transactions."`
+```text
+<non_responsibilities>
+- Currency conversion.    ← no modal verb
+</non_responsibilities>
+```
+
+**Fix:** Add a modal:
+
+- Rules: `"The system MUST NOT process suspicious transactions."`
+- Non-responsibilities: `"DOES NOT perform currency conversion."` or
+  `"WILL NOT handle PCI key management (handled by the vault service)."`
 
 ---
 
@@ -308,8 +318,8 @@ The system MUST NOT process suspicious transactions.
 </capabilities>
 
 <non_responsibilities>
-- Currency conversion.
-- PCI DSS key management (handled by the vault service).
+- DOES NOT perform currency conversion.
+- DOES NOT manage PCI DSS keys (handled by the vault service).
 </non_responsibilities>
 ```
 
@@ -369,7 +379,8 @@ pdd contracts check --stories user_stories/ prompts/foo_python.prompt
 
 `--stories` takes a **directory** of `story__*.md` files. The checker scans
 each story's `## Covers` section and validates that every rule ID referenced
-there actually exists in the linked prompt's `<contract_rules>`.
+there actually exists in the linked prompt's `<contract_rules>`. Story files
+are scanned **recursively** — subdirectories are included automatically.
 
 Two reference formats are supported:
 
@@ -452,17 +463,21 @@ The repository ships runnable fixtures under `tests/fixtures/contract_check/`:
 | `malformed_ids_python.prompt` | `R_001` prefix — triggers `MALFORMED_ID` |
 | `non_sequential_ids_python.prompt` | R1, R2, R4 gap — triggers `NON_SEQUENTIAL_ID` |
 | `missing_modal_python.prompt` | Rule without modal verb — triggers `MISSING_MODAL` |
+| `capabilities_no_modal_python.prompt` | Capability line without modal verb — triggers `MISSING_MODAL` in `<capabilities>` |
 | `vague_no_vocab_python.prompt` | Vague terms, no vocabulary — triggers `VAGUE_TERM` |
 | `vague_with_vocab_python.prompt` | Same terms, all defined — zero issues |
 | `unknown_coverage_refs_python.prompt` | Coverage cites R99 — triggers `UNKNOWN_COVERAGE_REF` |
+| `coverage_unchecked_python.prompt` | Coverage entry starts with TODO — triggers `UNCHECKED_RULE` |
 | `uncovered_mustnot_python.prompt` | MUST NOT with no coverage — triggers `UNCOVERED_MUST_NOT` |
 | `payment_api_issues_python.prompt` | Combined defects in one file (integration testing) |
 | `rate_limiter_issues_python.prompt` | Sequential gap + coverage errors (integration testing) |
 | `waiver_valid_python.prompt` | Complete, unexpired waiver — zero issues |
 | `waiver_expired_python.prompt` | Expired waiver — triggers `EXPIRED_WAIVER` |
 | `waiver_missing_fields_python.prompt` | Incomplete waiver — triggers `MISSING_WAIVER_FIELDS` |
+| `waiver_ref_missing_python.prompt` | Coverage cites W99 not in `<waivers>` — triggers `WAIVER_REF_MISSING` |
 | `legacy_no_sections_python.prompt` | No contract sections — silently clean |
 | `story__covers_rule_ids.md` | Valid `## Covers` entries — zero issues |
 | `story__unknown_rule_ids.md` | `## Covers` with unknown IDs — triggers `UNKNOWN_STORY_REF` |
 | `story__payment_flow.md` | Realistic story with valid covers for payment API |
 | `story__payment_bad_refs.md` | Story citing R99, R100 — triggers `UNKNOWN_STORY_REF` |
+| `story__cross_module_covers.md` | Cross-module `prompt#rule-id` format — zero issues |

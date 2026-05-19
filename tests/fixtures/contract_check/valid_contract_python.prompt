@@ -47,6 +47,6 @@ The system MAY log additional metadata for audit purposes.
 </capabilities>
 
 <non_responsibilities>
-- Virus scanning file content.
-- Long-term archival storage.
+- DOES NOT perform virus scanning of file content.
+- DOES NOT provide long-term archival storage.
 </non_responsibilities>

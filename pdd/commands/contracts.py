@@ -1,3 +1,4 @@
+# pylint: disable=duplicate-code
 """
 Contract authoring quality utilities (pdd contracts …).
 """
@@ -19,7 +20,6 @@ from ..contract_check import (
     check_stories,
     run_llm_ambiguity_pass,
 )
-from ..core.errors import handle_error
 
 _console = Console(highlight=False)
 
@@ -112,7 +112,7 @@ def contracts_group() -> None:
     help="Run optional LLM ambiguity review on <contract_rules> terms.",
 )
 @click.pass_context
-def contracts_check(
+def contracts_check(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
     ctx: click.Context,
     target: str,
     as_json: bool,
@@ -177,10 +177,10 @@ def contracts_check(
 
     # Scan a directory of prompts
     elif target_path.is_dir():
-        for r in check_directory(target_path, strict=strict):
+        for prompt_result in check_directory(target_path, strict=strict):
             if llm_ambiguity:
                 llm_issues = run_llm_ambiguity_pass(
-                    r.path,
+                    prompt_result.path,
                     strength=strength,
                     temperature=temperature,
                     time=time_val,
@@ -189,8 +189,8 @@ def contracts_check(
                 if strict:
                     for issue in llm_issues:
                         issue.level = "error"
-                r.issues.extend(llm_issues)
-            all_results.append(r)
+                prompt_result.issues.extend(llm_issues)
+            all_results.append(prompt_result)
 
     # Scan user-story directory
     if stories_dir is not None:
