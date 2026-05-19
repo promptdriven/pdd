@@ -181,6 +181,9 @@ def example_cost_tracking_setup():
         - cost: Estimated cost in USD (e.g., 0.05 for 5 cents)
         - input_files: List of input files involved
         - output_files: List of output files generated/modified
+        - attempted_models: Semicolon-delimited model attempt chain. A
+          single-model success contains the successful model once; this field
+          is empty only when no LLM attempt was recorded.
     
     Args:
         None

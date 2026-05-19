@@ -631,6 +631,14 @@ def _llm_invoke_cloud(
     if verbose:
         logger.debug(f"Cloud llm_invoke request to: {cloud_url}")
 
+    def _with_cloud_attempt(exc: Exception) -> Exception:
+        """Attach the cloud sentinel only after the HTTP boundary is reached."""
+        try:
+            exc.attempted_models = ["cloud:auto"]
+        except Exception:
+            pass
+        return exc
+
     try:
         response = requests.post(
             cloud_url,
@@ -681,7 +689,6 @@ def _llm_invoke_cloud(
                 model_name_out = data.get("modelName", "cloud_model")
                 attempted_models_out = [str(model_name_out)] if model_name_out else []
 
-            _propagate_attempted_models_to_ctx(attempted_models_out)
             return {
                 "result": result,
                 "cost": data.get("totalCost", 0.0),
@@ -692,7 +699,7 @@ def _llm_invoke_cloud(
 
         elif response.status_code == 402:
             error_msg = response.json().get("error", "Insufficient credits")
-            raise InsufficientCreditsError(error_msg)
+            raise _with_cloud_attempt(InsufficientCreditsError(error_msg))
 
         elif response.status_code in (401, 403):
             # Clear stale JWT cache to prevent repeated failures
@@ -707,22 +714,22 @@ def _llm_invoke_cloud(
                 f"Authentication expired ({server_error or response.status_code}). "
                 "Please re-authenticate with: pdd auth logout && pdd auth login"
             )
-            raise CloudFallbackError(error_msg)
+            raise _with_cloud_attempt(CloudFallbackError(error_msg))
 
         elif response.status_code >= 500:
             error_msg = response.json().get("error", f"Server error ({response.status_code})")
-            raise CloudFallbackError(error_msg)
+            raise _with_cloud_attempt(CloudFallbackError(error_msg))
 
         else:
             error_msg = response.json().get("error", f"HTTP {response.status_code}")
-            raise CloudInvocationError(f"Cloud llm_invoke failed: {error_msg}")
+            raise _with_cloud_attempt(CloudInvocationError(f"Cloud llm_invoke failed: {error_msg}"))
 
-    except requests.exceptions.Timeout:
-        raise CloudFallbackError("Cloud request timed out")
+    except requests.exceptions.Timeout as e:
+        raise _with_cloud_attempt(CloudFallbackError("Cloud request timed out")) from e
     except requests.exceptions.ConnectionError as e:
-        raise CloudFallbackError(f"Cloud connection failed: {e}")
+        raise _with_cloud_attempt(CloudFallbackError(f"Cloud connection failed: {e}")) from e
     except requests.exceptions.RequestException as e:
-        raise CloudFallbackError(f"Cloud request failed: {e}")
+        raise _with_cloud_attempt(CloudFallbackError(f"Cloud request failed: {e}")) from e
 
 
 def _is_wsl_environment() -> bool:
@@ -3026,11 +3033,9 @@ def llm_invoke(
     )
 
     # Chronological chain of every model PDD attempts during this invocation.
-    # Hoisted above the cloud-vs-local split so cloud attempts are recorded
-    # even when control later falls through to the local execution path.
-    # Per the prompt contract, append "cloud:<model_name>" the moment we
-    # attempt a cloud HTTP call; rewrite the entry with the cloud-reported
-    # model on success.
+    # Cloud attempts are merged from _llm_invoke_cloud only after that helper
+    # reaches the HTTP boundary; pre-request auth/setup failures are not model
+    # attempts and must not pollute the chain.
     attempted_models_chain: List[str] = []
 
     if use_cloud:
@@ -3039,14 +3044,6 @@ def llm_invoke(
 
         if verbose:
             logger.debug("Attempting cloud execution...")
-
-        # Record the cloud attempt up-front so the chain captures it even if
-        # the cloud call raises a fallback / invocation error and we drop
-        # through to local execution below. The exact model the cloud picks
-        # isn't known until the response returns; use the documented
-        # "cloud:auto" sentinel from the prompt contract until then.
-        cloud_sentinel = "cloud:auto"
-        attempted_models_chain.append(cloud_sentinel)
 
         try:
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
@@ -3063,9 +3060,8 @@ def llm_invoke(
                 messages=messages,
                 language=language,
             )
-            # Replace the "cloud:auto" placeholder with whatever the cloud
-            # actually reported, prefixed so callers can tell cloud and
-            # local attempts apart in the cost CSV.
+            # Prefix whatever the cloud actually reported so callers can tell
+            # cloud and local attempts apart in the cost CSV.
             cloud_reported = cloud_result.get("attempted_models") if isinstance(cloud_result, dict) else None
             if cloud_reported:
                 attempted_models_chain = []
@@ -3092,12 +3088,18 @@ def llm_invoke(
                 "llm_invoke.cloud_fallback",
                 **_safe_error_fields(e),
             )
-            # Continue to local execution below; cloud_sentinel stays in
-            # attempted_models_chain so the failed cloud attempt is recorded.
+            for name in getattr(e, "attempted_models", []) or []:
+                text = str(name)
+                if text and (not attempted_models_chain or attempted_models_chain[-1] != text):
+                    attempted_models_chain.append(text)
         except InsufficientCreditsError as e:
             # Re-raise credit errors - user needs to know.  Attach the
             # cloud attempt so callers / track_cost can still record it.
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
+            for name in getattr(e, "attempted_models", []) or []:
+                text = str(name)
+                if text and (not attempted_models_chain or attempted_models_chain[-1] != text):
+                    attempted_models_chain.append(text)
             try:
                 e.attempted_models = list(attempted_models_chain)
             except Exception:
@@ -3113,8 +3115,10 @@ def llm_invoke(
                 "llm_invoke.cloud_error",
                 **_safe_error_fields(e),
             )
-            # Continue to local execution below; cloud_sentinel stays in
-            # attempted_models_chain so the failed cloud attempt is recorded.
+            for name in getattr(e, "attempted_models", []) or []:
+                text = str(name)
+                if text and (not attempted_models_chain or attempted_models_chain[-1] != text):
+                    attempted_models_chain.append(text)
 
     # --- 2. Local execution uses already-validated formatted_messages ---
 
@@ -3784,12 +3788,14 @@ def llm_invoke(
                             finish_reason=finish_reason,
                             call_type="responses",
                         )
+                        _propagate_attempted_models_to_ctx(attempted_models_chain)
                         return {
                             'result': final_result,
                             'cost': total_cost,
                             'model_name': model_name_litellm,
                             'thinking_output': None,
                             'finish_reason': finish_reason,
+                            'attempted_models': list(attempted_models_chain),
                         }
                     except Exception as e:
                         last_exception = e

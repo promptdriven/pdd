@@ -1562,6 +1562,35 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
                     assert response['result'].field2 == 42
 
 
+def test_llm_invoke_responses_api_success_returns_attempted_models(mock_load_models, mock_set_llm_cache):
+    """Successful Responses API calls should expose and propagate attempted_models."""
+    model_key_name = "OPENAI_API_KEY"
+    valid_json = '{"field1": "test_value", "field2": 42}'
+
+    mock_ctx = MagicMock()
+    mock_ctx.obj = {}
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        mock_responses_return = create_mock_openai_responses_api_response(valid_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return):
+            with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                    with patch('click.get_current_context', return_value=mock_ctx):
+                        response = llm_invoke(
+                            prompt="Test prompt {text}",
+                            input_json={"text": "test"},
+                            strength=0.5,
+                            temperature=0.0,
+                            verbose=False,
+                            output_pydantic=SampleOutputModel
+                        )
+
+    assert response['attempted_models'] == ['gpt-5-nano']
+    assert mock_ctx.obj['attempted_models'] == ['gpt-5-nano']
+    mock_completion.assert_not_called()
+
+
 # --- Tests for Multi-Credential Provider (Vertex AI) ---
 
 def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
@@ -2594,6 +2623,7 @@ def test_llm_invoke_cloud_fallback_on_error():
 
         # Should have used local fallback
         assert result["result"] == "local fallback response"
+        assert result["attempted_models"] == ["test-model"]
 
 
 def test_llm_invoke_insufficient_credits_no_fallback():
