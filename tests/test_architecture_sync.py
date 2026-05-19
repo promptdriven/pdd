@@ -2812,6 +2812,60 @@ def test_register_untracked_prompts_adds_include_first_entry():
         assert entry['dependencies'] == ['split_main_python.prompt']
 
 
+def test_register_untracked_prompts_uses_nested_pddrc_generate_output_path(tmp_path):
+    """Nested .pddrc prompt contexts should own auto-register filepath inference."""
+    prompts_dir = tmp_path / "prompts"
+    commands_dir = prompts_dir / "commands"
+    src_runtime_dir = prompts_dir / "src" / "workers" / "runtime"
+    commands_dir.mkdir(parents=True)
+    src_runtime_dir.mkdir(parents=True)
+    arch_path = tmp_path / "architecture.json"
+
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  commands:
+    paths: ["pdd/commands/**", "prompts/commands/**"]
+    defaults:
+      prompts_dir: "prompts/commands"
+      generate_output_path: "pdd/commands/"
+  pdd_cli:
+    paths: ["pdd/**", "prompts/**"]
+    defaults:
+      prompts_dir: "prompts"
+      generate_output_path: "pdd"
+""",
+        encoding="utf-8",
+    )
+    (commands_dir / "foo_python.prompt").write_text(
+        "<pdd-reason>Foo command</pdd-reason>\n% body\n",
+        encoding="utf-8",
+    )
+    (src_runtime_dir / "gemini_cli_python.prompt").write_text(
+        "<pdd-reason>Gemini runtime</pdd-reason>\n% body\n",
+        encoding="utf-8",
+    )
+    arch_path.write_text("[]\n", encoding="utf-8")
+
+    result = register_untracked_prompts(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+
+    assert set(result["registered"]) == {
+        "commands/foo_python.prompt",
+        "src/workers/runtime/gemini_cli_python.prompt",
+    }
+    updated = json.loads(arch_path.read_text(encoding="utf-8"))
+    entries = {entry["filename"]: entry for entry in updated}
+    assert entries["commands/foo_python.prompt"]["filepath"] == "pdd/commands/foo.py"
+    assert (
+        entries["src/workers/runtime/gemini_cli_python.prompt"]["filepath"]
+        == "src/workers/runtime/gemini_cli.py"
+    )
+
+
 def test_register_skips_file_without_tags():
     """register_untracked_prompts skips prompt files with no PDD tags."""
     with tempfile.TemporaryDirectory() as tmp:

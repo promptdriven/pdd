@@ -342,6 +342,107 @@ def _find_renamed_prompt_file(filename: str, prompts_dir: Path) -> Optional[Path
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _prompt_source_stem_and_extension(filename: str) -> Optional[tuple[str, str]]:
+    """Return source filepath stem plus extension inferred from a prompt filename."""
+    normalized = _normalize_prompt_filename(filename)
+    stem = normalized[:-len('.prompt')] if normalized.endswith('.prompt') else normalized
+
+    language_to_ext = {language: ext for ext, language in _EXT_TO_LANGUAGE.items()}
+    for language, ext in sorted(language_to_ext.items(), key=lambda item: len(item[0]), reverse=True):
+        suffix = f'_{language}'
+        if stem.endswith(suffix):
+            return stem[:-len(suffix)], ext
+
+    if stem.endswith('_python'):
+        return stem[:-len('_python')], '.py'
+    return None
+
+
+def _join_posix_path(prefix: str, relative_path: str) -> str:
+    """Join path fragments for architecture.json filepath values."""
+    normalized_prefix = prefix.replace("\\", "/").strip()
+    normalized_relative = relative_path.replace("\\", "/").lstrip("/")
+    if normalized_prefix in ("", ".", "./"):
+        return normalized_relative
+    return f'{normalized_prefix.rstrip("/")}/{normalized_relative}'
+
+
+def _infer_filepath_from_pddrc_context(
+    filename: str,
+    prompts_dir: Path,
+    architecture_path: Path,
+) -> Optional[str]:
+    """Infer filepath from a nested .pddrc prompts_dir/generate_output_path context."""
+    prompt_info = _prompt_source_stem_and_extension(filename)
+    if prompt_info is None:
+        return None
+
+    pddrc_path = architecture_path.parent / ".pddrc"
+    if not pddrc_path.is_file():
+        return None
+
+    try:
+        from .construct_paths import _load_pddrc_config
+
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:
+        return None
+
+    prompt_path = prompts_dir / _normalize_prompt_filename(filename)
+    try:
+        prompt_rel = prompt_path.relative_to(pddrc_path.parent).as_posix()
+    except ValueError:
+        try:
+            prompt_rel = prompt_path.resolve().relative_to(pddrc_path.parent.resolve()).as_posix()
+        except (OSError, ValueError):
+            return None
+
+    matches: List[tuple[int, str, str, str]] = []
+    for context_config in config.get("contexts", {}).values():
+        if not isinstance(context_config, dict):
+            continue
+        defaults = context_config.get("defaults", {})
+        if not isinstance(defaults, dict):
+            continue
+
+        context_prompts_dir = defaults.get("prompts_dir")
+        generate_output_path = defaults.get("generate_output_path")
+        if not isinstance(context_prompts_dir, str) or not isinstance(generate_output_path, str):
+            continue
+
+        prompts_dir_value = context_prompts_dir.replace("\\", "/").strip()
+        if Path(prompts_dir_value).is_absolute():
+            try:
+                context_prompts_rel = (
+                    Path(prompts_dir_value)
+                    .resolve()
+                    .relative_to(pddrc_path.parent.resolve())
+                    .as_posix()
+                )
+            except (OSError, ValueError):
+                continue
+        else:
+            context_prompts_rel = prompts_dir_value.strip("/")
+
+        if context_prompts_rel in ("", ".", "prompts"):
+            continue
+        if prompt_rel != context_prompts_rel and not prompt_rel.startswith(f"{context_prompts_rel}/"):
+            continue
+
+        relative_prompt = prompt_rel[len(context_prompts_rel):].lstrip("/")
+        relative_info = _prompt_source_stem_and_extension(relative_prompt)
+        if relative_info is None:
+            continue
+        relative_stem, ext = relative_info
+        matches.append((len(context_prompts_rel), generate_output_path, relative_stem, ext))
+
+    if not matches:
+        return None
+
+    _, generate_output_path, relative_stem, ext = max(matches, key=lambda item: item[0])
+    return _join_posix_path(generate_output_path, f"{relative_stem}{ext}")
+
+
 def _infer_filepath(filename: str) -> str:
     """
     Infer output filepath from prompt filename using naming conventions.
@@ -352,23 +453,12 @@ def _infer_filepath(filename: str) -> str:
     Returns:
         Inferred filepath string
     """
-    normalized = _normalize_prompt_filename(filename)
-    stem = normalized[:-len('.prompt')] if normalized.endswith('.prompt') else normalized
-
-    language_to_ext = {language: ext for ext, language in _EXT_TO_LANGUAGE.items()}
-    for language, ext in sorted(language_to_ext.items(), key=lambda item: len(item[0]), reverse=True):
-        suffix = f'_{language}'
-        if stem.endswith(suffix):
-            filepath_stem = stem[:-len(suffix)]
-            if '/' in filepath_stem:
-                return f'{filepath_stem}{ext}'
-            return f'pdd/{filepath_stem}{ext}'
-
-    if stem.endswith('_python'):
-        module_name = stem[:-len('_python')]
-        if '/' in module_name:
-            return f'{module_name}.py'
-        return f'pdd/{module_name}.py'
+    prompt_info = _prompt_source_stem_and_extension(filename)
+    if prompt_info is not None:
+        filepath_stem, ext = prompt_info
+        if '/' in filepath_stem:
+            return f'{filepath_stem}{ext}'
+        return f'pdd/{filepath_stem}{ext}'
     return f'prompts/{filename}'
 
 
@@ -522,7 +612,10 @@ def register_untracked_prompts(
             skipped.append(filename)
             continue
 
-        filepath = _infer_filepath(filename)
+        filepath = (
+            _infer_filepath_from_pddrc_context(filename, prompts_dir, architecture_path)
+            or _infer_filepath(filename)
+        )
         module_tags = _infer_module_tags(filename)
         reason = tags['reason'] or f'Auto-registered module: {filename}'
 
