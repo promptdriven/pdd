@@ -35,10 +35,17 @@
 % ── Responsibilities ──
 
 % 1. Extract include paths from prompt text
+%    - Function: _parse_include_attrs(attrs_text: str) -> Dict[str, str]
+%    - Parse quoted attributes from an ``<include ...>`` opening tag into lower-cased keys
+%    - Function: _include_is_architecture_dependency_candidate(attrs: Dict[str, str]) -> bool
+%    - Return False for context-only include selectors:
+%      - ``mode="interface"``
+%      - any non-empty ``select=``, ``query=``, or ``lines=`` attribute
+%    - Context-only include selectors are LLM source context, not architecture edges
 %    - Function: extract_include_paths_from_prompt_text(text: str) -> Set[str]
 %    - Parse ``<include>...</include>`` tags (supports attributes on the tag like ``<include foo="bar">path</include>``)
-%    - Pattern: r"<include[^>]*>(.*?)</include>" with re.DOTALL
-%    - Return set of stripped, non-empty paths
+%    - Pattern: r"<include(?P<attrs>[^>]*)>(?P<body>.*?)</include>" with re.DOTALL
+%    - Return set of stripped, non-empty paths only for includes that pass _include_is_architecture_dependency_candidate
 
 % 2. Find architecture record for a prompt file
 %    - Function: _find_architecture_record_for_prompt_file(project_root: Path, prompt_file_resolved: Path) -> Optional[Tuple[Path, List[Dict[str, Any]], int]]

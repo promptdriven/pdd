@@ -199,9 +199,17 @@ class TestParseLlmResponse:
 class TestApplyArchitectureCorrections:
     def test_applies_corrections(self, tmp_path):
         arch_path = tmp_path / "architecture.json"
+        prompts = tmp_path / "prompts"
+        prompts.mkdir()
+        (prompts / "foo_python.prompt").write_text(
+            "<pdd-dependency>bar_python.prompt</pdd-dependency>\n"
+            "<pdd-dependency>baz_python.prompt</pdd-dependency>\n",
+            encoding="utf-8",
+        )
         architecture = [
             {"filename": "foo_python.prompt", "dependencies": ["bar_python.prompt"]},
             {"filename": "bar_python.prompt", "dependencies": []},
+            {"filename": "baz_python.prompt", "dependencies": []},
         ]
         arch_path.write_text(json.dumps(architecture))
 

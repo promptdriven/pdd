@@ -20,10 +20,35 @@ from .architecture_registry import extract_modules, find_architecture_for_projec
 from .sync_order import extract_module_from_include
 
 
+def _parse_include_attrs(attrs_text: str) -> Dict[str, str]:
+    """Return lower-cased attributes from an ``<include ...>`` opening tag."""
+    attrs: Dict[str, str] = {}
+    pattern = r'([A-Za-z_:][\w:.-]*)\s*=\s*("([^"]*)"|\'([^\']*)\')'
+    for match in re.finditer(pattern, attrs_text):
+        value = match.group(3) if match.group(3) is not None else match.group(4)
+        attrs[match.group(1).lower()] = value or ""
+    return attrs
+
+
+def _include_is_architecture_dependency_candidate(attrs: Dict[str, str]) -> bool:
+    """Return False for context-only include selectors."""
+    if attrs.get("mode", "").strip().lower() == "interface":
+        return False
+    return not any(attrs.get(name, "").strip() for name in ("select", "query", "lines"))
+
+
 def extract_include_paths_from_prompt_text(text: str) -> Set[str]:
-    """Return paths inside ``<include>...</include>`` tags (supports attributes on the tag)."""
-    pattern = r"<include[^>]*>(.*?)</include>"
-    return {m.strip() for m in re.findall(pattern, text, re.DOTALL) if m.strip()}
+    """Return architecture-bearing paths inside ``<include>...</include>`` tags."""
+    pattern = r"<include(?P<attrs>[^>]*)>(?P<body>.*?)</include>"
+    paths: Set[str] = set()
+    for match in re.finditer(pattern, text, re.DOTALL):
+        attrs = _parse_include_attrs(match.group("attrs") or "")
+        if not _include_is_architecture_dependency_candidate(attrs):
+            continue
+        body = match.group("body").strip()
+        if body:
+            paths.add(body)
+    return paths
 
 
 def _find_architecture_record_for_prompt_file(

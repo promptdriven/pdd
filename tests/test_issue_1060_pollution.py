@@ -34,6 +34,15 @@ def _read_json(path: Path) -> Any:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _write_prompt_with_dependencies(path: Path, dependencies: list[str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tags = "\n".join(
+        f"<pdd-dependency>{dependency}</pdd-dependency>"
+        for dependency in dependencies
+    )
+    path.write_text(f"{tags}\n%\nPrompt body.\n", encoding="utf-8")
+
+
 # ---------------------------------------------------------------------------
 # AC #1: root scan with bundled examples — root arch must not gain example modules
 # ---------------------------------------------------------------------------
@@ -101,6 +110,10 @@ def test_ac2_nested_correction_writes_to_owning_file(tmp_path: Path) -> None:
     ]
     _write_json(root_arch, root_data)
     _write_json(nested_arch, nested_data)
+    _write_prompt_with_dependencies(
+        tmp_path / "services" / "api" / "prompts" / "api_python.prompt",
+        ["models_python.prompt", "auth_python.prompt"],
+    )
 
     root_before = _read_json(root_arch)
     corrections = [
@@ -147,6 +160,10 @@ def test_ac3_root_correction_does_not_touch_nested(tmp_path: Path) -> None:
     _write_json(
         nested_arch,
         [{"filename": "api_python.prompt", "dependencies": []}],
+    )
+    _write_prompt_with_dependencies(
+        tmp_path / "prompts" / "root_mod_python.prompt",
+        ["helper_python.prompt"],
     )
 
     nested_before = _read_json(nested_arch)
@@ -339,6 +356,10 @@ def test_dict_wrapper_arch_preserves_prd_files_on_correction(tmp_path: Path) -> 
             indent=2,
         ),
         encoding="utf-8",
+    )
+    _write_prompt_with_dependencies(
+        tmp_path / "services" / "api" / "prompts" / "api_python.prompt",
+        ["models_python.prompt", "auth_python.prompt"],
     )
 
     corrections = [
