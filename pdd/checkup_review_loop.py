@@ -618,6 +618,22 @@ class ReviewLoopConfig:
     # at the end of the field list so positional callers keep working
     # unchanged.
     fixer_fallback: Optional[str] = None
+    # APPENDED — Issue #1092 deterministic gates. When ``enable_gates``
+    # is True (the default), every clean-exit site in
+    # ``run_checkup_review_loop`` routes through
+    # ``_enforce_gates_before_clean`` which runs ``pdd.checkup_gates``
+    # over the loop-owned PR worktree. A failing local gate (e.g.
+    # ``prettier --check`` on a worktree the LLM reviewer declared
+    # clean) injects synthetic blocker findings tagged
+    # ``reviewer="gate:<name>"`` so the loop refuses the clean verdict
+    # and the fixer addresses the deterministic failure. ``gate_timeout``
+    # is the per-gate wall-clock cap in seconds. ``gate_allow`` is a
+    # forward-compatibility hook that lets the operator opt extra gate
+    # names into discovery. MUST stay at the end of the field list so
+    # positional callers keep working unchanged.
+    enable_gates: bool = True
+    gate_timeout: float = 60.0
+    gate_allow: Tuple[str, ...] = ()
 
 
 @dataclass
@@ -686,6 +702,17 @@ class ReviewLoopState:
     # codex as the fixer after gemini took over reviewing, even
     # though the docs say codex (the original reviewer) is excluded.
     original_reviewer: Optional[str] = None
+    # APPENDED — Issue #1092. One entry per ``_enforce_gates_before_clean``
+    # invocation, in execution order. Each entry is a dict with
+    # ``round`` (int), ``mode`` (str — e.g. "review", "verify",
+    # "review-only", "fallback-review", "review-pending"), and
+    # ``results`` (list of ``GateResult.to_dict()`` payloads — both
+    # passed and failed gates). Drives the rendered
+    # ``### Deterministic Gates`` section and the ``gates`` field of
+    # ``final-state.json``. Empty when ``config.enable_gates`` is
+    # False. Kept at the end of the field list so positional
+    # construction stays stable.
+    gate_runs: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -871,6 +898,38 @@ def run_checkup_review_loop(
                             break
                         state.active_reviewer = fallback_result.reviewer
                         if fallback_result.status == "clean":
+                            # Issue #1092: deterministic gates must pass
+                            # before any clean verdict, including the
+                            # fallback-reviewer-clean path. A fallback
+                            # promoted to ``clean`` cannot override a
+                            # failing local gate. Gate findings are
+                            # recorded under the fallback's identity so
+                            # the audit trail shows which reviewer the
+                            # gates were validating against.
+                            gate_findings = _enforce_gates_before_clean(
+                                state=state,
+                                config=config,
+                                worktree=worktree,
+                                artifacts_dir=artifacts_dir,
+                                round_number=round_number,
+                                mode="fallback-review",
+                                pr_metadata=pr_metadata,
+                                reviewer=fallback_result.reviewer,
+                            )
+                            if gate_findings:
+                                _record_gate_findings(state, gate_findings)
+                                state.reviewer_status[fallback_result.reviewer] = "findings"
+                                # The fallback reviewer is now the active
+                                # reviewer for the rest of the loop;
+                                # feed the gate findings to the fixer on
+                                # the next iteration rather than declaring
+                                # clean. Without this, a fallback clean
+                                # on top of a failing prettier gate would
+                                # ship.
+                                reviewer = fallback_result.reviewer
+                                fallback_used = True
+                                pending_findings = list(gate_findings)
+                                continue
                             state.fresh_final_status = "clean"
                             state.stop_reason = (
                                 f"Primary reviewer {reviewer} unavailable "
@@ -905,22 +964,88 @@ def run_checkup_review_loop(
                         "Review-only mode: primary reviewer reported findings."
                     )
                 else:
-                    _mark_reviewer_findings_fixed(state, reviewer)
-                    state.reviewer_status[reviewer] = "clean"
-                    state.fresh_final_status = "clean"
-                    state.stop_reason = (
-                        "Review-only mode: primary reviewer reported no findings."
+                    # Issue #1092: deterministic gates must pass before
+                    # declaring a clean review-only verdict. Review-only
+                    # is non-mutating (no fixer runs), so a failing gate
+                    # surfaces in the report as a blocker finding and
+                    # the reviewer status stays at ``findings`` — the
+                    # operator runs the suggested local command and
+                    # commits the fix themselves.
+                    gate_findings = _enforce_gates_before_clean(
+                        state=state,
+                        config=config,
+                        worktree=worktree,
+                        artifacts_dir=artifacts_dir,
+                        round_number=round_number,
+                        mode="review-only",
+                        pr_metadata=pr_metadata,
+                        reviewer=reviewer,
                     )
+                    if gate_findings:
+                        _record_gate_findings(state, gate_findings)
+                        state.reviewer_status[reviewer] = "findings"
+                        state.stop_reason = (
+                            "Review-only mode: deterministic gates "
+                            "reported findings."
+                        )
+                    else:
+                        _mark_reviewer_findings_fixed(state, reviewer)
+                        state.reviewer_status[reviewer] = "clean"
+                        state.fresh_final_status = "clean"
+                        state.stop_reason = (
+                            "Review-only mode: primary reviewer reported no findings."
+                        )
                 break
             if not fix_findings:
-                _mark_reviewer_findings_fixed(state, reviewer)
-                state.reviewer_status[reviewer] = "clean"
-                break
+                # Issue #1092: deterministic gates gate the round-start
+                # clean exit too. A reviewer that says "no actionable
+                # findings" on its FIRST pass cannot override a failing
+                # local check; promote gate failures to the next-round
+                # findings set and continue the loop.
+                gate_findings = _enforce_gates_before_clean(
+                    state=state,
+                    config=config,
+                    worktree=worktree,
+                    artifacts_dir=artifacts_dir,
+                    round_number=round_number,
+                    mode="review",
+                    pr_metadata=pr_metadata,
+                    reviewer=reviewer,
+                )
+                if gate_findings:
+                    _record_gate_findings(state, gate_findings)
+                    # Treat the gate findings as the fixer's input for
+                    # this round; do NOT break clean.
+                    fix_findings = list(gate_findings) + fix_findings
+                else:
+                    _mark_reviewer_findings_fixed(state, reviewer)
+                    state.reviewer_status[reviewer] = "clean"
+                    break
         else:
             fix_findings = _actionable_findings(state, pending_findings)
             if not fix_findings:
-                state.reviewer_status[reviewer] = "clean"
-                break
+                # Issue #1092: same enforcement on the "pending findings
+                # filtered to empty" early-exit path. Verifier reports
+                # everything fixed, but a deterministic gate may still
+                # fail (e.g. a fixer that addressed code-level findings
+                # but left prettier red). Re-run gates and route their
+                # findings into the next fixer pass.
+                gate_findings = _enforce_gates_before_clean(
+                    state=state,
+                    config=config,
+                    worktree=worktree,
+                    artifacts_dir=artifacts_dir,
+                    round_number=round_number,
+                    mode="review-pending",
+                    pr_metadata=pr_metadata,
+                    reviewer=reviewer,
+                )
+                if gate_findings:
+                    _record_gate_findings(state, gate_findings)
+                    fix_findings = list(gate_findings)
+                else:
+                    state.reviewer_status[reviewer] = "clean"
+                    break
 
         state.reviewer_status[reviewer] = "findings"
         # Capture the worktree HEAD BEFORE the primary fixer runs so the
@@ -1146,6 +1271,28 @@ def run_checkup_review_loop(
             break
         if pending_findings:
             state.reviewer_status[reviewer] = "findings"
+            continue
+
+        # Issue #1092: the verifier just declared the PR clean after the
+        # fixer's push, but a deterministic gate may still fail (e.g. a
+        # whitespace error the LLM verifier overlooked, or a prettier
+        # mismatch the fixer didn't address). Re-run gates one last time;
+        # if any fail, prepend them to ``pending_findings`` and keep the
+        # loop going.
+        gate_findings = _enforce_gates_before_clean(
+            state=state,
+            config=config,
+            worktree=worktree,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            mode="verify",
+            pr_metadata=pr_metadata,
+            reviewer=reviewer,
+        )
+        if gate_findings:
+            _record_gate_findings(state, gate_findings)
+            state.reviewer_status[reviewer] = "findings"
+            pending_findings = list(gate_findings)
             continue
 
         state.reviewer_status[reviewer] = "clean"
@@ -3162,6 +3309,192 @@ def _strip_markdown_links(text: str) -> str:
     return re.sub(r"\[([^\]]+)\]\([^)]*\)", r"\1", text or "").strip()
 
 
+def _pr_changed_files_all(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, Any]],
+) -> List[str]:
+    """Return the full PR changed-file inventory (POSIX relative paths).
+
+    Mirrors ``_pr_changed_python_files`` but does not filter by extension —
+    deterministic gate discovery scopes per-file gates such as
+    ``py_compile``/``ruff``/``black`` to ``*.py`` itself, and inspects
+    e.g. ``package.json``/``pyproject.toml`` at the worktree root for
+    repo-wide gates regardless of which files changed.
+
+    Returns an empty list on git error so the caller falls back to the
+    repo-wide gate set (``git diff --check`` is always emitted).
+    """
+    base_candidates: List[str] = []
+    if pr_metadata and pr_metadata.get("base_ref"):
+        base_ref = str(pr_metadata["base_ref"])
+        base_candidates.append(f"origin/{base_ref}")
+        base_candidates.append(base_ref)
+    base_candidates.extend(["origin/main", "origin/master", "main", "master"])
+
+    for base in base_candidates:
+        try:
+            verify = subprocess.run(
+                ["git", "rev-parse", "--verify", base],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("gates: changed-files base verify failed for %r: %s", base, exc)
+            continue
+        if verify.returncode != 0:
+            continue
+        try:
+            diff = subprocess.run(
+                ["git", "diff", "--name-only", f"{base}...HEAD"],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("gates: changed-files git diff failed for %r: %s", base, exc)
+            continue
+        if diff.returncode != 0:
+            continue
+        names = [line.strip() for line in diff.stdout.splitlines() if line.strip()]
+        if names or base.endswith(("/main", "/master", "main", "master")):
+            return names
+
+    # HEAD~1 fallback — better than ``[]`` on a single-commit smoke test.
+    try:
+        diff = subprocess.run(
+            ["git", "diff", "--name-only", "HEAD~1...HEAD"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        logger.debug("gates: changed-files HEAD~1 fallback failed: %s", exc)
+        return []
+    if diff.returncode != 0:
+        return []
+    return [line.strip() for line in diff.stdout.splitlines() if line.strip()]
+
+
+def _enforce_gates_before_clean(
+    *,
+    state: ReviewLoopState,
+    config: ReviewLoopConfig,
+    worktree: Path,
+    artifacts_dir: Path,
+    round_number: int,
+    mode: str,
+    pr_metadata: Optional[Dict[str, Any]],
+    reviewer: str,
+) -> List[ReviewFinding]:
+    """Run deterministic local gates before declaring ``reviewer`` clean.
+
+    Issue #1092. The LLM reviewer can declare a PR "clean" while a fast,
+    deterministic local check still fails on the loop-owned PR worktree
+    (e.g. ``prettier --check`` on unformatted JS, ``git diff --check``
+    on whitespace errors). When ``config.enable_gates`` is True, this
+    helper invokes ``pdd.checkup_gates.discover_gates`` over the
+    worktree and ``run_gates`` to execute each one, converting failures
+    into synthetic blocker findings the caller must inject into the
+    per-round flow exactly like reviewer findings.
+
+    Returns an empty list when gates are disabled or every gate passed.
+    Returns one ``ReviewFinding`` per failed gate otherwise. The caller
+    is responsible for inserting those findings into ``state.findings_by_key``
+    (via ``_record_gate_findings``) and re-routing the loop.
+
+    Never raises: every runner-side failure is captured by ``run_gates``
+    as a ``GateResult`` with ``exit_code=None`` and translated into a
+    synthetic blocker finding.
+    """
+    if not config.enable_gates:
+        return []
+    # Imported lazily to avoid a top-of-module cycle: ``checkup_gates``
+    # itself imports ``ReviewFinding`` from this module.
+    from .checkup_gates import (
+        DEFAULT_GATE_TIMEOUT_SECONDS,
+        discover_gates,
+        gate_results_to_findings,
+        run_gates,
+    )
+
+    try:
+        changed_files = _pr_changed_files_all(worktree, pr_metadata)
+    except Exception as exc:  # noqa: BLE001 - defensive: never raise
+        logger.debug("gates: changed-files resolution crashed: %s", exc, exc_info=True)
+        changed_files = []
+    try:
+        gates = discover_gates(
+            worktree,
+            changed_files=tuple(changed_files),
+            extra_allow=tuple(config.gate_allow),
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive
+        logger.warning("gates: discovery crashed: %s", exc, exc_info=True)
+        return []
+    if not gates:
+        return []
+    default_timeout = (
+        config.gate_timeout
+        if config.gate_timeout and config.gate_timeout > 0
+        else DEFAULT_GATE_TIMEOUT_SECONDS
+    )
+    try:
+        results = run_gates(
+            worktree,
+            gates,
+            artifacts_dir=artifacts_dir,
+            round_number=round_number,
+            # Use the caller's mode token as-is so the on-disk manifest
+            # filename (``round-{R}-{mode}-gates.json``) matches the
+            # design-doc contract. Suffix ``-gates`` on the JSON name
+            # already distinguishes gate output from the reviewer's
+            # ``round-{R}-{mode}-{role}.findings.json`` artifact in the
+            # same directory.
+            mode=mode,
+            default_timeout=default_timeout,
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive: never raise
+        logger.warning("gates: run_gates crashed: %s", exc, exc_info=True)
+        return []
+    # Record EVERY gate run (passed + failed) so the final report's
+    # ``### Deterministic Gates`` section and ``final-state.json``'s
+    # ``gates`` field show the full audit trail, not just failures.
+    state.gate_runs.append(
+        {
+            "round": round_number,
+            "mode": mode,
+            "reviewer": reviewer,
+            "results": [result.to_dict() for result in results],
+        }
+    )
+    return gate_results_to_findings(results, round_number=round_number)
+
+
+def _record_gate_findings(
+    state: ReviewLoopState,
+    findings: Sequence[ReviewFinding],
+) -> None:
+    """Insert gate findings into ``state.findings_by_key`` for audit.
+
+    Mirrors the per-finding portion of ``_record_review`` but never
+    touches ``state.reviewer_status``: the caller decides whether the
+    reviewer slot stays at ``findings``, rotates to a fallback, or stays
+    open for the next round.
+    """
+    for finding in findings:
+        existing = state.findings_by_key.get(finding.key)
+        if existing is None:
+            state.findings_by_key[finding.key] = finding
+        else:
+            # A later round produced the same gate finding again — keep
+            # the original dedup row but refresh evidence/required_fix so
+            # the final report shows the latest output excerpt.
+            existing.status = "open"
+            existing.evidence = finding.evidence or existing.evidence
+            existing.required_fix = finding.required_fix or existing.required_fix
+
+
 def _record_review(
     state: ReviewLoopState,
     result: ReviewResult,
@@ -4063,6 +4396,12 @@ def _write_final_state(
             }
             for fix in state.fixes
         ],
+        # Issue #1092: deterministic-gate audit trail. One entry per
+        # ``_enforce_gates_before_clean`` invocation, carrying both
+        # passed and failed ``GateResult`` dicts so downstream tooling
+        # can audit gate runs regardless of whether they produced
+        # synthetic findings.
+        "gates": list(state.gate_runs),
     }
     _write_artifact(artifacts_dir / "final-state.json", json.dumps(payload, indent=2))
 
@@ -4235,6 +4574,57 @@ def _render_final_report(
             if reviewer_name in reviewers:
                 continue
             _render_diag_line(reviewer_name, detail)
+
+    # Issue #1092: render every recorded deterministic-gate run, grouped
+    # by round. Failed gates are clearly marked so a reader scanning the
+    # report can see exactly which local check vetoed (or would have
+    # vetoed) the LLM's clean verdict.
+    if state.gate_runs:
+        lines.extend(["", "### Deterministic Gates", ""])
+        by_round: Dict[int, List[Dict[str, Any]]] = {}
+        for run in state.gate_runs:
+            by_round.setdefault(int(run.get("round", 0)), []).append(run)
+        for round_number in sorted(by_round):
+            lines.append(f"#### Round {round_number}")
+            for run in by_round[round_number]:
+                mode = str(run.get("mode") or "?")
+                reviewer_label = str(run.get("reviewer") or "")
+                header = f"- mode `{mode}`"
+                if reviewer_label:
+                    header += f", reviewer `{reviewer_label}`"
+                lines.append(header)
+                for result in run.get("results", []) or []:
+                    gate = result.get("gate") or {}
+                    name = gate.get("name", "<unnamed>")
+                    source = gate.get("source", "")
+                    exit_code = result.get("exit_code")
+                    duration = result.get("duration_seconds", 0.0) or 0.0
+                    error = (result.get("error") or "").strip()
+                    if exit_code is None:
+                        status = f"runner-error ({error})" if error else "runner-error"
+                    elif exit_code == 0:
+                        status = "passed"
+                    else:
+                        status = f"failed (exit {exit_code})"
+                    lines.append(
+                        f"  - `{name}` — {status}, "
+                        f"source={source or '?'}, "
+                        f"duration={float(duration):.2f}s"
+                    )
+                    if exit_code not in (0, None):
+                        tail_source = (
+                            result.get("stderr_excerpt")
+                            or result.get("stdout_excerpt")
+                            or ""
+                        )
+                        tail = tail_source.strip()
+                        if tail:
+                            if len(tail) > 1000:
+                                tail = tail[:1000] + "\n[...]"
+                            lines.append("    ```")
+                            for output_line in tail.splitlines():
+                                lines.append(f"    {output_line}")
+                            lines.append("    ```")
 
     lines.extend([
         "",

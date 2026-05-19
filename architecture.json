@@ -7532,7 +7532,8 @@
               "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/",
-              "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"
+              "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)",
+              "Issue #1092: at every clean-exit site (round-start LLM clean, review-only clean, post-verify clean, pending-findings-empty early exit, and fallback-reviewer clean), invokes _enforce_gates_before_clean to run pdd.checkup_gates over the loop-owned worktree; any failing deterministic gate (git diff --check, prettier --check, py_compile, optional ruff/black/mypy/tsc) is converted to a synthetic blocker ReviewFinding (reviewer prefix `gate:`) that the loop feeds back into the fixer rather than declaring clean"
             ]
           },
           {
@@ -7569,7 +7570,10 @@
           "clean_reviewer_states",
           "fallback_reviewer_on_failure",
           "timeout_adder",
-          "reasoning_time"
+          "reasoning_time",
+          "enable_gates",
+          "gate_timeout",
+          "gate_allow"
         ],
         "artifacts_layout": {
           "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
@@ -7591,6 +7595,76 @@
     },
     "position": {
       "x": 15600,
+      "y": 3200
+    }
+  },
+  {
+    "reason": "Issue #1092: deterministic local gates the review loop runs before honoring any LLM 'clean' verdict.",
+    "description": "Discovers and executes a conservative, allowlisted set of repo-local checks (git diff --check, prettier --check via package.json, py_compile per changed Python file, optional ruff/black/mypy when configured in pyproject.toml, optional tsc --noEmit when typescript is declared). Each gate runs as a list-form subprocess with bounded timeout, output truncation, PDD_* env scrubbing, and secret redaction. Failing gates are converted into synthetic blocker ReviewFinding rows with reviewer prefix 'gate:' so the review loop refuses the clean verdict and routes the deterministic failure through the fixer.",
+    "dependencies": [
+      "checkup_review_loop_python.prompt"
+    ],
+    "priority": 217.6,
+    "filename": "checkup_gates_python.prompt",
+    "filepath": "pdd/checkup_gates.py",
+    "tags": [
+      "agentic",
+      "checkup",
+      "review-loop",
+      "gates",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "discover_gates",
+            "signature": "(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = ()) -> List[Gate]",
+            "returns": "List[Gate]",
+            "sideEffects": [
+              "Reads package.json, pyproject.toml, tsconfig.json, and .git markers from the loop-owned worktree (read-only)",
+              "Probes PATH for ruff/black/mypy/npx via shutil.which (read-only)"
+            ]
+          },
+          {
+            "name": "run_gates",
+            "signature": "(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]",
+            "returns": "List[GateResult]",
+            "sideEffects": [
+              "Spawns each gate as a list-form subprocess with cwd=worktree, env scrubbed of PDD_* and forced CI=1/NO_COLOR=1/FORCE_COLOR=0",
+              "Captures stdout/stderr, truncates to ~10KB each side, and runs _scrub_secrets before persistence",
+              "Writes per-gate human-readable artifacts and a JSON manifest under artifacts_dir/round-{R}-{mode}-gate-*.txt and round-{R}-{mode}-gates.json",
+              "Never raises: timeouts, missing binaries, and OSErrors are captured as GateResult rows with exit_code=None and non-empty error"
+            ]
+          },
+          {
+            "name": "gate_results_to_findings",
+            "signature": "(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]",
+            "returns": "List[ReviewFinding]",
+            "sideEffects": [
+              "None"
+            ]
+          }
+        ],
+        "dataclasses": [
+          "Gate",
+          "GateResult"
+        ],
+        "config_knobs": [
+          "DEFAULT_GATE_TIMEOUT_SECONDS"
+        ],
+        "artifacts_layout": {
+          "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
+          "per_round": [
+            "round-{N}-gates-{mode}-gates.json",
+            "round-{N}-gates-{mode}-gate-{slug}.txt"
+          ]
+        }
+      }
+    },
+    "position": {
+      "x": 15700,
       "y": 3200
     }
   },

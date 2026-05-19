@@ -23,7 +23,7 @@
 % Commands:
 %   generate, example, test, preprocess, fix, split, etc. (as per the full README.md)
 %   Each command may have its own specific options.
-%   Include `checkup` with all README-documented checkup options, including PR mode (`--pr`, `--issue`) and review-loop mode (`--review-loop`, `--review-only`, `--reviewer`, `--fixer`, `--reviewer-fallback`, role/limit/status flags). The review-loop status-handling flags include `--continue-on-reviewer-limit` (report provider/rate/timeout failures as degraded) and `--fallback-reviewer-on-failure` (promote the fixer to a fallback reviewer when the primary ends in failed/missing).
+%   Include `checkup` with all README-documented checkup options, including PR mode (`--pr`, `--issue`) and review-loop mode (`--review-loop`, `--review-only`, `--reviewer`, `--fixer`, `--reviewer-fallback`, role/limit/status flags). The review-loop status-handling flags include `--continue-on-reviewer-limit` (report provider/rate/timeout failures as degraded) and `--fallback-reviewer-on-failure` (promote the fixer to a fallback reviewer when the primary ends in failed/missing). The deterministic-gate flags (issue #1092) include `--no-gates` (disable gate enforcement), `--gate-timeout SECONDS` (per-gate wall-clock cap, default 60), and the repeatable `--gate-allow CMD` (forward-compatibility hook for opting extra gate names into discovery).
 
 % The bash completion script (pdd_completion.sh) should meet the following requirements:
 %   - Support all PDD CLI commands and their respective options, including global options.

@@ -1,0 +1,64 @@
+% Write `pdd/checkup_gates.py`, the deterministic-gate enforcement layer for
+`pdd checkup --pr --review-loop` (issue promptdriven/pdd#1092).
+
+<include>context/python_preamble.prompt</include>
+
+% Goal
+Provide a conservative, allowlisted gate-discovery and gate-execution
+surface that the review loop calls before honoring any LLM "clean"
+verdict. A failing local gate (e.g. `prettier --check` on the PR
+worktree) must convert into a synthetic blocker `ReviewFinding` so the
+loop refuses to ship and the fixer addresses the failure.
+
+% Public API
+1. `@dataclass Gate(name: str, cmd: List[str], source: str, severity: str = "blocker", timeout: float = 60.0, area: str = "deterministic-gate", required_fix_hint: str = "")` — one discovered gate. `cmd` is the literal list-form argv. `source` is a human-readable origin (e.g. `package.json:scripts.format:check`).
+2. `@dataclass GateResult(gate: Gate, exit_code: Optional[int], stdout_excerpt: str, stderr_excerpt: str, duration_seconds: float, started_at_iso: str, error: str = "")` — execution outcome. `exit_code is None` means the runner itself failed (timeout, FileNotFoundError, OSError). `passed` returns True iff `exit_code == 0`.
+3. `discover_gates(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = ()) -> List[Gate]` — read-only inspection of the worktree to emit the allowlist set.
+4. `run_gates(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]` — execute every gate as a list-form subprocess. Persist `round-{R}-{mode}-gates.json` and per-gate `round-{R}-{mode}-gate-{slug}.txt`. Never raises.
+5. `gate_results_to_findings(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]` — convert failing gates into synthetic blocker findings tagged `reviewer=f"gate:{gate.name}"`, `area="deterministic-gate"`, with the gate command and output excerpt in `evidence` and `required_fix`. Passed gates are skipped.
+
+% Conservative v1 discovery set
+6. `git diff --check` — always emitted when the worktree is a real git checkout. Skip when `.git` is absent so unit-test fixtures that mock `_setup_pr_worktree` to a bare `tmp_path` do not regress.
+7. `package.json` scripts under any of `format:check`, `prettier:check`, `lint:check`, `typecheck`, `tsc`, `tsc:noemit` — only when the script command starts with `prettier --check`, `tsc --noEmit`, `tsc -p`, or a `npx`/`yarn`/`pnpm`/`bun run` prefix of the same. Skip if the command contains `--write`, `--fix`, `install`, `publish`, `deploy`, `start`, `build`/`build:`, `git push`, `rm -`, `rimraf`. The package-manager runner is auto-detected from lockfile presence (`pnpm-lock.yaml` → `pnpm`, `yarn.lock` → `yarn`, `bun.lockb` → `bun`, otherwise `npm`).
+8. TypeScript: when `tsconfig.json` exists and `typescript` appears in any of the `dependencies` / `devDependencies` / `peerDependencies` maps AND no `typecheck`/`tsc`/`tsc:noemit` script was already emitted AND `npx` is on PATH, emit `tsc-noemit` running `npx tsc --noEmit`.
+9. Python compile sanity: for every changed `.py` file that exists in the worktree, emit a `py-compile:<rel>` gate running `python -m py_compile <abs>`.
+10. `ruff check <changed_py>` — only when `pyproject.toml` declares a `[tool.ruff]` section AND `ruff` is on PATH.
+11. `black --check <changed_py>` — only when `pyproject.toml` declares `[tool.black]` AND `black` is on PATH.
+12. `mypy <changed_py>` — only when `pyproject.toml` declares `[tool.mypy]` AND `mypy` is on PATH.
+
+% NOT in default discovery (codex flagged as too risky)
+13. `.pre-commit-config.yaml` hooks. Skipped: hook author can run arbitrary shell.
+14. Generic `Makefile` targets. Skipped: too environment-heavy (PDD's own `make lint` is conda+pylint).
+15. `cargo check`, `go test`, etc. Skipped: not present in scope.
+16. Targeted pytest. Deferred to a v2 follow-up.
+17. `eslint` invocation that does not explicitly include `--no-fix`. Skipped: ESLint can mutate the worktree on some configurations.
+
+% extra_allow
+18. `extra_allow` is a forward-compatibility argument plumbed from the CLI's `--gate-allow` flag (repeatable). Accepted but does not yet widen the allowlist — every gate is allowlist-only. Future versions may consult this argument to opt extra gate names in.
+
+% Runner contract (codex requirements)
+19. All commands are list-form. NEVER `shell=True`. Each gate spawns `subprocess.run(list(gate.cmd), cwd=str(worktree), env=<scrubbed>, capture_output=True, text=True, timeout=<gate or default>, check=False)`.
+20. Timeout per gate (default 60s). Use `gate.timeout` when set to a positive value; otherwise fall back to `default_timeout`.
+21. Output captured then truncated to roughly 10,000 characters per stream. When truncation fires, append a short `[...truncated]` marker so an operator can tell artifacts are incomplete.
+22. Scrub captured `stdout`/`stderr` through `pdd.checkup_review_loop._scrub_secrets` BEFORE persisting or rendering. Lazy-import to avoid a top-of-module cycle.
+23. Working directory: the loop-owned PR worktree. Never the user's primary checkout.
+24. Environment: inherit the caller's env then drop every key beginning with `PDD_` (so the gate cannot inherit reviewer/fixer state or token files), then force `CI=1`, `NO_COLOR=1`, `FORCE_COLOR=0` for deterministic non-interactive output.
+25. `subprocess.run(..., check=False)`. The runner NEVER raises. Capture `subprocess.TimeoutExpired`, `FileNotFoundError`, `PermissionError`, generic `OSError`, and any unexpected `Exception` as a `GateResult` with `exit_code=None` and a non-empty `error` describing what happened. Treat that as a gate failure via `gate_results_to_findings`.
+
+% Artifact contract
+26. The runner creates `artifacts_dir` with `mkdir(parents=True, exist_ok=True)`.
+27. For each gate, write `round-{R}-{mode}-gate-{slug}.txt` containing the command, source, started timestamp, duration, exit code (or `<runner-error>` + error string), and the truncated/scrubbed stdout/stderr.
+28. After all gates execute, write `round-{R}-{mode}-gates.json` containing the list of `GateResult.to_dict()` payloads in execution order.
+29. The artifacts root is `.pdd/checkup-review-loop/issue-{N}-pr-{M}/` so the existing `.pdd/*` gitignore filter prevents gate artifacts from being staged by `_commit_and_push_if_changed`.
+
+% Findings adapter
+30. `gate_results_to_findings` MUST construct one `ReviewFinding` per failing gate (`exit_code != 0` OR `exit_code is None`). Passed gates are skipped. Set `severity` to the gate's severity (default `blocker`), `reviewer` to `f"gate:{gate.name}"`, `area` to `"deterministic-gate"`, `location` to `gate.source`, and `round_number` to the caller-supplied round.
+31. `evidence` must include the gate's command line and the (scrubbed/truncated) stderr or stdout tail so the fixer can see what the deterministic check actually reported.
+32. `required_fix` must spell out the local command to run (e.g., `Run \`npm run format:check\` locally and address the reported issues`), preserving the gate's `required_fix_hint` when present.
+33. The dedup key (`ReviewFinding.key`) is stable across rounds for the same gate (severity + location + finding + required_fix) so a recurring failure does not produce duplicate findings.
+
+% Dependencies
+<pdd.checkup_review_loop><include select="class:ReviewFinding,def:_scrub_secrets">../pdd/checkup_review_loop.py</include></pdd.checkup_review_loop>
+
+% Deliverables
+- Code: `pdd/checkup_gates.py`

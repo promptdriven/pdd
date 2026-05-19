@@ -108,6 +108,19 @@ class ReviewLoopConfig:
     # Must differ from the primary fixer and the active reviewer. Kept at
     # the end of the field list so positional callers stay stable.
     fixer_fallback: Optional[str] = None
+    # Issue #1092 deterministic-gate enforcement. ``enable_gates`` toggles
+    # the gate layer at every clean-exit site (CLI: ``--no-gates`` flips
+    # this to False). ``gate_timeout`` is the per-gate wall-clock cap in
+    # seconds (CLI: ``--gate-timeout``). ``gate_allow`` is the
+    # forward-compatibility hook plumbed from the repeatable
+    # ``--gate-allow`` CLI flag. Gate failures convert into synthetic
+    # ``ReviewFinding`` rows with ``reviewer=f"gate:{name}"`` and
+    # ``area="deterministic-gate"`` and are routed through the normal
+    # fixer path. The gate module is ``pdd/checkup_gates.py`` (registered
+    # in ``architecture.json`` under ``checkup_gates_python.prompt``).
+    enable_gates: bool = True
+    gate_timeout: float = 60.0
+    gate_allow: Tuple[str, ...] = ()
 
 
 @dataclass

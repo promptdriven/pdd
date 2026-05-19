@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 from unittest.mock import patch
@@ -5347,3 +5348,464 @@ class TestPromptSourceGuardIntegration:
         # Reviewer-status reflects the refusal, not "clean".
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
+
+
+class TestReviewLoopDeterministicGates:
+    """Issue #1092: deterministic local gates gate the clean verdict.
+
+    These tests pin the contract that a failing local deterministic
+    check (e.g. ``prettier --check``) cannot be overridden by an LLM
+    "clean" verdict at ANY clean-exit site in the review loop.
+    """
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+            },
+        )
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed"))
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+    def _stub_failing_gate(
+        self,
+        monkeypatch: Any,
+        *,
+        gate_name: str = "prettier-check",
+        fail_rounds: Tuple[int, ...] = (1,),
+    ) -> List[int]:
+        """Patch the gate runner so it reports a failing gate for ``fail_rounds``.
+
+        Returns a list that is mutated to record each ``round_number`` the
+        runner was invoked with so tests can assert call counts.
+        """
+        import pdd.checkup_gates as gates_mod
+        import pdd.checkup_review_loop as mod
+
+        rounds_seen: List[int] = []
+
+        def fake_discover(worktree, changed_files, *, extra_allow=()):
+            return [
+                gates_mod.Gate(
+                    name=gate_name,
+                    cmd=["echo", "fake"],
+                    source="package.json:scripts.format:check",
+                    required_fix_hint="Run prettier --write . locally.",
+                )
+            ]
+
+        def fake_run(worktree, gates, *, artifacts_dir, round_number, mode, default_timeout=60.0):
+            rounds_seen.append(round_number)
+            exit_code = 1 if round_number in fail_rounds else 0
+            return [
+                gates_mod.GateResult(
+                    gate=g,
+                    exit_code=exit_code,
+                    stdout_excerpt="Code style issues found." if exit_code else "",
+                    stderr_excerpt="",
+                    duration_seconds=0.01,
+                    started_at_iso="2026-01-01T00:00:00Z",
+                )
+                for g in gates
+            ]
+
+        # Patch BOTH the source-module symbols (so other importers see the
+        # stubs) and the loop's local import resolution path.
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", fake_run)
+        # ``_enforce_gates_before_clean`` imports lazily; patch the parent
+        # module's attribute lookup so the imports inside the helper hit
+        # our stubs.
+        _ = mod
+        return rounds_seen
+
+    def test_clean_reviewer_with_failing_prettier_gate_blocks_clean_verdict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Reviewer says clean; a failing prettier gate must keep the loop open."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # The gate keeps failing every round, so the loop runs to
+        # max_rounds and the reviewer never lands at "clean".
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+        # Reviewer always says clean; fixer pretends to act.
+        calls: List[Tuple[str, str]] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            calls.append((role, kwargs["label"]))
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "reviewer-status: codex=findings" in report
+        # The synthetic gate finding made it into the dedup'd findings.
+        assert "gate:prettier-check" in report
+
+    def test_fixer_receives_gate_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._stub_failing_gate(monkeypatch)
+        instructions: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            instructions.append(instruction)
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The fixer's prompt must reference the synthetic gate finding.
+        fix_instructions = [
+            text for text in instructions if "fix" in text.lower()
+        ]
+        joined = "\n".join(fix_instructions)
+        assert "gate:prettier-check" in joined or "deterministic-gate" in joined
+
+    def test_gates_rerun_after_fixer_push_and_clean_when_passing(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Happy path: gate fails round 1, fixer addresses, gate passes round 2."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        rounds_seen = self._stub_failing_gate(monkeypatch, fail_rounds=(1,))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=3),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Gate runner must have been invoked across multiple rounds.
+        assert 1 in rounds_seen
+        # Loop ends clean once the gate stops failing.
+        assert "reviewer-status: codex=clean" in report
+        assert "fresh-final-review: clean" in report
+
+    def test_verify_clean_with_failing_gate_does_not_mark_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Verify-path coverage: post-fix verifier says clean, but gate fails."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Round 1: reviewer reports findings → fixer runs → verifier says
+        # clean. The gate fails AFTER the verify pass. The loop must
+        # NOT declare clean.
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+        review_calls = {"n": 0}
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix" in label:
+                return True, json.dumps({"summary": "fixed", "dispositions": {}}), 0.05, role
+            review_calls["n"] += 1
+            if review_calls["n"] == 1:
+                # Reviewer reports a finding so the loop enters the
+                # fixer / verifier path.
+                payload = {
+                    "status": "findings",
+                    "issue_aligned": True,
+                    "summary": "f",
+                    "findings": [
+                        {
+                            "severity": "blocker",
+                            "reviewer": role,
+                            "area": "test",
+                            "evidence": "e",
+                            "finding": "fix me",
+                            "required_fix": "do it",
+                            "location": "f.py:1",
+                        }
+                    ],
+                }
+                return True, json.dumps(payload), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The post-verify path must not end clean while the gate is red.
+        assert "reviewer-status: codex=clean" not in report
+        assert "gate:prettier-check" in report
+
+    def test_review_only_with_failing_gate_reports_findings_not_clean(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._stub_failing_gate(monkeypatch)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(review_only=True),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        assert "gate:prettier-check" in report
+
+    def test_fallback_reviewer_clean_with_failing_gate_does_not_ship(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The fallback-reviewer clean path must also honour the gate veto."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Gate fails in every round so the fallback clean cannot ship.
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+
+        # Primary reviewer fails, fallback reviewer (the fixer's role) is
+        # promoted and reports clean. Without #1092, the loop would ship
+        # the fallback's clean verdict immediately. With #1092, the
+        # gate-failure findings must keep the loop open and the verdict
+        # at "findings".
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if role == "codex":
+                # Primary reviewer always fails → fallback promotion fires.
+                return False, "Authentication failed", 0.0, role
+            if "fix" in label:
+                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+            # Fallback reviewer always reports clean.
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(
+                fallback_reviewer_on_failure=True,
+                max_rounds=1,
+            ),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Loop must NOT exit clean (fresh-final stays missing).
+        assert "fresh-final-review: clean" not in report
+        # Gate finding must be in the rendered findings table.
+        assert "gate:prettier-check" in report
+
+    def test_no_gates_flag_preserves_legacy_behavior(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """``enable_gates=False`` must skip the helper entirely."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Make ``discover_gates`` raise — if the loop is honouring
+        # ``enable_gates=False``, the helper short-circuits before
+        # touching ``checkup_gates`` and the loop completes cleanly.
+        def boom(*a: Any, **k: Any):
+            raise AssertionError("gates should not run when disabled")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(enable_gates=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "reviewer-status: codex=clean" in report
+
+    def test_gate_artifacts_are_persisted_under_pdd_checkup_review_loop_dir(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        # Stub a single failing gate so we can inspect the persisted
+        # artifact path without exercising the full loop.
+        def fake_discover(worktree, changed_files, *, extra_allow=()):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        artifacts = tmp_path / ".pdd" / "checkup-review-loop"
+        artifacts.mkdir(parents=True, exist_ok=True)
+
+        findings = _enforce_gates_before_clean(
+            state=ReviewLoopState(reviewer_status={"codex": "missing"}),
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=artifacts,
+            round_number=3,
+            mode="review",
+            pr_metadata={},
+            reviewer="codex",
+        )
+
+        assert findings, "failing gate must yield at least one finding"
+        manifest = artifacts / "round-3-review-gates.json"
+        assert manifest.exists(), (
+            f"expected manifest at {manifest}; got "
+            f"{sorted(p.name for p in artifacts.iterdir())}"
+        )
+
+    def test_gate_runs_render_in_final_report_and_final_state(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The ### Deterministic Gates section + final-state.json gates field."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps({"summary": "noop", "dispositions": {}}), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "### Deterministic Gates" in report
+        assert "prettier-check" in report
+        # The final-state.json artifact must include the structured
+        # gate-run audit trail.
+        final_state_path = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+        )
+        assert final_state_path.exists(), (
+            f"missing {final_state_path}; siblings: "
+            f"{sorted(p.name for p in final_state_path.parent.iterdir())}"
+        )
+        payload = json.loads(final_state_path.read_text(encoding="utf-8"))
+        assert "gates" in payload
+        assert payload["gates"], "expected at least one gate-run entry"
+        assert payload["gates"][0]["mode"]
+        assert payload["gates"][0]["results"]
+
+    def test_gate_finding_carries_stable_dedup_key(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_gates import Gate, GateResult, gate_results_to_findings
+
+        gate = Gate(
+            name="prettier-check",
+            cmd=["prettier", "--check", "."],
+            source="package.json:scripts.format:check",
+        )
+        r1 = gate_results_to_findings(
+            [
+                GateResult(
+                    gate=gate,
+                    exit_code=1,
+                    stdout_excerpt="round-1 output",
+                    stderr_excerpt="",
+                    duration_seconds=0.1,
+                    started_at_iso="2026-01-01T00:00:00Z",
+                )
+            ],
+            round_number=1,
+        )
+        r2 = gate_results_to_findings(
+            [
+                GateResult(
+                    gate=gate,
+                    exit_code=1,
+                    stdout_excerpt="round-2 output (different excerpt)",
+                    stderr_excerpt="",
+                    duration_seconds=0.1,
+                    started_at_iso="2026-01-01T00:00:01Z",
+                )
+            ],
+            round_number=2,
+        )
+        assert r1[0].key == r2[0].key
