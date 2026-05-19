@@ -528,6 +528,34 @@ def _validate_with_pydantic(
     raise ValueError(f"Cannot validate result type {type(result)} with Pydantic model")
 
 
+def _propagate_attempted_models_to_ctx(attempted_models: List[str]) -> None:
+    """Best-effort: record the model fallback chain on the current Click
+    context's ``ctx.obj['attempted_models']`` so :mod:`pdd.track_cost` can
+    write it into the per-command cost CSV. No-op when not inside a Click
+    invocation or when Click isn't importable.
+    """
+    if not attempted_models:
+        return
+    try:
+        import click  # Lazy import to avoid hard dependency at module load
+        ctx = click.get_current_context(silent=True)
+        if ctx is None or ctx.obj is None or not hasattr(ctx.obj, "__setitem__"):
+            return
+        # Append to any existing chain so multiple llm_invoke calls in the
+        # same command compose into one chronological list.
+        existing = ctx.obj.get("attempted_models") or []
+        if not isinstance(existing, list):
+            existing = []
+        combined = list(existing)
+        for name in attempted_models:
+            if name and (not combined or combined[-1] != name):
+                combined.append(str(name))
+        ctx.obj["attempted_models"] = combined
+    except Exception:
+        # Cost tracking is best-effort; never raise from this helper.
+        pass
+
+
 def _llm_invoke_cloud(
     prompt: Optional[str],
     input_json: Optional[Union[Dict[str, Any], List[Dict[str, Any]]]],
@@ -638,11 +666,28 @@ def _llm_invoke_cloud(
                     # Return raw result if validation fails
                     pass
 
+            # If the cloud reports its own fallback chain (e.g. via attemptedModels
+            # or modelChain), surface that to callers so cost tracking can
+            # record it. Otherwise, fall back to a single-element list
+            # containing the final model used.
+            cloud_attempted = (
+                data.get("attemptedModels")
+                or data.get("attempted_models")
+                or data.get("modelChain")
+            )
+            if cloud_attempted and isinstance(cloud_attempted, list):
+                attempted_models_out = [str(m) for m in cloud_attempted if m]
+            else:
+                model_name_out = data.get("modelName", "cloud_model")
+                attempted_models_out = [str(model_name_out)] if model_name_out else []
+
+            _propagate_attempted_models_to_ctx(attempted_models_out)
             return {
                 "result": result,
                 "cost": data.get("totalCost", 0.0),
                 "model_name": data.get("modelName", "cloud_model"),
                 "thinking_output": data.get("thinkingOutput"),
+                "attempted_models": attempted_models_out,
             }
 
         elif response.status_code == 402:
@@ -3131,7 +3176,12 @@ def llm_invoke(
     # --- 3. Iterate Through Candidates and Invoke LLM ---
     last_exception = None
     newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
-    
+    # Chronological chain of models attempted for this invocation. Each candidate
+    # is appended exactly once when we first try it; this is later included in
+    # the returned dict (and the failure path) so callers / cost tracking can
+    # see the full fallback chain — including the final successful model.
+    attempted_models_chain: List[str] = []
+
     # Initialize variables for retry section
     response_format = None
     time_kwargs = {}
@@ -3148,6 +3198,12 @@ def llm_invoke(
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+
+        # Record this candidate in the chronological chain. Use the candidate's
+        # configured model name so the chain reflects what we *intended* to use
+        # for each attempt, regardless of whether the call ultimately succeeds.
+        if model_name_litellm and (not attempted_models_chain or attempted_models_chain[-1] != model_name_litellm):
+            attempted_models_chain.append(str(model_name_litellm))
 
         if verbose:
             logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
@@ -4344,12 +4400,20 @@ def llm_invoke(
                     finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
                     call_type=call_type_for_attribution,
                 )
+                # Surface the chain on the active Click context so the
+                # track_cost decorator records it even when callers reshape
+                # the return value into a tuple without the dict.
+                _propagate_attempted_models_to_ctx(attempted_models_chain)
                 return {
                     'result': final_result,
                     'cost': total_cost,
                     'model_name': model_name_litellm, # Actual model used
                     'thinking_output': final_thinking if final_thinking else None,
                     'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
+                    # Chronological chain of every model PDD attempted, including
+                    # any earlier candidates that failed and were abandoned and
+                    # the final successful model. Consumed by track_cost.
+                    'attempted_models': list(attempted_models_chain),
                 }
 
             # --- 6b. Handle Invocation Errors ---

@@ -135,7 +135,9 @@ def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_o
          mock.patch('os.path.getsize', return_value=100):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # The writer reads the existing file (to detect a missing 'attempted_models'
+    # column) before opening for append, so we expect both calls.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     handle = mock_open_file()
     assert not any('timestamp,model,command,cost,input_files,output_files' in call.args[0] for call in handle.write.call_args_list)
@@ -502,8 +504,9 @@ def test_exception_in_logging(mock_click_context, mock_open_file, mock_rprint):
          mock.patch('os.path.getsize', return_value=100):
         result = sample_command(mock_ctx, '/path/to/prompt.txt')
 
-    # Ensure that open was attempted
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Ensure that open was attempted for append (a prior read-open may also
+    # have been issued for the migration check; both raise IOError).
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Ensure that an error was printed using rprint
     mock_rprint.assert_called_once()
@@ -1054,3 +1057,53 @@ def test_extract_cost_and_model_non_tuple_returns_empty():
     assert cost == ''
     assert model == ''
     assert attempted == []
+
+
+def test_existing_csv_without_attempted_models_is_migrated(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """An existing 6-column cost.csv should be migrated to include the new
+    'attempted_models' header so subsequent rows are addressable by name via
+    csv.DictReader instead of leaking into ``None``.
+    """
+    csv_path = tmp_path / "cost.csv"
+    # Pre-existing CSV with the old six-column schema.
+    csv_path.write_text(
+        "timestamp,model,command,cost,input_files,output_files\n"
+        "2026-01-01T00:00:00.000,gpt-4,generate,1.0,a.txt,b.txt\n",
+        encoding="utf-8",
+    )
+
+    mock_ctx = create_mock_context(
+        'generate',
+        {
+            'prompt_file': '/path/to/prompt.txt',
+            'output_cost': str(csv_path),
+            'output': '/path/to/output',
+        },
+        obj={
+            'output_cost': str(csv_path),
+            'attempted_models': ['vertex_ai/gemini', 'deepseek/chat'],
+        },
+    )
+    mock_click_context.return_value = mock_ctx
+
+    sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
+
+    content = csv_path.read_text(encoding='utf-8')
+    lines = content.strip().splitlines()
+    header = lines[0].split(',')
+    assert header[:6] == [
+        'timestamp', 'model', 'command', 'cost', 'input_files', 'output_files'
+    ]
+    assert header[-1] == 'attempted_models'
+
+    # csv.DictReader should now expose the new column under its proper name
+    # (instead of dumping the extra value into ``None``).
+    import csv as _csv
+    with open(csv_path, newline='', encoding='utf-8') as fp:
+        rows = list(_csv.DictReader(fp))
+    assert rows[-1]['attempted_models'] == 'vertex_ai/gemini;deepseek/chat'
+    assert None not in rows[-1]
+
+    mock_rprint.assert_not_called()

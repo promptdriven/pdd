@@ -104,11 +104,35 @@ def track_cost(func):
                             'attempted_models': attempted_models_str,
                         }
 
-                        file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
                         fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files', 'attempted_models']
+                        file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
+
+                        # If file exists with an older header that doesn't include
+                        # 'attempted_models', migrate it in place so DictReader can
+                        # expose the new column properly.
+                        if file_has_content:
+                            try:
+                                with open(output_cost_path, 'r', newline='', encoding='utf-8') as existing:
+                                    reader = csv.reader(existing)
+                                    existing_header = next(reader, None)
+                                    existing_rows = list(reader) if existing_header is not None else []
+                            except Exception:
+                                existing_header = None
+                                existing_rows = []
+
+                            if existing_header is not None and 'attempted_models' not in existing_header:
+                                migrated_fieldnames = list(existing_header) + ['attempted_models']
+                                with open(output_cost_path, 'w', newline='', encoding='utf-8') as csvfile:
+                                    migrate_writer = csv.writer(csvfile)
+                                    migrate_writer.writerow(migrated_fieldnames)
+                                    for existing_row in existing_rows:
+                                        # Pad shorter rows so column count matches.
+                                        padded = list(existing_row) + [''] * (len(migrated_fieldnames) - len(existing_row))
+                                        migrate_writer.writerow(padded)
+                                fieldnames = migrated_fieldnames
 
                         with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
-                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
                             if not file_has_content:
                                 writer.writeheader()
                             writer.writerow(row)

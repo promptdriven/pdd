@@ -804,7 +804,7 @@ The generated CSV file includes the following columns:
 - cost: The estimated cost of the operation in USD (e.g., 0.05 for 5 cents). This will be zero for local models or operations that do not use a LLM.
 - input_files: A list of input files involved in the operation
 - output_files: A list of output files generated or modified by the operation
-- attempted_models: A semicolon-delimited, chronological list of every model PDD attempted for this command, including the final successful model as well as any earlier models that failed and were abandoned (e.g., `vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat`). Empty when no fallback occurred or no attempts were recorded.
+- attempted_models: A semicolon-delimited, chronological list of every model PDD attempted for this command, including the final successful model as well as any earlier models that failed and were abandoned (e.g., `vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat`). For a normal single-model success this contains a single entry; empty only when no LLM attempt was recorded for the command.
 
 This comprehensive output allows for detailed tracking of not only the cost and type of operations but also the specific files involved in each PDD command execution, plus the full fallback chain when PDD switched models mid-run.
 
