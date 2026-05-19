@@ -64,7 +64,7 @@
      - Lists .prompt files changed on current branch compared to base branch
      - Implementation:
        - Use `git merge-base HEAD <base_branch>` to find common ancestor
-       - Use `git diff --name-only --diff-filter=ACMR <merge_base> HEAD` for committed changes
+       - Use `git diff --name-status -z --diff-filter=ACMR <merge_base> HEAD` for committed changes (NOT `--name-only`, which C-quotes paths containing spaces, embedded quotes, backslashes, or non-ASCII bytes — see issue #1080). Capture stdout as raw bytes and split on NUL. Each file produces one record; for `A`/`M`/`T` the record layout is `<status>\0<path>`; for `R`/`C` the layout is `<status><similarity>\0<old_path>\0<new_path>` (R/C status fields carry a similarity score, e.g. `R100`, `C75`). Decode paths via `os.fsdecode` so non-UTF-8 paths round-trip via surrogate-escape. For every record report only the new/destination path — the old path of a rename is no longer in HEAD, and a copy source is unchanged.
        - Use `git status --porcelain=v1 -z` to include uncommitted changes (staged and unstaged), parsed via `pdd.git_porcelain.parse_porcelain_z` so paths with spaces, embedded quotes, or a literal `" -> "` substring round-trip verbatim (the old text-mode `--porcelain` output is lossy — see issue #1080)
        - Filter for files ending in ".prompt"
        - For renames/copies the structured parser exposes both new and old paths via `PorcelainEntry.path` and `PorcelainEntry.old_path`; report the new (current) prompt path

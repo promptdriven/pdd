@@ -1554,3 +1554,107 @@ class TestChangedPromptsRename1080:
         assert '"prompts/new name.prompt"' not in changed, (
             f"Quoted variant leaked into response: {changed!r}"
         )
+
+
+class TestChangedPromptsCommittedRename1080:
+    """Issue #1080 follow-up: committed renames (i.e. the rename is in
+    HEAD, not just the working tree) must also round-trip verbatim.
+
+    The earlier text-mode ``git diff --name-only`` parser C-quoted
+    paths containing shell-special characters; the ``.endswith('.prompt')``
+    filter then missed the trailing quote and silently dropped the
+    file. The fix switches the committed-diff branch to the
+    ``--name-status -z`` machine-readable shape.
+    """
+
+    @pytest.mark.asyncio
+    async def test_committed_rename_to_path_with_embedded_quote(self, tmp_path):
+        """A committed rename to ``prompts/quote"name.prompt`` must
+        appear in the response. The text-mode ``--name-only`` output
+        would emit ``"prompts/quote\\"name.prompt"`` with surrounding
+        quotes — the ``.endswith('.prompt')`` filter would miss the
+        trailing ``"`` and drop the entry."""
+        from pdd.server.routes.files import list_changed_prompt_files
+
+        _init_repo_1080(tmp_path, {
+            "prompts/orig.prompt": "alpha\n",
+            "README.md": "readme\n",
+        })
+        _git_1080(tmp_path, "branch", "-M", "main")
+        _git_1080(tmp_path, "checkout", "-b", "feature")
+        _git_1080(
+            tmp_path, "mv", "prompts/orig.prompt", 'prompts/quote"name.prompt'
+        )
+        _git_1080(tmp_path, "commit", "-m", "rename with embedded quote")
+
+        validator = PathValidator(project_root=tmp_path)
+        result = await list_changed_prompt_files(
+            base_branch="main", validator=validator,
+        )
+
+        changed = result["changed_prompts"]
+        assert 'prompts/quote"name.prompt' in changed, (
+            f"Renamed prompt with embedded quote missing from {changed!r}"
+        )
+        for entry in changed:
+            assert not entry.startswith('"') and not entry.endswith('"'), (
+                f"Stray quote in path: {entry!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_committed_rename_to_path_with_space(self, tmp_path):
+        """A committed rename to a path containing a space must appear
+        unquoted in the response."""
+        from pdd.server.routes.files import list_changed_prompt_files
+
+        _init_repo_1080(tmp_path, {
+            "prompts/orig.prompt": "alpha\n",
+            "README.md": "readme\n",
+        })
+        _git_1080(tmp_path, "branch", "-M", "main")
+        _git_1080(tmp_path, "checkout", "-b", "feature")
+        _git_1080(tmp_path, "mv", "prompts/orig.prompt", "prompts/new name.prompt")
+        _git_1080(tmp_path, "commit", "-m", "rename with space")
+
+        validator = PathValidator(project_root=tmp_path)
+        result = await list_changed_prompt_files(
+            base_branch="main", validator=validator,
+        )
+
+        changed = result["changed_prompts"]
+        assert "prompts/new name.prompt" in changed, (
+            f"Renamed prompt with space missing from {changed!r}"
+        )
+        assert '"prompts/new name.prompt"' not in changed, (
+            f"Quoted variant leaked into response: {changed!r}"
+        )
+
+    @pytest.mark.asyncio
+    async def test_committed_rename_prompt_to_prompt_reports_only_new(self, tmp_path):
+        """When BOTH the old and new paths of a committed rename are
+        ``.prompt`` files, only the NEW (current) path is reported;
+        the old path is no longer present in HEAD."""
+        from pdd.server.routes.files import list_changed_prompt_files
+
+        _init_repo_1080(tmp_path, {
+            "prompts/from.prompt": "alpha\n",
+            "README.md": "readme\n",
+        })
+        _git_1080(tmp_path, "branch", "-M", "main")
+        _git_1080(tmp_path, "checkout", "-b", "feature")
+        _git_1080(tmp_path, "mv", "prompts/from.prompt", "prompts/to.prompt")
+        _git_1080(tmp_path, "commit", "-m", "prompt-to-prompt rename")
+
+        validator = PathValidator(project_root=tmp_path)
+        result = await list_changed_prompt_files(
+            base_branch="main", validator=validator,
+        )
+
+        changed = result["changed_prompts"]
+        assert "prompts/to.prompt" in changed, (
+            f"New prompt path missing from {changed!r}"
+        )
+        assert "prompts/from.prompt" not in changed, (
+            f"Old (no-longer-present) prompt path leaked into "
+            f"response: {changed!r}"
+        )
