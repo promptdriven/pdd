@@ -9,9 +9,13 @@ interface without importing the real code.
 
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 # ---------------------------------------------------------------------------
@@ -351,3 +355,70 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "max-cost-reached: false\n"
     "max-duration-reached: false\n"
 )
+
+
+def main() -> None:
+    """Demonstrate the public contract by importing the real module and showing usage."""
+    import json
+    from unittest.mock import patch
+
+    # Import directly from the live module so this example also acts as an
+    # import smoke test for the package.
+    from pdd.checkup_review_loop import (
+        FixResult as RealFixResult,
+        ReviewFinding as RealReviewFinding,
+        ReviewLoopConfig as RealReviewLoopConfig,
+        ReviewLoopContext as RealReviewLoopContext,
+        ReviewLoopState as RealReviewLoopState,
+        parse_reviewers,
+        run_checkup_review_loop,
+    )
+
+    print("=== pdd.checkup_review_loop usage demonstration ===")
+    print()
+    print("1. parse_reviewers normalizes the legacy --reviewers CLI value:")
+    print("   parse_reviewers('codex,claude') -> {!r}".format(parse_reviewers("codex,claude")))
+    print("   parse_reviewers('chatgpt,anthropic') -> {!r}".format(parse_reviewers("chatgpt,anthropic")))
+    print("   parse_reviewers(None) -> {!r}".format(parse_reviewers(None)))
+
+    print()
+    print("2. Public dataclasses (live shapes):")
+    finding = RealReviewFinding(
+        severity="medium",
+        reviewer="codex",
+        area="test",
+        evidence="tests/test_foo.py missing regression test",
+        finding="The PR does not test the new workflow.",
+        required_fix="Add a regression test in tests/test_foo.py covering X.",
+        location="tests/test_foo.py:1",
+        status="open",
+        round_number=1,
+    )
+    print("   ReviewFinding:", finding)
+
+    fix = RealFixResult(
+        fixer="claude",
+        success=True,
+        summary="Added regression test.",
+        changed_files=["tests/test_foo.py"],
+    )
+    print("   FixResult:", fix)
+
+    print()
+    print("3. EXAMPLE_NORMALIZED_FINDING payload (dedup-state shape):")
+    print(json.dumps(EXAMPLE_NORMALIZED_FINDING, indent=2))
+
+    print()
+    print("4. EXAMPLE_FINAL_REPORT_HEADER (contract for final-report.md header):")
+    print(EXAMPLE_FINAL_REPORT_HEADER)
+
+    print()
+    print("5. run_checkup_review_loop signature (mocked execution skipped to keep example offline).")
+    print("   The real function is invoked by pdd checkup --review-loop and returns")
+    print("   (success: bool, report_md: str, total_cost_usd: float, last_model: str).")
+    print()
+    print("Example complete.")
+
+
+if __name__ == "__main__":
+    main()
