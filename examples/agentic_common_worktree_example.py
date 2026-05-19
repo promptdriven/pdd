@@ -215,10 +215,15 @@ def example_revert_out_of_scope_changes() -> None:
         out_of_scope = cwd / "random.txt"
         out_of_scope.write_text("junk")
 
+        # The scope guard now invokes ``git status --porcelain=v1 -z -u``
+        # and parses it via ``pdd.git_porcelain.parse_porcelain_z`` (see
+        # issue #1080). Records are NUL-separated bytes — not
+        # newline-separated text — and ``capture_output=True`` returns
+        # ``stdout`` as ``bytes``.
         porcelain = (
-            " M pdd/module.py\n"       # in-scope (allowed dir)
-            " M setup.cfg\n"            # out-of-scope tracked
-            "?? random.txt\n"           # out-of-scope untracked
+            b" M pdd/module.py\x00"     # in-scope (allowed dir)
+            b" M setup.cfg\x00"          # out-of-scope tracked
+            b"?? random.txt\x00"         # out-of-scope untracked
         )
 
         with patch("pdd.agentic_common_worktree.subprocess.run") as mock_run:

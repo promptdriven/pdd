@@ -65,9 +65,9 @@
      - Implementation:
        - Use `git merge-base HEAD <base_branch>` to find common ancestor
        - Use `git diff --name-only --diff-filter=ACMR <merge_base> HEAD` for committed changes
-       - Use `git status --porcelain` to include uncommitted changes (staged and unstaged)
+       - Use `git status --porcelain=v1 -z` to include uncommitted changes (staged and unstaged), parsed via `pdd.git_porcelain.parse_porcelain_z` so paths with spaces, embedded quotes, or a literal `" -> "` substring round-trip verbatim (the old text-mode `--porcelain` output is lossy — see issue #1080)
        - Filter for files ending in ".prompt"
-       - Handle renamed files (format: "old -> new" in git status)
+       - For renames/copies the structured parser exposes both new and old paths via `PorcelainEntry.path` and `PorcelainEntry.old_path`; report the new (current) prompt path
      - Error handling:
        - Return 500 if git is not installed
        - If merge-base fails, compare directly against base_branch

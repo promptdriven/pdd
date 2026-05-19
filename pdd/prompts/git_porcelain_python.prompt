@@ -1,0 +1,57 @@
+<pdd-reason>Shared, lossless parser for `git status --porcelain=v1 -z` that preserves renames and exotic path bytes.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "parse_porcelain_z", "signature": "(stdout: Union[bytes, str]) -> List[PorcelainEntry]", "returns": "List[PorcelainEntry]"},
+      {"name": "run_porcelain_z", "signature": "(cwd: Union[str, Path], *, include_untracked: bool = True, timeout: Optional[float] = 30) -> Optional[List[PorcelainEntry]]", "returns": "Optional[List[PorcelainEntry]]"},
+      {"name": "iter_changed_paths", "signature": "(entries: Iterable[PorcelainEntry]) -> Iterator[str]", "returns": "Iterator[str]"}
+    ],
+    "classes": [
+      {
+        "name": "PorcelainEntry",
+        "description": "Frozen dataclass: status (two-char XY), path (new-or-only path, fsdecoded), old_path (Optional[str] for R/C records).",
+        "fields": ["status: str", "path: str", "old_path: Optional[str]"]
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<include>context/python_preamble.prompt</include>
+
+% You are an expert Python engineer. Your goal is to write `pdd/git_porcelain.py`.
+
+% Role & Scope
+Shared, lossless parser for the machine-readable `git status --porcelain=v1 -z` output. Centralizes the porcelain decoding so every scope guard, change detector, and prompt-changed endpoint can rely on the same rename-aware, byte-safe representation instead of reimplementing fragile `line[3:]` / `split(" -> ")` text-mode parsers.
+
+% Motivation
+The text-mode `git status --porcelain` output is lossy for any path with shell-meaningful characters: paths with spaces, tabs, embedded quotes, or non-ASCII bytes are C-style quoted, and a staged rename is collapsed into a single literal `"old -> new"` string. Ad-hoc parsers that do `line[3:]` and `split(" -> ")` silently mishandle all of those cases. The `--porcelain=v1 -z` variant is the documented machine-readable format: records are joined by `NUL` (no C-style quoting, no trailing newline), and for each `R` (rename) or `C` (copy) record git emits the OLD path as a SECOND `NUL`-terminated record immediately after the new path. See issue #1080 for the audit that motivated this helper.
+
+% Requirements
+1. **`PorcelainEntry`**: A frozen dataclass with three fields:
+   - `status: str` — the two-character `XY` status field (first char = index/staging state, second char = worktree state). For renames/copies this is `"R "`, `"RM"`, etc.; for untracked files this is `"??"`.
+   - `path: str` — the new-or-only path, decoded via `os.fsdecode` so byte paths round-trip on platforms where filenames are not valid UTF-8.
+   - `old_path: Optional[str]` — the previous path for `R`/`C` records; `None` for every other status.
+
+2. **`parse_porcelain_z(stdout: Union[bytes, str]) -> List[PorcelainEntry]`**: Parse `git status --porcelain=v1 -z` output.
+   - Accept either raw `bytes` (preferred — preserves non-UTF-8 filenames) or a pre-decoded `str`.
+   - Split records on `NUL` (`\x00`); drop empty tails (git emits no trailing `NUL` after the last record).
+   - Each record begins with a two-character status field, a single space, then the new-or-only path.
+   - Skip malformed records shorter than 4 bytes/chars defensively.
+   - When `"R"` or `"C"` appears in either column of the status, consume the NEXT record as the bare old-path (no status prefix). The old path is decoded the same way as the new path.
+   - Return the entries in the order git emitted them; empty input yields an empty list.
+
+3. **`run_porcelain_z(cwd, *, include_untracked=True, timeout=30) -> Optional[List[PorcelainEntry]]`**: Convenience that runs `git status --porcelain=v1 -z` in *cwd* and parses the result.
+   - When `include_untracked` is `True` (default), pass `--untracked-files=all`; otherwise pass `-uno` (matches the behavior of `revert_out_of_scope_changes_with_dirs`, which only cares about tracked changes).
+   - Return `None` on `subprocess.TimeoutExpired`, `FileNotFoundError`, `OSError`, or non-zero exit so callers can degrade gracefully.
+
+4. **`iter_changed_paths(entries) -> Iterator[str]`**: Yield every path mentioned by *entries* — the new side and (for renames/copies) the old side too. Convenience for callers that want a flat list of every changed path (e.g. for staging or audit logging).
+
+5. **Decoding**: An internal `_decode_path` helper should call `os.fsdecode` on bytes and return strings unchanged. This preserves non-UTF-8 filenames via the surrogate-escape mechanism while keeping the public API typed as `str`.
+
+% Deliverables
+- Code: `pdd/git_porcelain.py`
+- Exports: `PorcelainEntry`, `parse_porcelain_z`, `run_porcelain_z`, `iter_changed_paths`
