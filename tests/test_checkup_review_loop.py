@@ -3846,10 +3846,12 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
 
         pushes = 0
+        force_flags: List[bool] = []
 
-        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
             nonlocal pushes
             pushes += 1
+            force_flags.append(kwargs.get("force_with_lease_on_non_fast_forward", True))
             if pushes < 3:
                 return False, " ! [rejected] HEAD -> feature (fetch first)"
             return True, ""
@@ -3880,6 +3882,7 @@ class TestCommitAndPushIfChanged:
         assert "rebasing" in message
         assert pushes == 3
         assert rebase_count == 2
+        assert force_flags == [False, False, False]
 
     def test_three_fetch_first_pushes_exhaust_retries_cleanly(
         self, monkeypatch: Any, tmp_path: Path
@@ -3894,10 +3897,12 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
 
         pushes = 0
+        force_flags: List[bool] = []
 
-        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
             nonlocal pushes
             pushes += 1
+            force_flags.append(kwargs.get("force_with_lease_on_non_fast_forward", True))
             return False, " ! [rejected] HEAD -> feature (fetch first)"
 
         rebase_count = 0
@@ -3927,6 +3932,7 @@ class TestCommitAndPushIfChanged:
         assert rebase_count == 2
         assert message.startswith("Failed to push fixes to PR branch:")
         assert "fetch first" in message
+        assert force_flags == [False, False, False]
 
     def test_non_remote_advance_error_on_retry_breaks_out(
         self, monkeypatch: Any, tmp_path: Path
@@ -3941,10 +3947,12 @@ class TestCommitAndPushIfChanged:
         monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
 
         pushes = 0
+        force_flags: List[bool] = []
 
-        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
             nonlocal pushes
             pushes += 1
+            force_flags.append(kwargs.get("force_with_lease_on_non_fast_forward", True))
             if pushes == 1:
                 return False, " ! [rejected] HEAD -> feature (fetch first)"
             return False, "fatal: Authentication failed for 'https://github.com/o/r.git'"
@@ -3974,6 +3982,7 @@ class TestCommitAndPushIfChanged:
         assert pushes == 2
         assert rebase_count == 1
         assert "Authentication failed" in message
+        assert force_flags == [False, False]
 
     def test_non_fast_forward_rebases_instead_of_force_push(
         self, monkeypatch: Any, tmp_path: Path
