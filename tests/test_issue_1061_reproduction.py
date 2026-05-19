@@ -1147,3 +1147,31 @@ def test_b1_iter2_symmetric_bare_correction_rejected_for_path_qualified_scope(
         "modules_to_sync targets the path-qualified 'core/cli' module; "
         f"got flat entry deps {flat_entry['dependencies']!r}"
     )
+
+
+def test_n1_iter2_ordered_extractor_in_sync_order(tmp_path: Path) -> None:
+    """[N1.iter2] Direct unit test for ``extract_includes_from_file_ordered``:
+    declarations come back in source order with first-occurrence dedup,
+    and the three include forms (body, self-closing, include-many) all
+    interleave correctly.
+    """
+    from pdd.sync_order import extract_includes_from_file_ordered
+
+    path = tmp_path / "mixed.prompt"
+    path.write_text(
+        "<include>first.md</include>\n"
+        '<include path="second.md" />\n'
+        "<include-many>third.md, fourth.md</include-many>\n"
+        "<include>second.md</include>\n"  # dup of self-closing -> dropped
+        "<include>fifth.md</include>\n",
+        encoding="utf-8",
+    )
+
+    ordered = extract_includes_from_file_ordered(path)
+    assert ordered == [
+        "first.md",
+        "second.md",
+        "third.md",
+        "fourth.md",
+        "fifth.md",
+    ], f"Expected source-order with first-occurrence dedup; got {ordered!r}"

@@ -115,6 +115,95 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
         return set()
 
 
+def extract_includes_from_file_ordered(file_path: Path) -> List[str]:
+    """
+    Same tag tolerance as :func:`extract_includes_from_file`, but returns
+    includes in **source declaration order** with first-occurrence dedup.
+
+    The set-returning variant above is used by callers that only care
+    about *which* paths a prompt includes. Callers that need to preserve
+    or expose declaration order — e.g. when re-converging an
+    architecture entry's ``dependencies`` (#1061 iter-2 N1) — must use
+    this helper so the on-disk diff is hash-independent and stable.
+
+    Returns:
+        List of unique include path strings in the order they first
+        appear in ``file_path``. Returns ``[]`` when the file cannot be
+        read.
+    """
+    if not file_path.exists() or not file_path.is_file():
+        logger.warning(f"File not found or not a file: {file_path}")
+        return []
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.error(f"Error reading file {file_path}: {e}")
+        return []
+
+    ordered: List[str] = []
+    seen: Set[str] = set()
+
+    def _emit(value: str) -> None:
+        stripped = value.strip()
+        if not stripped or stripped in seen:
+            return
+        ordered.append(stripped)
+        seen.add(stripped)
+
+    # Walk every recognised <include*> form in source order. ``re.finditer``
+    # preserves match order, and we union the three forms via a single
+    # alternation-driven scan keyed by match start offset so ordering is
+    # globally correct (not per-pattern).
+    body_pattern = re.compile(
+        r'<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>', re.DOTALL
+    )
+    self_closing_pattern = re.compile(
+        r'<include\s+([^>]*?)\s*/>', re.DOTALL
+    )
+    many_pattern = re.compile(
+        r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>', re.DOTALL
+    )
+
+    events: List[tuple] = []
+    for m in body_pattern.finditer(content):
+        events.append((m.start(), "body", m.group(1) or "", m.group(2) or ""))
+    for m in self_closing_pattern.finditer(content):
+        events.append((m.start(), "self", m.group(1) or "", ""))
+    for m in many_pattern.finditer(content):
+        events.append((m.start(), "many", "", m.group(1) or ""))
+    events.sort(key=lambda e: e[0])
+
+    for _start, kind, attrs, body in events:
+        if kind == "body":
+            path_value: Optional[str] = None
+            if attrs:
+                attr_match = re.search(
+                    r'path\s*=\s*["\']([^"\']+)["\']', attrs
+                )
+                if attr_match:
+                    path_value = attr_match.group(1).strip()
+            if not path_value:
+                path_value = body.strip()
+            if path_value:
+                _emit(path_value)
+        elif kind == "self":
+            path_match = re.search(
+                r'path\s*=\s*["\']([^"\']+)["\']', attrs
+            )
+            if path_match:
+                _emit(path_match.group(1))
+        else:  # "many"
+            # Mirror pdd.preprocess.process_include_many_tags: split on
+            # newlines first, then on commas. Preserves declaration
+            # order *within* the include-many block too.
+            for part in body.splitlines():
+                for item in part.split(","):
+                    _emit(item)
+
+    return ordered
+
+
 def extract_module_from_include(include_path: str) -> Optional[str]:
     """
     Maps include paths to module names by stripping suffixes.
