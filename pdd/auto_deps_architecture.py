@@ -70,22 +70,33 @@ def _include_is_architecture_dependency_candidate(
 
 
 def extract_include_paths_from_prompt_text(text: str) -> Set[str]:
-    """Return architecture-bearing paths inside ``<include>...</include>`` tags.
+    """Return architecture-bearing paths inside ``<include>`` tags.
 
-    The effective include target is ``attrs.get("path") or body``. When a
-    ``path=`` attribute is set, the validator/preprocessor resolves the
-    include from that path and ignores the body; auto-deps must do the
-    same to avoid writing a body-form fallback as a fabricated dependency
-    (codex iter-3 finding M2.iter3). For tags without ``path=``, behavior
-    is unchanged — the body wins as before.
+    Matches both the body form ``<include ...>body</include>`` and the
+    self-closing form ``<include ... />``. The effective include target
+    is ``attrs.get("path") or body``. When a ``path=`` attribute is set,
+    the validator/preprocessor resolves the include from that path and
+    ignores the body; auto-deps must do the same to avoid writing a
+    body-form fallback as a fabricated dependency (codex iter-3 finding
+    M2.iter3). For body-form tags without ``path=``, behavior is
+    unchanged — the body wins as before. Self-closing tags carry no
+    body, so a ``path=`` attribute is required to produce a target —
+    codex iter-4 finding M1.iter4 (matches the two-branch pattern in
+    ``architecture_include_validation._INCLUDE_RE``).
     """
-    pattern = r"<include(?P<attrs>[^>]*)>(?P<body>.*?)</include>"
+    pattern = (
+        r"<include(?P<attrs>\s+[^>]*?)?>(?P<body>.*?)</include>"
+        r"|<include(?P<attrs_self>\s+[^>]*?)\s*/>"
+    )
     paths: Set[str] = set()
     for match in re.finditer(pattern, text, re.DOTALL):
-        attrs = _parse_include_attrs(match.group("attrs") or "")
-        body = match.group("body").strip()
+        attrs_text = match.group("attrs") or match.group("attrs_self") or ""
+        attrs = _parse_include_attrs(attrs_text)
+        body = (match.group("body") or "").strip()
         # Effective target: path= attribute wins when set (matches the
         # validator / preprocessor contract); body is the fallback.
+        # Self-closing tags have no body, so only path= can populate
+        # the target — empty target is skipped below.
         target = (attrs.get("path") or "").strip() or body
         if not target:
             continue

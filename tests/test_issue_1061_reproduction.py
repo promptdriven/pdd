@@ -1479,3 +1479,64 @@ def test_m2_iter3_path_attribute_context_include_skipped_for_module_dep(
         "No module deps should be added for a context-only path= "
         f"include; got {report['added_dependencies']!r}"
     )
+
+
+def test_m1_iter4_self_closing_path_include_adds_architecture_dep(
+    tmp_path: Path,
+) -> None:
+    """[M1.iter4] Self-closing ``<include path="b_python.prompt" />`` must
+    add ``b_python.prompt`` to the architecture dependencies of the
+    enclosing prompt.
+
+    Iter-3's ``extract_include_paths_from_prompt_text`` only matched the
+    body-form ``<include ...>body</include>``, so a self-closing
+    ``<include path="b_python.prompt" />`` was silently dropped by
+    auto-deps. The preprocessor (``pdd.preprocess.process_include_tags``)
+    and the validator
+    (``architecture_include_validation._extract_include_references``) both
+    accept the self-closing form, so the validator would then report
+    ``a_python.prompt includes module 'b' but architecture deps don't
+    list it`` — recreating the exact #1061 auto-deps / validator drift.
+
+    This test exercises the full pipeline through
+    ``merge_auto_deps_includes_into_architecture`` and asserts the dep is
+    written into ``architecture.json``.
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "a_python.prompt").write_text("%\n", encoding="utf-8")
+    (prompts / "b_python.prompt").write_text("%\n", encoding="utf-8")
+    arch = [
+        {"filename": "a_python.prompt", "dependencies": []},
+        {"filename": "b_python.prompt", "dependencies": []},
+    ]
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps(arch), encoding="utf-8")
+
+    old = "%\n"
+    # Self-closing include — no body, path= attribute carries the
+    # module-prompt target.
+    new = '%\n<include path="b_python.prompt" />\n'
+
+    report = merge_auto_deps_includes_into_architecture(
+        tmp_path, prompts / "a_python.prompt", old, new
+    )
+
+    assert report["updated"] is True, (
+        "Self-closing <include path=.../> must drive an architecture "
+        f"update; got report={report!r}"
+    )
+    assert report["added_dependencies"] == ["b_python.prompt"], (
+        "Self-closing include must add b_python.prompt as a dep; "
+        f"got {report['added_dependencies']!r}"
+    )
+
+    data = json.loads(arch_path.read_text(encoding="utf-8"))
+    a = next(e for e in data if e["filename"] == "a_python.prompt")
+    assert a["dependencies"] == ["b_python.prompt"], (
+        "architecture.json must list b_python.prompt as a dep of "
+        f"a_python.prompt; got {a['dependencies']!r}"
+    )
