@@ -2687,6 +2687,52 @@ def test_llm_invoke_cloud_invocation_error_fallback():
         assert result["result"] == "local fallback response"
 
 
+def test_cloud_attempts_survive_pre_loop_setup_failure():
+    """Regression (codex P2): when a CloudFallbackError records cloud attempts
+    AND the subsequent local pre-candidate-loop setup raises (e.g. corrupt
+    llm_model.csv), the escaping exception MUST carry the cloud chain in
+    ``e.attempted_models`` AND the cloud chain MUST have already been
+    propagated to ``ctx.obj['attempted_models']`` so the ``@track_cost``
+    decorator can still write a cost row for the failed command.
+    """
+    from pdd.llm_invoke import CloudFallbackError as CurrentCloudFallbackError
+
+    cloud_err = CurrentCloudFallbackError("Network error")
+    cloud_err.attempted_models = ["cloud:gemini-2.5-pro"]
+
+    with patch("pdd.llm_invoke._llm_invoke_cloud", side_effect=cloud_err):
+        # Simulate a setup failure between the cloud handler and the
+        # candidate loop. _load_model_data sits in that gap.
+        with patch(
+            "pdd.llm_invoke._load_model_data",
+            side_effect=ValueError("simulated setup failure"),
+        ):
+            with patch(
+                "pdd.llm_invoke._propagate_attempted_models_to_ctx"
+            ) as mock_propagate:
+                with patch("rich.console.Console"):
+                    with pytest.raises(ValueError) as exc_info:
+                        llm_invoke(
+                            prompt="Test {topic}",
+                            input_json={"topic": "test"},
+                            use_cloud=True,
+                        )
+
+    # The escaping ValueError must carry the cloud chain so track_cost can
+    # record it on the failed command's CSV row.
+    assert getattr(exc_info.value, "attempted_models", None) == [
+        "cloud:gemini-2.5-pro"
+    ]
+
+    # The cloud chain must have been propagated to ctx BEFORE the pre-loop
+    # setup raised, so track_cost can recover it from ctx.obj even if the
+    # exception path were to lose the attribute.
+    propagated_chains = [c.args[0] for c in mock_propagate.call_args_list]
+    assert ["cloud:gemini-2.5-pro"] in propagated_chains, (
+        f"Expected ctx propagation of cloud chain, got: {propagated_chains}"
+    )
+
+
 # --- Tests for cloud exception classes ---
 
 def test_cloud_fallback_error():

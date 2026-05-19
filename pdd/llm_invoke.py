@@ -3101,6 +3101,10 @@ def llm_invoke(
                 text = str(name)
                 if text and (not attempted_models_chain or attempted_models_chain[-1] != text):
                     attempted_models_chain.append(text)
+            # Propagate immediately so track_cost can still recover the cloud
+            # attempts even if pre-loop local setup raises before the candidate
+            # loop attaches the chain to a result/exception.
+            _propagate_attempted_models_to_ctx(attempted_models_chain)
         except InsufficientCreditsError as e:
             # Re-raise credit errors - user needs to know.  Attach the
             # cloud attempt so callers / track_cost can still record it.
@@ -3128,6 +3132,10 @@ def llm_invoke(
                 text = str(name)
                 if text and (not attempted_models_chain or attempted_models_chain[-1] != text):
                     attempted_models_chain.append(text)
+            # Propagate immediately so track_cost can still recover the cloud
+            # attempts even if pre-loop local setup raises before the candidate
+            # loop attaches the chain to a result/exception.
+            _propagate_attempted_models_to_ctx(attempted_models_chain)
 
     # --- 2. Local execution uses already-validated formatted_messages ---
 
@@ -3147,24 +3155,38 @@ def llm_invoke(
     if time is None:
         time = 0.0
 
-    if not (0.0 <= strength <= 1.0):
-        raise ValueError("'strength' must be between 0.0 and 1.0.")
-    if not (0.0 <= temperature <= 2.0): # Common range for temperature
-        warnings.warn("'temperature' is outside the typical range (0.0-2.0).")
-    if not (0.0 <= time <= 1.0):
-        raise ValueError("'time' must be between 0.0 and 1.0.")
-
-    # --- 2. Load Model Data & Select Candidates ---
+    # Wrap pre-candidate-loop setup so any failure (parameter validation,
+    # model CSV load, candidate selection) still surfaces the cloud attempts
+    # already merged into attempted_models_chain. Without this, e.g. a
+    # missing/corrupt llm_model.csv after a CloudFallbackError would escape
+    # naked and track_cost would lose the cloud entry.
     try:
-        model_df = _load_model_data(LLM_MODEL_CSV_PATH)
-        candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
-    except (FileNotFoundError, ValueError, RuntimeError) as e:
-        logger.error(f"Failed during model loading or selection: {e}")
-        _emit_llm_attribution(
-            attribution_context,
-            "llm_invoke.model_selection_error",
-            **_safe_error_fields(e),
-        )
+        if not (0.0 <= strength <= 1.0):
+            raise ValueError("'strength' must be between 0.0 and 1.0.")
+        if not (0.0 <= temperature <= 2.0): # Common range for temperature
+            warnings.warn("'temperature' is outside the typical range (0.0-2.0).")
+        if not (0.0 <= time <= 1.0):
+            raise ValueError("'time' must be between 0.0 and 1.0.")
+
+        # --- 2. Load Model Data & Select Candidates ---
+        try:
+            model_df = _load_model_data(LLM_MODEL_CSV_PATH)
+            candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            logger.error(f"Failed during model loading or selection: {e}")
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.model_selection_error",
+                **_safe_error_fields(e),
+            )
+            raise
+    except Exception as e:
+        try:
+            e.attempted_models = list(attempted_models_chain)
+        except Exception:
+            # Some exception types are immutable (e.g. some C extension errors);
+            # best-effort attach only.
+            pass
         raise
 
     _emit_llm_attribution(
