@@ -7491,7 +7491,8 @@
       "agentic_common_python.prompt",
       "agentic_change_python.prompt",
       "agentic_checkup_orchestrator_python.prompt",
-      "agentic_e2e_fix_orchestrator_python.prompt"
+      "agentic_e2e_fix_orchestrator_python.prompt",
+      "architecture_registry_python.prompt"
     ],
     "priority": 217.5,
     "filename": "checkup_review_loop_python.prompt",

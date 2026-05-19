@@ -4303,3 +4303,1047 @@ class TestStaticAnalysisCandidateFindingsIntegration:
         assert any("SUBSET" in name and "CANONICAL" in name for name in names), (
             f"expected SUBSET vs CANONICAL drift, got: {names}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1063: deterministic prompt-source guard
+#
+# The review loop's fixer can patch a generated code file (e.g. ``pdd/foo.py``)
+# without updating its owning prompt source (``pdd/prompts/foo_python.prompt``),
+# letting prompt/code drift land on the PR head. The guard MUST refuse to push
+# any fix whose changed paths include an architecture-registered module whose
+# owning prompt is NOT also part of the same change set.
+# ---------------------------------------------------------------------------
+
+
+def _write_arch_json(worktree: Path, modules: List[Dict[str, Any]]) -> Path:
+    """Write a bare-list ``architecture.json`` to ``worktree``."""
+    path = worktree / "architecture.json"
+    path.write_text(json.dumps(modules, indent=2), encoding="utf-8")
+    return path
+
+
+def _commit_arch_to_head(worktree: Path, modules: List[Dict[str, Any]]) -> Path:
+    """Initialize a git repo in ``worktree`` and commit ``architecture.json`` to HEAD.
+
+    Required after review pass #3 Finding 2: ``_load_prompt_source_map``
+    reads via ``git show HEAD:architecture.json`` (not the worktree
+    filesystem) to prevent a fixer from removing its own registry
+    entry in the same change set. Tests that previously seeded the
+    registry by writing to the worktree alone now need a real commit.
+    """
+    path = _write_arch_json(worktree, modules)
+    subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=worktree,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+    )
+    subprocess.run(
+        ["git", "add", "architecture.json"], cwd=worktree, check=True
+    )
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed registry"],
+        cwd=worktree,
+        check=True,
+    )
+    return path
+
+
+def _prompt_module(filename: str, filepath: str) -> Dict[str, Any]:
+    """Minimal architecture module shape for testing the guard mapping."""
+    return {"filename": filename, "filepath": filepath}
+
+
+class TestPromptSourceGuardHelper:
+    """Unit tests for ``_check_prompt_source_guard``.
+
+    The helper is pure-function: it takes a worktree and a list of
+    changed-file paths (POSIX, relative to worktree root) and returns
+    ``None`` to allow the push or a refusal string for the policy layer
+    to stash into ``state.stop_reason``.  All of the behavioural contract
+    encoded in issue #1063 lives here so the runtime integration tests
+    can stay focused on wiring.
+    """
+
+    @staticmethod
+    def _seed_prompt(worktree: Path, rel_prompt: str) -> Path:
+        """Place a non-empty prompt file at ``worktree / rel_prompt``."""
+        prompt_path = worktree / rel_prompt
+        prompt_path.parent.mkdir(parents=True, exist_ok=True)
+        prompt_path.write_text("prompt body\n", encoding="utf-8")
+        return prompt_path
+
+    @staticmethod
+    def _seed_code(worktree: Path, rel_code: str) -> Path:
+        """Place a non-empty code file at ``worktree / rel_code``.
+
+        Required for tests of the original-#1063 drift case (code
+        modified, prompt unchanged) after review pass #3 Finding 1:
+        the guard now distinguishes "code persists on disk" from
+        "code retired" via ``Path.is_file()``.
+        """
+        code_path = worktree / rel_code
+        code_path.parent.mkdir(parents=True, exist_ok=True)
+        code_path.write_text("# generated code\n", encoding="utf-8")
+        return code_path
+
+    def test_registered_code_changed_without_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
+
+        reason = _check_prompt_source_guard(tmp_path, ["pdd/agentic_update.py"])
+
+        assert reason is not None
+        # The refusal must name BOTH the code path AND its owning prompt
+        # so an operator can act on the message without re-deriving the
+        # mapping from architecture.json.
+        assert "pdd/agentic_update.py" in reason
+        assert "pdd/prompts/agentic_update_python.prompt" in reason
+        # The refusal must include the prescribed call-to-action.
+        assert "prompt source" in reason.lower()
+
+    def test_registered_code_changed_with_prompt_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            [
+                "pdd/agentic_update.py",
+                "pdd/prompts/agentic_update_python.prompt",
+            ],
+        )
+
+        assert reason is None
+
+    def test_unregistered_changed_file_is_allowed(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        # Architecture registers a different module so the guard has a
+        # non-empty mapping but the changed file is outside the prompt-
+        # owned set.  The guard MUST NOT widen its scope to unregistered
+        # paths (tests/ in particular).
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            ["tests/test_agentic_update.py", "docs/notes.md"],
+        )
+
+        assert reason is None
+
+    def test_multiple_offenders_are_enumerated(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [
+                _prompt_module(
+                    "agentic_update_python.prompt", "pdd/agentic_update.py"
+                ),
+                _prompt_module(
+                    "checkup_review_loop_python.prompt",
+                    "pdd/checkup_review_loop.py",
+                ),
+            ],
+        )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
+        self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            [
+                "pdd/agentic_update.py",
+                "pdd/checkup_review_loop.py",
+            ],
+        )
+
+        assert reason is not None
+        assert "pdd/agentic_update.py" in reason
+        assert "pdd/checkup_review_loop.py" in reason
+        assert "pdd/prompts/agentic_update_python.prompt" in reason
+        assert "pdd/prompts/checkup_review_loop_python.prompt" in reason
+
+    def test_mixed_changes_block_when_one_pair_is_incomplete(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [
+                _prompt_module(
+                    "agentic_update_python.prompt", "pdd/agentic_update.py"
+                ),
+                _prompt_module(
+                    "checkup_review_loop_python.prompt",
+                    "pdd/checkup_review_loop.py",
+                ),
+            ],
+        )
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+        self._seed_code(tmp_path, "pdd/checkup_review_loop.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/agentic_update_python.prompt")
+        self._seed_prompt(tmp_path, "pdd/prompts/checkup_review_loop_python.prompt")
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            [
+                # agentic_update.py has its prompt updated alongside - OK
+                "pdd/agentic_update.py",
+                "pdd/prompts/agentic_update_python.prompt",
+                # checkup_review_loop.py does NOT - this MUST trip the guard
+                "pdd/checkup_review_loop.py",
+            ],
+        )
+
+        assert reason is not None
+        assert "pdd/checkup_review_loop.py" in reason
+        assert "pdd/prompts/checkup_review_loop_python.prompt" in reason
+        # The compliant pair must NOT be named as an offender.
+        assert "pdd/agentic_update.py" not in reason.split("checkup_review_loop")[0]
+
+    def test_missing_architecture_json_degrades_gracefully(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        # No architecture.json in tmp_path on purpose.
+        with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
+            reason = _check_prompt_source_guard(
+                tmp_path, ["pdd/agentic_update.py"]
+            )
+
+        assert reason is None
+        # The operator must learn the guard was disabled this round.
+        assert any(
+            "architecture.json" in rec.getMessage() for rec in caplog.records
+        )
+
+    def test_malformed_architecture_json_degrades_gracefully(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Genuinely exercise the JSON-decode failure path against
+        HEAD (review pass #3 Finding 2 switched the read source to
+        ``git show HEAD:architecture.json``). Commits a malformed
+        registry to HEAD so the helper hits the JSONDecodeError
+        branch rather than the no-repo / no-HEAD branch.
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        # Initialize a real git repo and commit garbage as
+        # architecture.json so HEAD's blob is unparseable.
+        subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=tmp_path,
+            check=True,
+        )
+        (tmp_path / "architecture.json").write_text(
+            "this is not json {", encoding="utf-8"
+        )
+        subprocess.run(
+            ["git", "add", "architecture.json"], cwd=tmp_path, check=True
+        )
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "garbage registry"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
+            reason = _check_prompt_source_guard(
+                tmp_path, ["pdd/agentic_update.py"]
+            )
+
+        assert reason is None
+        assert any(
+            "unparseable" in rec.getMessage() for rec in caplog.records
+        )
+
+    def test_code_missing_with_prompt_missing_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """When the registered code path is in the change set but the
+        code file is absent from disk after the change, there is
+        nothing to drift from. Allow regardless of the prompt's fate.
+
+        Replaces the round-2 stale-registry-skip-with-warning test:
+        review pass #3 Finding 1 swapped the "prompt missing on disk"
+        warn-and-skip branch for an unconditional block (because the
+        same disk-state shape with code PRESENT is the worst-drift
+        attack). The graceful-degradation guarantee now hinges on
+        ``code_still_exists``: when the code is gone, the contract is
+        irrelevant.
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        # Neither file on disk.
+
+        reason = _check_prompt_source_guard(
+            tmp_path, ["pdd/agentic_update.py"]
+        )
+
+        assert reason is None
+
+    def test_code_present_with_prompt_missing_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """The disk-state attack: code persists on disk, prompt is
+        missing, and the prompt is NOT in the change set (a pre-
+        existing stale-registry state, or a separate deletion the
+        fixer is exploiting). Round-2 logged a warning and skipped;
+        review pass #3 Finding 1 rejects that as too permissive and
+        requires this to BLOCK.
+
+        Rationale: a code edit against a destroyed source of truth
+        cannot be regenerated from the prompt later. Brick auto-heal
+        on this state rather than let the bot's edits ride.
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        # Code present, prompt absent.
+        self._seed_code(tmp_path, "pdd/agentic_update.py")
+
+        reason = _check_prompt_source_guard(
+            tmp_path, ["pdd/agentic_update.py"]
+        )
+
+        assert reason is not None
+        assert "pdd/agentic_update.py" in reason
+        assert "pdd/prompts/agentic_update_python.prompt" in reason
+
+    def test_guard_reads_registry_from_head_not_worktree(
+        self, tmp_path: Path
+    ) -> None:
+        """The guard MUST consult ``architecture.json`` at HEAD, not
+        the worktree filesystem (review pass #3 Finding 2).
+
+        Otherwise a fixer can remove its own registry entry in the
+        same change set and slip past the guard. This test commits
+        an entry mapping ``pdd/bogus.py -> bogus_python.prompt`` to
+        HEAD, then overwrites the worktree's ``architecture.json``
+        with an empty list (simulating the fixer's evasion), then
+        confirms the guard still blocks because the HEAD registry
+        retains the entry.
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("bogus_python.prompt", "pdd/bogus.py")],
+        )
+        # Fixer evasion: rewrite the worktree's architecture.json to
+        # remove the entry. The HEAD copy still has it.
+        _write_arch_json(tmp_path, [])
+        self._seed_code(tmp_path, "pdd/bogus.py")
+        self._seed_prompt(tmp_path, "pdd/prompts/bogus_python.prompt")
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            ["pdd/bogus.py", "architecture.json"],
+        )
+
+        assert reason is not None
+        assert "pdd/bogus.py" in reason
+        assert "pdd/prompts/bogus_python.prompt" in reason
+
+    def test_no_changed_files_is_allowed(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        # No commit/registry needed: the guard returns None on empty
+        # changed_files BEFORE consulting any registry.
+        assert _check_prompt_source_guard(tmp_path, []) is None
+
+    def test_code_changed_with_prompt_deleted_in_same_change_set_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Module retirement is a legitimate, contract-respecting change.
+
+        When the fixer/user deletes BOTH the registered code file AND
+        its owning prompt in the same change set (the code is gone
+        from disk, not just modified), the source of truth is
+        retired together with its generated artifact. The guard MUST
+        allow this rather than block on the missing prompt (codex
+        review pass #2 Finding B). The distinguishing detail from
+        the worse drift case (code persists, prompt deleted) is that
+        the code file is also absent on disk.
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        # Architecture still lists the module, but BOTH files are
+        # absent from disk - this is the retirement scenario where
+        # the next commit will drop the registry entry too.
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+        # Intentionally do NOT create either the code file or the
+        # prompt file on disk - both have been deleted in this change
+        # set.
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            [
+                "pdd/agentic_update.py",
+                "pdd/prompts/agentic_update_python.prompt",
+            ],
+        )
+
+        # Allowed: the code is gone, there is nothing to drift from.
+        assert reason is None
+
+    def test_code_modified_with_prompt_deleted_only_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Finding 1 (review pass #3): code persists, prompt deleted.
+
+        The fixer modifies ``pdd/foo.py`` (code still on disk) AND
+        deletes ``pdd/prompts/foo_python.prompt`` in the same change
+        set. Both paths appear in the change set, but the source of
+        truth has been destroyed while the generated artifact
+        remains - this is strictly WORSE drift than the original
+        #1063 case. The guard MUST block this.
+
+        Round-2's "prompt-in-change-set → allow" branch was scoped to
+        module retirement only; this test pins the disk-state check
+        that distinguishes retirement (both gone) from the worse
+        drift (code persists, prompt gone).
+        """
+        from pdd.checkup_review_loop import _check_prompt_source_guard
+
+        _commit_arch_to_head(
+            tmp_path,
+            [_prompt_module("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Code persists on disk (modified, not deleted).
+        (tmp_path / "pdd").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "pdd" / "foo.py").write_text(
+            "modified code\n", encoding="utf-8"
+        )
+        # Prompt was deleted in this change set - intentionally NOT
+        # creating it on disk.
+
+        reason = _check_prompt_source_guard(
+            tmp_path,
+            [
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+
+        assert reason is not None
+        # The refusal MUST name both paths so the operator can act.
+        assert "pdd/foo.py" in reason
+        assert "pdd/prompts/foo_python.prompt" in reason
+
+
+class TestPromptSourceGuardChangedFilesParsing:
+    """``_git_changed_files`` must surface rename old+new paths.
+
+    Renames are reported by ``git status --porcelain`` as
+    ``R  old -> new``. The original parser collapsed that into the
+    literal ``"old -> new"`` string, which never matched any
+    architecture-registry code-path key — so a registered file could
+    be renamed out from under the registry without tripping the
+    prompt-source guard (codex review pass #2 Finding A).
+
+    These tests exercise the real ``git`` invocation against a tmp
+    git repo. Monkeypatching ``_git_changed_files`` would hide the
+    bug because the parsing is the thing being tested.
+    """
+
+    @staticmethod
+    def _init_repo(worktree: Path) -> None:
+        """Initialize a minimal git repo with a deterministic identity."""
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+        )
+
+    def test_changed_files_includes_both_paths_for_rename(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "foo.py").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Rename the registered code file.
+        subprocess.run(
+            ["git", "mv", "pdd/foo.py", "pdd/foo_v2.py"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+
+        # BOTH paths must appear so the guard can match the old path
+        # against the architecture registry.
+        assert "pdd/foo.py" in changed
+        assert "pdd/foo_v2.py" in changed
+        # And the literal "old -> new" collapsed string MUST NOT appear.
+        assert not any("->" in entry for entry in changed)
+
+    def test_guard_handles_renamed_registered_file(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end: a rename of a registered code file without its
+        prompt change MUST be refused by the guard.
+        """
+        from pdd.checkup_review_loop import (
+            _check_prompt_source_guard,
+            _git_changed_files,
+        )
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "code\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+        _write_arch_json(
+            tmp_path,
+            [
+                _prompt_module(
+                    "agentic_update_python.prompt", "pdd/agentic_update.py"
+                )
+            ],
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # The fixer renames the registered code file without touching
+        # the prompt - exactly the rename-handling drift case.
+        subprocess.run(
+            ["git", "mv", "pdd/agentic_update.py", "pdd/agentic_update_v2.py"],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+        reason = _check_prompt_source_guard(tmp_path, changed)
+
+        assert reason is not None
+        # The refusal must name the registered (old) path that moved
+        # out from under its owning prompt.
+        assert "pdd/agentic_update.py" in reason
+        assert "pdd/prompts/agentic_update_python.prompt" in reason
+
+    def test_changed_files_excludes_collapsed_rename_literal(
+        self, tmp_path: Path
+    ) -> None:
+        """Regression guard: the parser MUST NOT emit ``"a -> b"``
+        strings for any rename, even when the staged rename uses
+        unusual path characters.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "name with space.py").write_text(
+            "x\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+        subprocess.run(
+            [
+                "git",
+                "mv",
+                "pdd/name with space.py",
+                "pdd/renamed_no_space.py",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+
+        # Both paths surface as discrete entries (``-z`` preserves
+        # paths exactly without quoting, so the space is intact).
+        assert "pdd/name with space.py" in changed
+        assert "pdd/renamed_no_space.py" in changed
+        # And nothing collapsed with the arrow literal.
+        assert not any("->" in entry for entry in changed)
+
+    def test_changed_files_surfaces_deleted_files(
+        self, tmp_path: Path
+    ) -> None:
+        """Belt-and-suspenders for Finding B: confirm an ``rm`` of a
+        registered prompt surfaces in ``_git_changed_files`` so the
+        same-change-set deletion path in ``_check_prompt_source_guard``
+        actually receives the deleted prompt in ``changed_files``. The
+        guard tests at the unit layer use synthetic lists; this test
+        verifies the helper's real-git output makes that synthetic
+        shape correspond to actual filesystem reality.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        prompt = tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt"
+        prompt.write_text("body\n", encoding="utf-8")
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "code\n", encoding="utf-8"
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Edit code and delete prompt - the module-retirement scenario.
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "newcode\n", encoding="utf-8"
+        )
+        prompt.unlink()
+
+        changed = _git_changed_files(tmp_path)
+
+        # Both the modified code and the deleted prompt MUST surface
+        # so the guard's "prompt in change set" check at step (2) of
+        # the new check order can see it.
+        assert "pdd/agentic_update.py" in changed
+        assert "pdd/prompts/agentic_update_python.prompt" in changed
+
+    def test_paired_rename_of_code_and_prompt_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Legitimate-refactor case (advisor reconciliation of
+        Findings 1 and A): the fixer renames BOTH the registered
+        code file AND its owning prompt in the same change set. The
+        registered code-path is no longer on disk (renamed away)
+        and the registered prompt-path is also no longer on disk
+        (renamed away). Both old paths surface in the change set
+        via the rename-detection emitted by ``_git_changed_files``.
+
+        Under the reconciled check order, the "code gone, prompt
+        also gone" branch hits the legitimate-retirement / paired-
+        refactor allow branch.
+        """
+        from pdd.checkup_review_loop import (
+            _check_prompt_source_guard,
+            _git_changed_files,
+        )
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd" / "prompts").mkdir(parents=True)
+        (tmp_path / "pdd" / "agentic_update.py").write_text(
+            "code\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "agentic_update_python.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+        _write_arch_json(
+            tmp_path,
+            [
+                _prompt_module(
+                    "agentic_update_python.prompt", "pdd/agentic_update.py"
+                )
+            ],
+        )
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Paired rename: BOTH code and prompt move to new paths.
+        subprocess.run(
+            ["git", "mv", "pdd/agentic_update.py", "pdd/agentic_update_v2.py"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git",
+                "mv",
+                "pdd/prompts/agentic_update_python.prompt",
+                "pdd/prompts/agentic_update_v2_python.prompt",
+            ],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        changed = _git_changed_files(tmp_path)
+        # Sanity: both old paths appear in the change set via the
+        # ``-z`` rename-detection emit.
+        assert "pdd/agentic_update.py" in changed
+        assert "pdd/prompts/agentic_update_python.prompt" in changed
+
+        reason = _check_prompt_source_guard(tmp_path, changed)
+
+        # Allowed: this is a legitimate paired refactor, not drift.
+        assert reason is None
+
+
+class TestPromptSourceGuardIntegration:
+    """Wires the guard into the main review loop.
+
+    Confirms the policy layer (not the push helper) refuses the push,
+    keeps affected findings open, and renders an actionable refusal in
+    the final report.
+    """
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+    def _seed_registry(
+        self, tmp_path: Path, modules: List[Dict[str, Any]]
+    ) -> None:
+        # ``_commit_arch_to_head`` initializes a git repo + commits the
+        # registry to HEAD so the post-Finding-2 ``git show
+        # HEAD:architecture.json`` read in ``_load_prompt_source_map``
+        # finds the registry. Also seed the code file(s) so the
+        # post-Finding-1 ``code_still_exists`` check sees them and the
+        # original drift case (code modified, prompt unchanged) reaches
+        # the drift branch.
+        _commit_arch_to_head(tmp_path, modules)
+        for entry in modules:
+            code_full = tmp_path / entry["filepath"]
+            code_full.parent.mkdir(parents=True, exist_ok=True)
+            code_full.write_text("# generated code\n", encoding="utf-8")
+            prompt_rel = f"pdd/prompts/{entry['filename']}"
+            full = tmp_path / prompt_rel
+            full.parent.mkdir(parents=True, exist_ok=True)
+            full.write_text("prompt body\n", encoding="utf-8")
+
+    def _finding(self, location: str = "pdd/agentic_update.py:1") -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": location,
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_loop_refuses_push_when_only_generated_code_changed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._seed_registry(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+
+        # The fake fixer "edits" agentic_update.py without touching its
+        # prompt - exactly the failure mode from commit bf57242d.
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/agentic_update.py"]
+        )
+        push_calls: List[Tuple[Any, Any, Any]] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs, "called"))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # ``success`` is the loop's "ran without crashing" signal per the
+        # docstring at pdd/checkup_review_loop.py:706-708 — it is NOT the
+        # ship gate. The verdict adapter parses ``reviewer-status:`` and
+        # ``fresh-final-review:`` markers in the rendered report; we assert
+        # those directly below so a future drift between the loop's
+        # internal completion flag and the ship-gating signals cannot
+        # silently turn this refusal into a green check on the PR. See
+        # also ``test_failed_push_aborts_loop_without_running_verifier``
+        # which encodes the same ``success=True`` + non-clean-status
+        # contract for the analogous push-failure refusal path.
+        assert success is True
+
+        # The policy layer MUST refuse before the push helper is invoked.
+        assert push_calls == []
+
+        # Ship-gate markers MUST signal non-clean. The verdict adapter
+        # treats any reviewer-status row whose status is not in
+        # ``clean_reviewer_states`` as non-shippable; ``fresh-final-
+        # review: missing`` keeps the final-fresh gate unsatisfied.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        assert "issue_aligned: unknown" in report
+
+        # The refusal MUST name both paths so the operator can act.
+        assert "pdd/agentic_update.py" in report
+        assert "pdd/prompts/agentic_update_python.prompt" in report
+
+        # The original finding stays OPEN in the findings table. Pin the
+        # exact row shape so we assert against the verdict-adapter-visible
+        # marker (``| <severity> | open |``) rather than substring-greping
+        # the whole report. The row appears under the ``### Findings``
+        # heading; status ``open`` is what the adapter consumes.
+        assert "### Findings" in report
+        findings_section = report.split("### Findings", 1)[1].split("### ", 1)[0]
+        assert "| blocker | open |" in findings_section
+        assert "broken api" in findings_section
+        # And confirm the finding was NOT moved to the fixed bucket.
+        assert "| blocker | fixed |" not in findings_section
+
+    def test_loop_allows_push_when_prompt_changed_with_code(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._seed_registry(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+
+        # The fake fixer "edits" BOTH the code and the prompt.
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: [
+                "pdd/agentic_update.py",
+                "pdd/prompts/agentic_update_python.prompt",
+            ],
+        )
+        push_calls: List[str] = []
+
+        def fake_push(*_a: Any, **_kw: Any) -> Tuple[bool, str]:
+            push_calls.append("called")
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py","pdd/prompts/agentic_update_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The guard MUST NOT block the compliant change set.
+        assert push_calls, "push helper should have been invoked"
+
+    def test_loop_allows_push_when_changed_file_is_unregistered(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._seed_registry(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+
+        # The fixer changed a file that is NOT in the registry (a test).
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: ["tests/test_agentic_update.py"],
+        )
+        push_calls: List[str] = []
+
+        def fake_push(*_a: Any, **_kw: Any) -> Tuple[bool, str]:
+            push_calls.append("called")
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["tests/test_agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Unregistered files are out of scope for the guard.
+        assert push_calls, "push helper should have been invoked"
+
+    def test_guard_trip_fully_terminates_loop_across_multiple_rounds(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """A guard trip MUST end the entire run, not just the current
+        round. With ``max_rounds=3`` and a fixer that would otherwise
+        keep producing code-only edits, the loop must invoke the fixer
+        once on round 1 and stop — never running rounds 2 or 3, and
+        never invoking the push helper at any point.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        self._seed_registry(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/agentic_update.py"]
+        )
+        push_calls: List[str] = []
+
+        def fake_push(*_a: Any, **_kw: Any) -> Tuple[bool, str]:
+            push_calls.append("called")
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        call_labels: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            call_labels.append(label)
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=3, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Push helper is never invoked across the whole run.
+        assert push_calls == []
+        # The fixer ran exactly once (round 1) before the guard tripped.
+        fix_calls = [lbl for lbl in call_labels if "fix-" in lbl]
+        assert len(fix_calls) == 1, (
+            f"fixer must run only once before guard trips, got: {fix_calls}"
+        )
+        # Round 2/3 review/fix/verify labels MUST NOT appear.
+        assert not any("round2" in lbl or "round3" in lbl for lbl in call_labels)
+        # The verifier MUST NOT have run either (it only runs after a
+        # successful push).
+        assert not any("verify-" in lbl for lbl in call_labels)
+        # Reviewer-status reflects the refusal, not "clean".
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report

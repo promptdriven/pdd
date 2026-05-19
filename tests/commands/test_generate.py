@@ -302,39 +302,221 @@ def test_generate_env_vars(runner, mock_code_gen):
     """Test environment variable parsing and setting."""
     with runner.isolated_filesystem():
         with open("p.txt", "w") as f: f.write("p")
-        
+
         # Set a host env var to test pass-through
         os.environ["HOST_VAR"] = "host_value"
-        
+
         # We invoke with one explicit KV pair and one pass-through key
         result = runner.invoke(generate_module.generate, ["p.txt", "-e", "NEW_VAR=new_val", "-e", "HOST_VAR"])
-        
+
         assert result.exit_code == 0
-        
+
         # Verify os.environ was updated (mock_code_gen runs inside the context where env is set)
         assert os.environ.get("NEW_VAR") == "new_val"
         assert os.environ.get("HOST_VAR") == "host_value"
-        
+
+        # Verify env_vars dict was also forwarded into code_generator_main so that
+        # template / front-matter variable resolution sees them (regression for
+        # the codex finding on pdd/commands/generate.py:320).
+        call_kwargs = mock_code_gen.call_args[1]
+        assert call_kwargs["env_vars"] == {
+            "NEW_VAR": "new_val",
+            "HOST_VAR": "host_value",
+        }
+
         # Cleanup
         if "NEW_VAR" in os.environ: del os.environ["NEW_VAR"]
         if "HOST_VAR" in os.environ: del os.environ["HOST_VAR"]
+
+
+def test_generate_unit_test_and_exclude_tests_forwarded(runner, mock_code_gen):
+    """Regression: ``--unit-test`` and ``--exclude-tests`` must reach code_generator_main.
+
+    The codex review for issue #1057 flagged that these flags were parsed by the
+    CLI but no longer forwarded into ``code_generator_main``, which still
+    consumes them. Without this propagation, test inclusion/exclusion behaviour
+    silently degrades to the function default.
+    """
+    with runner.isolated_filesystem():
+        with open("p.txt", "w") as f:
+            f.write("p")
+        os.makedirs("tests")
+        with open("tests/test_p.py", "w") as f:
+            f.write("def test_p(): pass\n")
+
+        result = runner.invoke(
+            generate_module.generate,
+            ["p.txt", "--unit-test", "tests/test_p.py", "--exclude-tests"],
+        )
+
+        assert result.exit_code == 0, result.output
+        kwargs = mock_code_gen.call_args[1]
+        assert kwargs["unit_test_file"] == "tests/test_p.py"
+        assert kwargs["exclude_tests"] is True
+
+
+def test_generate_exclude_tests_default_false(runner, mock_code_gen):
+    """Default for --exclude-tests is False and must propagate verbatim."""
+    with runner.isolated_filesystem():
+        with open("p.txt", "w") as f:
+            f.write("p")
+
+        result = runner.invoke(generate_module.generate, ["p.txt"])
+
+        assert result.exit_code == 0, result.output
+        kwargs = mock_code_gen.call_args[1]
+        assert kwargs["exclude_tests"] is False
+        assert kwargs["unit_test_file"] is None
+
+
+def test_generate_missing_prompt_file_fails_usage(runner, mock_code_gen):
+    """Regression for codex finding on pdd/commands/generate.py:284.
+
+    A missing standard prompt file must short-circuit with a usage error and a
+    non-zero exit code. Without this guard, ``code_generator_main`` returns an
+    error tuple that the CLI wrapper would otherwise treat as success (exit 0),
+    masking failures from scripts.
+    """
+    with runner.isolated_filesystem():
+        result = runner.invoke(generate_module.generate, ["missing.prompt"])
+
+    assert result.exit_code != 0, result.output
+    assert "does not exist" in result.output
+    mock_code_gen.assert_not_called()
+
+
+def test_generate_directory_prompt_fails_usage(runner, mock_code_gen):
+    """A directory passed where a prompt file is expected must error out."""
+    with runner.isolated_filesystem():
+        os.mkdir("prompts_dir")
+        result = runner.invoke(generate_module.generate, ["prompts_dir"])
+
+    assert result.exit_code != 0, result.output
+    assert "directory" in result.output.lower()
+    mock_code_gen.assert_not_called()
 
 # --- Example Command Tests ---
 
 def test_example_success(runner, mock_context_gen):
     """Test the example command success path."""
     with runner.isolated_filesystem():
-        with open("prompt.txt", "w") as f: f.write("p")
-        with open("code.py", "w") as f: f.write("c")
-        
-        result = runner.invoke(generate_module.example, ["prompt.txt", "code.py", "--output", "out.md"])
-        
+        # Use a `<basename>_<language>.prompt` filename so infer_module_identity()
+        # would resolve to ("foo", "python"); this exercises the same naming
+        # contract that `clears_run_report=True` relies on (see #1057).
+        with open("foo_python.prompt", "w") as f: f.write("p")
+        with open("foo.py", "w") as f: f.write("c")
+
+        result = runner.invoke(generate_module.example, ["foo_python.prompt", "foo.py", "--output", "out.md"])
+
         assert result.exit_code == 0
         mock_context_gen.assert_called_once()
         kwargs = mock_context_gen.call_args[1]
-        assert kwargs["prompt_file"] == "prompt.txt"
-        assert kwargs["code_file"] == "code.py"
+        assert kwargs["prompt_file"] == "foo_python.prompt"
+        assert kwargs["code_file"] == "foo.py"
         assert kwargs["output"] == "out.md"
+
+
+def test_example_format_defaults_to_code(runner, mock_context_gen):
+    """Regression for codex finding on pdd/commands/generate.py:409.
+
+    `pdd example PROMPT CODE --output example.txt` (no explicit ``--format``)
+    must forward ``format="code"`` into ``context_generator_main`` so the
+    code-format path that normalizes the output suffix to the language
+    extension still runs. A regression to ``default=None`` would skip that
+    normalization, contradicting the documented default in --help and
+    README examples.
+    """
+    with runner.isolated_filesystem():
+        with open("foo_python.prompt", "w") as f:
+            f.write("p")
+        with open("foo.py", "w") as f:
+            f.write("c")
+
+        result = runner.invoke(
+            generate_module.example,
+            ["foo_python.prompt", "foo.py", "--output", "example.txt"],
+        )
+
+        assert result.exit_code == 0, result.output
+        mock_context_gen.assert_called_once()
+        kwargs = mock_context_gen.call_args[1]
+        assert kwargs["format"] == "code", (
+            "pdd example must forward format='code' by default so the "
+            "code-format suffix-normalization path runs (regression for "
+            "codex finding on pdd/commands/generate.py:409)."
+        )
+
+
+def test_example_generation_failure_exits_nonzero(runner, mock_context_gen):
+    """A failed pdd example run must not return normally."""
+    mock_context_gen.side_effect = RuntimeError("example generation failed")
+
+    with runner.isolated_filesystem():
+        with open("foo_python.prompt", "w") as f:
+            f.write("p")
+        with open("foo.py", "w") as f:
+            f.write("c")
+
+        result = runner.invoke(
+            generate_module.example,
+            ["foo_python.prompt", "foo.py"],
+            obj={"quiet": True},
+        )
+
+    assert result.exit_code == 1
+
+
+def test_example_command_declares_clears_run_report():
+    """Regression test for issue #1057.
+
+    `pdd example` must be decorated with ``@log_operation(..., clears_run_report=True)``
+    so a successful example regeneration invalidates any stale
+    ``.pdd/meta/<module>_<language>_run.json``. Without that flag, the
+    fingerprint would be refreshed while the run report kept describing the
+    pre-mutation example output.
+
+    We assert against the source file because this test module deliberately
+    mocks ``pdd.operation_log.log_operation`` with a no-op decorator factory
+    at import time (see the top of this file), which strips the decorator
+    parameters from the in-memory function object. The source is the
+    authoritative record of the decorator stack.
+    """
+    import importlib
+    import inspect
+    import re
+    from pathlib import Path
+
+    # Resolve the real module file path. ``pdd.commands`` re-exports ``generate``
+    # as a Click command at attribute lookup time, which can shadow the module
+    # object — use importlib to bypass that and reach the real submodule.
+    real_generate = importlib.import_module("pdd.commands.generate")
+    module_file = getattr(real_generate, "__file__", None)
+    if not module_file:
+        # Fall back to filesystem lookup via the package, which should always
+        # have a __file__.
+        pdd_commands = importlib.import_module("pdd.commands")
+        module_file = str(Path(pdd_commands.__file__).parent / "generate.py")
+    source = Path(module_file).read_text(encoding="utf-8")
+
+    # Match the @log_operation(...) decorator immediately preceding `def example(`.
+    # Allow other decorators (e.g. @track_cost) between them.
+    pattern = re.compile(
+        r"@log_operation\((?P<args>[^)]*)\)\s*(?:@[\w\.]+(?:\([^)]*\))?\s*)*def\s+example\b",
+        re.DOTALL,
+    )
+    match = pattern.search(source)
+    assert match is not None, (
+        "pdd.commands.generate.example must be wrapped with @log_operation(...)"
+    )
+    decorator_args = match.group("args")
+    assert 'operation="example"' in decorator_args, (
+        "example command's @log_operation must declare operation=\"example\""
+    )
+    assert "clears_run_report=True" in decorator_args, (
+        "Regression for issue #1057: `pdd example` must declare "
+        "clears_run_report=True on its @log_operation decorator so a fresh "
+        "fingerprint never coexists with a stale per-module run report."
+    )
 
 # --- Test Command Tests ---
 
@@ -382,22 +564,30 @@ def test_test_manual_mode_explicit(runner, mock_cmd_test):
     # Even if we pass a URL, --manual should force manual mode
     url = "https://github.com/user/repo/issues/1"
     result = runner.invoke(generate_module.test, ["--manual", url, "code.py"])
-    
+
     assert result.exit_code == 0
     mock_cmd_test.assert_called_once()
     kwargs = mock_cmd_test.call_args[1]
     assert kwargs["prompt_file"] == url
     assert kwargs["code_file"] == "code.py"
+    # Regression for the codex finding on pdd/commands/generate.py:523 — when
+    # the user supplies --manual we must forward manual=True so cmd_test_main
+    # does not silently fall back to agentic test generation for non-Python or
+    # API-enabled inputs.
+    assert kwargs["manual"] is True
 
 def test_test_manual_mode_implicit(runner, mock_cmd_test):
     """Test 'test' command in Manual mode implicitly (no URL)."""
     result = runner.invoke(generate_module.test, ["prompt.txt", "code.py"])
-    
+
     assert result.exit_code == 0
     mock_cmd_test.assert_called_once()
     kwargs = mock_cmd_test.call_args[1]
     assert kwargs["prompt_file"] == "prompt.txt"
     assert kwargs["code_file"] == "code.py"
+    # Without --manual the implicit manual-mode dispatch must forward
+    # manual=False so cmd_test_main can choose the right path.
+    assert kwargs["manual"] is False
 
 def test_test_manual_mode_arg_error(runner):
     """Test Manual mode fails if not exactly 2 arguments."""
@@ -458,6 +648,56 @@ def test_test_story_generation_mode_from_prompt_inputs(runner):
     assert kwargs["temperature"] == 0.0
     assert kwargs["time"] == 0.25
     assert kwargs["verbose"] is False
+
+
+def test_test_story_mode_links_uses_env_prompts_dir(runner, monkeypatch):
+    """Regression for codex finding on pdd/commands/generate.py:469.
+
+    Story-link mode must fall back to ``PDD_PROMPTS_DIR`` when ctx does not
+    provide an explicit ``prompts_dir`` override. The CLI does not populate
+    that ctx key, so without the env-var fallback story linking scans the
+    wrong locations.
+    """
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "env_prompts")
+    with runner.isolated_filesystem():
+        with open("story__upload_flow.md", "w") as f:
+            f.write("As a user...")
+
+        with patch.object(generate_module, "cache_story_prompt_links") as mock_link:
+            mock_link.return_value = (
+                True, "Story prompt metadata linked.", 0.0, "gpt-4", []
+            )
+            result = runner.invoke(generate_module.test, ["story__upload_flow.md"])
+
+    assert result.exit_code == 0, result.output
+    mock_link.assert_called_once()
+    assert mock_link.call_args[1]["prompts_dir"] == "env_prompts"
+
+
+def test_test_story_generation_uses_env_dirs(runner, monkeypatch):
+    """Regression for codex finding on pdd/commands/generate.py:469.
+
+    Story-generation mode must fall back to ``PDD_PROMPTS_DIR`` and
+    ``PDD_USER_STORIES_DIR`` when ctx lacks explicit overrides.
+    """
+    monkeypatch.setenv("PDD_PROMPTS_DIR", "env_prompts")
+    monkeypatch.setenv("PDD_USER_STORIES_DIR", "env_stories")
+    with runner.isolated_filesystem():
+        with open("upload_python.prompt", "w") as f:
+            f.write("Upload prompt")
+
+        with patch.object(generate_module, "generate_user_story") as mock_gen:
+            mock_gen.return_value = (
+                True, "ok", 0.0, "gpt-4",
+                "env_stories/story__upload_flow.md", ["upload_python.prompt"],
+            )
+            result = runner.invoke(generate_module.test, ["upload_python.prompt"])
+
+    assert result.exit_code == 0, result.output
+    mock_gen.assert_called_once()
+    kwargs = mock_gen.call_args[1]
+    assert kwargs["prompts_dir"] == "env_prompts"
+    assert kwargs["stories_dir"] == "env_stories"
 
 
 def test_test_markdown_input_not_story_mode(runner):
