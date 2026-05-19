@@ -40,6 +40,7 @@ __all__ = [
     "PorcelainEntry",
     "parse_porcelain_z",
     "run_porcelain_z",
+    "iter_changed_paths",
 ]
 
 

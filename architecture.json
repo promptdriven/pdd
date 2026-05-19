@@ -5,7 +5,8 @@
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
-      "_keyring_timeout_python.prompt"
+      "_keyring_timeout_python.prompt",
+      "git_porcelain_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
