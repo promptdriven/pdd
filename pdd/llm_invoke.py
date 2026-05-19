@@ -541,15 +541,30 @@ def _propagate_attempted_models_to_ctx(attempted_models: List[str]) -> None:
         ctx = click.get_current_context(silent=True)
         if ctx is None or ctx.obj is None or not hasattr(ctx.obj, "__setitem__"):
             return
-        # Append to any existing chain so multiple llm_invoke calls in the
+        # Compose with any existing chain so multiple llm_invoke calls in the
         # same command compose into one chronological list.
         existing = ctx.obj.get("attempted_models") or []
         if not isinstance(existing, list):
             existing = []
-        combined = list(existing)
-        for name in attempted_models:
-            if name and (not combined or combined[-1] != name):
-                combined.append(str(name))
+        incoming = [str(name) for name in attempted_models if name]
+        # Single llm_invoke now calls this helper twice (once from the
+        # cloud-fallback handler with the cloud-only prefix, then again on
+        # local success with the full chain). When the incoming chain is a
+        # prefix-extension of the existing chain, REPLACE rather than
+        # append-with-dedup — otherwise the cloud prefix would be re-appended
+        # on top of itself (the dedup loop only checks combined[-1] != name,
+        # not whole-prefix containment).
+        if (
+            existing
+            and len(incoming) >= len(existing)
+            and incoming[: len(existing)] == existing
+        ):
+            combined = list(incoming)
+        else:
+            combined = list(existing)
+            for name in incoming:
+                if not combined or combined[-1] != name:
+                    combined.append(name)
         ctx.obj["attempted_models"] = combined
     except Exception:
         # Cost tracking is best-effort; never raise from this helper.

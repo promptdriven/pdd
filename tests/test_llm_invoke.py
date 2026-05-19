@@ -2733,6 +2733,38 @@ def test_cloud_attempts_survive_pre_loop_setup_failure():
     )
 
 
+def test_propagate_attempted_models_replaces_when_incoming_extends_existing():
+    """Regression (codex P2): single llm_invoke calls the helper twice — once
+    from the cloud-fallback handler with the cloud-only prefix, then again on
+    local success with the full chain. When the incoming chain is a
+    prefix-extension of the existing ctx chain, the helper MUST replace so the
+    cloud prefix isn't recorded twice on ctx.obj['attempted_models'].
+    """
+    import click
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    ctx = click.Context(click.Command("x"), obj={})
+    with ctx:
+        _propagate_attempted_models_to_ctx(['cloud:a', 'cloud:b'])
+        _propagate_attempted_models_to_ctx(['cloud:a', 'cloud:b', 'local:c'])
+        assert ctx.obj['attempted_models'] == ['cloud:a', 'cloud:b', 'local:c']
+
+
+def test_propagate_attempted_models_appends_when_incoming_is_disjoint():
+    """The append-with-dedup fallback must still compose disjoint chains from
+    multiple distinct llm_invoke calls in one Click command into one
+    chronological list.
+    """
+    import click
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    ctx = click.Context(click.Command("x"), obj={})
+    with ctx:
+        _propagate_attempted_models_to_ctx(['m1'])
+        _propagate_attempted_models_to_ctx(['m2'])
+        assert ctx.obj['attempted_models'] == ['m1', 'm2']
+
+
 # --- Tests for cloud exception classes ---
 
 def test_cloud_fallback_error():
