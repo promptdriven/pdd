@@ -4216,6 +4216,12 @@ def _check_architecture_registry_edit_guard(
         consumed_removed.add((code, old_prompt))
         consumed_added.add((code, new_prompt))
 
+    # Invariant: ``consumed_added`` only contains pairs the filepath
+    # loop matched -- i.e. ``(code, new_prompt)`` for codes shared with
+    # HEAD. A prompt repoint that moves to a NEW filepath produces
+    # ``pair_new = (new_code, prompt)`` which is never pre-consumed
+    # there, so this loop catches identity repoints orthogonally from
+    # the filepath loop (see swap-variant regression test).
     for prompt, old_code in head_by_prompt.items():
         new_code = wt_by_prompt.get(prompt)
         if new_code is None or new_code == old_code:

@@ -5881,6 +5881,60 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "pdd/baz.py" in reason
         assert "without prompt source on disk" in reason
 
+    def test_swap_repoint_two_pairs_is_refused_with_both_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-4 claimed the filepath repoint loop consumes both
+        pairs and the prompt loop skips the second repoint. Empirically
+        the loop catches both because ``consumed_added`` only contains
+        ``(code, new_prompt)`` from the filepath loop -- not
+        ``(new_code, prompt)`` -- so the prompt loop's skip check fails
+        and the second repoint is recorded. Regression: both repoints
+        must appear in the refusal.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Worktree: swap variant. Same filepath repoints to a different
+        # prompt; same prompt repoints to a different filepath.
+        (tmp_path / "pdd" / "bar.py").write_text(
+            "# bar\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "bar_python.prompt").write_text(
+            "p\n", encoding="utf-8"
+        )
+        new_arch = [
+            _arch_pair("bar_python.prompt", "pdd/foo.py"),
+            _arch_pair("foo_python.prompt", "pdd/bar.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/bar.py",
+                "pdd/prompts/bar_python.prompt",
+            ],
+        )
+        assert reason is not None
+        # Both repoints MUST appear in the refusal:
+        assert "repointed pdd/foo.py" in reason
+        assert "repointed pdd/prompts/foo_python.prompt" in reason
+        # And the underlying details:
+        assert (
+            "pdd/prompts/foo_python.prompt to pdd/prompts/bar_python.prompt"
+            in reason
+        )
+        assert "pdd/foo.py to pdd/bar.py" in reason
+
 
 class TestArchitectureRegistryEditGuardIntegration:
     """Wires the registry-edit guard into ``run_checkup_review_loop``."""
