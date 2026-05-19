@@ -923,6 +923,53 @@ def test_m1_auto_deps_promotes_module_prompt_select_include(tmp_path: Path) -> N
     )
 
 
+def test_b1_self_include_does_not_create_self_edge(tmp_path: Path) -> None:
+    """Self-includes (a module-prompt including itself) MUST NOT be turned
+    into a self-edge in arch deps. This mirrors the validator's
+    ``m != self_mod`` / ``m != mod_base`` filter in
+    ``cross_validate_architecture_with_prompt_includes``.
+    """
+    from pdd.agentic_sync import _apply_architecture_corrections
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts = project_root / "prompts"
+    prompts.mkdir()
+    (prompts / "a_python.prompt").write_text(
+        "<pdd-reason>r</pdd-reason>\n\n"
+        "<pdd-dependency>a_LLM.prompt</pdd-dependency>\n\n"
+        "% Self-include for self-context (should NOT become a self-edge dep).\n"
+        "<include>a_python.prompt</include>\n",
+        encoding="utf-8",
+    )
+    (prompts / "a_LLM.prompt").write_text("%", encoding="utf-8")
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {"filename": "a_python.prompt", "dependencies": ["a_LLM.prompt"]},
+        {"filename": "a_LLM.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    _apply_architecture_corrections(
+        project_root,
+        [{"filename": "a_python.prompt", "dependencies": []}],
+        architecture,
+        quiet=True,
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = next(e for e in final if e["filename"] == "a_python.prompt")
+    assert "a_python.prompt" not in entry["dependencies"], (
+        "Self-include must not produce a self-edge dep; got "
+        f"{entry['dependencies']!r}"
+    )
+    assert entry["dependencies"] == ["a_LLM.prompt"], (
+        f"Re-converged deps should match <pdd-dependency> declarations only; got "
+        f"{entry['dependencies']!r}"
+    )
+
+
 def test_m1_auto_deps_merge_preserves_select_include_of_module_prompt(
     tmp_path: Path,
 ) -> None:

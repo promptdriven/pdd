@@ -1812,8 +1812,10 @@ def _resolve_prompt_for_architecture_correction(
     return None
 
 
-def _module_prompt_include_dependencies(prompt_path: Path) -> List[str]:
-    """Return ``<include>`` targets that name another module prompt.
+def _module_prompt_include_dependencies(
+    prompt_path: Path, self_filename: Optional[str] = None
+) -> List[str]:
+    """Return ``<include>`` targets that name *another* module prompt.
 
     Mirrors the validator (``cross_validate_architecture_with_prompt_includes``):
     any ``<include>`` whose body resolves to a module prompt — i.e.
@@ -1822,11 +1824,21 @@ def _module_prompt_include_dependencies(prompt_path: Path) -> List[str]:
     ``lines`` attributes. Stripping these from re-converged dependencies would
     re-create the inverse #1061 drift (``validate-arch-includes`` would warn
     "<include>s module 'b' ... but architecture.json does not list it").
+
+    Self-edges are skipped to match the validator (``m != mod_base`` /
+    ``m != self_mod`` in
+    ``cross_validate_architecture_with_prompt_includes`` and
+    ``_pdd_dependency_modules``). A prompt that ``<include>``s itself for
+    self-context is not depending on itself.
     """
+    self_mod = extract_module_from_include(self_filename) if self_filename else None
     deps: List[str] = []
     seen: set[str] = set()
     for inc in extract_includes_from_file(prompt_path):
-        if _module_prompt_include_target(inc) is None:
+        inc_mod = _module_prompt_include_target(inc)
+        if inc_mod is None:
+            continue
+        if self_mod and inc_mod == self_mod:
             continue
         if inc not in seen:
             deps.append(inc)
@@ -1837,6 +1849,7 @@ def _module_prompt_include_dependencies(prompt_path: Path) -> List[str]:
 def _declared_prompt_dependencies(
     prompt_path: Path,
     arch_modules: List[Dict[str, Any]],
+    self_filename: Optional[str] = None,
 ) -> Optional[List[str]]:
     """Return architecture-authoritative dependencies declared by the prompt.
 
@@ -1848,6 +1861,10 @@ def _declared_prompt_dependencies(
     correction that re-writes the entry's ``dependencies`` cannot strip a
     module-prompt include-backed edge and re-introduce a validation failure
     in the reverse direction.
+
+    ``self_filename`` (the architecture filename for this prompt) lets the
+    self-include filter match the validator: a prompt's ``<include>`` of
+    its own module prompt is self-context, not a self-edge dep.
 
     Returns ``None`` only when the prompt declares no dependencies at all
     (no ``<pdd-dependency>`` tag *and* no module-prompt ``<include>``) — in
@@ -1862,7 +1879,9 @@ def _declared_prompt_dependencies(
     declared: List[str] = list(tags.get("dependencies", []) or [])
     has_dep_tags = tags.get("has_dependency_tags", False) or bool(declared)
 
-    include_deps = _module_prompt_include_dependencies(prompt_path)
+    include_deps = _module_prompt_include_dependencies(
+        prompt_path, self_filename=self_filename
+    )
     if not has_dep_tags and not include_deps:
         return None
 
@@ -1991,7 +2010,9 @@ def _apply_architecture_corrections(
             continue
 
         prompt_path, _prompt_filename = prompt_info
-        declared_deps = _declared_prompt_dependencies(prompt_path, modules)
+        declared_deps = _declared_prompt_dependencies(
+            prompt_path, modules, self_filename=filename
+        )
         if declared_deps is None:
             if not quiet:
                 console.print(
