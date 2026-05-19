@@ -5873,6 +5873,71 @@ class TestReviewLoopDeterministicGates:
         assert "reviewer-status: codex=clean" not in report
         assert "gate:runner" in report
 
+    def test_final_report_renders_gate_runner_crash_row(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review iteration 2, Finding 2: when ``_enforce_gates_before_clean``
+        records a discover/run crash, the ``### Deterministic Gates`` section
+        of the rendered report MUST show the crash row (phase + exception
+        class). Previously the renderer iterated ``run.get("results", [])``
+        which is ``[]`` for a crash, so the section emitted a bare header
+        with no useful operator-facing detail.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_discover(worktree, changed_files, *, extra_allow=()):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError("renderer-test kaboom")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "### Deterministic Gates" in report
+        # Slice the Deterministic Gates section so we don't accidentally
+        # match a substring from the Findings table (whose ``finding``
+        # field already says "runner crashed").
+        start = report.index("### Deterministic Gates")
+        rest = report[start:]
+        next_section_idx = rest.find("\n### ", 1)
+        det_section = rest if next_section_idx == -1 else rest[:next_section_idx]
+        # The crash row must explicitly name the phase (``run_gates``)
+        # and the exception class (``RuntimeError``).
+        assert "runner crash" in det_section.lower(), (
+            f"Deterministic Gates section missing crash row:\n{det_section}"
+        )
+        assert "run_gates" in det_section, det_section
+        assert "RuntimeError" in det_section, det_section
+
     def test_gate_finding_carries_stable_dedup_key(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

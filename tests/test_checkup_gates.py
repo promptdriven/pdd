@@ -646,3 +646,68 @@ class TestGateResultsToFindings:
             round_number=2,
         )
         assert r1[0].key == r2[0].key
+
+    def test_gate_runner_error_finding_key_stable_across_rounds_with_volatile_error(
+        self,
+    ) -> None:
+        """Codex review iteration 2, Finding 1: the runner-error finding's
+        ``finding`` text MUST NOT embed ``result.error`` because that field
+        carries volatile detail (paths, exception ``[Errno N]`` codes, etc.)
+        that varies across rounds. ``ReviewFinding.key`` is built from
+        ``severity|location|finding|required_fix``; an embedded volatile
+        ``error`` breaks the dedup contract documented in
+        ``pdd/prompts/checkup_gates_python.prompt`` and tested by
+        ``test_dedup_key_is_stable_across_rounds`` for the
+        exit_code != 0 branch.
+        """
+        from pdd.checkup_gates import Gate, GateResult, gate_results_to_findings
+
+        gate = Gate(
+            name="persist-fail",
+            cmd=["true"],
+            source="<test>",
+        )
+        r1 = gate_results_to_findings(
+            [
+                GateResult(
+                    gate=gate,
+                    exit_code=None,
+                    stdout_excerpt="",
+                    stderr_excerpt="",
+                    duration_seconds=0.1,
+                    started_at_iso="2026-01-01T00:00:00Z",
+                    error=(
+                        "PermissionError: [Errno 13] Permission denied: "
+                        "/tmp/round-1-review-gate-persist-fail.txt"
+                    ),
+                )
+            ],
+            round_number=1,
+        )
+        r2 = gate_results_to_findings(
+            [
+                GateResult(
+                    gate=gate,
+                    exit_code=None,
+                    stdout_excerpt="",
+                    stderr_excerpt="",
+                    duration_seconds=0.1,
+                    started_at_iso="2026-01-01T00:00:05Z",
+                    error=(
+                        "PermissionError: [Errno 13] Permission denied: "
+                        "/tmp/round-2-review-gate-persist-fail.txt"
+                    ),
+                )
+            ],
+            round_number=2,
+        )
+        assert r1[0].key == r2[0].key, (
+            "runner-error finding keys MUST match across rounds despite "
+            "round-specific paths in ``result.error``; otherwise the loop "
+            "produces a duplicate finding row every round.\n"
+            f"r1.key={r1[0].key!r}\nr2.key={r2[0].key!r}"
+        )
+        # The volatile error text MUST still appear in evidence so the
+        # operator can still see the actual failure detail.
+        assert "PermissionError" in r1[0].evidence
+        assert "/tmp/round-1-review-gate-persist-fail.txt" in r1[0].evidence

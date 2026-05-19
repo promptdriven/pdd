@@ -4663,7 +4663,23 @@ def _render_final_report(
                 if reviewer_label:
                     header += f", reviewer `{reviewer_label}`"
                 lines.append(header)
-                for result in run.get("results", []) or []:
+                results = run.get("results", []) or []
+                run_error = str(run.get("error") or "").strip()
+                run_phase = str(run.get("phase") or "").strip()
+                # Issue #1092 codex review iteration 2 Finding 2: when
+                # ``_enforce_gates_before_clean`` records a discover/run
+                # crash, ``results`` is ``[]`` and the audit detail
+                # lives in ``error``/``phase``. Surface it as a crash
+                # row so the operator sees what blew up instead of an
+                # empty section. The matching synthetic blocker
+                # finding still appears in ``### Findings``.
+                if not results and (run_error or run_phase):
+                    phase_label = run_phase or "gate-runner"
+                    error_label = run_error or "unknown error"
+                    lines.append(
+                        f"  - runner crash during `{phase_label}`: {error_label}"
+                    )
+                for result in results:
                     gate = result.get("gate") or {}
                     name = gate.get("name", "<unnamed>")
                     source = gate.get("source", "")

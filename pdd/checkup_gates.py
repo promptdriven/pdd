@@ -166,6 +166,11 @@ _FORBIDDEN_SCRIPT_FRAGMENTS: Tuple[str, ...] = (
 # the whole script when any of these tokens appear. List spans the
 # minimum metachar set codex review iteration 1 Finding 1 requested
 # plus the obvious shell-out binaries.
+#
+# POSIX shell metacharacters only. Windows cmd.exe metacharacters
+# (e.g. ``^``, ``%VAR%``) are out of v1 scope: PDD is a Unix-first
+# project and ``package.json`` scripts are conventionally written for
+# POSIX shells (codex review iteration 2, Finding 3 — info).
 _SHELL_METACHAR_TOKENS: Tuple[str, ...] = (
     "&&",
     "||",
@@ -759,9 +764,20 @@ def _render_per_gate_body(result: GateResult) -> str:
 
 
 def _build_evidence(result: GateResult) -> str:
-    """Render the short evidence string for the synthetic finding."""
+    """Render the short evidence string for the synthetic finding.
+
+    ``result.error`` (the volatile runner-side detail — exception class,
+    ``[Errno N]`` codes, round-specific artifact paths) lives here only.
+    It must NOT leak into ``_build_finding_message`` because the
+    ``ReviewFinding.key`` dedup contract (codex review iteration 2,
+    Finding 1) requires the message stay constant across rounds for the
+    same gate-name; otherwise identical persistence failures across
+    rounds produce different keys and the loop spams duplicate findings.
+    """
     if result.exit_code is None:
-        prefix = f"Runner error: {result.error}"
+        prefix = "Runner error"
+        if result.error:
+            prefix += f": {result.error}"
     else:
         prefix = f"Gate exit_code={result.exit_code}"
     cmd_line = " ".join(result.gate.cmd)
@@ -785,10 +801,20 @@ def _build_required_fix(result: GateResult) -> str:
 
 
 def _build_finding_message(result: GateResult) -> str:
+    """Build the ``finding`` field for the synthetic ReviewFinding.
+
+    ``ReviewFinding.key`` is built from
+    ``severity|location|finding|required_fix``. To keep the dedup key
+    stable across rounds for the same gate, this string MUST be
+    deterministic and MUST NOT embed any per-invocation detail such as
+    ``result.error`` (which carries exception class names, ``[Errno N]``
+    codes, or round-specific artifact paths). The volatile detail lives
+    in ``_build_evidence`` (codex review iteration 2, Finding 1).
+    """
     if result.exit_code is None:
         return (
             f"Deterministic gate {result.gate.name!r} failed to execute "
-            f"({result.error or 'runner error'})."
+            "(runner error)."
         )
     return (
         f"Deterministic gate {result.gate.name!r} failed with exit "
