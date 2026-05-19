@@ -3430,8 +3430,23 @@ def _enforce_gates_before_clean(
             extra_allow=tuple(config.gate_allow),
         )
     except Exception as exc:  # noqa: BLE001 - defensive
+        # Discovery is allowlist-only and reads repo config files; a
+        # crash here means a config file we trusted just blew up. Fail
+        # CLOSED with a synthetic blocker finding so the loop refuses
+        # the clean verdict rather than silently shipping while the
+        # gate layer was offline.
         logger.warning("gates: discovery crashed: %s", exc, exc_info=True)
-        return []
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": f"{type(exc).__name__}: {exc}",
+                "phase": "discover",
+            }
+        )
+        return [_gate_runner_crash_finding(exc, round_number, phase="discover")]
     if not gates:
         return []
     default_timeout = (
@@ -3455,8 +3470,25 @@ def _enforce_gates_before_clean(
             default_timeout=default_timeout,
         )
     except Exception as exc:  # noqa: BLE001 - defensive: never raise
+        # Codex review iteration 1, Finding 3: a crashed gate runner
+        # is a SAFETY EVENT, not a no-op. Fail closed with a synthetic
+        # blocker finding so ``state.reviewer_status[reviewer]`` cannot
+        # land on ``clean`` while the gate layer was offline. The
+        # caller's normal ``_record_gate_findings`` + pending-findings
+        # path then surfaces this in the rendered report exactly like
+        # any other deterministic-gate failure.
         logger.warning("gates: run_gates crashed: %s", exc, exc_info=True)
-        return []
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": f"{type(exc).__name__}: {exc}",
+                "phase": "run_gates",
+            }
+        )
+        return [_gate_runner_crash_finding(exc, round_number, phase="run_gates")]
     # Record EVERY gate run (passed + failed) so the final report's
     # ``### Deterministic Gates`` section and ``final-state.json``'s
     # ``gates`` field show the full audit trail, not just failures.
@@ -3469,6 +3501,44 @@ def _enforce_gates_before_clean(
         }
     )
     return gate_results_to_findings(results, round_number=round_number)
+
+
+def _gate_runner_crash_finding(
+    exc: BaseException,
+    round_number: int,
+    *,
+    phase: str,
+) -> ReviewFinding:
+    """Build the synthetic blocker finding for a crashed gate runner.
+
+    Codex review iteration 1 (Finding 3) requires the loop fail CLOSED
+    when ``discover_gates`` or ``run_gates`` raises: a swallowed-into-
+    ``[]`` path lets the LLM's clean verdict ride over a gate layer
+    that is actually broken. The finding rides through the normal
+    pending-findings path, the loop refuses clean, and the operator
+    sees both the crash class and the recommended remediation in the
+    rendered report.
+    """
+    exc_class = type(exc).__name__
+    exc_message = str(exc)
+    return ReviewFinding(
+        severity="blocker",
+        reviewer="gate:runner",
+        area="deterministic-gate",
+        evidence=f"{exc_class}: {exc_message}",
+        finding=(
+            f"Deterministic gate runner crashed during {phase!r}: {exc_class}. "
+            "Refusing clean verdict until the runner can complete."
+        ),
+        required_fix=(
+            "Investigate the gate runner crash and re-run `pdd checkup "
+            "--pr --review-loop`. Pass `--no-gates` only as a last-resort "
+            "diagnostic; never as a workaround on a PR-side ship gate."
+        ),
+        location=f"pdd/checkup_gates.py:{phase}",
+        status="open",
+        round_number=round_number,
+    )
 
 
 def _record_gate_findings(

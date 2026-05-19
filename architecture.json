@@ -7657,8 +7657,8 @@
         "artifacts_layout": {
           "directory": ".pdd/checkup-review-loop/issue-{issue_number}-pr-{pr_number}/",
           "per_round": [
-            "round-{N}-gates-{mode}-gates.json",
-            "round-{N}-gates-{mode}-gate-{slug}.txt"
+            "round-{N}-{mode}-gates.json",
+            "round-{N}-{mode}-gate-{slug}.txt"
           ]
         }
       }
