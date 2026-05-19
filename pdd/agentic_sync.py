@@ -35,6 +35,7 @@ from .architecture_include_validation import (
     resolve_architecture_prompt_path,
     validate_prompt_contract_context,
 )
+from .architecture_sync import parse_prompt_tags, _normalize_dependency_filenames
 from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
 from .architecture_registry import (
     extract_modules,
@@ -1730,15 +1731,89 @@ def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, 
     return modules_to_sync, deps_valid, deps_corrections
 
 
+def _normalise_sync_module_names(
+    modules_to_sync: Optional[List[str]],
+) -> set[str]:
+    """Return accepted module basenames for dependency corrections."""
+    allowed: set[str] = set()
+    for module in modules_to_sync or []:
+        if not isinstance(module, str):
+            continue
+        value = module.strip()
+        if not value:
+            continue
+        allowed.add(value)
+        extracted = extract_module_from_include(
+            value if value.endswith(".prompt") else f"{value}.prompt"
+        )
+        if extracted:
+            allowed.add(extracted)
+    return allowed
+
+
+def _candidate_prompts_dirs(project_root: Path, arch_path: Path) -> List[Path]:
+    """Return prompt roots that can own an architecture entry."""
+    candidates = [
+        arch_path.parent / "prompts",
+        project_root / "prompts",
+        project_root / "pdd" / "prompts",
+    ]
+    unique: List[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved not in seen:
+            unique.append(candidate)
+            seen.add(resolved)
+    return unique
+
+
+def _resolve_prompt_for_architecture_correction(
+    project_root: Path,
+    arch_path: Path,
+    filename: str,
+) -> Optional[Tuple[Path, str]]:
+    """Resolve an architecture filename to ``(prompt_path, prompt_filename)``."""
+    rel = filename.replace("\\", "/").lstrip("/")
+    prompt_rel = rel[len("prompts/"):] if rel.startswith("prompts/") else rel
+
+    for prompts_dir in _candidate_prompts_dirs(project_root, arch_path):
+        candidate = prompts_dir / prompt_rel
+        if candidate.is_file():
+            return candidate, prompt_rel
+
+    fallback = resolve_architecture_prompt_path(filename, arch_path.parent)
+    if fallback.is_file():
+        return fallback, fallback.relative_to(fallback.parent).as_posix()
+    return None
+
+
+def _declared_prompt_dependencies(
+    prompt_path: Path,
+    arch_modules: List[Dict[str, Any]],
+) -> Optional[List[str]]:
+    """Return dependencies declared by ``<pdd-dependency>`` tags, if present."""
+    try:
+        prompt_content = prompt_path.read_text(encoding="utf-8")
+    except OSError:
+        return None
+    tags = parse_prompt_tags(prompt_content)
+    if not (tags.get("has_dependency_tags", False) or bool(tags.get("dependencies"))):
+        return None
+    return _normalize_dependency_filenames(tags.get("dependencies", []), arch_modules)
+
+
 def _apply_architecture_corrections(
     project_root: Path,
     corrections: List[Dict[str, Any]],
     architecture: Optional[List[Dict[str, Any]]] = None,
     quiet: bool = False,
+    modules_to_sync: Optional[List[str]] = None,
 ) -> List[Dict[str, Any]]:
     """
     Apply LLM-suggested dependency corrections to the architecture.json file that
-    *owns* each corrected ``filename``.
+    *owns* each corrected ``filename`` after re-converging dependencies from the
+    prompt's authoritative ``<pdd-dependency>`` tags.
 
     Per issue #1060, combined architecture data is read-only analysis. Writes must
     go back to the single architecture.json that lists the corrected filename,
@@ -1753,6 +1828,8 @@ def _apply_architecture_corrections(
             downstream dependency-graph build sees the new dependencies without
             re-reading from disk.
         quiet: Suppress output.
+        modules_to_sync: Optional basenames selected for this sync run. When
+            supplied, dependency corrections for other modules are ignored.
 
     Returns:
         The (possibly mutated) combined ``architecture`` list, or ``[]`` if none
@@ -1761,11 +1838,19 @@ def _apply_architecture_corrections(
     if architecture is None:
         architecture = []
 
+    allowed_modules = _normalise_sync_module_names(modules_to_sync)
     successful_changes = 0
     for correction in corrections:
         filename = correction.get("filename", "")
-        new_deps = correction.get("dependencies", [])
         if not filename:
+            continue
+        module_base = extract_module_from_include(filename)
+        if allowed_modules and module_base not in allowed_modules:
+            if not quiet:
+                console.print(
+                    f"[yellow]Skipping dependency correction for out-of-scope "
+                    f"module '{filename}'[/yellow]"
+                )
             continue
 
         # Locate every architecture.json under project_root that declares this
@@ -1811,10 +1896,31 @@ def _apply_architecture_corrections(
 
         arch_path, raw_data, modules, idx = owners[0]
         old_deps = modules[idx].get("dependencies", [])
+        prompt_info = _resolve_prompt_for_architecture_correction(
+            project_root, arch_path, filename
+        )
+        if prompt_info is None:
+            if not quiet:
+                console.print(
+                    f"[yellow]Skipping dependency correction for {filename}: "
+                    "prompt file not found[/yellow]"
+                )
+            continue
+
+        prompt_path, _prompt_filename = prompt_info
+        declared_deps = _declared_prompt_dependencies(prompt_path, modules)
+        if declared_deps is None:
+            if not quiet:
+                console.print(
+                    f"[yellow]Skipping dependency correction for {filename}: "
+                    "prompt has no <pdd-dependency> metadata[/yellow]"
+                )
+            continue
+
         # Mutate the dict in place — because extract_modules returns the same
         # dict objects (not copies), this propagates into ``raw_data`` whether
         # the file was bare-list or ``{prd_files, modules}`` shaped.
-        modules[idx]["dependencies"] = new_deps
+        modules[idx]["dependencies"] = declared_deps
         try:
             # Write the raw loaded structure back so the original shape (and
             # any sibling keys like ``prd_files``) is preserved on disk.
@@ -1822,8 +1928,8 @@ def _apply_architecture_corrections(
             successful_changes += 1
             if not quiet:
                 console.print(
-                    f"[yellow]Updated deps for {filename} in {arch_path}: "
-                    f"{old_deps} -> {new_deps}[/yellow]"
+                    f"[yellow]Re-converged deps for {filename} in {arch_path}: "
+                    f"{old_deps} -> {declared_deps}[/yellow]"
                 )
         except OSError as e:
             if not quiet:
@@ -1836,7 +1942,7 @@ def _apply_architecture_corrections(
         # the downstream graph build sees the new dependencies.
         for entry in architecture:
             if isinstance(entry, dict) and entry.get("filename") == filename:
-                entry["dependencies"] = new_deps
+                entry["dependencies"] = declared_deps
                 break
 
     if successful_changes and not quiet:
@@ -2100,7 +2206,11 @@ def run_agentic_sync(
             console.print("[yellow]LLM flagged dependency corrections, updating architecture.json...[/yellow]")
         if not dry_run:
             architecture = _apply_architecture_corrections(
-                project_root, deps_corrections, architecture, quiet
+                project_root=project_root,
+                corrections=deps_corrections,
+                architecture=architecture,
+                quiet=quiet,
+                modules_to_sync=modules_to_sync,
             )
 
     # 11. Build dependency graph

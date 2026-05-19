@@ -435,6 +435,13 @@ def test_run_agentic_sync_with_prompt_compliant_llm_does_not_write_undeclared_de
     """
     # Real arch on disk so _apply_architecture_corrections can rewrite it.
     arch_path = tmp_path / "architecture.json"
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    (prompts / "agentic_update_python.prompt").write_text(
+        _PROMPT_1055_SHAPE, encoding="utf-8"
+    )
+    (prompts / "agentic_update_LLM.prompt").write_text("%", encoding="utf-8")
+    (prompts / "sync_order_python.prompt").write_text("%", encoding="utf-8")
     architecture = [
         _arch_entry(
             "agentic_update_python.prompt",
@@ -471,10 +478,11 @@ def test_run_agentic_sync_with_prompt_compliant_llm_does_not_write_undeclared_de
 
     from pdd.agentic_sync import run_agentic_sync
 
-    success, _msg, _cost, _model = run_agentic_sync(
-        "https://github.com/promptdriven/pdd/issues/1061",
-        quiet=True,
-    )
+    with patch("pdd.agentic_sync._find_project_root", return_value=tmp_path):
+        success, _msg, _cost, _model = run_agentic_sync(
+            "https://github.com/promptdriven/pdd/issues/1061",
+            quiet=True,
+        )
     assert success, "run_agentic_sync should succeed with prompt-compliant LLM output"
 
     final = json.loads(arch_path.read_text(encoding="utf-8"))
