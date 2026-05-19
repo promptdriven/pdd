@@ -3830,7 +3830,18 @@ class TestCommitAndPushIfChanged:
             "https://github.com/o/r.git",
             "refs/heads/feature",
         ] in runs
-        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+        assert [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ] in runs
 
     def test_fetch_first_rebases_again_when_retry_also_races(
         self, monkeypatch: Any, tmp_path: Path
@@ -4044,7 +4055,18 @@ class TestCommitAndPushIfChanged:
             "https://github.com/o/r.git",
             "refs/heads/feature",
         ] in runs
-        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+        assert [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ] in runs
 
     def test_fetch_first_rebase_failure_aborts_before_second_push(
         self, monkeypatch: Any, tmp_path: Path
@@ -4072,7 +4094,7 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
-            if cmd[:2] == ["git", "rebase"] and "--abort" not in cmd:
+            if "rebase" in cmd and "--abort" not in cmd:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
@@ -4153,7 +4175,18 @@ class TestCommitAndPushIfChanged:
         ]
         assert "x-access-token" in fetches[1][3]
         assert fetches[1][4] == "refs/heads/feature"
-        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+        assert [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ] in runs
 
     def test_fetch_auth_failure_redacts_token_in_error(
         self, monkeypatch: Any, tmp_path: Path

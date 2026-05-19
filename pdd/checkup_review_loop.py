@@ -3638,7 +3638,18 @@ def _rebase_onto_updated_pr_head(
         )
 
     rebase = subprocess.run(
-        ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"],
+        [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ],
         cwd=worktree,
         capture_output=True,
         text=True,
