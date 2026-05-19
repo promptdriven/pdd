@@ -6860,3 +6860,293 @@ class TestRound6ScanScopeBoundary:
             ],
         )
         assert reason is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081 codex review pass #7: symlinked-package bypass.
+#
+# Round-6 finding 2 narrowed the unregistered-new-code scan to paths under
+# ``pdd/`` ending in ``.py``. That filter silently allows a NEW SYMLINK
+# under ``pdd/`` whose link path has no ``.py`` suffix — e.g.
+# ``pdd/foo_v2 -> ../tests/evil_pkg``. ``git status --untracked-files=all``
+# lists the directory-symlink as the bare link path (``pdd/foo_v2``, no
+# trailing slash, no ``.py``), the ``.py`` filter skips it, the scan
+# returns no offenders, and the bypass succeeds — ``pdd.foo_v2`` is now an
+# importable Python package backed by ``tests/evil_pkg`` with no
+# registered prompt source.
+#
+# Fix: under ``pdd/`` (excluding ``pdd/prompts/``), keep any symlink in
+# scope regardless of suffix. Generated prompt-driven code is never a
+# symlink, so this rule has no legitimate-use false positives.
+# ---------------------------------------------------------------------------
+
+
+class TestRound7SymlinkedPackageBypass:
+    """Round-7 finding: a NEW symlink under ``pdd/`` (excluding
+    ``pdd/prompts/``) can resolve to importable Python code (a package
+    directory or a ``.py`` module) without carrying a ``.py`` suffix on
+    the link path itself. The unregistered-new-code scan must keep
+    symlinks in scope regardless of suffix.
+    """
+
+    @staticmethod
+    def _init_repo(worktree: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree,
+            check=True,
+        )
+
+    def test_guard_refuses_directory_symlink_package_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 round-7 bypass: the fixer deletes the
+        registered code+prompt, wipes ``architecture.json``, and adds a
+        directory-symlink ``pdd/foo_v2 -> ../tests/evil_pkg`` backed by
+        a real ``tests/evil_pkg/__init__.py``. ``git status
+        --untracked-files=all`` lists the symlink as the bare path
+        ``pdd/foo_v2`` (no trailing slash, no ``.py``). The 10b scan
+        MUST still refuse it because the symlink is under ``pdd/`` and
+        a symlink there can resolve to importable Python code.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+            _git_changed_files,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. wipe architecture.json to []
+        #   4. create tests/evil_pkg/__init__.py
+        #   5. create pdd/foo_v2 as a SYMLINK to ../tests/evil_pkg
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+        evil_pkg = tmp_path / "tests" / "evil_pkg"
+        evil_pkg.mkdir(parents=True)
+        (evil_pkg / "__init__.py").write_text(
+            "# unregistered code\n", encoding="utf-8"
+        )
+        # Relative symlink target so the link works regardless of where
+        # the tmp_path lives.
+        (tmp_path / "pdd" / "foo_v2").symlink_to(Path("..") / "tests" / "evil_pkg")
+
+        # Use the REAL ``_git_changed_files`` so the
+        # ``--untracked-files=all`` listing of the directory-symlink
+        # (bare ``pdd/foo_v2``, no trailing slash, no ``.py``) is what
+        # the guard actually sees.
+        changed = _git_changed_files(tmp_path)
+        # Sanity: git reports the symlink as the bare link path.
+        assert "pdd/foo_v2" in changed
+        assert "pdd/foo_v2/" not in changed
+
+        reason = _check_architecture_registry_edit_guard(tmp_path, changed)
+        assert reason is not None
+        assert "architecture.json registry edit refused" in reason
+        # The refusal must NAME the symlinked-package bypass file.
+        assert "pdd/foo_v2" in reason
+
+    def test_guard_refuses_py_symlink_to_external_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``.py``-suffixed symlink to a file outside ``pdd/`` (a
+        single-file Python module via symlink) is also a bypass shape.
+        The existing ``.py`` filter already catches this, plus the
+        presence check counts symlinks as presence — confirming the
+        end-to-end refusal here keeps the contract regression-tested.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+        # Real file outside pdd/ that the symlink will resolve to.
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        (tmp_path / "tests" / "evil.py").write_text(
+            "# unregistered\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.py").symlink_to(
+            Path("..") / "tests" / "evil.py"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.py" in reason
+
+    def test_symlink_under_pdd_prompts_is_not_flagged_by_scan(
+        self, tmp_path: Path
+    ) -> None:
+        """The ``pdd/prompts/`` skip wins: a symlink at
+        ``pdd/prompts/...`` MUST NOT be flagged by the
+        unregistered-new-code scan. (Prompts can legitimately be
+        symlinks if a project chooses to layer shared prompt sources.)
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        # Retire foo and drop an unrelated symlink inside pdd/prompts/.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "prompts" / "shared_extra.prompt").symlink_to(
+            tmp_path / "pdd" / "prompts" / "bar_python.prompt"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/shared_extra.prompt",
+            ],
+        )
+        # The retirement is legitimate AND the symlink inside
+        # pdd/prompts/ is skipped before the symlink branch runs.
+        assert reason is None
+
+
+class TestRound7SymlinkedPackageBypassIntegration:
+    """Mirror of the round-7 bypass through ``run_checkup_review_loop``.
+
+    Confirms no push happens and the report renders the 10b refusal with
+    the symlinked-package path named.
+    """
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_post_review_loop_report", lambda *a, **k: None
+        )
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:1",
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_loop_refuses_push_on_symlinked_package_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the round-7 bypass on the worktree filesystem before
+        # the loop reads ``_git_changed_files``.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+        evil_pkg = tmp_path / "tests" / "evil_pkg"
+        evil_pkg.mkdir(parents=True)
+        (evil_pkg / "__init__.py").write_text(
+            "# unregistered\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2").symlink_to(
+            Path("..") / "tests" / "evil_pkg"
+        )
+
+        # Use the REAL ``_git_changed_files`` so the symlink listing is
+        # exercised end-to-end.
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2",'
+                    '"pdd/foo.py","pdd/prompts/foo_python.prompt",'
+                    '"tests/evil_pkg/__init__.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The policy layer refused before the push helper.
+        assert push_calls == []
+        # Refusal carries the symlinked-package path (no .py suffix).
+        assert "architecture.json registry edit refused" in report
+        assert "pdd/foo_v2" in report
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report

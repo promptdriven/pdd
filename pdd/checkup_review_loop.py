@@ -4304,6 +4304,17 @@ def _check_architecture_registry_edit_guard(
     # scan. ``__init__.py`` is INTENTIONALLY kept in scope so the
     # round-6 finding 1 untracked-directory bypass (a new package at
     # ``pdd/foo_v2/__init__.py``) is still caught.
+    #
+    # Round-7 finding: a symlink under ``pdd/`` (excluding
+    # ``pdd/prompts/``) can resolve to importable Python code (a
+    # package directory or a ``.py`` module) without carrying a
+    # ``.py`` suffix on the link path itself. ``git status
+    # --untracked-files=all`` lists a directory-symlink as the bare
+    # link path (e.g. ``pdd/foo_v2``, no trailing slash, no ``.py``),
+    # so the ``.py`` filter alone silently allows it. Generated
+    # prompt-driven code under ``pdd/`` is never a symlink, so the
+    # safe rule is to keep any newly-added symlink under ``pdd/``
+    # (outside ``pdd/prompts/``) in scope regardless of suffix.
     unregistered_new_code_paths: List[str] = []
     if removed_only or implicit_retirement:
         head_registered_paths = {path for pair in head_pairs for path in pair}
@@ -4325,13 +4336,21 @@ def _check_architecture_registry_edit_guard(
             # falls outside the registry-mutation scope.
             if not path.startswith("pdd/"):
                 continue
-            if not path.endswith(".py"):
-                continue
             candidate = worktree / path
+            # Round-7 finding: a symlink under ``pdd/`` can resolve
+            # to importable Python code (package directory or .py
+            # file) without carrying a ``.py`` suffix on the link
+            # path itself. ``Path.is_symlink()`` does NOT follow the
+            # link, so it works even if the target is broken or
+            # outside the worktree. Keep symlinks in scope regardless
+            # of suffix; otherwise apply the existing ``.py`` filter.
+            is_symlink = candidate.is_symlink()
+            if not is_symlink and not path.endswith(".py"):
+                continue
             # Treat either a real file or a symlink as "present on
             # disk" — symlinks are themselves part of the #1081
             # attack surface here.
-            if not (candidate.is_file() or candidate.is_symlink()):
+            if not (candidate.is_file() or is_symlink):
                 continue
             # Round-3 finding 2: skip modifications of files that
             # already existed at HEAD. Only flag genuine additions.
