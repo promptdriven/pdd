@@ -1,0 +1,99 @@
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Shared, pure drift classifier consumed by sync, update, ci-heal, change-preflight, and global scan paths.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "classify_drift", "signature": "(inputs: DriftInputs) -> DriftVerdict", "returns": "DriftVerdict"}
+    ]
+  }
+}
+</pdd-interface>
+
+% Goal
+Write `pdd/drift_classifier.py` — a pure, side-effect-free classifier that decides whether a PDD module's artifacts are in sync with its prompt, given pre-collected hashes, fingerprints, and an optional git change set.
+
+% Role & Scope
+This module owns **classification only**. It does not perform repair, does not read the filesystem, does not invoke git, and does not call any LLM. Adapters at each call site (`sync_determine_operation`, `update_main`, `ci_drift_heal`, `agentic_change_orchestrator`, `sync_main` global scan) collect the inputs and consume the verdict; each chooses its own repair plan downstream. Repair-plan unification is explicitly out of scope for the first PR (tracked separately).
+
+This module is distinct from `failure_classification` — that module classifies runtime test/build failures (a different axis from artifact drift).
+
+% Requirements
+
+1. **`DriftReason` (str Enum)** — enumerated causes the classifier may emit. At minimum:
+   - `IN_SYNC` — no drift detected.
+   - `PROMPT_CHANGED` — current prompt hash differs from stored fingerprint.
+   - `CODE_CHANGED` — current code hash differs from stored fingerprint.
+   - `EXAMPLE_CHANGED` — current example hash differs from stored fingerprint.
+   - `TEST_CHANGED` — at least one current test hash differs from stored fingerprint.
+   - `INCLUDE_DEP_CHANGED` — at least one resolved `<include>` dependency hash differs.
+   - `SOURCE_DOC_CHANGED` — at least one resolved source-doc include hash differs.
+   - `ARCHITECTURE_CHANGED` — architecture/PRD metadata differs from stored state.
+   - `MISSING_ARTIFACT` — an artifact the fingerprint claims exists is absent on input.
+   - `FINGERPRINT_MISSING` — no stored fingerprint was supplied (fresh-CI / first run).
+   - `GIT_CHANGE_OVERRIDE` — `git_change_set` lists a path that owns one of this module's artifacts; this reason is recorded alongside the specific artifact reason it triggers.
+   - `UNKNOWN` — input is degraded enough that the classifier cannot decide with confidence; verdict must not assert `is_drift=False`.
+
+2. **`ArtifactHashes` (Pydantic v2 `BaseModel`)** — current hashes already computed by the caller:
+   - `prompt: Optional[str] = None`
+   - `code: Optional[str] = None`
+   - `example: Optional[str] = None`
+   - `tests: Mapping[str, str] = {}` (per-file test hashes, keyed by filename)
+   - `include_deps: Mapping[str, str] = {}` (resolved `<include>` path → content hash)
+   - `source_docs: Mapping[str, str] = {}` (resolved doc-style include path → content hash)
+
+3. **`GitChangeSet` (Pydantic v2 `BaseModel`)** — optional git context that may upgrade a non-drift verdict to drift:
+   - `changed_paths: Sequence[str] = ()` (repo-relative paths changed vs. `base_ref`)
+   - `base_ref: Optional[str] = None`
+   - `head_ref: Optional[str] = None`
+
+4. **`DriftInputs` (Pydantic v2 `BaseModel`)** — the classifier's only input:
+   - `target: str` — module basename or prompt path (used for diagnostics, not branching).
+   - `scope: Literal["sync", "update", "change", "ci", "scan"]` — caller identity; used only for telemetry/observability. The classifier MUST NOT branch on `scope` to produce different verdicts for identical hashes/fingerprints.
+   - `stored_fingerprint: Optional[Mapping[str, Any]] = None`
+   - `stored_run_report: Optional[Mapping[str, Any]] = None`
+   - `current_hashes: ArtifactHashes`
+   - `architecture_metadata: Optional[Mapping[str, Any]] = None`
+   - `prd_metadata: Optional[Mapping[str, Any]] = None`
+   - `git_change_set: Optional[GitChangeSet] = None`
+
+5. **`DriftVerdict` (Pydantic v2 `BaseModel`)** — the classifier's only output:
+   - `is_drift: bool`
+   - `reasons: Sequence[DriftReason]` — canonical-ordered (sorted by enum value) so test diffs are stable across Python dict iteration.
+   - `stale_artifacts: Sequence[str]` — subset of `{"prompt", "code", "example", "tests", "include_deps", "source_docs", "architecture"}`, canonically ordered.
+   - `confidence: Literal["high", "medium", "low"]`
+   - `details: Mapping[str, Any] = {}` — diagnostic only; MUST NOT carry behavior-bearing data callers branch on.
+
+6. **`classify_drift(inputs: DriftInputs) -> DriftVerdict`** — the only public function:
+   - **Pure**: no filesystem, network, git, LLM, or logging side effects. Same inputs ⇒ same verdict.
+   - **Deterministic ordering**: when emitting multiple reasons, sort by `DriftReason` enum value before returning.
+   - **Hash comparison**: for each of prompt/code/example, if `stored_fingerprint` carries a hash and `current_hashes` carries a hash, mismatch emits the corresponding `*_CHANGED` reason and adds the artifact to `stale_artifacts`. A `None` current hash against a stored hash emits `MISSING_ARTIFACT`. A `None` stored hash against a present current hash is NOT drift on its own (fresh module).
+   - **Include-dep & source-doc handling**: any per-path hash mismatch in `current_hashes.include_deps` vs. the equivalent stored map emits `INCLUDE_DEP_CHANGED` and marks `"include_deps"` stale; same for `source_docs` / `SOURCE_DOC_CHANGED`.
+   - **Architecture metadata**: when `architecture_metadata` is present and differs from the stored snapshot (if any), emit `ARCHITECTURE_CHANGED` and mark `"architecture"` stale.
+   - **Git change set as explicit input (acceptance criterion #2)**: when `git_change_set` is supplied, treat any `changed_paths` entry that owns one of this module's artifacts (prompt / code / example / a test file / an include) as drift. Emit `GIT_CHANGE_OVERRIDE` *in addition to* the specific artifact reason it triggers, so callers can distinguish "hash already mismatched" from "fingerprint absent but git tells us this path changed". This is what makes CI auto-heal's git-diff reclassification an explicit classifier input rather than CI-only correction logic.
+   - **Fingerprint absence**: when `stored_fingerprint is None`:
+     - If `git_change_set` is supplied and at least one changed path owns a module artifact → `is_drift=True` with `FINGERPRINT_MISSING` + `GIT_CHANGE_OVERRIDE` + the implicated `*_CHANGED` reason; `confidence="medium"`.
+     - Otherwise → emit `FINGERPRINT_MISSING`, `is_drift=True` only if any artifact hash is present without a matching stored hash AND `current_hashes` carries enough signal; default `confidence="low"`.
+   - **Confidence rules**:
+     - `high` — full fingerprint present, hashes computed for every claimed artifact, no `UNKNOWN`.
+     - `medium` — partial inputs (e.g. fingerprint present but optional metadata missing, or only git_change_set drives the verdict).
+     - `low` — `stored_fingerprint is None` and no `git_change_set`, or any `UNKNOWN` reason emitted.
+   - **`scope` is telemetry only**: identical hash/fingerprint/git inputs MUST produce identical verdicts regardless of `scope`. Any per-scope behavior belongs in the caller's adapter, never inside `classify_drift`.
+   - **No exceptions for missing optional fields**: degraded inputs return `UNKNOWN` (with `confidence="low"`) rather than raising.
+
+7. **Hash-only false-negative guard**: when stored and current hashes match but `stored_fingerprint` is older than the recorded artifact mtime carried in the fingerprint (if present), downgrade confidence from `high` to `medium` and add an `"mtime_skew"` entry to `details`. Do not flip `is_drift` based on mtime alone.
+
+8. **Scope-respect for partial diffs**: when `git_change_set.changed_paths` is non-empty but none of the entries own any of this module's artifacts, the git change set MUST NOT contribute any reason. Out-of-scope diffs cannot cause classification drift for unrelated modules.
+
+9. **Public surface**: export `classify_drift`, `DriftInputs`, `DriftVerdict`, `DriftReason`, `ArtifactHashes`, `GitChangeSet` from `pdd.drift_classifier`. Re-export from `pdd.__init__` is left to a follow-up integration step.
+
+10. **No I/O imports leak**: the module MUST NOT import `subprocess`, `git`, `requests`, `httpx`, or `pdd.llm_invoke`. Caller adapters perform I/O; the classifier stays pure.
+
+% Dependencies
+This module has no PDD dependencies. It uses only `pydantic` (v2), `enum`, and `typing` from the standard library and project dependencies.
+
+% Deliverables
+- Code: `pdd/drift_classifier.py`

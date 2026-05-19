@@ -2227,7 +2227,8 @@
       "agentic_common_python.prompt",
       "agentic_update_python.prompt",
       "sync_determine_operation_python.prompt",
-      "operation_log_python.prompt"
+      "operation_log_python.prompt",
+      "drift_classifier_python.prompt"
     ],
     "priority": 62,
     "filename": "update_main_python.prompt",
@@ -2487,10 +2488,41 @@
     }
   },
   {
+    "reason": "Shared, pure drift classifier consumed by sync, update, ci-heal, change-preflight, and global scan paths.",
+    "description": "Pure side-effect-free Pydantic v2 classifier that takes stored fingerprints, current artifact hashes, resolved include/source-doc hashes, optional architecture/PRD metadata, optional git change set, and a caller scope, and returns a structured DriftVerdict (is_drift, canonical-ordered reasons, stale_artifacts, confidence, details). Git change set is an explicit input rather than CI-only correction logic. Caller adapters perform I/O; the classifier never reads the filesystem, runs git, or invokes the LLM.",
+    "dependencies": [],
+    "priority": 66,
+    "filename": "drift_classifier_python.prompt",
+    "filepath": "pdd/drift_classifier.py",
+    "tags": [
+      "module",
+      "python",
+      "sync",
+      "drift-detection"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "classify_drift",
+            "signature": "(inputs: DriftInputs) -> DriftVerdict",
+            "returns": "DriftVerdict"
+          }
+        ]
+      }
+    },
+    "position": {
+      "x": 10800,
+      "y": 2120
+    }
+  },
+  {
     "reason": "Intelligently determines which sync operations to run.",
     "description": "Analyzes prompt state, file timestamps, and previous results to decide which workflow steps are needed.",
     "dependencies": [
-      "agentic_langtest_python.prompt"
+      "agentic_langtest_python.prompt",
+      "drift_classifier_python.prompt"
     ],
     "priority": 67,
     "filename": "sync_determine_operation_python.prompt",
@@ -5262,7 +5294,8 @@
     "dependencies": [
       "core/cloud_python.prompt",
       "code_generator_main_python.prompt",
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "drift_classifier_python.prompt"
     ],
     "priority": 148,
     "filename": "sync_main_python.prompt",
@@ -5795,7 +5828,8 @@
     "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
-      "agentic_common_python.prompt"
+      "agentic_common_python.prompt",
+      "drift_classifier_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -7978,7 +8012,8 @@
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
       "architecture_sync_python.prompt",
-      "metadata_sync_python.prompt"
+      "metadata_sync_python.prompt",
+      "drift_classifier_python.prompt"
     ],
     "priority": 80,
     "filename": "ci_drift_heal_python.prompt",

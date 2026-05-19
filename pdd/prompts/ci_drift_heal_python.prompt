@@ -26,6 +26,7 @@
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>metadata_sync_python.prompt</pdd-dependency>
+<pdd-dependency>drift_classifier_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write a standalone CI script that detects prompt/example drift across all PDD modules and auto-heals drifted modules.
 
@@ -97,7 +98,9 @@ A standalone CI script (`pdd/ci_drift_heal.py`) that orchestrates drift detectio
 
 20. **Output:** Rich console with drift summary table before healing. Per-module heal result and cost. Final summary of healed/failed/skipped counts.
 
-21. **Finalization log surface:** On every successful return from `_run_metadata_sync_safe`, emit exactly one log line of the form `metadata finalized for <basename>: <meta_path>` where `<meta_path>` is the absolute or repo-relative `.pdd/meta/<safe_basename>_<language>.json` path. On finalization failure, emit `metadata finalization failed for <basename>: <reason>` as required by Requirement 6. On metadata-staging-verification failure, emit `metadata staging verification failed: missing <meta_path>` as required by Requirement 14. These three log surfaces are stable assertion points for regression tests in `tests/test_ci_drift_heal.py` covering both the success path (metadata committed alongside prompt/code) and the failure path (workflow exits non-zero with explicit error).
+21. **Shared Drift Classifier (issue #884)**: The detection phase (Requirement 2) and the git-based reclassification step (Requirement 3) are classification concerns shared with `sync_determine_operation`, `update_main`, `pdd change` preflight, and the no-arg `pdd sync` global scan. The CI adapter MUST build a `DriftInputs` (with `scope="ci"`, populating `git_change_set` from the `--diff-base` fetch so the diff is an explicit classifier input rather than CI-only correction logic) and call `pdd.drift_classifier.classify_drift` to produce the per-module verdict. The CI-specific reclassification rules (clean-CI fingerprint-absent handling) are encoded by passing the git change set through `DriftInputs` and consuming `DriftVerdict.reasons`; this module's repair dispatch in Requirements 6–17 remains unchanged. Behavior MUST be observationally identical for the existing detection matrix; characterization tests pin the current outputs. See `docs/drift_classifier.md`.
+
+22. **Finalization log surface:** On every successful return from `_run_metadata_sync_safe`, emit exactly one log line of the form `metadata finalized for <basename>: <meta_path>` where `<meta_path>` is the absolute or repo-relative `.pdd/meta/<safe_basename>_<language>.json` path. On finalization failure, emit `metadata finalization failed for <basename>: <reason>` as required by Requirement 6. On metadata-staging-verification failure, emit `metadata staging verification failed: missing <meta_path>` as required by Requirement 14. These three log surfaces are stable assertion points for regression tests in `tests/test_ci_drift_heal.py` covering both the success path (metadata committed alongside prompt/code) and the failure path (workflow exits non-zero with explicit error).
 
 % Dependencies
 <pdd.sync_determine_operation>

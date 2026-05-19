@@ -1,4 +1,5 @@
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
+<pdd-dependency>drift_classifier_python.prompt</pdd-dependency>
 
 # sync_determine_operation_python.prompt
 
@@ -33,6 +34,7 @@ You are an expert Python developer. Your task is to implement the core decision-
 10. **Missing File Recovery**: `validate_expected_files` checks fingerprint expectations against disk. `_handle_missing_expected_files` returns appropriate recovery operation with priority: code → example → test.
 11. **Cost Estimation**: `estimate_operation_cost` returns dollar estimates per operation for budget tracking.
 12. **Stale Run Report Handling**: Run reports without a fingerprint are ignored (orphaned). After `auto-deps`, existing run reports are stale and ignored (the early auto-deps check fires before run_report processing).
+13. **Shared Drift Classifier (issue #884)**: Stale-artifact classification (prompt/code/example/test/include-dep hash comparisons) is the shared concern unified by `pdd.drift_classifier.classify_drift`. This module's adapter MUST build a `DriftInputs` (with `scope="sync"`) from the already-computed fingerprint and current hashes, call `classify_drift`, and map the resulting `DriftVerdict.reasons` onto the deterministic decision priority in Requirement 3. The repair-plan selection (which `SyncDecision.operation` to return) remains the responsibility of this module — only the classification step is shared. Behavior MUST be observationally identical to the pre-refactor state machine; characterization tests pin the full matrix. See `docs/drift_classifier.md` for the API sketch and call-site table.
 
 ### Dependencies:
 

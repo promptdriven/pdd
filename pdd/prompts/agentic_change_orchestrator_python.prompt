@@ -13,6 +13,7 @@
 
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>drift_classifier_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write the `pdd/agentic_change_orchestrator.py` module.
 
@@ -292,6 +293,8 @@ Between Step 8 (Analyze Prompt Changes) and Step 9 (Implement), the orchestrator
 3. Known v1 limitation (documented in the helper's docstring): a heal-induced cascade (healing module A triggers drift in module B) is NOT handled here. CI auto-heal (`pdd.ci_drift_heal`) is the post-PR safety net. Don't rerun `_preflight_drift_heal` in a fixed-point loop — it's intentionally single-pass to cap cost and worktree mutations.
 
 4. Heal failures are **non-fatal** except metadata-finalization failures: the workflow continues when ordinary subprocess-level module heals fail, and operators inspect `state["preflight_failed_heal_modules"]` for visibility. If a preflight heal subprocess reports `metadata finalization failed`, `metadata staging verification failed`, or the `pdd update --sync-metadata` `[metadata-sync]` error prefix, raise a hard failure instead of continuing, because issue #1006 requires preflight drift-heal to fail loudly rather than publish half-synced metadata.
+
+5. **Shared Drift Classifier (issue #884)**: The stale-artifact decision driving preflight heal (`decision.operation == "update"` from `sync_determine_operation`) is the same classification concern shared with `update_main`, `ci_drift_heal`, and the no-arg `pdd sync` global scan. `_preflight_drift_heal` MUST obtain its per-module verdict via `pdd.drift_classifier.classify_drift` (passing `scope="change"` in `DriftInputs`) and map a drift verdict whose `stale_artifacts` includes `"prompt"` to the existing `pdd update` heal path. Existing healing logic (subprocess dispatch, metadata-finalization escalation, worktree containment) is unchanged; only the "is this module stale?" decision is shared. Characterization tests pin the current preflight-detection matrix. See `docs/drift_classifier.md`.
 
 % Step 10.5 — Associated-Document Contract Verifier (Issue #739)
 
