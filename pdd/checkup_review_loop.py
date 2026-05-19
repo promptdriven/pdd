@@ -37,7 +37,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 
@@ -1066,6 +1066,29 @@ def run_checkup_review_loop(
         # (line ~1068) follows the same contract and is exercised by
         # ``test_failed_push_aborts_loop_without_running_verifier``.
         guard_changed_files = _git_changed_files(worktree)
+        # Issue #1081: architecture-registry edit guard runs BEFORE the
+        # 10a prompt-source guard. 10a is per-entry against the
+        # pre-fixer HEAD registry, which a coordinated rename + prompt
+        # delete + ``architecture.json`` rewrite can step around. 10b
+        # closes that hole by detecting registry mutations themselves
+        # (added pair with no prompt on disk, removed pair with code
+        # still present, or any repoint). Cheaper on the common no-
+        # registry-edit path (short-circuits on the trigger check) and
+        # produces the more precise diagnostic for the #1081 attack
+        # shape; running it first surfaces the registry-mutation
+        # refusal rather than a downstream 10a refusal that fires on a
+        # partial symptom.
+        registry_guard_refusal = _check_architecture_registry_edit_guard(
+            worktree, guard_changed_files
+        )
+        if registry_guard_refusal:
+            _write_artifact(
+                artifacts_dir
+                / f"round-{round_number}-architecture-registry-guard-refusal.txt",
+                registry_guard_refusal + "\n",
+            )
+            state.stop_reason = registry_guard_refusal
+            break
         guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
         if guard_refusal:
             _write_artifact(
@@ -3960,6 +3983,235 @@ def _check_prompt_source_guard(
         "generated-code-only fix refused: "
         f"{pairs_text}. Update the prompt source or run the proper PDD "
         "sync path before re-running the review loop."
+    )
+
+
+def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
+    """Build the canonical ``(code_path, prompt_path)`` pair set from an
+    ``architecture.json`` payload.
+
+    Used by ``_check_architecture_registry_edit_guard`` to compare
+    pre-change (HEAD) and post-change (worktree) registry shapes. Paths
+    are normalized to POSIX so comparisons match the changed-file form
+    returned by ``_git_changed_files``.
+    """
+    pairs: Set[Tuple[str, str]] = set()
+    for entry in extract_modules(data):
+        filepath = entry.get("filepath")
+        filename = entry.get("filename")
+        if not (isinstance(filepath, str) and isinstance(filename, str)):
+            continue
+        if not filepath or not filename:
+            continue
+        pairs.add(
+            (
+                Path(filepath).as_posix(),
+                (Path("pdd") / "prompts" / filename).as_posix(),
+            )
+        )
+    return pairs
+
+
+def _check_architecture_registry_edit_guard(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Refuse ``architecture.json`` mutations that bypass the prompt
+    source-of-truth contract (issue #1081).
+
+    Sibling of ``_check_prompt_source_guard`` (10a). Where 10a iterates
+    over the HEAD registry to catch code-only edits, this guard
+    enforces against registry MUTATIONS introduced in the current
+    change set so a coordinated rename + prompt delete + registry
+    rewrite cannot slip past 10a.
+
+    Returns ``None`` when the push should proceed, or a refusal string
+    (suitable for ``state.stop_reason``) when the registry edit is a
+    bypass shape.
+
+    Trigger: only runs when ``architecture.json`` is in the change set.
+    On the common no-registry-edit path this short-circuits to ``None``.
+
+    Block rules:
+      - Added pair (in worktree, not in HEAD): the new prompt MUST exist
+        on disk AND be in the changed set. Otherwise the fixer is
+        pointing the registry at a prompt that does not exist.
+      - Removed pair (in HEAD, not in worktree): the old code path MUST
+        be gone from disk AND (the old prompt is gone OR is in the
+        changed set). This is the legitimate retirement shape; anything
+        else is drift.
+      - Repointed pair (filepath in both with different prompt, or
+        prompt in both with different filepath): BLOCK unconditionally.
+        A repoint MUST be split into a retire-old + add-new with prompt
+        sources actually present on disk.
+
+    Graceful degradation (allow + warn, never block) on:
+      - ``git show HEAD:architecture.json`` non-zero exit
+      - HEAD blob unparseable as JSON
+      - HEAD registry yields no prompt-owned modules
+      - Worktree blob unavailable/unparseable AND HEAD also has no pairs
+    """
+    changed_norm = {Path(p).as_posix() for p in changed_files if p}
+    if "architecture.json" not in changed_norm:
+        return None
+
+    head_result = subprocess.run(
+        ["git", "show", "HEAD:architecture.json"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if head_result.returncode != 0:
+        logger.warning(
+            "architecture-registry guard: architecture.json missing at "
+            "HEAD in %s (git show exit=%s, stderr=%s); skipping "
+            "registry-edit enforcement for this round.",
+            worktree,
+            head_result.returncode,
+            (head_result.stderr or "").strip(),
+        )
+        return None
+    try:
+        head_data = json.loads(head_result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "architecture-registry guard: architecture.json at HEAD in "
+            "%s is unparseable (%s); skipping registry-edit "
+            "enforcement.",
+            worktree,
+            exc,
+        )
+        return None
+
+    head_pairs = _extract_arch_pairs(head_data)
+    if not head_pairs:
+        logger.warning(
+            "architecture-registry guard: architecture.json at HEAD in "
+            "%s lists no prompt-owned modules; skipping registry-edit "
+            "enforcement.",
+            worktree,
+        )
+        return None
+
+    # Worktree-side read. Per spec: when HEAD has entries, treat any
+    # unavailable/empty/garbage worktree registry as ``worktree_pairs =
+    # ∅`` so removed-pair enforcement still fires. Only allow + warn
+    # when the post-change registry is genuinely absent on both sides
+    # (which the HEAD-empty short-circuit above already handles).
+    worktree_pairs: Set[Tuple[str, str]] = set()
+    worktree_path = worktree / "architecture.json"
+    try:
+        worktree_blob = worktree_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "architecture-registry guard: architecture.json missing or "
+            "unreadable in worktree %s (%s); enforcing as full registry "
+            "removal.",
+            worktree,
+            exc,
+        )
+    else:
+        try:
+            worktree_data = json.loads(worktree_blob)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "architecture-registry guard: architecture.json in "
+                "worktree %s is unparseable (%s); enforcing as full "
+                "registry removal.",
+                worktree,
+                exc,
+            )
+        else:
+            worktree_pairs = _extract_arch_pairs(worktree_data)
+
+    added = worktree_pairs - head_pairs
+    removed = head_pairs - worktree_pairs
+
+    # Repointed detection: surface entries where the filepath appears
+    # on both sides mapped to a different prompt, OR the prompt appears
+    # on both sides mapped to a different filepath. These MUST be
+    # reported separately (not elided as add + remove) so the operator
+    # sees the precise #1081 attack shape.
+    head_by_code: Dict[str, str] = {c: p for c, p in head_pairs}
+    head_by_prompt: Dict[str, str] = {p: c for c, p in head_pairs}
+    wt_by_code: Dict[str, str] = {c: p for c, p in worktree_pairs}
+    wt_by_prompt: Dict[str, str] = {p: c for c, p in worktree_pairs}
+
+    repointed_by_code: List[Tuple[str, str, str]] = []
+    repointed_by_prompt: List[Tuple[str, str, str]] = []
+    consumed_added: Set[Tuple[str, str]] = set()
+    consumed_removed: Set[Tuple[str, str]] = set()
+
+    for code, old_prompt in head_by_code.items():
+        new_prompt = wt_by_code.get(code)
+        if new_prompt is None or new_prompt == old_prompt:
+            continue
+        repointed_by_code.append((code, old_prompt, new_prompt))
+        consumed_removed.add((code, old_prompt))
+        consumed_added.add((code, new_prompt))
+
+    for prompt, old_code in head_by_prompt.items():
+        new_code = wt_by_prompt.get(prompt)
+        if new_code is None or new_code == old_code:
+            continue
+        pair_old = (old_code, prompt)
+        pair_new = (new_code, prompt)
+        if pair_old in consumed_removed and pair_new in consumed_added:
+            continue
+        repointed_by_prompt.append((prompt, old_code, new_code))
+        consumed_removed.add(pair_old)
+        consumed_added.add(pair_new)
+
+    added_only = added - consumed_added
+    removed_only = removed - consumed_removed
+
+    offenders_added: List[Tuple[str, str]] = []
+    for code, prompt in sorted(added_only):
+        prompt_on_disk = (worktree / prompt).is_file()
+        prompt_in_changeset = prompt in changed_norm
+        if prompt_on_disk and prompt_in_changeset:
+            continue
+        offenders_added.append((code, prompt))
+
+    offenders_removed: List[Tuple[str, str]] = []
+    for code, prompt in sorted(removed_only):
+        code_gone = not (worktree / code).is_file()
+        prompt_gone = not (worktree / prompt).is_file()
+        prompt_in_changeset = prompt in changed_norm
+        if code_gone and (prompt_gone or prompt_in_changeset):
+            continue
+        offenders_removed.append((code, prompt))
+
+    repointed_by_code.sort()
+    repointed_by_prompt.sort()
+
+    if not (offenders_added or offenders_removed
+            or repointed_by_code or repointed_by_prompt):
+        return None
+
+    parts: List[str] = []
+    for code, prompt in offenders_added:
+        parts.append(
+            f"added {code}\u2194{prompt} without prompt source on disk"
+        )
+    for code, prompt in offenders_removed:
+        parts.append(
+            f"removed {code}\u2194{prompt} with code still present"
+        )
+    for code, old_prompt, new_prompt in repointed_by_code:
+        parts.append(
+            f"repointed {code} from {old_prompt} to {new_prompt}"
+        )
+    for prompt, old_code, new_code in repointed_by_prompt:
+        parts.append(
+            f"repointed {prompt} from {old_code} to {new_code}"
+        )
+
+    return (
+        "architecture.json registry edit refused: "
+        + "; ".join(parts)
+        + ". Update the prompt source or run the proper PDD sync path "
+        "before re-running the review loop."
     )
 
 

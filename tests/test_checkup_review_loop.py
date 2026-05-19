@@ -5347,3 +5347,478 @@ class TestPromptSourceGuardIntegration:
         # Reviewer-status reflects the refusal, not "clean".
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081: architecture-registry edit guard
+#
+# Coordinated rename + prompt delete + ``architecture.json`` rewrite was
+# slipping past the per-entry prompt-source guard (10a). The new guard 10b
+# detects registry MUTATIONS themselves: added pair without prompt source on
+# disk, removed pair with code still present, or any repoint.
+# ---------------------------------------------------------------------------
+
+
+def _arch_pair(filename: str, filepath: str) -> Dict[str, Any]:
+    return {"filename": filename, "filepath": filepath}
+
+
+def _seed_repo_with_arch(
+    worktree: Path,
+    modules: List[Dict[str, Any]],
+    *,
+    extra_files: Dict[str, str] | None = None,
+) -> None:
+    """Initialize a git repo, commit the architecture registry and the
+    code/prompt files for each registered module, plus optional extras.
+    """
+    subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=worktree,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+    )
+    (worktree / "architecture.json").write_text(
+        json.dumps(modules, indent=2), encoding="utf-8"
+    )
+    for entry in modules:
+        code = worktree / entry["filepath"]
+        code.parent.mkdir(parents=True, exist_ok=True)
+        code.write_text("# generated\n", encoding="utf-8")
+        prompt = worktree / "pdd" / "prompts" / entry["filename"]
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("prompt body\n", encoding="utf-8")
+    for rel, body in (extra_files or {}).items():
+        path = worktree / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed"], cwd=worktree, check=True
+    )
+
+
+class TestArchitectureRegistryEditGuardHelper:
+    """Unit tests for ``_check_architecture_registry_edit_guard`` (#1081)."""
+
+    def test_no_architecture_change_is_no_op(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Only a code-only change; architecture.json untouched.
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path, ["pdd/foo.py"]
+        )
+        assert reason is None
+
+    def test_coordinated_bypass_with_registry_repoint_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Reproduces issue #1081: rename code, delete prompt, rewrite
+        registry. Without 10b, both guards return None and the fix
+        lands on the PR.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Coordinated mutation:
+        #   1. rename pdd/foo.py -> pdd/foo_v2.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. rewrite architecture.json to point at the new path
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("foo_v2_python.prompt", "pdd/foo_v2.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        changed_files = [
+            "architecture.json",
+            "pdd/foo_v2.py",
+            "pdd/foo.py",
+            "pdd/prompts/foo_python.prompt",
+        ]
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path, changed_files
+        )
+        assert reason is not None
+        # The refusal MUST name the added pair so the operator can act.
+        assert "pdd/foo_v2.py" in reason
+        assert "pdd/prompts/foo_v2_python.prompt" in reason
+        assert "without prompt source on disk" in reason
+        assert "architecture.json registry edit refused" in reason
+
+    def test_repoint_with_same_prompt_name_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Rename code, keep the prompt name (prompt still on disk).
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("foo_python.prompt", "pdd/foo_v2.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            ["architecture.json", "pdd/foo.py", "pdd/foo_v2.py"],
+        )
+        assert reason is not None
+        assert "repointed" in reason
+        assert "pdd/foo.py" in reason
+        assert "pdd/foo_v2.py" in reason
+
+    def test_legitimate_retirement_is_allowed(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        # Retire foo: delete code, delete prompt, drop from registry.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is None
+
+    def test_registry_wiped_with_code_present_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """If the fixer wipes ``architecture.json`` to ``[]`` while the
+        registered code/prompt still exist on disk, that is the #1081
+        attack shape under the worktree-empty/HEAD-non-empty branch.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path, ["architecture.json"]
+        )
+        assert reason is not None
+        assert "code still present" in reason
+        assert "pdd/foo.py" in reason
+
+    def test_added_pair_with_prompt_on_disk_and_in_changeset_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Operator adds a NEW registered module with both code and
+        # prompt actually written to disk.
+        (tmp_path / "pdd" / "baz.py").write_text("# new\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "baz_python.prompt").write_text(
+            "p\n", encoding="utf-8"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            _arch_pair("baz_python.prompt", "pdd/baz.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/baz.py",
+                "pdd/prompts/baz_python.prompt",
+            ],
+        )
+        assert reason is None
+
+    def test_added_pair_without_prompt_on_disk_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Add a registry entry pointing at a prompt name that was
+        # never written.
+        (tmp_path / "pdd" / "baz.py").write_text("# new\n", encoding="utf-8")
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            _arch_pair("baz_python.prompt", "pdd/baz.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            ["architecture.json", "pdd/baz.py"],
+        )
+        assert reason is not None
+        assert "pdd/baz.py" in reason
+        assert "without prompt source on disk" in reason
+
+    def test_missing_head_registry_degrades_gracefully(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        # No git repo at all → ``git show HEAD:architecture.json`` fails.
+        with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
+            reason = _check_architecture_registry_edit_guard(
+                tmp_path, ["architecture.json"]
+            )
+        assert reason is None
+        assert any(
+            "architecture-registry guard" in rec.getMessage()
+            for rec in caplog.records
+        )
+
+    def test_empty_head_registry_degrades_gracefully(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        # HEAD has an empty registry; guard has nothing to defend.
+        _seed_repo_with_arch(tmp_path, [])
+
+        with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
+            reason = _check_architecture_registry_edit_guard(
+                tmp_path, ["architecture.json"]
+            )
+        assert reason is None
+
+
+class TestArchitectureRegistryEditGuardIntegration:
+    """Wires the registry-edit guard into ``run_checkup_review_loop``."""
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_post_review_loop_report", lambda *a, **k: None
+        )
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:1",
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_loop_refuses_push_on_1081_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 regression: a fixer that rewrites the
+        registry to a new code path + new prompt name must NOT reach
+        ``_commit_and_push_if_changed``.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass: simulate the fixer's mutations on the
+        # worktree filesystem before the guard reads it.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("foo_v2_python.prompt", "pdd/foo_v2.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2.py","pdd/foo.py",'
+                    '"pdd/prompts/foo_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Loop completed with a trustworthy report (success=True per
+        # docstring contract); ship gate lives in the report markers.
+        assert success is True
+        # Push helper was NEVER invoked: the policy layer refused.
+        assert push_calls == []
+        # Report carries the registry-edit refusal.
+        assert "architecture.json registry edit refused" in report
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        # The original finding stays OPEN.
+        assert "### Findings" in report
+        findings_section = report.split("### Findings", 1)[1].split("### ", 1)[0]
+        assert "| blocker | open |" in findings_section
+        assert "| blocker | fixed |" not in findings_section
+
+    def test_loop_runs_existing_six_case_discriminator_unchanged(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The new 10b guard must not regress the existing 10a six-case
+        discriminator. A code-only change (no architecture.json edit)
+        must still be refused by 10a, not 10b.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Pure code-only edit; architecture.json is NOT in the change
+        # set, so the 10b registry-edit guard short-circuits to None.
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/foo.py"]
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Refused — but by the 10a prompt-source guard, not 10b.
+        assert push_calls == []
+        assert "generated-code-only fix refused" in report
+        # Registry-edit refusal MUST NOT appear (no registry edit).
+        assert "architecture.json registry edit refused" not in report
