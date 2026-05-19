@@ -37,15 +37,23 @@
 % 1. Extract include paths from prompt text
 %    - Function: _parse_include_attrs(attrs_text: str) -> Dict[str, str]
 %    - Parse quoted attributes from an ``<include ...>`` opening tag into lower-cased keys
-%    - Function: _include_is_architecture_dependency_candidate(attrs: Dict[str, str]) -> bool
-%    - Return False for context-only include selectors:
+%    - Function: _is_module_prompt_include_target(body: str) -> bool
+%    - Return True when the include body names a module prompt — i.e. the body ends in
+%      ``.prompt`` and ``extract_module_from_include`` resolves it. Mirrors
+%      ``architecture_include_validation._module_prompt_include_target`` so the auto-deps
+%      writer and the validator agree on which includes are architecture edges.
+%    - Function: _include_is_architecture_dependency_candidate(attrs: Dict[str, str], body: str = "") -> bool
+%    - Module-prompt include targets are ALWAYS architecture edges, even with
+%      ``mode="interface"`` / ``select=`` / ``query=`` / ``lines=`` — the validator
+%      treats them as required deps regardless of attributes, so the writer must too.
+%    - For non-prompt source-file includes (``pdd/foo.py``), return False when any of:
 %      - ``mode="interface"``
 %      - any non-empty ``select=``, ``query=``, or ``lines=`` attribute
-%    - Context-only include selectors are LLM source context, not architecture edges
+%    - Context-only source-file include selectors are LLM source context, not architecture edges.
 %    - Function: extract_include_paths_from_prompt_text(text: str) -> Set[str]
 %    - Parse ``<include>...</include>`` tags (supports attributes on the tag like ``<include foo="bar">path</include>``)
 %    - Pattern: r"<include(?P<attrs>[^>]*)>(?P<body>.*?)</include>" with re.DOTALL
-%    - Return set of stripped, non-empty paths only for includes that pass _include_is_architecture_dependency_candidate
+%    - Return set of stripped, non-empty paths only for includes that pass _include_is_architecture_dependency_candidate(attrs, body)
 
 % 2. Find architecture record for a prompt file
 %    - Function: _find_architecture_record_for_prompt_file(project_root: Path, prompt_file_resolved: Path) -> Optional[Tuple[Path, List[Dict[str, Any]], int]]
