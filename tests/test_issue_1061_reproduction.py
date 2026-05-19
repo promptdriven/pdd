@@ -706,3 +706,259 @@ def test_out_of_scope_corrections_do_not_fabricate_undeclared_deps(
     assert bad == [], (
         f"validate-arch-includes warnings for out-of-scope module: {bad!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# iter-1 codex review follow-ups.
+#
+# [B1] Re-convergence MUST include module-prompt <include> targets, not only
+# <pdd-dependency> tags — the validator
+# (cross_validate_architecture_with_prompt_includes) still treats
+# <include select="def:x">b_python.prompt</include> as a required dep.
+#
+# [B2] modules_to_sync gate MUST use path-preserving basename normalization,
+# matching architecture graph alias rules: a correction for
+# 'commands/fix_python.prompt' must match modules_to_sync=['commands/fix'].
+#
+# [M1] auto-deps context-only filter MUST apply only to non-prompt source
+# includes, NOT to <include select=...> on module prompts.
+# ---------------------------------------------------------------------------
+
+
+def test_b1_reconverge_preserves_module_prompt_select_include(tmp_path: Path) -> None:
+    """[B1] An ``<include select="def:x">b_python.prompt</include>`` MUST
+    survive ``_apply_architecture_corrections``' re-convergence even when
+    no matching ``<pdd-dependency>`` tag is present.
+
+    Without this, the validator
+    (``cross_validate_architecture_with_prompt_includes``) re-warns:
+    "a_python.prompt <include>s module 'b' ... but architecture.json
+    dependencies do not list that module".
+    """
+    from pdd.agentic_sync import _apply_architecture_corrections
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts = project_root / "prompts"
+    prompts.mkdir()
+    (prompts / "a_python.prompt").write_text(
+        "<pdd-reason>r</pdd-reason>\n\n"
+        "<pdd-dependency>a_LLM.prompt</pdd-dependency>\n\n"
+        "% Pull in b's interface as context.\n"
+        '<include select="def:x">b_python.prompt</include>\n',
+        encoding="utf-8",
+    )
+    (prompts / "a_LLM.prompt").write_text("%", encoding="utf-8")
+    (prompts / "b_python.prompt").write_text("%", encoding="utf-8")
+    (prompts / "extra_python.prompt").write_text("%", encoding="utf-8")
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {
+            "filename": "a_python.prompt",
+            "dependencies": ["a_LLM.prompt", "b_python.prompt", "extra_python.prompt"],
+        },
+        {"filename": "a_LLM.prompt", "dependencies": []},
+        {"filename": "b_python.prompt", "dependencies": []},
+        {"filename": "extra_python.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    # LLM proposes trimming to ['a_LLM.prompt'] (the iter-0 buggy direction).
+    corrections = [
+        {"filename": "a_python.prompt", "dependencies": ["a_LLM.prompt"]},
+    ]
+    _apply_architecture_corrections(
+        project_root, corrections, architecture, quiet=True
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = next(e for e in final if e["filename"] == "a_python.prompt")
+    assert "b_python.prompt" in entry["dependencies"], (
+        "Module-prompt <include> targets must survive re-convergence; got "
+        f"{entry['dependencies']!r}"
+    )
+    # Spurious 'extra_python.prompt' must be removed (no <pdd-dependency>, no include).
+    assert "extra_python.prompt" not in entry["dependencies"], (
+        f"Undeclared dep should have been trimmed; got {entry['dependencies']!r}"
+    )
+
+    warnings = cross_validate_architecture_with_prompt_includes(final, project_root)
+    bad = [w for w in warnings if "a_python.prompt" in w]
+    assert bad == [], (
+        "validate-arch-includes must not warn for a_python.prompt after "
+        f"re-convergence; got: {bad!r}"
+    )
+
+
+def test_b2_path_qualified_correction_not_skipped_as_out_of_scope(
+    tmp_path: Path,
+) -> None:
+    """[B2] A correction for ``commands/fix_python.prompt`` must NOT be
+    skipped when ``modules_to_sync=['commands/fix']`` — the gate must use
+    path-preserving basename normalization (``commands/fix_python.prompt``
+    → ``commands/fix``), not the bare-stem form (``fix``) which loses the
+    directory and would mismatch.
+    """
+    from pdd.agentic_sync import _apply_architecture_corrections
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts = project_root / "prompts" / "commands"
+    prompts.mkdir(parents=True)
+    (prompts / "fix_python.prompt").write_text(
+        "<pdd-reason>r</pdd-reason>\n\n"
+        "<pdd-dependency>fix_LLM.prompt</pdd-dependency>\n\n"
+        "% Body\n",
+        encoding="utf-8",
+    )
+    (project_root / "prompts" / "fix_LLM.prompt").write_text("%", encoding="utf-8")
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {
+            "filename": "commands/fix_python.prompt",
+            "dependencies": ["fix_LLM.prompt", "stale_python.prompt"],
+        },
+        {"filename": "fix_LLM.prompt", "dependencies": []},
+        {"filename": "stale_python.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    corrections = [
+        {
+            "filename": "commands/fix_python.prompt",
+            "dependencies": ["fix_LLM.prompt"],
+        }
+    ]
+    _apply_architecture_corrections(
+        project_root,
+        corrections,
+        architecture,
+        quiet=True,
+        modules_to_sync=["commands/fix"],
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = next(
+        e for e in final if e["filename"] == "commands/fix_python.prompt"
+    )
+    assert "stale_python.prompt" not in entry["dependencies"], (
+        "The correction for the in-scope path-qualified module 'commands/fix' "
+        "must have been applied (stale dep removed); got "
+        f"{entry['dependencies']!r}"
+    )
+
+
+def test_b2_bare_basename_modules_to_sync_still_matches_flat_correction(
+    tmp_path: Path,
+) -> None:
+    """[B2] Backwards-compat: a flat correction filename
+    ``fix_python.prompt`` must still match ``modules_to_sync=['fix']``,
+    even with the new path-preserving alias rules.
+    """
+    from pdd.agentic_sync import _apply_architecture_corrections
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts = project_root / "prompts"
+    prompts.mkdir()
+    (prompts / "fix_python.prompt").write_text(
+        "<pdd-dependency>fix_LLM.prompt</pdd-dependency>\n", encoding="utf-8"
+    )
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {"filename": "fix_python.prompt", "dependencies": ["fix_LLM.prompt", "stale.prompt"]},
+        {"filename": "fix_LLM.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    _apply_architecture_corrections(
+        project_root,
+        [{"filename": "fix_python.prompt", "dependencies": ["fix_LLM.prompt"]}],
+        architecture,
+        quiet=True,
+        modules_to_sync=["fix"],
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = next(e for e in final if e["filename"] == "fix_python.prompt")
+    assert "stale.prompt" not in entry["dependencies"], (
+        f"correction should have been applied for flat 'fix' module; got "
+        f"{entry['dependencies']!r}"
+    )
+
+
+def test_m1_auto_deps_promotes_module_prompt_select_include(tmp_path: Path) -> None:
+    """[M1] ``extract_include_paths_from_prompt_text`` MUST keep
+    ``<include select="def:x">b_python.prompt</include>`` because the
+    validator still treats that as a module dep. Only non-prompt
+    source-file includes (``pdd/sync_order.py`` with ``select=``/
+    ``mode="interface"``) are filtered as context-only.
+    """
+    from pdd.auto_deps_architecture import extract_include_paths_from_prompt_text
+
+    text = (
+        '<include select="def:foo">b_python.prompt</include>\n'
+        '<include mode="interface" select="def:bar">c_python.prompt</include>\n'
+        '<include>full_python.prompt</include>\n'
+        '<include select="def:baz" mode="interface">pdd/source.py</include>\n'
+    )
+    paths = extract_include_paths_from_prompt_text(text)
+
+    # Module-prompt targets survive the filter even with select=/mode=.
+    assert "b_python.prompt" in paths, (
+        f"select= on a module prompt must remain an architecture dep; got {paths!r}"
+    )
+    assert "c_python.prompt" in paths, (
+        f"mode=interface on a module prompt must remain an architecture dep; got {paths!r}"
+    )
+    assert "full_python.prompt" in paths, (
+        f"plain include of a module prompt must remain an architecture dep; got {paths!r}"
+    )
+    # Non-prompt source include with select=/mode= is context-only and filtered out.
+    assert "pdd/source.py" not in paths, (
+        f"context-only source include must be filtered; got {paths!r}"
+    )
+
+
+def test_m1_auto_deps_merge_preserves_select_include_of_module_prompt(
+    tmp_path: Path,
+) -> None:
+    """[M1] End-to-end at the merge boundary: when a prompt gains
+    ``<include select="def:x">b_python.prompt</include>``, the auto-deps
+    merge must add ``b_python.prompt`` to the architecture entry so the
+    validator stays happy.
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts = project_root / "prompts"
+    prompts.mkdir()
+    a_prompt = prompts / "a_python.prompt"
+    a_prompt.write_text("<pdd-reason>r</pdd-reason>\n% Body\n", encoding="utf-8")
+    (prompts / "b_python.prompt").write_text("%", encoding="utf-8")
+
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {"filename": "a_python.prompt", "dependencies": []},
+        {"filename": "b_python.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    old_text = "<pdd-reason>r</pdd-reason>\n% Body\n"
+    new_text = (
+        "<pdd-reason>r</pdd-reason>\n"
+        '<include select="def:bar">b_python.prompt</include>\n'
+        "% Body\n"
+    )
+
+    report = merge_auto_deps_includes_into_architecture(
+        project_root, a_prompt, old_text, new_text
+    )
+    assert "b_python.prompt" in report["added_dependencies"], (
+        "auto-deps must promote a select= include of a module prompt to an "
+        f"architecture dep; got {report!r}"
+    )
