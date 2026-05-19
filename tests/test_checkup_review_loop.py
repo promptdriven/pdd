@@ -5938,6 +5938,101 @@ class TestReviewLoopDeterministicGates:
         assert "run_gates" in det_section, det_section
         assert "RuntimeError" in det_section, det_section
 
+    def test_final_report_scrubs_secrets_in_gate_runner_crash_row(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex review iteration 3, Finding (MEDIUM, secret leak):
+        the ``### Deterministic Gates`` crash-row renderer prints
+        ``run["error"]`` directly. ``run["error"]`` is built from
+        ``f"{type(exc).__name__}: {exc}"`` and a subprocess exception
+        can embed env-derived secrets (``OPENAI_API_KEY``,
+        ``GITHUB_TOKEN``, ``ANTHROPIC_API_KEY``, …). The final report
+        is posted back to the source issue + PR as a public comment,
+        so any secret-bearing token in the crash row would leak.
+
+        The renderer MUST scrub through the loop's existing
+        ``_scrub_secrets`` helper BEFORE rendering. ``final-state.json``
+        persistence must also scrub the same fields.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+        import pdd.checkup_gates as gates_mod
+
+        self._patch_io(monkeypatch, tmp_path)
+
+        # The exception message embeds a token that matches the
+        # ``sk-ant-`` pattern in ``_SECRET_SCRUB_PATTERNS``. Codex's
+        # repro flagged this exact class.
+        secret_token = "sk-ant-fake-1234567890abcdef"
+
+        def fake_discover(worktree, changed_files, *, extra_allow=()):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=[sys.executable, "-c", "import sys; sys.exit(1)"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError(f"failure with token {secret_token}")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+
+        # The whole report (which becomes a public GitHub comment) MUST
+        # NOT contain the raw token. Check the ``### Deterministic
+        # Gates`` section in particular so a regression in the new
+        # renderer is pinpointed precisely.
+        assert secret_token not in report, (
+            "raw secret leaked into rendered report; the crash-row "
+            "renderer must scrub run['error'] through _scrub_secrets "
+            "before render"
+        )
+        start = report.index("### Deterministic Gates")
+        rest = report[start:]
+        next_section_idx = rest.find("\n### ", 1)
+        det_section = rest if next_section_idx == -1 else rest[:next_section_idx]
+        assert "[REDACTED]" in det_section, (
+            f"crash row must show [REDACTED] in place of the token:\n"
+            f"{det_section}"
+        )
+        assert secret_token not in det_section
+        # Defang must not eat the diagnostic context.
+        assert "runner crash" in det_section.lower()
+        assert "RuntimeError" in det_section
+
+        # final-state.json persists ``state.gate_runs`` raw — make sure
+        # the on-disk audit trail does NOT leak the token either.
+        final_state_path = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1" / "final-state.json"
+        )
+        if final_state_path.exists():
+            payload_text = final_state_path.read_text(encoding="utf-8")
+            assert secret_token not in payload_text, (
+                "raw secret persisted to final-state.json gate_runs; "
+                "the persistence path must scrub run['error'] too"
+            )
+
     def test_gate_finding_carries_stable_dedup_key(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

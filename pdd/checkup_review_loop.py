@@ -3518,9 +3518,19 @@ def _gate_runner_crash_finding(
     pending-findings path, the loop refuses clean, and the operator
     sees both the crash class and the recommended remediation in the
     rendered report.
+
+    Codex review iteration 3 (MEDIUM, secret leak): the raw exception
+    message may carry env-derived secrets (``OPENAI_API_KEY``,
+    ``GITHUB_TOKEN``, ``sk-…`` tokens, ``Bearer`` headers). The
+    ``ReviewFinding.evidence`` field is rendered into the public GitHub
+    comment AND persisted into ``final-state.json["findings"]``, so we
+    scrub through ``_scrub_secrets`` BEFORE building the finding. The
+    ``finding`` field stays deterministic — it never embeds the raw
+    exception message anyway, so dedup-key stability (iteration 2
+    Finding 1) is preserved.
     """
     exc_class = type(exc).__name__
-    exc_message = str(exc)
+    exc_message = _scrub_secrets(str(exc))
     return ReviewFinding(
         severity="blocker",
         reviewer="gate:runner",
@@ -4470,10 +4480,56 @@ def _write_final_state(
         # ``_enforce_gates_before_clean`` invocation, carrying both
         # passed and failed ``GateResult`` dicts so downstream tooling
         # can audit gate runs regardless of whether they produced
-        # synthetic findings.
-        "gates": list(state.gate_runs),
+        # synthetic findings. Codex review iteration 3 (MEDIUM, secret
+        # leak): scrub through ``_scrub_secrets`` because crash-row
+        # ``error`` strings and ``GateResult.error`` are exception
+        # messages that may embed env-derived secrets.
+        "gates": [_scrubbed_gate_run(run) for run in state.gate_runs],
     }
     _write_artifact(artifacts_dir / "final-state.json", json.dumps(payload, indent=2))
+
+
+def _scrubbed_gate_run(run: Dict[str, Any]) -> Dict[str, Any]:
+    """Return a shallow copy of ``run`` with secret-bearing fields scrubbed.
+
+    Codex review iteration 3 (MEDIUM, secret leak). ``state.gate_runs``
+    is built from raw exception strings, so the rendered report and the
+    persisted ``final-state.json`` must NOT publish it verbatim. The
+    in-memory ``state.gate_runs`` keeps the raw values for unit testing
+    and future operator-side debug tooling that talks to a live process;
+    every IO-facing consumer (renderer + JSON persistence) reads through
+    this helper so the scrub is applied uniformly.
+    """
+    scrubbed: Dict[str, Any] = dict(run)
+    if "error" in scrubbed and isinstance(scrubbed["error"], str):
+        scrubbed["error"] = _scrub_secrets(scrubbed["error"])
+    if "phase" in scrubbed and isinstance(scrubbed["phase"], str):
+        # Defensive: ``phase`` is currently a small literal set
+        # (``discover``/``run_gates``) but a future caller may pass
+        # user-controlled content.
+        scrubbed["phase"] = _scrub_secrets(scrubbed["phase"])
+    results = scrubbed.get("results")
+    if isinstance(results, list):
+        new_results: List[Dict[str, Any]] = []
+        for result in results:
+            if not isinstance(result, dict):
+                new_results.append(result)
+                continue
+            scrubbed_result: Dict[str, Any] = dict(result)
+            # Belt-and-suspenders: ``stdout_excerpt`` / ``stderr_excerpt``
+            # are already scrubbed inside ``checkup_gates._execute_one``
+            # before they land in ``state.gate_runs``. Re-scrubbing here
+            # is a no-op on already-scrubbed text (the regex does not
+            # match ``[REDACTED]``) and guards against a future caller
+            # that bypasses ``_execute_one``. ``error`` is the new
+            # surface from iteration 3 that DEFINITELY needs scrubbing.
+            for key in ("error", "stdout_excerpt", "stderr_excerpt"):
+                value = scrubbed_result.get(key)
+                if isinstance(value, str):
+                    scrubbed_result[key] = _scrub_secrets(value)
+            new_results.append(scrubbed_result)
+        scrubbed["results"] = new_results
+    return scrubbed
 
 
 def _post_review_loop_report(
@@ -4664,8 +4720,21 @@ def _render_final_report(
                     header += f", reviewer `{reviewer_label}`"
                 lines.append(header)
                 results = run.get("results", []) or []
-                run_error = str(run.get("error") or "").strip()
-                run_phase = str(run.get("phase") or "").strip()
+                # Codex review iteration 3 (MEDIUM, secret leak): the
+                # crash-row and per-result-error renderers print
+                # ``run["error"]`` / ``result["error"]`` directly. Both
+                # come from ``f"{type(exc).__name__}: {exc}"`` and a
+                # subprocess exception can embed env-derived secrets
+                # (``OPENAI_API_KEY``, ``GITHUB_TOKEN``, ``sk-…`` tokens)
+                # in its message. The final report is posted as a public
+                # GitHub comment, so we MUST scrub through
+                # ``_scrub_secrets`` BEFORE rendering. ``phase`` is
+                # written by ``_enforce_gates_before_clean`` from a
+                # small literal set (``"discover"`` / ``"run_gates"``)
+                # but we defensively scrub it too in case a future
+                # caller passes user-controlled content.
+                run_error = _scrub_secrets(str(run.get("error") or "")).strip()
+                run_phase = _scrub_secrets(str(run.get("phase") or "")).strip()
                 # Issue #1092 codex review iteration 2 Finding 2: when
                 # ``_enforce_gates_before_clean`` records a discover/run
                 # crash, ``results`` is ``[]`` and the audit detail
@@ -4685,7 +4754,12 @@ def _render_final_report(
                     source = gate.get("source", "")
                     exit_code = result.get("exit_code")
                     duration = result.get("duration_seconds", 0.0) or 0.0
-                    error = (result.get("error") or "").strip()
+                    # Same scrub rationale as the crash row above: the
+                    # per-gate ``error`` is built from a raw exception
+                    # string in ``checkup_gates._execute_one`` and can
+                    # carry env-derived secrets when a binary or path
+                    # name is secret-bearing.
+                    error = _scrub_secrets(str(result.get("error") or "")).strip()
                     if exit_code is None:
                         status = f"runner-error ({error})" if error else "runner-error"
                     elif exit_code == 0:
