@@ -293,7 +293,13 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
             for elem in dep_elems
             if elem.text
             for dep in [elem.text.strip()]
-            if dep and dep.endswith('.prompt') and '\n' not in dep and len(dep) <= 100
+            if dep
+            and '\n' not in dep
+            and len(dep) <= 100
+            and (
+                dep.endswith('.prompt')
+                or re.fullmatch(r'[A-Za-z0-9_-]+', dep)
+            )
         ]
 
     except (etree.XMLSyntaxError, etree.ParserError):
@@ -360,6 +366,8 @@ def _infer_filepath(filename: str) -> str:
 
     if stem.endswith('_python'):
         module_name = stem[:-len('_python')]
+        if '/' in module_name:
+            return f'{module_name}.py'
         return f'pdd/{module_name}.py'
     return f'prompts/{filename}'
 
@@ -396,9 +404,23 @@ def _normalize_dependency_filenames(
     }
     by_exact_lower: Dict[str, List[str]] = {}
     by_basename_lower: Dict[str, List[str]] = {}
+    by_bare_stem_lower: Dict[str, List[str]] = {}
+    language_suffixes = [
+        suffix
+        for language in _EXT_TO_LANGUAGE.values()
+        for suffix in (f"_{language}", f"_{language.lower()}")
+    ]
     for filename in all_filenames:
         by_exact_lower.setdefault(filename.lower(), []).append(filename)
-        by_basename_lower.setdefault(Path(filename).name.lower(), []).append(filename)
+        basename = Path(filename).name
+        by_basename_lower.setdefault(basename.lower(), []).append(filename)
+        if basename.endswith(".prompt"):
+            stem = basename[:-len(".prompt")]
+            for suffix in language_suffixes:
+                if stem.endswith(suffix):
+                    bare_stem = stem[:-len(suffix)]
+                    by_bare_stem_lower.setdefault(bare_stem.lower(), []).append(filename)
+                    break
 
     normalized_dependencies: List[str] = []
     seen: set[str] = set()
@@ -420,6 +442,10 @@ def _normalize_dependency_filenames(
                 basename_matches = by_basename_lower.get(Path(normalized).name.lower(), [])
                 if len(basename_matches) == 1:
                     resolved = basename_matches[0]
+                elif "/" not in normalized:
+                    bare_matches = by_bare_stem_lower.get(normalized.lower(), [])
+                    if len(bare_matches) == 1:
+                        resolved = bare_matches[0]
         if resolved not in seen:
             normalized_dependencies.append(resolved)
             seen.add(resolved)

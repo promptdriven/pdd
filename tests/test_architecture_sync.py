@@ -118,6 +118,15 @@ def test_parse_tags_only_dependencies():
     assert result['dependencies'] == ['dep1.prompt', 'dep2.prompt']
 
 
+def test_parse_tags_accepts_bare_basename_dependency():
+    """Bare basename dependency tags are kept for later architecture normalization."""
+    content = "<pdd-dependency>api</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == ['api']
+
+
 def test_parse_tags_after_yaml_front_matter():
     """PDD metadata immediately after YAML front matter should be parsed."""
     content = """---
@@ -395,6 +404,53 @@ def test_sync_prompts_to_architecture_normalizes_basename_dependency_tags(tmp_pa
         "src/config_Python.prompt",
         "src/services/lifecycle_Python.prompt",
     ]
+
+
+def test_update_architecture_from_prompt_normalizes_bare_dependency_tag(tmp_path):
+    """Bare dependency tags should resolve instead of clearing existing deps."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "app_python.prompt").write_text(
+        "<pdd-dependency>api</pdd-dependency>",
+        encoding="utf-8",
+    )
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "app_python.prompt",
+                    "filepath": "pdd/app.py",
+                    "description": "App",
+                    "reason": "App",
+                    "dependencies": ["api_python.prompt"],
+                    "priority": 1,
+                },
+                {
+                    "filename": "api_python.prompt",
+                    "filepath": "pdd/api.py",
+                    "description": "API",
+                    "reason": "API",
+                    "dependencies": [],
+                    "priority": 2,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = update_architecture_from_prompt(
+        "app_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False,
+    )
+
+    updated_arch = json.loads(architecture_path.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert updated_arch[0]["dependencies"] == ["api_python.prompt"]
 
 
 def test_sync_prompts_to_architecture_dry_run_preserves_architecture_file(tmp_path):
@@ -2654,6 +2710,14 @@ def test_infer_filepath_path_aware_pascal_python():
     assert (
         _infer_filepath('src/clients/__init___Python.prompt')
         == 'src/clients/__init__.py'
+    )
+
+
+def test_infer_filepath_path_aware_legacy_lowercase_python():
+    """_infer_filepath keeps path-qualified legacy lowercase Python prompts path-aware."""
+    assert (
+        _infer_filepath('src/workers/runtime/gemini_cli_python.prompt')
+        == 'src/workers/runtime/gemini_cli.py'
     )
 
 
