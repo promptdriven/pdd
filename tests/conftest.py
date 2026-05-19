@@ -86,6 +86,20 @@ def _enforce_isolated_home(monkeypatch):
     monkeypatch.setenv("CODEX_HOME", os.path.join(_PYTEST_FAKE_HOME, ".codex"))
 
 
+@pytest.fixture(scope="session")
+def sandbox_home() -> Path:
+    """Expose the session-scoped fake HOME pinned at conftest import time.
+
+    Regression tests in ``tests/test_home_isolation.py`` assert that
+    HOME / CODEX_HOME / ``Path.home()`` / module-level JWT_CACHE_FILE
+    constants all resolve to exactly this path. Asserting equality
+    against this fixture (rather than a hard-coded temp-root whitelist
+    like ``/tmp/``) keeps the invariant robust against CI/dev
+    environments with a custom ``TMPDIR``.
+    """
+    return Path(_PYTEST_FAKE_HOME)
+
+
 @pytest.fixture(autouse=True)
 def restore_agentic_e2e_fix_orchestrator_mocks():
     """Restore orchestrator globals that heavily mocked tests replace.
