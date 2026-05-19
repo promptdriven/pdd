@@ -2,14 +2,18 @@
   "pdd_version": "0.0.238",
   "timestamp": "2026-05-15T23:15:26.384265+00:00",
   "command": "fix",
-  "prompt_hash": "c645297e7ef308c45c30163b4f7588bcbc4722067b48b72462cff03d3779f853",
-  "code_hash": "25d63daf3f15152b2fbf7df1d39744fd5458ce7f542ee96c755bc8574abe932f",
-  "example_hash": "2f072b2b39ee1f4cfb2ec34f6ed40ce0f52ae607733b4a868753ac275fa184a6",
-  "test_hash": "d4b6ba1dcd9090588d97badcb3eeb4317b7d4f3c4b9bddffb045abfe39850b49",
+  "prompt_hash": "6a9da0bcb6c63d0227fe6e2b9a00778c51d1d6af0f1374205ddbe94e5788f451",
+  "code_hash": "e9997cd8f686042f0f05da8eab272b5ffa2a3fd97356328ca8304451055ffe7e",
+  "example_hash": "2abaef91610ddec6948b421f4b77fbcecf3434c19dfe7ed6206c844f44a425ba",
+  "test_hash": "cdffcd71f325a042eea892d4a805b7a7ec5e79e55ae7644ae71a6814b07c567e",
   "test_files": {
-    "test_checkup_review_loop.py": "d4b6ba1dcd9090588d97badcb3eeb4317b7d4f3c4b9bddffb045abfe39850b49"
+    "test_checkup_review_loop.py": "cdffcd71f325a042eea892d4a805b7a7ec5e79e55ae7644ae71a6814b07c567e"
   },
   "include_deps": {
+    "context/agentic_change_example.py": "46743f7ad91c5949e25e8a5c7532b3f8ada733e16f85a41d3e72ae9507ee559b",
+    "context/agentic_checkup_orchestrator_example.py": "6855fd29b1d0474a877d0eec215b98643a7c8d7e6468a3ad9b2d754c6a9f626a",
+    "context/agentic_common_example.py": "113b5829cae3a9e38c362b74d5115ba09cab06c7be5831527d9829f97f7b3b7d",
+    "context/agentic_e2e_fix_orchestrator_example.py": "3de20bfd0d4f8b22aabf1738f905d6bfa8873a7537be20eece44353b02c23c0a",
     "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
   }
 }

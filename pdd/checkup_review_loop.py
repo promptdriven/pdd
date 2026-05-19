@@ -3546,27 +3546,12 @@ def _commit_and_push_if_changed(
     if not clone_url or not head_ref or not head_owner or not head_repo:
         return False, "Cannot push fixes: PR head repo/ref metadata is unavailable."
 
-    success, error = push_with_retry(
-        worktree,
-        repo_owner=head_owner,
-        repo_name=head_repo,
-        remote=clone_url,
-        refspec=f"HEAD:{head_ref}",
-        set_upstream=False,
-        force_with_lease_on_non_fast_forward=False,
-    )
-    if success:
-        return True, "Pushed fixes to PR branch."
-    if _is_remote_advanced_push_error(error):
-        rebased, rebase_message = _rebase_onto_updated_pr_head(
-            worktree,
-            clone_url=clone_url,
-            head_ref=head_ref,
-            repo_owner=head_owner,
-            repo_name=head_repo,
-        )
-        if not rebased:
-            return False, rebase_message
+    error = ""
+    rebased_for_remote_advance = False
+    # Another checkup attempt, maintainer, or bot can push to the PR branch
+    # between our fetch/rebase and retry. Give that narrow race a couple of
+    # chances without ever falling back to force-push.
+    for rebase_attempt in range(3):
         success, error = push_with_retry(
             worktree,
             repo_owner=head_owner,
@@ -3577,7 +3562,26 @@ def _commit_and_push_if_changed(
             force_with_lease_on_non_fast_forward=False,
         )
         if success:
-            return True, "Pushed fixes to PR branch after rebasing onto updated PR head."
+            if rebased_for_remote_advance:
+                return (
+                    True,
+                    "Pushed fixes to PR branch after rebasing onto updated PR head.",
+                )
+            return True, "Pushed fixes to PR branch."
+        if not _is_remote_advanced_push_error(error):
+            break
+        if rebase_attempt == 2:
+            break
+        rebased, rebase_message = _rebase_onto_updated_pr_head(
+            worktree,
+            clone_url=clone_url,
+            head_ref=head_ref,
+            repo_owner=head_owner,
+            repo_name=head_repo,
+        )
+        if not rebased:
+            return False, rebase_message
+        rebased_for_remote_advance = True
     return False, f"Failed to push fixes to PR branch: {error.strip()}"
 
 
