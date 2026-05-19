@@ -2739,10 +2739,9 @@ def test_propagate_attempted_models_appends_repeated_chain():
     (e.g. both report ['cloud:a','cloud:b']) must compose into the
     chronologically correct ['cloud:a','cloud:b','cloud:a','cloud:b'].
 
-    The helper is now contracted to be called AT MOST ONCE per llm_invoke
-    invocation, so the per-element append-with-dedup loop (skip only when
-    combined[-1] == name) correctly preserves the full cross-invocation
-    history.
+    The helper is contracted to be called AT MOST ONCE per llm_invoke
+    invocation and now performs pure concatenation across boundaries
+    (round 5), so the cross-invocation history is preserved verbatim.
     """
     import click
     from pdd.llm_invoke import _propagate_attempted_models_to_ctx
@@ -2757,9 +2756,9 @@ def test_propagate_attempted_models_appends_repeated_chain():
 
 
 def test_propagate_attempted_models_appends_when_incoming_is_disjoint():
-    """The append-with-dedup fallback must still compose disjoint chains from
-    multiple distinct llm_invoke calls in one Click command into one
-    chronological list.
+    """Pure concatenation must compose disjoint chains from multiple
+    distinct llm_invoke calls in one Click command into one chronological
+    list.
     """
     import click
     from pdd.llm_invoke import _propagate_attempted_models_to_ctx
@@ -2769,6 +2768,42 @@ def test_propagate_attempted_models_appends_when_incoming_is_disjoint():
         _propagate_attempted_models_to_ctx(['m1'])
         _propagate_attempted_models_to_ctx(['m2'])
         assert ctx.obj['attempted_models'] == ['m1', 'm2']
+
+
+def test_propagate_attempted_models_preserves_same_model_repeats():
+    """Regression (codex round 5, P2): two sibling llm_invoke calls that
+    each report a single identical model (e.g. both ['gpt-4']) must
+    compose to ['gpt-4','gpt-4'] — collapsing to ['gpt-4'] at the
+    invocation boundary would silently drop a real LLM call from the
+    cost CSV.
+    """
+    import click
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    ctx = click.Context(click.Command("x"), obj={})
+    with ctx:
+        _propagate_attempted_models_to_ctx(['gpt-4'])
+        _propagate_attempted_models_to_ctx(['gpt-4'])
+        assert ctx.obj['attempted_models'] == ['gpt-4', 'gpt-4']
+
+
+def test_propagate_attempted_models_preserves_boundary_adjacency():
+    """Regression (codex round 5, P2): when the second incoming chain
+    starts with the same model the previous chain ended with (e.g. prior
+    ended at 'cloud:b', next starts with 'cloud:b' then escalates to
+    'local:c'), the boundary adjacency must NOT be collapsed — both
+    'cloud:b' entries are distinct LLM calls and must appear in order.
+    """
+    import click
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    ctx = click.Context(click.Command("x"), obj={})
+    with ctx:
+        _propagate_attempted_models_to_ctx(['cloud:a', 'cloud:b'])
+        _propagate_attempted_models_to_ctx(['cloud:b', 'local:c'])
+        assert ctx.obj['attempted_models'] == [
+            'cloud:a', 'cloud:b', 'cloud:b', 'local:c'
+        ]
 
 
 # --- Tests for cloud exception classes ---

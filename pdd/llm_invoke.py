@@ -541,22 +541,18 @@ def _propagate_attempted_models_to_ctx(attempted_models: List[str]) -> None:
         ctx = click.get_current_context(silent=True)
         if ctx is None or ctx.obj is None or not hasattr(ctx.obj, "__setitem__"):
             return
-        # Compose with any existing chain so multiple sibling llm_invoke
-        # calls in one Click command compose into one chronological list.
-        # The contract is "called at most once per llm_invoke" — that
-        # invariant lets this per-element append-with-dedup loop be correct
-        # for both inter-invocation composition AND repeated identical
-        # chains (two sibling llm_invoke calls that both produced
-        # ['cloud:a','cloud:b'] correctly yield ['cloud:a','cloud:b','cloud:a','cloud:b']).
+        # Pure concatenation across invocation boundaries. The contract is
+        # "called at most once per llm_invoke", and each llm_invoke already
+        # pre-deduplicates its own chain before propagation, so the boundary
+        # is a discrete chronological event. Two sibling llm_invoke calls
+        # that reuse the same model (e.g. both report ['gpt-4']) must
+        # combine to ['gpt-4','gpt-4'] to preserve real call history —
+        # de-duplicating at the boundary would silently drop LLM calls.
         existing = ctx.obj.get("attempted_models") or []
         if not isinstance(existing, list):
             existing = []
         incoming = [str(name) for name in attempted_models if name]
-        combined = list(existing)
-        for name in incoming:
-            if not combined or combined[-1] != name:
-                combined.append(name)
-        ctx.obj["attempted_models"] = combined
+        ctx.obj["attempted_models"] = list(existing) + incoming
     except Exception:
         # Cost tracking is best-effort; never raise from this helper.
         pass
