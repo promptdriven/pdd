@@ -182,8 +182,14 @@ class LintResult:
 
 def _extract_xml_sections(text: str) -> dict[str, str]:
     """Return tag-name → inner text for all XML-style sections found."""
+    # PDD % comments may mention tag names (e.g. "without a <vocabulary> block").
+    # Ignore those lines so comment text cannot pair with real closing tags.
+    scan_text = "\n".join(
+        line for line in text.splitlines()
+        if not line.lstrip().startswith("%")
+    )
     sections: dict[str, str] = {}
-    for section_match in _XML_SECTION_RE.finditer(text):
+    for section_match in _XML_SECTION_RE.finditer(scan_text):
         tag = section_match.group("tag").lower()
         body = section_match.group("body")
         # Last occurrence wins for duplicate tags

@@ -1,6 +1,6 @@
 % Real-world example fixture for pdd prompt lint.
-% Demonstrates how "duplicate upload" is ambiguous without a <vocabulary> definition.
-% Used by: test_duplicate_upload_term_is_flagged
+% Demonstrates how "duplicate upload" is ambiguous without a vocabulary block.
+% Used by: test_upload_handler_ambiguous_fixture
 
 <contract_rules>
 1. The function must reject duplicate uploads gracefully.
