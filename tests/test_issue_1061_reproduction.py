@@ -1149,6 +1149,161 @@ def test_b1_iter2_symmetric_bare_correction_rejected_for_path_qualified_scope(
     )
 
 
+def test_m1_iter2_same_tail_path_qualified_include_kept_as_dep(
+    tmp_path: Path,
+) -> None:
+    """[M1.iter2] Same-tail path-qualified include must be KEPT as a dep.
+
+    ``commands/fix_python.prompt`` that ``<include>``s
+    ``server/fix_python.prompt`` is **not** a self-include — the two
+    modules live in different directories and the validator (and the
+    architecture graph) consider them distinct modules. iter-1's
+    self-edge guard compared bare basenames and would silently drop the
+    ``server/fix_python.prompt`` dependency during re-convergence.
+
+    The path-preserving guard keeps the dep when self/inc directories
+    differ.
+    """
+    from pdd.agentic_sync import (
+        _apply_architecture_corrections,
+        _module_prompt_include_dependencies,
+    )
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    commands_dir = project_root / "prompts" / "commands"
+    commands_dir.mkdir(parents=True)
+    server_dir = project_root / "prompts" / "server"
+    server_dir.mkdir(parents=True)
+
+    self_prompt = commands_dir / "fix_python.prompt"
+    self_prompt.write_text(
+        "<pdd-reason>r</pdd-reason>\n\n"
+        "% Body — include a same-tail module prompt from another folder.\n"
+        '<include select="def:fix">server/fix_python.prompt</include>\n',
+        encoding="utf-8",
+    )
+    (server_dir / "fix_python.prompt").write_text("%", encoding="utf-8")
+
+    # Direct unit-level: re-conv must keep the cross-folder same-tail dep.
+    direct_deps = _module_prompt_include_dependencies(
+        self_prompt, self_filename="commands/fix_python.prompt"
+    )
+    assert "server/fix_python.prompt" in direct_deps, (
+        "Path-preserving self-edge guard must keep same-tail cross-folder "
+        f"include as a dep; got {direct_deps!r}"
+    )
+
+    # End-to-end through ``_apply_architecture_corrections``: the
+    # correction's re-convergence must write the include-backed dep into
+    # the owning architecture.json entry.
+    arch_path = project_root / "architecture.json"
+    architecture = [
+        {
+            "filename": "commands/fix_python.prompt",
+            # Start empty; re-convergence must add ``server/fix_python.prompt``
+            # because the prompt <include>s it.
+            "dependencies": [],
+        },
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    _apply_architecture_corrections(
+        project_root,
+        [{"filename": "commands/fix_python.prompt", "dependencies": []}],
+        architecture,
+        quiet=True,
+    )
+
+    final = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = next(
+        e for e in final if e["filename"] == "commands/fix_python.prompt"
+    )
+    assert "server/fix_python.prompt" in entry["dependencies"], (
+        "Re-converged deps must include the same-tail cross-folder "
+        f"<include> target; got {entry['dependencies']!r}"
+    )
+    # commands/fix_python.prompt is NOT in its own deps (real self-edge filter).
+    assert "commands/fix_python.prompt" not in entry["dependencies"], (
+        "Self filename must never appear as its own dep; got "
+        f"{entry['dependencies']!r}"
+    )
+
+
+def test_m1_iter2_real_path_qualified_self_include_still_dropped(
+    tmp_path: Path,
+) -> None:
+    """[M1.iter2] Sanity check the symmetric direction: a *real*
+    path-qualified self-include (same folder, same name) must still be
+    dropped as a self-edge. Without this, the path-preserving guard
+    would over-correct and allow self-edges in nested layouts.
+    """
+    from pdd.agentic_sync import _module_prompt_include_dependencies
+
+    prompts_dir = tmp_path / "prompts" / "commands"
+    prompts_dir.mkdir(parents=True)
+    self_prompt = prompts_dir / "fix_python.prompt"
+    self_prompt.write_text(
+        "% Self-include for self-context (path-qualified).\n"
+        "<include>commands/fix_python.prompt</include>\n",
+        encoding="utf-8",
+    )
+
+    deps = _module_prompt_include_dependencies(
+        self_prompt, self_filename="commands/fix_python.prompt"
+    )
+    assert "commands/fix_python.prompt" not in deps, (
+        "Real path-qualified self-include must still be dropped; got "
+        f"{deps!r}"
+    )
+
+
+def test_n1_iter2_include_dependencies_preserve_source_order(
+    tmp_path: Path,
+) -> None:
+    """[N1.iter2] Multiple module-prompt ``<include>``s must produce
+    dependencies in **source declaration order**, not hash-dependent
+    set order. iter-1 iterated a ``set`` from
+    ``extract_includes_from_file`` and produced churn in
+    ``architecture.json`` diffs whenever the hash seed changed.
+    """
+    from pdd.agentic_sync import _module_prompt_include_dependencies
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    # Use names that hash very differently and would shuffle in a set.
+    self_prompt = prompts_dir / "owner_python.prompt"
+    body = (
+        "<pdd-reason>order test</pdd-reason>\n"
+        "<include>zeta_python.prompt</include>\n"
+        "<include>alpha_python.prompt</include>\n"
+        "<include>mu_python.prompt</include>\n"
+        "<include>beta_python.prompt</include>\n"
+        "<include>gamma_python.prompt</include>\n"
+    )
+    self_prompt.write_text(body, encoding="utf-8")
+    # Touch dep targets so the helper sees them as module prompts.
+    for name in ("zeta", "alpha", "mu", "beta", "gamma"):
+        (prompts_dir / f"{name}_python.prompt").write_text("%", encoding="utf-8")
+
+    deps = _module_prompt_include_dependencies(
+        self_prompt, self_filename="owner_python.prompt"
+    )
+
+    expected = [
+        "zeta_python.prompt",
+        "alpha_python.prompt",
+        "mu_python.prompt",
+        "beta_python.prompt",
+        "gamma_python.prompt",
+    ]
+    assert deps == expected, (
+        "Include-backed deps must preserve source declaration order; got "
+        f"{deps!r} (expected {expected!r})"
+    )
+
+
 def test_n1_iter2_ordered_extractor_in_sync_order(tmp_path: Path) -> None:
     """[N1.iter2] Direct unit test for ``extract_includes_from_file_ordered``:
     declarations come back in source order with first-occurrence dedup,
