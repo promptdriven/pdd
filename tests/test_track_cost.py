@@ -135,8 +135,9 @@ def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_o
          mock.patch('os.path.getsize', return_value=100):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
-    # The writer reads the existing file (to detect a missing 'attempted_models'
-    # column) before opening for append, so we expect both calls.
+    # The writer peeks only the header of the existing file (to detect a
+    # missing 'attempted_models' column) before opening for append, so we
+    # expect both calls.
     mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     handle = mock_open_file()

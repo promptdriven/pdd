@@ -183,18 +183,27 @@ def track_cost(func):
 
                         # If file exists with an older header that doesn't include
                         # 'attempted_models', migrate it in place so DictReader can
-                        # expose the new column properly.
+                        # expose the new column properly. Peek only the header on
+                        # every call; load and rewrite rows ONLY when migration is
+                        # actually needed, to keep append cost O(1) over the
+                        # lifetime of a long-lived cost CSV.
                         if file_has_content:
+                            existing_header = None
+                            existing_rows = []
+                            needs_migration = False
                             try:
                                 with open(output_cost_path, 'r', newline='', encoding='utf-8') as existing:
                                     reader = csv.reader(existing)
                                     existing_header = next(reader, None)
-                                    existing_rows = list(reader) if existing_header is not None else []
+                                    if existing_header is not None and 'attempted_models' not in existing_header:
+                                        needs_migration = True
+                                        existing_rows = list(reader)
                             except Exception:
                                 existing_header = None
                                 existing_rows = []
+                                needs_migration = False
 
-                            if existing_header is not None and 'attempted_models' not in existing_header:
+                            if needs_migration:
                                 migrated_fieldnames = list(existing_header) + ['attempted_models']
                                 with open(output_cost_path, 'w', newline='', encoding='utf-8') as csvfile:
                                     migrate_writer = csv.writer(csvfile)
