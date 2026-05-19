@@ -1,0 +1,38 @@
+% DEMO FILE 1 — vague prompt (no vocabulary).
+% Features shown: non-LLM default mode, JSON output, vocabulary suggestions, read-only guarantee.
+%
+% Run:
+%   pdd prompt lint prompts/payment_api_vague_python.prompt
+%   pdd prompt lint --json prompts/payment_api_vague_python.prompt
+%   pdd prompt lint --strict prompts/payment_api_vague_python.prompt   # exit 2
+
+You are a Python developer. Implement the `payment` module (`src/payment.py`).
+
+<contract_rules>
+1. Only authorized merchants may initiate a charge.
+2. Reject duplicate transactions gracefully.
+3. Return a valid payment response on successful charge.
+4. Active subscriptions must not be charged more than once per billing cycle.
+5. Trusted payment providers may skip the fraud check.
+6. Refunds are allowed within a reasonable time window.
+</contract_rules>
+
+<requirements>
+- POST /charge: accepts a JSON payload and initiates a charge via the provider.
+- Return HTTP 201 with {"transaction_id": "<uuid>"} on successful charge.
+- Reject duplicate charges with HTTP 409.
+- Store a complete audit record for every transaction attempt.
+- Enforce a safe retry policy on network errors.
+</requirements>
+
+<acceptance_tests>
+1. Given an authorized merchant, when they POST a valid charge, the server returns HTTP 201.
+2. Given a duplicate transaction, when submitted by an active subscription, the server returns HTTP 409.
+3. Given a trusted provider webhook, when it arrives, the server processes it gracefully.
+4. Given a complete refund request within the time window, the server returns HTTP 200.
+</acceptance_tests>
+
+Instructions
+- Use Stripe SDK for provider calls.
+- Raise HTTPException for all error paths.
+- Write pytest tests for the happy path and each rejection scenario.

@@ -1,0 +1,18 @@
+% Fixture: unknown_coverage_refs_python.prompt
+% The coverage section references R99 which does not exist in contract_rules.
+% Expected: UNKNOWN_COVERAGE_REF error for R99.
+
+<vocabulary>
+- authorized user: a caller whose Bearer JWT contains the "upload" scope
+</vocabulary>
+
+<contract_rules>
+R1: The system MUST only accept uploads from authorized users.
+R2: The system MUST return HTTP 201 on successful upload.
+</contract_rules>
+
+<coverage>
+- R1: test_unauthorized_rejected (tests/test_upload.py)
+- R2: test_successful_upload (tests/test_upload.py)
+- R99: test_nonexistent_rule (tests/test_upload.py)
+</coverage>

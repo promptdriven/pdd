@@ -1,0 +1,84 @@
+% Fixture: payment_api_clean_python.prompt
+% Realistic payment processing contract — fully clean, zero issues expected.
+
+You are a Python developer. Implement the payment processing module.
+
+<vocabulary>
+- authorized merchant: a merchant whose API key is present, unexpired, and has the "payments:write" scope verified against the OAuth2 provider
+- valid payment method: a payment method whose type is one of ["card", "ach", "wallet"] and whose token is a non-empty string from the vault service
+- duplicate charge: a charge whose idempotency_key matches an existing charge in the charges table created within the last 24 hours by the same merchant
+- graceful rejection: returns HTTP 409 with JSON {"code": "DUPLICATE_CHARGE", "idempotency_key": "<key>", "original_charge_id": "<id>"}
+- successful charge: a charge that reaches status="captured" and receives HTTP 201 within 3000 ms
+- suspicious transaction: a transaction whose risk_score from the fraud service exceeds 0.85
+- settled: a charge whose status field equals "settled" in the charges table and whose settled_at timestamp is populated
+</vocabulary>
+
+<contract_rules>
+R1 - Idempotency guard
+
+For every POST /charges request,
+the system MUST reject duplicate charges gracefully
+when the idempotency_key matches an existing charge created within the last 24 hours.
+
+This rule is violated if the system creates a second charge row or returns HTTP 200.
+
+R2 - Merchant authorization
+
+For every POST /charges request,
+the system MUST only accept requests from authorized merchants.
+
+This rule is violated if a request with an absent or revoked API key receives HTTP 200.
+
+R3 - Payment method validation
+
+For every POST /charges request,
+the system MUST reject requests that do not supply a valid payment method.
+
+This rule is violated if a charge is created without a vaulted payment token.
+
+R4 - Fraud gate
+
+For every POST /charges request,
+the system MUST NOT process suspicious transactions.
+
+This rule is violated if a charge with risk_score > 0.85 reaches status="captured".
+
+R5 - Success response
+
+For every successfully processed charge,
+the system MUST return HTTP 201 with the charge ID and status="captured".
+
+R6 - Settlement audit
+
+For every settled charge,
+the system MAY emit a settlement event to the audit queue.
+
+R7 - Error format
+
+For every rejected request,
+the system MUST return a JSON body with at minimum {"code": "<string>", "message": "<string>"}.
+</contract_rules>
+
+<coverage>
+- R1: test_duplicate_charge_rejected (tests/test_payment.py)
+- R1: story__charge_flow.md
+- R2: test_unauthorized_merchant_rejected (tests/test_payment.py)
+- R3: test_invalid_payment_method_rejected (tests/test_payment.py)
+- R4: test_suspicious_transaction_blocked (tests/test_payment.py)
+- R5: test_successful_charge_returns_201 (tests/test_payment.py)
+- R6: story__charge_flow.md
+- R7: test_error_response_shape (tests/test_payment.py)
+</coverage>
+
+<capabilities>
+- MAY accept both synchronous and asynchronous charge processing modes.
+- MUST NOT store raw card numbers; only vaulted tokens are permitted.
+- MUST NOT expose internal exception stack traces in HTTP responses.
+- MAY retry vault service calls up to two times before returning HTTP 503.
+</capabilities>
+
+<non_responsibilities>
+- Currency conversion.
+- Issuer-side dispute resolution.
+- PCI DSS key management (handled by the vault service).
+</non_responsibilities>

@@ -1,0 +1,33 @@
+% LINT DEMO — intentionally vague: run `pdd prompt lint` on this file to see warnings.
+% pdd prompt lint examples/prompts_linter/prompts/lint_demo_vague_python.prompt
+
+You are a Python developer. Implement the `file_upload` module (`src/file_upload.py`).
+
+<contract_rules>
+1. Only authorized users may upload files.
+2. Reject duplicate uploads gracefully.
+3. Return a valid response when the upload is complete.
+4. Active sessions are allowed up to 10 uploads per day.
+5. Log all successful uploads for audit purposes.
+6. Trusted services may bypass the rate limit.
+</contract_rules>
+
+<requirements>
+- Accept multipart/form-data POST to /upload.
+- Return HTTP 201 with {"id": "<uuid>"} on successful upload.
+- Reject duplicate files with HTTP 409.
+- Sanitize file names before saving to storage.
+- Enforce a reasonable file size limit.
+</requirements>
+
+<acceptance_tests>
+1. Given an authorized user, when they POST a valid file, then the server returns HTTP 201.
+2. Given a duplicate upload, when submitted by an active user, then the server returns HTTP 409.
+3. Given an expired session, when a request arrives, then the server returns HTTP 401.
+4. Given a complete upload, the audit log must contain a safe record.
+</acceptance_tests>
+
+Instructions
+- Implement using FastAPI and Python 3.12+.
+- Use type annotations for all public functions.
+- Raise HTTPException for all error paths.

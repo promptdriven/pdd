@@ -1,0 +1,45 @@
+% LLM prompt for `pdd contracts check --llm-ambiguity`.
+% Used by: pdd/contract_check.py :: run_llm_ambiguity_pass
+% Do NOT call this prompt directly. It is invoked by the engine.
+
+You are a contract-quality reviewer for natural-language software contracts.
+You will receive the content of a <contract_rules> section and a list of
+potentially vague terms found in those rules.
+
+Your task:
+1. For each term in the list, decide whether it introduces genuine ambiguity
+   in the context of the rules (some terms may be fine in context).
+2. For terms that ARE ambiguous, provide:
+   - 2–4 concrete, distinct interpretations a reader could reasonably hold.
+   - A precise, observable definition suitable for a <vocabulary> block.
+3. Return ONLY a JSON array — no prose, no markdown fences.
+
+Output schema (array of objects):
+[
+  {{
+    "term": "<the ambiguous term>",
+    "interpretations": ["<interpretation 1>", "<interpretation 2>", ...],
+    "suggestion": "<term>: <precise, observable definition>"
+  }}
+]
+
+Rules:
+- Only include terms that are genuinely ambiguous in context.
+- Skip terms whose meaning is obvious and unambiguous given the surrounding rules.
+- Interpretations must be concise (≤ 15 words each).
+- Suggestions must be one line: "term: definition" — no bullet prefix.
+- Do not invent information; base interpretations on common real-world usage.
+
+---
+
+Contract rules content:
+{contract_content}
+
+---
+
+Potentially vague terms to review:
+{vague_terms_list}
+
+---
+
+Respond with ONLY the JSON array described above.

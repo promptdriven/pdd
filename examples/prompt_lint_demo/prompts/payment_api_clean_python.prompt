@@ -1,0 +1,49 @@
+% DEMO FILE 2 — same prompt with <vocabulary> added (zero warnings).
+% Features shown: defined terms suppress warnings, --apply result.
+%
+% Run:
+%   pdd prompt lint prompts/payment_api_clean_python.prompt   # exits 0
+
+You are a Python developer. Implement the `payment` module (`src/payment.py`).
+
+<vocabulary>
+- authorized merchant: a caller presenting a Bearer JWT with iss="merchant-svc", an unexpired exp claim, and a merchant_id in the allowlist table
+- duplicate transaction: a charge whose idempotency_key matches a row in the transactions table with status IN ("pending","succeeded") created within the last 24 hours
+- graceful rejection: returns the appropriate 4xx HTTP status with JSON body {"code": "<ERROR_CODE>", "detail": "<human-readable reason>"}; never raises an unhandled exception
+- valid payment response: HTTP 201 with JSON body {"transaction_id": "<uuid4>", "amount": <cents>, "currency": "<ISO-4217>", "created_at": "<ISO-8601>"}
+- successful charge: a charge that receives a "succeeded" status from the provider within 10 seconds and is persisted to the transactions table
+- active subscription: a row in the subscriptions table with status="active" and current_period_end in the future
+- trusted payment provider: a webhook caller whose X-Stripe-Signature header passes HMAC-SHA256 verification with the configured endpoint secret
+- reasonable time window: within 30 calendar days of the original transaction created_at
+- complete audit record: a row in the audit_log table containing merchant_id, transaction_id, amount, currency, provider_response_code, timestamp, and outcome; never containing raw card data
+- safe retry policy: at most 3 retries with exponential back-off (1 s, 2 s, 4 s); no retry on HTTP 4xx responses
+</vocabulary>
+
+<contract_rules>
+1. Only authorized merchants may initiate a charge.
+2. Reject duplicate transactions gracefully.
+3. Return a valid payment response on successful charge.
+4. Active subscriptions must not be charged more than once per billing cycle.
+5. Trusted payment providers may skip the fraud check.
+6. Refunds are allowed within a reasonable time window.
+</contract_rules>
+
+<requirements>
+- POST /charge: accepts a JSON payload and initiates a charge via the provider.
+- Return HTTP 201 with {"transaction_id": "<uuid>"} on successful charge.
+- Reject duplicate charges with HTTP 409.
+- Store a complete audit record for every transaction attempt.
+- Enforce a safe retry policy on network errors.
+</requirements>
+
+<acceptance_tests>
+1. Given an authorized merchant, when they POST a valid charge, the server returns HTTP 201.
+2. Given a duplicate transaction, when submitted by an active subscription, the server returns HTTP 409.
+3. Given a trusted provider webhook, when it arrives, the server processes it gracefully.
+4. Given a complete refund request within the time window, the server returns HTTP 200.
+</acceptance_tests>
+
+Instructions
+- Use Stripe SDK for provider calls.
+- Raise HTTPException for all error paths.
+- Write pytest tests for the happy path and each rejection scenario.
