@@ -3881,6 +3881,100 @@ class TestCommitAndPushIfChanged:
         assert pushes == 3
         assert rebase_count == 2
 
+    def test_three_fetch_first_pushes_exhaust_retries_cleanly(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            return False, " ! [rejected] HEAD -> feature (fetch first)"
+
+        rebase_count = 0
+
+        def fake_rebase(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal rebase_count
+            rebase_count += 1
+            return True, "rebased"
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod, "_rebase_onto_updated_pr_head", fake_rebase)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is False
+        assert pushes == 3
+        assert rebase_count == 2
+        assert message.startswith("Failed to push fixes to PR branch:")
+        assert "fetch first" in message
+
+    def test_non_remote_advance_error_on_retry_breaks_out(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            if pushes == 1:
+                return False, " ! [rejected] HEAD -> feature (fetch first)"
+            return False, "fatal: Authentication failed for 'https://github.com/o/r.git'"
+
+        rebase_count = 0
+
+        def fake_rebase(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal rebase_count
+            rebase_count += 1
+            return True, "rebased"
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod, "_rebase_onto_updated_pr_head", fake_rebase)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+        assert success is False
+        assert pushes == 2
+        assert rebase_count == 1
+        assert "Authentication failed" in message
+
     def test_non_fast_forward_rebases_instead_of_force_push(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:

@@ -3549,8 +3549,8 @@ def _commit_and_push_if_changed(
     error = ""
     rebased_for_remote_advance = False
     # Another checkup attempt, maintainer, or bot can push to the PR branch
-    # between our fetch/rebase and retry. Give that narrow race a couple of
-    # chances without ever falling back to force-push.
+    # between our fetch/rebase and retry. Give that narrow race up to three
+    # attempts without ever falling back to force-push.
     for rebase_attempt in range(3):
         success, error = push_with_retry(
             worktree,
@@ -3582,7 +3582,11 @@ def _commit_and_push_if_changed(
         if not rebased:
             return False, rebase_message
         rebased_for_remote_advance = True
-    return False, f"Failed to push fixes to PR branch: {error.strip()}"
+    # git may echo the tokenized remote URL back from the push helper when the
+    # retry path used `https://x-access-token:...@github.com/...`. Scrub before
+    # surfacing so secrets cannot leak into operator-visible logs or reports.
+    token = _github_token_from_env()
+    return False, f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}"
 
 
 def _is_remote_advanced_push_error(error: str) -> bool:
@@ -3642,15 +3646,21 @@ def _rebase_onto_updated_pr_head(
     if rebase.returncode == 0:
         return True, "Rebased fixes onto updated PR head."
 
-    subprocess.run(
+    abort = subprocess.run(
         ["git", "rebase", "--abort"],
         cwd=worktree,
         capture_output=True,
         text=True,
     )
+    abort_note = ""
+    if abort.returncode != 0:
+        abort_note = (
+            " (rebase --abort also failed: "
+            f"{abort.stderr.strip() or abort.stdout.strip()})"
+        )
     return False, (
         "Failed to rebase fixes onto updated PR branch before retrying push: "
-        f"{rebase.stderr.strip() or rebase.stdout.strip()}"
+        f"{rebase.stderr.strip() or rebase.stdout.strip()}{abort_note}"
     )
 
 
