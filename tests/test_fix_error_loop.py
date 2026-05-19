@@ -13,6 +13,7 @@ from pdd.fix_error_loop import (
     run_pytest_on_file,
     format_log_for_output,
     _normalize_agentic_result,
+    _safe_run_agentic_fix,
     escape_brackets
 )
 
@@ -1742,6 +1743,25 @@ def test_protect_tests_prevents_unit_test_write(mock_subprocess, mock_fix, mock_
     with open(test, 'r') as f:
         assert f.read() == original_test_content, \
             "Test file should NOT be modified when protect_tests=True"
+
+
+@patch("pdd.fix_error_loop.run_agentic_fix")
+def test_safe_run_agentic_fix_preserves_protect_tests_flag(mock_run_agentic_fix):
+    """Regression test: agentic fallback must receive protect_tests from fix_error_loop."""
+    mock_run_agentic_fix.return_value = (True, "ok", 0.0, "agentic-cli", [])
+
+    _safe_run_agentic_fix(
+        prompt_file="prompt.txt",
+        code_file="code.py",
+        unit_test_file="test.py",
+        error_log_file="error.log",
+        cwd=".",
+        protect_tests=True,
+    )
+
+    mock_run_agentic_fix.assert_called_once()
+    _, kwargs = mock_run_agentic_fix.call_args
+    assert kwargs["protect_tests"] is True, "protect_tests should be forwarded to run_agentic_fix"
 
 
 # ============================================================================
