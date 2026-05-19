@@ -56,6 +56,7 @@ from .sync_main import _detect_languages_with_context
 from .sync_order import (
     build_dependency_graph,
     extract_includes_from_file,
+    extract_includes_from_file_ordered,
     extract_module_from_include,
     topological_sort,
 )
@@ -1834,20 +1835,33 @@ def _module_prompt_include_dependencies(
     re-create the inverse #1061 drift (``validate-arch-includes`` would warn
     "<include>s module 'b' ... but architecture.json does not list it").
 
-    Self-edges are skipped to match the validator (``m != mod_base`` /
-    ``m != self_mod`` in
-    ``cross_validate_architecture_with_prompt_includes`` and
-    ``_pdd_dependency_modules``). A prompt that ``<include>``s itself for
-    self-context is not depending on itself.
+    Self-edges are skipped: a prompt that ``<include>``s itself for
+    self-context is not depending on itself. The self-equality check is
+    **path-preserving** so same-tail path-qualified modules
+    (``commands/fix_python.prompt`` vs ``server/fix_python.prompt``) are
+    NOT conflated — codex iter-2 finding M1.iter2. Path-preserving keys
+    degrade gracefully to bare basenames when no directory is present, so
+    flat-layout self-includes are still dropped.
+
+    Declaration order is preserved by reading ``<include>`` tags in source
+    order via ``extract_includes_from_file_ordered``; the iter-1
+    implementation iterated a ``set`` and produced hash-dependent ordering
+    (codex iter-2 finding N1.iter2).
     """
-    self_mod = extract_module_from_include(self_filename) if self_filename else None
+    self_key = (
+        _basename_from_architecture_filename(self_filename) if self_filename else None
+    )
     deps: List[str] = []
     seen: set[str] = set()
-    for inc in extract_includes_from_file(prompt_path):
-        inc_mod = _module_prompt_include_target(inc)
-        if inc_mod is None:
+    for inc in extract_includes_from_file_ordered(prompt_path):
+        # First gate: is this include even a module-prompt target?
+        if _module_prompt_include_target(inc) is None:
             continue
-        if self_mod and inc_mod == self_mod:
+        # Self-edge filter uses path-preserving keys so a same-tail
+        # cross-directory include (``server/fix_python.prompt`` from
+        # ``commands/fix_python.prompt``) is NOT dropped.
+        inc_key = _basename_from_architecture_filename(inc)
+        if self_key and inc_key and inc_key == self_key:
             continue
         if inc not in seen:
             deps.append(inc)
