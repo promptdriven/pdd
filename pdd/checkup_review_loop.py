@@ -4012,6 +4012,36 @@ def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
     return pairs
 
 
+def _path_exists_at_head(worktree: Path, path: str) -> bool:
+    """Return True if ``path`` exists in HEAD's tree.
+
+    Used by ``_check_architecture_registry_edit_guard`` to distinguish
+    additions (path not in HEAD) from modifications (path in HEAD). The
+    unregistered-new-code scan must skip modifications: a legitimate
+    retirement that also touches an existing unregistered helper or
+    test would otherwise falsely trip the scan (round-3 finding 2).
+    """
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"HEAD:{path}"],
+        cwd=worktree,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _is_real_file_no_symlink(path: Path) -> bool:
+    """Return True only when ``path`` is a real, non-symlink file.
+
+    ``Path.is_file()`` follows symlinks, so an attacker can satisfy a
+    prompt-source presence check with ``pdd/prompts/foo.prompt`` as a
+    symlink to any existing file. The guard must reject symlinks for
+    presence checks (round-3 finding 3).
+    """
+    return path.is_file() and not path.is_symlink()
+
+
 def _check_architecture_registry_edit_guard(
     worktree: Path, changed_files: Sequence[str]
 ) -> Optional[str]:
@@ -4028,13 +4058,19 @@ def _check_architecture_registry_edit_guard(
     (suitable for ``state.stop_reason``) when the registry edit is a
     bypass shape.
 
-    Trigger: only runs when ``architecture.json`` is in the change set.
-    On the common no-registry-edit path this short-circuits to ``None``.
+    Trigger: runs when EITHER ``architecture.json`` is in the change
+    set OR any HEAD-registered pair has its code or prompt missing
+    from the worktree (implicit retirement: the fixer effectively
+    retired a pair on disk without updating the registry, the
+    no-arch-edit variant of the #1081 bypass shape — round-3 finding
+    1). On the common path with no registry edit AND no implicit
+    retirement this short-circuits to ``None``.
 
     Block rules:
       - Added pair (in worktree, not in HEAD): the new prompt MUST exist
-        on disk AND be in the changed set. Otherwise the fixer is
-        pointing the registry at a prompt that does not exist.
+        on disk as a REAL file (not a symlink — round-3 finding 3) AND
+        be in the changed set. Otherwise the fixer is pointing the
+        registry at a prompt that does not exist or is forged.
       - Removed pair (in HEAD, not in worktree): the old code path MUST
         be gone from disk AND (the old prompt is gone OR is in the
         changed set). This is the legitimate retirement shape; anything
@@ -4043,14 +4079,22 @@ def _check_architecture_registry_edit_guard(
         prompt in both with different filepath): BLOCK unconditionally.
         A repoint MUST be split into a retire-old + add-new with prompt
         sources actually present on disk.
-      - Unregistered new code on partial/full wipe: when ANY HEAD pair
-        is removed (full wipe is just the boundary), BLOCK if the change
-        set also leaves a new path on disk that is in ``changed_files``,
-        is not ``architecture.json``, is not under ``pdd/prompts/``, and
-        is registered in NEITHER HEAD nor the worktree registry.
-        Otherwise a rename + prompt delete + registry rewrite can
-        masquerade as legitimate retirement while landing new
-        unregistered code (the partial-wipe variant of #1081).
+      - Unregistered new code on partial/full wipe OR implicit
+        retirement: when ANY HEAD pair was removed by registry edit OR
+        any HEAD pair was retired on disk without updating the
+        registry, BLOCK if the change set also leaves a NEW path on
+        disk that is in ``changed_files``, is not ``architecture.json``,
+        is not under ``pdd/prompts/``, is registered in NEITHER HEAD
+        nor the worktree registry, and did NOT exist at HEAD (i.e. it
+        is an addition, not a modification of an existing
+        unregistered helper — round-3 finding 2). Presence here
+        counts EITHER a real file OR a symlink: a symlink dropped at
+        the new code path is itself a #1081 attack shape, so it must
+        not slip past the scan (opposite polarity from the added-pair
+        prompt-presence check, where a symlink would forge
+        allowance). Otherwise a rename + prompt delete + registry
+        rewrite (or stale-registry no-arch-edit) can masquerade as
+        legitimate retirement while landing new unregistered code.
 
     Graceful degradation (allow + warn, never block) on:
       - ``git show HEAD:architecture.json`` non-zero exit
@@ -4059,8 +4103,7 @@ def _check_architecture_registry_edit_guard(
       - Worktree blob unavailable/unparseable AND HEAD also has no pairs
     """
     changed_norm = {Path(p).as_posix() for p in changed_files if p}
-    if "architecture.json" not in changed_norm:
-        return None
+    arch_in_changes = "architecture.json" in changed_norm
 
     head_result = subprocess.run(
         ["git", "show", "HEAD:architecture.json"],
@@ -4099,6 +4142,21 @@ def _check_architecture_registry_edit_guard(
             "enforcement.",
             worktree,
         )
+        return None
+
+    # Round-3 finding 1: broaden the trigger to ALSO fire when any
+    # HEAD-registered pair has its code or prompt missing from the
+    # worktree (implicit retirement). The fixer can retire a pair on
+    # disk without updating ``architecture.json``, leaving the
+    # registry stale and landing unregistered new code under cover of
+    # "code-only fix". Detect that here so the unregistered-new-code
+    # scan below can fire even when ``architecture.json`` was not
+    # edited.
+    implicit_retirement = any(
+        not (worktree / code).is_file() or not (worktree / prompt).is_file()
+        for code, prompt in head_pairs
+    )
+    if not arch_in_changes and not implicit_retirement:
         return None
 
     # Worktree-side read. Per spec: when HEAD has entries, treat any
@@ -4175,7 +4233,12 @@ def _check_architecture_registry_edit_guard(
 
     offenders_added: List[Tuple[str, str]] = []
     for code, prompt in sorted(added_only):
-        prompt_on_disk = (worktree / prompt).is_file()
+        # Round-3 finding 3: reject symlinks for prompt-source presence
+        # checks. ``Path.is_file()`` follows symlinks, so an attacker
+        # could satisfy the check with ``pdd/prompts/<filename>`` as a
+        # symlink to any existing file. Require a real, non-symlink
+        # file at the prompt path.
+        prompt_on_disk = _is_real_file_no_symlink(worktree / prompt)
         prompt_in_changeset = prompt in changed_norm
         if prompt_on_disk and prompt_in_changeset:
             continue
@@ -4183,6 +4246,10 @@ def _check_architecture_registry_edit_guard(
 
     offenders_removed: List[Tuple[str, str]] = []
     for code, prompt in sorted(removed_only):
+        # ``is_file()`` follows symlinks intentionally here: if the
+        # registered code path is replaced with a symlink to an
+        # existing file, ``code_gone`` is False so the removal is
+        # blocked as "code still present" — the correct outcome.
         code_gone = not (worktree / code).is_file()
         prompt_gone = not (worktree / prompt).is_file()
         prompt_in_changeset = prompt in changed_norm
@@ -4190,19 +4257,29 @@ def _check_architecture_registry_edit_guard(
             continue
         offenders_removed.append((code, prompt))
 
-    # Partial-wipe variant of the registry-edit bypass: when ANY HEAD
-    # pair is removed (full wipe is just the boundary case), an
-    # unregistered new code path that lands in the same change set is
+    # Unregistered-new-code scan: fires on the registry-edit
+    # partial/full wipe variant (``removed_only`` non-empty) OR on
+    # implicit retirement (a HEAD-registered pair is gone from disk
+    # without an ``architecture.json`` edit — round-3 finding 1).
+    # When ANY HEAD pair was effectively retired by either mechanism,
+    # an unregistered new code path landed in the same change set is
     # the #1081 attack shape. The retirement-shape allowance above
     # passes ``removed_only`` entries where the old code and prompt
     # are gone — but it cannot see a separate new file that the fixer
-    # introduced under the cover of that "legitimate retirement".
-    # Restrict to paths actually in the change set, not under
-    # ``pdd/prompts/``, not the registry itself, and absent from BOTH
-    # registry sides (so legitimate retire-old + add-new module
-    # rewrites still pass).
+    # introduced under the cover of "legitimate retirement". Restrict
+    # to paths actually in the change set, not under ``pdd/prompts/``,
+    # not the registry itself, absent from BOTH registry sides (so
+    # legitimate retire-old + add-new module rewrites still pass),
+    # AND that did NOT exist at HEAD (round-3 finding 2 — a
+    # modification of an existing unregistered helper, test, or doc
+    # is not "new code"). Presence here is "real file OR symlink": a
+    # symlink dropped at the new code path is itself a #1081 attack
+    # shape (the attacker can point pdd/foo_v2.py at any existing
+    # file and slip in unregistered code), so symlinks must COUNT as
+    # presence here — the opposite polarity from the added-pair
+    # prompt-presence check above, where a symlink forges allowance.
     unregistered_new_code_paths: List[str] = []
-    if removed_only:
+    if removed_only or implicit_retirement:
         head_registered_paths = {path for pair in head_pairs for path in pair}
         worktree_registered_paths = {
             path for pair in worktree_pairs for path in pair
@@ -4216,8 +4293,17 @@ def _check_architecture_registry_edit_guard(
                 continue
             if path.startswith("pdd/prompts/"):
                 continue
-            if (worktree / path).is_file():
-                unregistered_new_code_paths.append(path)
+            candidate = worktree / path
+            # Treat either a real file or a symlink as "present on
+            # disk" — symlinks are themselves part of the #1081
+            # attack surface here.
+            if not (candidate.is_file() or candidate.is_symlink()):
+                continue
+            # Round-3 finding 2: skip modifications of files that
+            # already existed at HEAD. Only flag genuine additions.
+            if _path_exists_at_head(worktree, path):
+                continue
+            unregistered_new_code_paths.append(path)
 
     repointed_by_code.sort()
     repointed_by_prompt.sort()
@@ -4229,10 +4315,21 @@ def _check_architecture_registry_edit_guard(
 
     parts: List[str] = []
     for path in unregistered_new_code_paths:
-        parts.append(
-            "removed registered pair while new unregistered code path "
-            f"{path} was added"
-        )
+        if arch_in_changes:
+            # Registry was edited; the partial/full-wipe attack shape.
+            parts.append(
+                "removed registered pair while new unregistered code path "
+                f"{path} was added"
+            )
+        else:
+            # No registry edit; a HEAD-registered pair was retired on
+            # disk while a new unregistered code path landed. Registry
+            # is now stale (round-3 finding 1).
+            parts.append(
+                "retired registered pair on disk while new unregistered "
+                f"code path {path} was added; architecture.json not "
+                "updated"
+            )
     for code, prompt in offenders_added:
         parts.append(
             f"added {code}\u2194{prompt} without prompt source on disk"
