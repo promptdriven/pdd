@@ -36,7 +36,11 @@ from .architecture_include_validation import (
     resolve_architecture_prompt_path,
     validate_prompt_contract_context,
 )
-from .architecture_sync import parse_prompt_tags, _normalize_dependency_filenames
+from .architecture_sync import (
+    parse_prompt_tags,
+    _normalize_dependency_filenames,
+    _normalize_prompt_filename,
+)
 from .sync_graph_order_consistency import warnings_for_arch_vs_include_sync_order
 from .architecture_registry import (
     extract_modules,
@@ -1849,7 +1853,11 @@ def _module_prompt_include_dependencies(
     (codex iter-2 finding N1.iter2).
     """
     self_key = (
-        _basename_from_architecture_filename(self_filename) if self_filename else None
+        _basename_from_architecture_filename(
+            _normalize_prompt_filename(self_filename)
+        )
+        if self_filename
+        else None
     )
     deps: List[str] = []
     seen: set[str] = set()
@@ -1859,8 +1867,14 @@ def _module_prompt_include_dependencies(
             continue
         # Self-edge filter uses path-preserving keys so a same-tail
         # cross-directory include (``server/fix_python.prompt`` from
-        # ``commands/fix_python.prompt``) is NOT dropped.
-        inc_key = _basename_from_architecture_filename(inc)
+        # ``commands/fix_python.prompt``) is NOT dropped. The include
+        # path is canonicalized first (stripping ``./`` and leading
+        # ``prompts/``) so an include spelled ``prompts/self.prompt``
+        # from inside ``self.prompt`` matches the architecture filename
+        # key (``self``) — codex iter-3 finding M1.iter3.
+        inc_key = _basename_from_architecture_filename(
+            _normalize_prompt_filename(inc)
+        )
         if self_key and inc_key and inc_key == self_key:
             continue
         if inc not in seen:
