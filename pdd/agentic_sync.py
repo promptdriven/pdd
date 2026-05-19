@@ -1740,7 +1740,15 @@ def _parse_llm_response(response: str) -> Tuple[List[str], bool, List[Dict[str, 
 def _normalise_sync_module_names(
     modules_to_sync: Optional[List[str]],
 ) -> set[str]:
-    """Return accepted module basenames for dependency corrections."""
+    """Return accepted module basenames for dependency corrections.
+
+    Path-preserving: an entry like ``"commands/fix"`` produces the alias set
+    ``{"commands/fix"}`` so a correction filename like
+    ``"commands/fix_python.prompt"`` (resolved via
+    ``_basename_from_architecture_filename`` → ``"commands/fix"``) matches.
+    The bare-stem form (``"fix"``) is also added so flat-layout sync runs
+    keep accepting basename-only entries.
+    """
     allowed: set[str] = set()
     for module in modules_to_sync or []:
         if not isinstance(module, str):
@@ -1748,12 +1756,22 @@ def _normalise_sync_module_names(
         value = module.strip()
         if not value:
             continue
+        # Direct alias (might be a basename or filename).
         allowed.add(value)
-        extracted = extract_module_from_include(
+        # Architecture-filename form → path-preserving basename, e.g.
+        # "commands/fix_python.prompt" → "commands/fix".
+        path_alias = _basename_from_architecture_filename(
             value if value.endswith(".prompt") else f"{value}.prompt"
         )
-        if extracted:
-            allowed.add(extracted)
+        if path_alias:
+            allowed.add(path_alias)
+        # Bare-stem fallback for flat-layout runs that pass "commands/fix"
+        # but where corrections might cite just "fix_python.prompt".
+        bare = extract_module_from_include(
+            value if value.endswith(".prompt") else f"{value}.prompt"
+        )
+        if bare:
+            allowed.add(bare)
     return allowed
 
 
@@ -1900,8 +1918,17 @@ def _apply_architecture_corrections(
         filename = correction.get("filename", "")
         if not filename:
             continue
-        module_base = extract_module_from_include(filename)
-        if allowed_modules and module_base not in allowed_modules:
+        # Use path-preserving normalization so corrections for
+        # ``commands/fix_python.prompt`` match ``modules_to_sync=["commands/fix"]``.
+        # Fall back to the bare-stem form to keep flat-layout runs working.
+        module_aliases: set[str] = set()
+        path_alias = _basename_from_architecture_filename(filename)
+        if path_alias:
+            module_aliases.add(path_alias)
+        bare = extract_module_from_include(filename)
+        if bare:
+            module_aliases.add(bare)
+        if allowed_modules and module_aliases.isdisjoint(allowed_modules):
             if not quiet:
                 console.print(
                     f"[yellow]Skipping dependency correction for out-of-scope "
