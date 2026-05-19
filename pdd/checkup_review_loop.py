@@ -3783,9 +3783,18 @@ def _git_changed_files(worktree: Path) -> List[str]:
     that adds a NEW registered code module without its prompt.
     ``_git_untracked_files`` exists separately for the staging path,
     which needs the explicit untracked list to feed into ``git add --``.
+
+    Round-6 finding 1: pass ``--untracked-files=all`` so files INSIDE a
+    new untracked directory are reported as individual ``?? dir/file``
+    records rather than collapsed to a single ``?? dir/`` trailing-slash
+    entry. Without this, the 10b unregistered-new-code scan's
+    ``Path.is_file()`` check fails on the directory path and the
+    untracked-directory bypass of #1081 succeeds (an attacker can drop
+    a new package at ``pdd/foo_v2/__init__.py`` and slip past the
+    guard).
     """
     result = subprocess.run(
-        ["git", "status", "--porcelain=v1", "-z"],
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -4284,6 +4293,17 @@ def _check_architecture_registry_edit_guard(
     # file and slip in unregistered code), so symlinks must COUNT as
     # presence here — the opposite polarity from the added-pair
     # prompt-presence check above, where a symlink forges allowance.
+    #
+    # Round-6 finding 2: restrict the scan to paths that look like
+    # generated prompt-driven code — under ``pdd/`` and ending in
+    # ``.py``. 10b's scope boundary is registry mutations, which
+    # cover prompt-owned modules registered in ``architecture.json``.
+    # Tests (``tests/``), docs (``docs/``), scripts (``scripts/``),
+    # and other top-level paths are out of scope: a legitimate
+    # retirement that also adds a test or a doc must not trip the
+    # scan. ``__init__.py`` is INTENTIONALLY kept in scope so the
+    # round-6 finding 1 untracked-directory bypass (a new package at
+    # ``pdd/foo_v2/__init__.py``) is still caught.
     unregistered_new_code_paths: List[str] = []
     if removed_only or implicit_retirement:
         head_registered_paths = {path for pair in head_pairs for path in pair}
@@ -4298,6 +4318,14 @@ def _check_architecture_registry_edit_guard(
             if path in worktree_registered_paths:
                 continue
             if path.startswith("pdd/prompts/"):
+                continue
+            # Round-6 finding 2: narrow the scan to generated
+            # prompt-driven code under ``pdd/`` ending in ``.py``.
+            # Anything else (tests, docs, scripts, top-level helpers)
+            # falls outside the registry-mutation scope.
+            if not path.startswith("pdd/"):
+                continue
+            if not path.endswith(".py"):
                 continue
             candidate = worktree / path
             # Treat either a real file or a symlink as "present on

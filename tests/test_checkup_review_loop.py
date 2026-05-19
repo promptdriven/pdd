@@ -6389,3 +6389,474 @@ class TestArchitectureRegistryEditGuardIntegration:
         # gone (legitimate retirement), helper modification is
         # outside the registry.
         assert "generated-code-only fix refused" not in report
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081 codex review pass #6: untracked-directory bypass + scan scoping.
+#
+# Finding 1: ``git status --porcelain=v1 -z`` without ``--untracked-files=all``
+# collapses an untracked DIRECTORY to a single ``?? dir/`` entry. The 10b
+# unregistered-new-code scan's ``Path.is_file()`` check then sees the
+# directory path (returns False) and skips it — bypassing the guard with a
+# new package at ``pdd/foo_v2/__init__.py``.
+#
+# Finding 2: the unregistered-new-code scan was overbroad, flagging any
+# non-prompt non-arch file. A legitimate retirement that also adds e.g.
+# ``tests/test_bar.py`` or ``docs/new.md`` would be falsely refused.
+# Restrict the scan to ``pdd/`` paths ending in ``.py``.
+# ---------------------------------------------------------------------------
+
+
+class TestRound6UntrackedDirectoryBypass:
+    """Round-6 finding 1: untracked-directory bypass via ``__init__.py``.
+
+    Uses a real git repo so the ``--untracked-files=all`` flag actually
+    exercises the parsing path. Monkeypatching ``_git_changed_files``
+    would hide the very thing being tested.
+    """
+
+    @staticmethod
+    def _init_repo(worktree: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree,
+            check=True,
+        )
+
+    def test_changed_files_enumerates_files_inside_untracked_directory(
+        self, tmp_path: Path
+    ) -> None:
+        """``_git_changed_files`` must list every file inside a new
+        untracked directory as a discrete entry, not collapse the
+        directory to a single ``dir/`` trailing-slash record.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "foo.py").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Create a NEW untracked directory with two files inside it.
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text("\n", encoding="utf-8")
+        (new_pkg / "core.py").write_text("# core\n", encoding="utf-8")
+
+        changed = _git_changed_files(tmp_path)
+
+        # Individual files MUST appear, not the bare directory.
+        assert "pdd/foo_v2/__init__.py" in changed
+        assert "pdd/foo_v2/core.py" in changed
+        # The directory itself MUST NOT appear (no trailing-slash
+        # entries; that was the bypass).
+        assert "pdd/foo_v2/" not in changed
+        assert not any(entry.endswith("/") for entry in changed)
+
+    def test_guard_refuses_untracked_directory_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 round-6 finding 1: the fixer deletes the
+        registered code+prompt, creates a new package directory at
+        ``pdd/foo_v2/__init__.py``, and wipes ``architecture.json``.
+        Combined: ``_git_changed_files(worktree)`` must list the new
+        ``__init__.py`` individually so the 10b scan can refuse it.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+            _git_changed_files,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. create pdd/foo_v2/__init__.py (UNTRACKED DIRECTORY)
+        #   4. wipe architecture.json to []
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text(
+            "# package init\n", encoding="utf-8"
+        )
+        (tmp_path / "architecture.json").write_text(
+            "[]", encoding="utf-8"
+        )
+
+        changed = _git_changed_files(tmp_path)
+        # Sanity: the new file inside the untracked directory MUST
+        # surface as a discrete entry.
+        assert "pdd/foo_v2/__init__.py" in changed
+        assert "pdd/foo_v2/" not in changed
+
+        reason = _check_architecture_registry_edit_guard(tmp_path, changed)
+        assert reason is not None
+        # The refusal must NAME the bypass file so the operator can act.
+        assert "pdd/foo_v2/__init__.py" in reason
+        assert "architecture.json registry edit refused" in reason
+        assert (
+            "removed registered pair while new unregistered code path"
+            in reason
+        )
+
+
+class TestRound6UntrackedDirectoryBypassIntegration:
+    """Mirror of the unit test above through ``run_checkup_review_loop``.
+
+    Confirms no push happens and the report renders the 10b refusal with
+    the bypass file named.
+    """
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_post_review_loop_report", lambda *a, **k: None
+        )
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:1",
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_loop_refuses_push_on_untracked_directory_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass on the worktree filesystem before the loop
+        # reads ``_git_changed_files``.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text(
+            "# package init\n", encoding="utf-8"
+        )
+        (tmp_path / "architecture.json").write_text(
+            "[]", encoding="utf-8"
+        )
+
+        # Use the REAL ``_git_changed_files`` so the
+        # ``--untracked-files=all`` flag is exercised end-to-end.
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2/__init__.py",'
+                    '"pdd/foo.py","pdd/prompts/foo_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The policy layer refused before the push helper.
+        assert push_calls == []
+        # Refusal carries the bypass file (NOT the bare directory).
+        assert "architecture.json registry edit refused" in report
+        assert "pdd/foo_v2/__init__.py" in report
+        assert "pdd/foo_v2/" not in report.replace(
+            "pdd/foo_v2/__init__.py", ""
+        )
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+
+
+class TestRound6ScanScopeBoundary:
+    """Round-6 finding 2: unregistered-new-code scan must be scoped to
+    generated prompt-driven code (``pdd/**/*.py``) so it does NOT flag
+    legitimate test/doc/script additions during a retirement.
+    """
+
+    def test_retirement_with_new_test_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A legitimate retirement of ``pdd/foo.py`` that also adds a
+        new test at ``tests/test_bar.py`` must NOT be refused.
+        ``tests/`` is outside the registry-mutation scope.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        # Retire foo and add a new test for bar.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        (tmp_path / "tests" / "test_bar.py").write_text(
+            "def test_bar():\n    pass\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "tests/test_bar.py",
+            ],
+        )
+        assert reason is None
+
+    def test_retirement_with_new_doc_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A legitimate retirement that also adds ``docs/new.md`` must
+        NOT be refused. ``docs/`` is outside the registry-mutation
+        scope.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "docs").mkdir(exist_ok=True)
+        (tmp_path / "docs" / "new.md").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "docs/new.md",
+            ],
+        )
+        assert reason is None
+
+    def test_retirement_with_new_script_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A legitimate retirement that also adds ``scripts/release.sh``
+        must NOT be refused. Scripts live outside the registry-mutation
+        scope.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "scripts").mkdir(exist_ok=True)
+        (tmp_path / "scripts" / "release.sh").write_text(
+            "#!/bin/sh\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "scripts/release.sh",
+            ],
+        )
+        assert reason is None
+
+    def test_retirement_with_new_pdd_module_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive control: a retirement that adds ``pdd/foo_v2.py``
+        (in scope: under ``pdd/`` and ending in ``.py``) MUST still be
+        refused. This is the existing ``foo_v2.py`` shape, retained.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.py" in reason
+
+    def test_retirement_with_new_pdd_init_under_subpackage_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive control covering round-6 finding 1: a new
+        ``pdd/foo_v2/__init__.py`` MUST still be refused even though
+        ``__init__.py`` could look "framework-y". Keeping
+        ``__init__.py`` in scope is what keeps the untracked-directory
+        bypass closed.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text(
+            "# init\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2/__init__.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2/__init__.py" in reason
+
+    def test_retirement_with_new_pdd_non_py_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-``.py`` file under ``pdd/`` (e.g. a data fixture) is
+        out of scope for the generated-code scan, even when it lives
+        inside the ``pdd/`` tree.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "fixture.txt").write_text(
+            "data\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/fixture.txt",
+            ],
+        )
+        assert reason is None
