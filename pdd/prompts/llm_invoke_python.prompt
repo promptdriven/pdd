@@ -104,6 +104,16 @@
     - 'model_name': Name of the selected model.
     - 'thinking_output': Reasoning output if available.
     - 'finish_reason': Provider completion reason when available. For litellm.completion/batch_completion, use the LiteLLM callback's `completion_response.choices[0].finish_reason`; for OpenAI Responses API, use the response status (for example "completed"). Return None when unavailable.
+    - 'attempted_models': Ordered list of every model name attempted during this invocation, in chronological order from first attempt to last. The final (successful) model is always the last element. Models that failed and were abandoned (auth errors, context overflow, schema validation failure, provider errors that triggered fallback) appear earlier in the list. The list contains a single element when no fallback occurred. See "Attempted-Model Tracking" below for the exact recording rules.
+
+% Attempted-Model Tracking:
+    - Maintain an ordered list of attempted model names across the per-model candidate loop and across local↔cloud transitions within a single `llm_invoke` call.
+    - Append each model name the first time it is actually attempted (i.e., just before the `litellm.completion`/`batch_completion`/`responses` call, or the cloud HTTP call). Do NOT append for models that are skipped before any call (e.g., missing api_key, context-window pre-validation rejection). Record only models for which an actual provider call was attempted.
+    - Do NOT duplicate the same model on consecutive same-model cache-bypass retries (None content, malformed JSON, invalid Python). Same-model retries count as one attempt — only record the next *distinct* model if fallback escalates.
+    - For cloud execution: when use_cloud resolves to True, append the cloud sentinel `cloud:<model_name>` (where `<model_name>` is the model the cloud endpoint reports in its response, or the literal string `cloud:auto` if the cloud response has not yet returned) at the point the cloud HTTP call is attempted. On CloudFallbackError / CloudInvocationError, the local path that follows appends its own model attempts after the cloud entry, preserving the full chronological chain.
+    - Always include the final successful model as the last list element.
+    - When all candidates are exhausted and `llm_invoke` raises `RuntimeError`, attach the chain to the exception as an `attempted_models` attribute (e.g., `exc.attempted_models = [...]`) so callers / decorators (`track_cost`) can still surface the abandoned chain. Do this for `RuntimeError`, `SchemaValidationError`, and `InsufficientCreditsError` raised by `llm_invoke`.
+    - Propagation: callers that wrap `llm_invoke` (notably the Click-based PDD commands) MAY copy the returned `attempted_models` list onto `click.get_current_context().obj['attempted_models']` so the `track_cost` decorator can record the full chain even when the command itself returns a legacy `(..., cost, model_name)` tuple shape. `llm_invoke` itself MUST NOT touch Click context — propagation is the caller's responsibility.
 
 % Model Selection:
     - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate).

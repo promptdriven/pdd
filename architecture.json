@@ -1138,8 +1138,8 @@
     }
   },
   {
-    "reason": "Tracks LLM usage costs across operations.",
-    "description": "Records token usage and calculates costs. Aggregates costs across workflow steps.",
+    "reason": "Tracks LLM usage costs across operations and records the attempted-model fallback chain.",
+    "description": "Click decorator that records timestamp, model, command, cost, input/output files, and the full attempted-model chain (semicolon-delimited) to the cost CSV. Accepts both legacy tuple and enriched-dict result shapes from decorated commands.",
     "dependencies": [],
     "priority": 33,
     "filename": "track_cost_python.prompt",
@@ -8807,6 +8807,48 @@
     "position": {
       "x": 24600,
       "y": 800
+    }
+  },
+  {
+    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "description": "Implements the llm_invoke entry point with model selection, structured output handling, cloud/local routing, attempted-model tracking, batch mode, cost accumulation, and Pydantic schema validation.",
+    "dependencies": [
+      "path_resolution_python.prompt",
+      "server/token_counter_python.prompt"
+    ],
+    "priority": 236,
+    "filename": "llm_invoke_python.prompt",
+    "filepath": "pdd/llm_invoke.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "llm_invoke",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "setup_file_logging",
+            "signature": "(log_file_path=None)",
+            "returns": "None"
+          },
+          {
+            "name": "set_verbose_logging",
+            "signature": "(verbose=False)",
+            "returns": "None"
+          },
+          {
+            "name": "set_quiet_logging",
+            "signature": "()",
+            "returns": "None"
+          }
+        ]
+      }
     }
   }
 ]
