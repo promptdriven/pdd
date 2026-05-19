@@ -562,7 +562,17 @@ class ReviewResult:
 
 @dataclass
 class FixResult:
-    """Result from a fixer role."""
+    """Result from a fixer role.
+
+    The verification-boundary fields (``fixer_result``, ``push_status``,
+    ``local_fixer_commit_sha``, ``pushed_head_sha``, ``round_number``) are
+    populated by the loop around ``_commit_and_push_if_changed`` so the
+    final report can render fixer evidence without conflating "fixer
+    subprocess returned success" with "fix landed on the PR head". The
+    legacy ``success`` field means only "fixer subprocess completed
+    without provider/parse failure"; it MUST NOT be rendered as a bare
+    ``success``/``fixed`` token in the user-facing report (issue #1088).
+    """
 
     fixer: str
     success: bool
@@ -571,6 +581,16 @@ class FixResult:
     raw_output: str = ""
     dispositions: Dict[str, str] = field(default_factory=dict)
     rationales: Dict[str, str] = field(default_factory=dict)
+    # SHA-backed verification trust boundary (issue #1088).
+    # ``fixer_result``: ``"attempted" | "skipped" | "failed"``.
+    # ``push_status``: ``"pushed" | "push_failed" | "not_attempted"``.
+    # SHAs are the full git SHAs captured via ``git rev-parse HEAD`` in
+    # the worktree — never inferred from fixer prose.
+    fixer_result: Optional[str] = None
+    push_status: Optional[str] = None
+    local_fixer_commit_sha: Optional[str] = None
+    pushed_head_sha: Optional[str] = None
+    round_number: int = 0
 
 
 @dataclass
@@ -686,6 +706,17 @@ class ReviewLoopState:
     # codex as the fixer after gemini took over reviewing, even
     # though the docs say codex (the original reviewer) is excluded.
     original_reviewer: Optional[str] = None
+    # SHA-backed verification trust boundary (issue #1088).
+    # ``verified_head_sha``: PR head SHA the verifier most recently
+    # reviewed as clean. Updated only when the verifier returns clean
+    # on the SHA the fixer just pushed.
+    # ``remote_pr_head_sha``: PR head SHA observed at final-report
+    # render time via a single ``_fetch_pr_metadata`` re-fetch (R-V5).
+    # ``verification_status_by_round``: per-round verifier outcome,
+    # values in ``{"verified", "unverified", "stale", "skipped"}``.
+    verified_head_sha: Optional[str] = None
+    remote_pr_head_sha: Optional[str] = None
+    verification_status_by_round: Dict[int, str] = field(default_factory=dict)
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -955,6 +986,13 @@ def run_checkup_review_loop(
             quiet=quiet,
             artifacts_dir=artifacts_dir,
         )
+        # Verification trust boundary (issue #1088). Stamp the round
+        # and the bare fixer-subprocess outcome onto the result so the
+        # final report can render evidence without conflating "fixer
+        # subprocess returned success" with "fix landed on the PR head".
+        fix.round_number = round_number
+        fix.fixer_result = "attempted" if fix.success else "failed"
+        fix.push_status = "not_attempted"
         state.fixes.append(fix)
         _record_fix_attempts(state, fix_findings, fix)
 
@@ -1005,6 +1043,9 @@ def run_checkup_review_loop(
                 # files, model — must remain visible in the final
                 # report and ``final-state.json``.
                 if fallback_fix is not None:
+                    fallback_fix.round_number = round_number
+                    fallback_fix.fixer_result = "failed"
+                    fallback_fix.push_status = "not_attempted"
                     state.fixes.append(fallback_fix)
                 # Preserve the existing stop_reason if the fallback path
                 # already wrote one (e.g. budget exhausted before fallback
@@ -1027,6 +1068,9 @@ def run_checkup_review_loop(
             # Both fixes stay in ``state.fixes`` so the audit trail records
             # the primary attempt as well as the fallback's takeover.
             fix = fallback_fix
+            fix.round_number = round_number
+            fix.fixer_result = "attempted"
+            fix.push_status = "not_attempted"
             state.fixes.append(fix)
             # NOTE: we deliberately do NOT call ``_record_fix_attempts``
             # again here. The primary attempt already incremented every
@@ -1081,14 +1125,59 @@ def run_checkup_review_loop(
             pr_metadata,
             f"fix: address {reviewer} review-loop findings",
         )
+        # Verification trust boundary (issue #1088, R-V1/R-V2/R-V3):
+        # Capture local/remote SHAs and push status from observable
+        # git state — never from fixer prose.
+        post_push_head_sha = _git_rev_parse_head(worktree) if pushed else ""
+        push_msg_lower = (push_message or "").lower()
+        # ``_commit_and_push_if_changed`` returns ``(True, "No changes
+        # to push.")`` or ``(True, "No eligible changes to push.")``
+        # when the fixer left the worktree unchanged. In that shape no
+        # commit was created so the trust fields stay null and
+        # ``fixer_result`` downgrades to ``skipped``.
+        no_commit_pushed = pushed and (
+            "no changes to push" in push_msg_lower
+            or "no eligible changes" in push_msg_lower
+        )
+        if pushed and not no_commit_pushed:
+            fix.push_status = "pushed"
+            fix.local_fixer_commit_sha = post_push_head_sha or None
+            fix.pushed_head_sha = post_push_head_sha or None
+        elif no_commit_pushed:
+            fix.push_status = "not_attempted"
+            fix.fixer_result = "skipped"
+            fix.local_fixer_commit_sha = None
+            fix.pushed_head_sha = None
+        else:
+            fix.push_status = "push_failed"
+            fix.pushed_head_sha = None
+            # Capture local SHA when the commit was created locally but
+            # the push failed — useful for operator diagnostics.
+            local_after_failed_push = _git_rev_parse_head(worktree)
+            fix.local_fixer_commit_sha = (
+                local_after_failed_push
+                if local_after_failed_push and local_after_failed_push != pre_fix_sha
+                else None
+            )
         if not pushed:
             # Failed push aborts the loop. We deliberately do NOT run the
             # verifier here — the local worktree contains a commit that the
             # PR does not, so a verify pass would falsely report "fixed".
+            state.verification_status_by_round[round_number] = "skipped"
             state.stop_reason = push_message
             break
 
         if _budget_exhausted(config, state, deadline):
+            # R-V6: budget cap crossed after the fixer pushed but
+            # before the verifier ran. The fix has landed on the PR
+            # head but verification did not clear the SHA; the round
+            # entry stays ``"unverified"`` so the rendered report can
+            # mark the affected ``### Fixes Attempted`` bullet
+            # ``verification=unverified``.
+            if fix.push_status == "pushed":
+                state.verification_status_by_round.setdefault(
+                    round_number, "unverified"
+                )
             _mark_budget_exhausted(config, state, deadline)
             break
 
@@ -1126,6 +1215,10 @@ def run_checkup_review_loop(
             # point, the right answer is a third independent role, not
             # self-verification.
             state.reviewer_status[reviewer] = verify.status
+            # R-V4: hard-not-clean verifier statuses leave
+            # ``state.verified_head_sha`` unchanged and the round entry
+            # is ``"unverified"``.
+            state.verification_status_by_round[round_number] = "unverified"
             state.stop_reason = (
                 f"Primary reviewer {reviewer} could not verify fixes: "
                 f"{verify.status}."
@@ -1146,10 +1239,20 @@ def run_checkup_review_loop(
             break
         if pending_findings:
             state.reviewer_status[reviewer] = "findings"
+            # R-V4: a ``findings`` verifier result leaves
+            # ``state.verified_head_sha`` unchanged (verification did
+            # not clear the head).
+            state.verification_status_by_round[round_number] = "unverified"
             continue
 
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
+        # R-V4: only ``clean`` advances ``verified_head_sha``. The SHA
+        # the verifier reviewed is, by construction, the SHA that was
+        # just pushed.
+        if fix.pushed_head_sha:
+            state.verified_head_sha = fix.pushed_head_sha
+        state.verification_status_by_round[round_number] = "verified"
         state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
         break
 
@@ -2203,6 +2306,14 @@ def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
         "changed_files": list(fix.changed_files),
         "dispositions": dict(fix.dispositions),
         "rationales": dict(fix.rationales),
+        # Verification trust boundary fields (issue #1088). Always
+        # present even when null so the on-disk audit shows the trust
+        # boundary that produced this fix.
+        "round_number": fix.round_number,
+        "fixer_result": fix.fixer_result,
+        "push_status": fix.push_status,
+        "local_fixer_commit_sha": fix.local_fixer_commit_sha,
+        "pushed_head_sha": fix.pushed_head_sha,
     }
 
 
@@ -3488,7 +3599,31 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
         # The base ref is what the static-analysis scanner uses to
         # compute the PR's merge-base diff (``base...HEAD``).
         "base_ref": str(base.get("ref") or ""),
+        # The current remote PR head SHA. Used at final-report render
+        # time (R-V5) to detect the stale-head case where the PR
+        # advanced after the verifier cleared an earlier SHA.
+        "head_sha": str(head.get("sha") or ""),
     }
+
+
+def _git_rev_parse_head(worktree: Path) -> str:
+    """Return ``HEAD`` SHA in the worktree, or ``""`` on failure.
+
+    Returned via ``git rev-parse HEAD`` — never inferred from fixer
+    prose (R-V1/R-V2 contract).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 def _commit_and_push_if_changed(
@@ -4051,6 +4186,15 @@ def _write_final_state(
         "fix_attempts_by_key": dict(state.fix_attempts_by_key),
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
         "reviewer_feedback_by_key": dict(state.reviewer_feedback_by_key),
+        # SHA-backed verification trust boundary (issue #1088). Always
+        # present so downstream consumers can rely on the schema rather
+        # than feature-detecting.
+        "verified_head_sha": state.verified_head_sha,
+        "remote_pr_head_sha": state.remote_pr_head_sha,
+        "verification_status_by_round": {
+            str(round_number): status
+            for round_number, status in state.verification_status_by_round.items()
+        },
         "findings": [f.to_dict() for f in state.findings],
         "fixes": [
             {
@@ -4060,6 +4204,12 @@ def _write_final_state(
                 "changed_files": list(fix.changed_files),
                 "dispositions": dict(fix.dispositions),
                 "rationales": dict(fix.rationales),
+                # Verification trust boundary fields.
+                "round_number": fix.round_number,
+                "fixer_result": fix.fixer_result,
+                "push_status": fix.push_status,
+                "local_fixer_commit_sha": fix.local_fixer_commit_sha,
+                "pushed_head_sha": fix.pushed_head_sha,
             }
             for fix in state.fixes
         ],
@@ -4098,6 +4248,39 @@ def _finalize(
     artifacts_dir: Path,
 ) -> str:
     """Render the final report, persist final-report.md and final-state.json."""
+    # R-V5: re-fetch current remote PR head SHA exactly once at the
+    # render boundary so the rendered report observes the stale-head
+    # case described by issue #1088. We only perform the re-fetch when
+    # a verifier pass actually pinned a SHA (``state.verified_head_sha``
+    # is set) — otherwise there is nothing to compare against.
+    if state.verified_head_sha:
+        metadata = _fetch_pr_metadata(
+            context.pr_owner, context.pr_repo, context.pr_number
+        )
+        remote_sha = (metadata or {}).get("head_sha") or ""
+        if remote_sha:
+            state.remote_pr_head_sha = remote_sha
+            if remote_sha != state.verified_head_sha:
+                # The PR head advanced after verification. Downgrade
+                # any otherwise-clean fresh-final to ``missing`` so
+                # downstream verdict adapters do not treat the stale
+                # verifier verdict as ship-ready.
+                if state.fresh_final_status == "clean":
+                    state.fresh_final_status = "missing"
+                    short_verified = state.verified_head_sha[:7]
+                    short_remote = remote_sha[:7]
+                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                        state.stop_reason = (
+                            f"PR head advanced after verification "
+                            f"(verified={short_verified} remote={short_remote}); "
+                            "rerun the review loop."
+                        )
+        else:
+            # Re-fetch failed or returned no head_sha. Per R-V5,
+            # fail-closed: downgrade a clean fresh-final to ``missing``
+            # and leave ``remote_pr_head_sha`` as ``None``.
+            if state.fresh_final_status == "clean":
+                state.fresh_final_status = "missing"
     report = _render_final_report(context, state, reviewers)
     issue_aligned = _resolve_issue_aligned(state)
     _write_artifact(artifacts_dir / "final-report.md", report)
@@ -4140,6 +4323,16 @@ def _render_final_report(
         for reviewer in reviewers
     )
     status_pairs = f"{status_pairs} fresh-final={state.fresh_final_status}".strip()
+    # Verification trust boundary header lines (issue #1088).
+    verified_sha_line = state.verified_head_sha or "none"
+    if state.remote_pr_head_sha:
+        remote_sha_line = state.remote_pr_head_sha
+    elif any((fix.pushed_head_sha for fix in state.fixes)):
+        # A fix was pushed but the render-time re-fetch could not
+        # observe a SHA. Render ``unknown`` per R-V5.
+        remote_sha_line = "unknown"
+    else:
+        remote_sha_line = "none"
     lines = [
         "## Step 7/8: Review Loop Final Report",
         "",
@@ -4149,6 +4342,8 @@ def _render_final_report(
         f"active-reviewer: {state.active_reviewer or 'unknown'}",
         f"reviewer-status: {status_pairs}",
         f"fresh-final-review: {state.fresh_final_status}",
+        f"verified-head-sha: {verified_sha_line}",
+        f"remote-pr-head-sha: {remote_sha_line}",
         f"max-rounds-reached: {str(state.max_rounds_reached).lower()}",
         f"max-cost-reached: {str(state.max_cost_reached).lower()}",
         f"max-duration-reached: {str(state.max_duration_reached).lower()}",
@@ -4299,27 +4494,75 @@ def _render_final_report(
         "",
     ])
     if state.fixes:
-        unfinished_review = (
+        # Verification trust boundary (issue #1088, R-V7). Render each
+        # ``### Fixes Attempted`` bullet in the structured triple
+        # ``fixer_result=… push_status=… verification=…`` so the bare
+        # fixer-subprocess return flag never leads as a ``success``
+        # token. The fixer's free-text summary is only rendered as the
+        # trailing ``summary=`` field so it cannot hijack downstream
+        # adapters that scan for verification evidence.
+        loop_unfinished = (
             remaining_findings
             or _has_hard_not_clean_state(state)
             or _has_limit_state(state)
         )
-        verification = (
-            "unverified" if unfinished_review else "verified"
+        remote_mismatch = bool(
+            state.verified_head_sha
+            and state.remote_pr_head_sha
+            and state.verified_head_sha != state.remote_pr_head_sha
+        )
+        remote_fetch_failed = bool(
+            state.verified_head_sha and not state.remote_pr_head_sha
         )
         for fix in state.fixes:
+            fixer_result = fix.fixer_result or (
+                "attempted" if fix.success else "failed"
+            )
+            push_status = fix.push_status or "not_attempted"
+            local_sha = (
+                fix.local_fixer_commit_sha[:7]
+                if fix.local_fixer_commit_sha
+                else "none"
+            )
+            pushed_sha = (
+                fix.pushed_head_sha[:7] if fix.pushed_head_sha else "none"
+            )
+            # R-V7 + R-V5: verification=verified requires push_status
+            # ``pushed``, the verifier cleared the pushed SHA, no
+            # loop-level unfinished state, and the render-time re-fetch
+            # confirmed the remote head still matches.
+            round_status = state.verification_status_by_round.get(
+                fix.round_number, "skipped"
+            )
+            verification = "unverified"
+            if (
+                push_status == "pushed"
+                and fix.pushed_head_sha
+                and fix.pushed_head_sha == state.verified_head_sha
+                and round_status == "verified"
+                and not loop_unfinished
+                and not remote_mismatch
+                and not remote_fetch_failed
+            ):
+                verification = "verified"
             changed = ", ".join(fix.changed_files) if fix.changed_files else "none"
             # Failed fixer summaries contain raw subprocess output (e.g.
             # ``[CRITICAL]`` log lines, ``issue_aligned: false`` JSON
             # fragments, ``max-cost-reached: true``) that the cloud
             # verdict adapter scans without fence/section awareness.
-            # Without this defang, a verified fallback fix could be
-            # downgraded by trip-wires that lived only in the failed
-            # primary's audit row.
-            safe_summary = _defang_adapter_trip_wires(fix.summary)
+            # Defang at render only so on-disk state stays truthful.
+            safe_summary = _defang_adapter_trip_wires(fix.summary or "")
+            summary_part = (
+                f" summary={_escape_table(safe_summary)}"
+                if safe_summary.strip()
+                else ""
+            )
             lines.append(
-                f"- {fix.fixer}: {'success' if fix.success else 'failed'}; "
-                f"verification={verification}; changed_files={changed}; {safe_summary}"
+                f"- round={fix.round_number} fixer={fix.fixer} "
+                f"fixer_result={fixer_result} push_status={push_status} "
+                f"local_sha={local_sha} pushed_sha={pushed_sha} "
+                f"changed_files={changed} verification={verification}"
+                f"{summary_part}"
             )
     else:
         lines.append("- none")
