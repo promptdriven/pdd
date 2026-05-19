@@ -793,12 +793,15 @@ async def list_changed_prompt_files(
                 detail=f"Failed to get git diff: {diff_result.stderr}"
             )
 
-        # Also get staged and unstaged changes (for uncommitted work)
+        # Also get staged and unstaged changes (for uncommitted work).
+        # Use ``--porcelain=v1 -z`` so renamed/space-containing prompt
+        # paths round-trip verbatim (see issue #1080). The structured
+        # parser exposes the new-side path with no quoting artifacts.
+        from pdd.git_porcelain import parse_porcelain_z
         status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain=v1", "-z"],
             cwd=project_root,
             capture_output=True,
-            text=True,
         )
 
         changed_files = set()
@@ -810,15 +813,11 @@ async def list_changed_prompt_files(
 
         # Parse uncommitted changes (staged and unstaged)
         if status_result.returncode == 0:
-            for line in status_result.stdout.strip().split("\n"):
-                if line and len(line) > 3:
-                    # Format: XY filename (X=staged, Y=unstaged)
-                    file_path = line[3:].strip()
-                    # Handle renamed files (format: "old -> new")
-                    if " -> " in file_path:
-                        file_path = file_path.split(" -> ")[1]
-                    if file_path.endswith(".prompt"):
-                        changed_files.add(file_path)
+            for entry in parse_porcelain_z(status_result.stdout):
+                # Endpoint reports the current (new) prompt path only.
+                file_path = entry.path
+                if file_path.endswith(".prompt"):
+                    changed_files.add(file_path)
 
         return {"changed_prompts": sorted(changed_files), "base_branch": base_branch}
 

@@ -1448,3 +1448,109 @@ class TestExpectedOutputs:
         assert prompt is not None, "Prompt not found in results"
         assert 'expected_outputs' in prompt
         assert sorted(prompt['expected_outputs']) == ['code', 'example', 'test']
+
+
+# =========================================================================
+# Issue #1080: /prompts/changed must handle renamed prompts via -z parser
+# =========================================================================
+
+
+def _git_env_1080() -> dict:
+    return {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
+
+
+def _init_repo_1080(repo: Path, files: dict) -> None:
+    import subprocess
+    repo.mkdir(parents=True, exist_ok=True)
+    env = _git_env_1080()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                   check=True, capture_output=True, env=env)
+    for rel, content in files.items():
+        tgt = repo / rel
+        tgt.parent.mkdir(parents=True, exist_ok=True)
+        tgt.write_text(content)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                   check=True, capture_output=True, env=env)
+
+
+def _git_1080(repo: Path, *args: str) -> None:
+    import subprocess
+    subprocess.run(["git", "-C", str(repo), *args], check=True,
+                   capture_output=True, text=True, env=_git_env_1080())
+
+
+class TestChangedPromptsRename1080:
+    """The ``/prompts/changed`` endpoint must report renamed prompt
+    paths verbatim — including paths containing spaces — via the
+    structured ``--porcelain=v1 -z`` parser.
+    """
+
+    @pytest.mark.asyncio
+    async def test_returns_new_path_for_renamed_prompt(self, tmp_path):
+        """Renamed prompt's NEW path appears in the response and no
+        ``"old -> new"`` literal or surrounding quotes leak in."""
+        from pdd.server.routes.files import list_changed_prompt_files
+
+        _init_repo_1080(tmp_path, {
+            "prompts/orig.prompt": "alpha\n",
+            "README.md": "readme\n",
+        })
+        _git_1080(tmp_path, "branch", "-M", "main")
+        _git_1080(tmp_path, "mv", "prompts/orig.prompt", "prompts/renamed.prompt")
+
+        validator = PathValidator(project_root=tmp_path)
+        result = await list_changed_prompt_files(
+            base_branch="main", validator=validator,
+        )
+
+        changed = result["changed_prompts"]
+        assert "prompts/renamed.prompt" in changed, (
+            f"New-side prompt missing from {changed!r}"
+        )
+        for entry in changed:
+            assert " -> " not in entry, (
+                f"Combined path literal in response: {entry!r}"
+            )
+            assert not entry.startswith('"') and not entry.endswith('"'), (
+                f"Stray quote in path: {entry!r}"
+            )
+
+    @pytest.mark.asyncio
+    async def test_handles_renamed_prompt_with_space_in_name(self, tmp_path):
+        """A renamed prompt whose path contains a space must appear
+        unquoted in the response — the buggy text-mode parser would
+        leave git's C-style quotes attached."""
+        from pdd.server.routes.files import list_changed_prompt_files
+
+        _init_repo_1080(tmp_path, {
+            "prompts/orig.prompt": "alpha\n",
+            "README.md": "readme\n",
+        })
+        _git_1080(tmp_path, "branch", "-M", "main")
+        _git_1080(tmp_path, "mv", "prompts/orig.prompt", "prompts/new name.prompt")
+
+        validator = PathValidator(project_root=tmp_path)
+        result = await list_changed_prompt_files(
+            base_branch="main", validator=validator,
+        )
+
+        changed = result["changed_prompts"]
+        assert "prompts/new name.prompt" in changed, (
+            f"Renamed prompt with space missing from {changed!r}"
+        )
+        assert '"prompts/new name.prompt"' not in changed, (
+            f"Quoted variant leaked into response: {changed!r}"
+        )

@@ -479,7 +479,8 @@ class TestCheckTargetFileUnchanged:
 
 class TestRevertOutOfScopeChanges:
     def test_reverts_tracked_out_of_scope(self):
-        porcelain = " M outside.py\n"
+        # Structured ``--porcelain=v1 -z`` format: NUL-separated bytes.
+        porcelain = b" M outside.py\x00"
         with patch(f"{MODULE}.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 _cp(stdout=porcelain),
@@ -493,7 +494,7 @@ class TestRevertOutOfScopeChanges:
     def test_removes_untracked_out_of_scope(self, tmp_path):
         junk = tmp_path / "junk.txt"
         junk.write_text("x")
-        porcelain = "?? junk.txt\n"
+        porcelain = b"?? junk.txt\x00"
         with patch(f"{MODULE}.subprocess.run", return_value=_cp(stdout=porcelain)):
             result = revert_out_of_scope_changes_with_dirs(
                 tmp_path, allowed_dirs={"pdd/"}, allowed_files=set()
@@ -502,7 +503,7 @@ class TestRevertOutOfScopeChanges:
             assert not junk.exists()
 
     def test_keeps_in_scope_by_dir_prefix(self):
-        porcelain = " M pdd/module.py\n"
+        porcelain = b" M pdd/module.py\x00"
         with patch(f"{MODULE}.subprocess.run", return_value=_cp(stdout=porcelain)):
             result = revert_out_of_scope_changes_with_dirs(
                 Path("/repo"), allowed_dirs={"pdd/"}, allowed_files=set()
@@ -510,7 +511,7 @@ class TestRevertOutOfScopeChanges:
             assert result == []
 
     def test_keeps_in_scope_by_allowed_files(self, tmp_path):
-        porcelain = " M setup.cfg\n"
+        porcelain = b" M setup.cfg\x00"
         allowed = {(tmp_path / "setup.cfg").resolve()}
         with patch(f"{MODULE}.subprocess.run", return_value=_cp(stdout=porcelain)):
             result = revert_out_of_scope_changes_with_dirs(
@@ -519,19 +520,24 @@ class TestRevertOutOfScopeChanges:
             assert result == []
 
     def test_handles_renames(self):
-        porcelain = "R  old.py -> new.py\n"
+        # ``-z`` emits the NEW path first, then the OLD path as a
+        # separate NUL-terminated record (see issue #1080 fix).
+        porcelain = b"R  new.py\x00old.py\x00"
         with patch(f"{MODULE}.subprocess.run") as mock_run:
             mock_run.side_effect = [
-                _cp(stdout=porcelain),
-                _cp(),  # checkout
+                _cp(stdout=porcelain),  # status
+                _cp(),                  # reset HEAD -- ...
+                _cp(),                  # checkout HEAD -- old.py
             ]
             result = revert_out_of_scope_changes_with_dirs(
                 Path("/repo"), allowed_dirs=set(), allowed_files=set()
             )
+            # Rename-aware guard surfaces BOTH old and new sides.
             assert Path("new.py") in result
+            assert Path("old.py") in result
 
     def test_handles_git_status_failure(self):
-        with patch(f"{MODULE}.subprocess.run", return_value=_cp(returncode=1)):
+        with patch(f"{MODULE}.subprocess.run", return_value=_cp(returncode=1, stderr=b"boom")):
             result = revert_out_of_scope_changes_with_dirs(
                 Path("/repo"), allowed_dirs=set(), allowed_files=set()
             )
@@ -545,7 +551,7 @@ class TestRevertOutOfScopeChanges:
             assert result == []
 
     def test_handles_os_error_on_remove(self, tmp_path):
-        porcelain = "?? ghost.txt\n"
+        porcelain = b"?? ghost.txt\x00"
         with patch(f"{MODULE}.subprocess.run", return_value=_cp(stdout=porcelain)), \
              patch(f"{MODULE}.os.remove", side_effect=OSError("perm")):
             result = revert_out_of_scope_changes_with_dirs(
@@ -555,7 +561,9 @@ class TestRevertOutOfScopeChanges:
             assert result == []
 
     def test_skips_short_lines(self):
-        porcelain = "X\n M valid.py\n"
+        # Malformed first record (< 4 bytes) is defensively skipped by
+        # the structured parser; the second record parses normally.
+        porcelain = b"X\x00 M valid.py\x00"
         with patch(f"{MODULE}.subprocess.run") as mock_run:
             mock_run.side_effect = [
                 _cp(stdout=porcelain),
@@ -604,3 +612,98 @@ class TestExtractBlockMarker:
     def test_special_regex_chars_in_name(self):
         output = "BEGIN_A.B\ncontent\nEND_A.B"
         assert extract_block_marker(output, "A.B") == "content"
+
+
+# =========================================================================
+# Issue #1080: rename-aware scope guard via structured -z porcelain parser
+# =========================================================================
+
+
+def _git_env_1080() -> dict:
+    return {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
+
+
+def _init_repo_1080(repo: Path, files: dict) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    env = _git_env_1080()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                   check=True, capture_output=True, env=env)
+    for rel, content in files.items():
+        tgt = repo / rel
+        tgt.parent.mkdir(parents=True, exist_ok=True)
+        tgt.write_text(content)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                   check=True, capture_output=True, env=env)
+
+
+def _git_1080(repo: Path, *args: str) -> None:
+    subprocess.run(["git", "-C", str(repo), *args], check=True,
+                   capture_output=True, text=True, env=_git_env_1080())
+
+
+class TestRevertWithDirsRename1080:
+    """``revert_out_of_scope_changes_with_dirs`` must consider BOTH old
+    and new sides of a rename via ``parse_porcelain_z``, and must never
+    construct a fake ``"old -> new"`` literal path.
+    """
+
+    def test_reverts_when_old_side_is_out_of_scope(self, tmp_path):
+        """Rename from out-of-scope old path into an in-scope new path
+        is still out-of-scope — the guard must undo it."""
+        _init_repo_1080(tmp_path, {
+            "scripts/external.py": "external original\n",
+            "pdd/in_scope.py": "in_scope\n",
+        })
+        _git_1080(tmp_path, "mv", "scripts/external.py", "pdd/legit.py")
+
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
+            allowed_dirs={"pdd/"},
+            allowed_files=set(),
+        )
+
+        assert (tmp_path / "scripts" / "external.py").exists(), (
+            "Out-of-scope old side was not restored: new-side-only parsing"
+        )
+        assert not (tmp_path / "pdd" / "legit.py").exists(), (
+            "Out-of-scope rename survived in pdd/legit.py"
+        )
+        assert result, (
+            f"Expected non-empty revert list, got {result!r} — guard "
+            "did not detect the out-of-scope old side"
+        )
+
+    def test_handles_paths_with_arrow_substring(self, tmp_path):
+        """An out-of-scope untracked path with ``" -> "`` in its name
+        must be removed by the guard. The buggy ``split(' -> ')``
+        truncates the name and ``os.remove`` fails on the wrong path."""
+        _init_repo_1080(tmp_path, {"pdd/anchor.py": "x\n"})
+        _git_1080(tmp_path, "config", "core.quotePath", "false")
+        weird = tmp_path / "bogus -> file.txt"
+        weird.write_text("junk\n")
+
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
+            allowed_dirs={"pdd/"},
+            allowed_files=set(),
+        )
+
+        assert not weird.exists(), (
+            "Out-of-scope untracked file with ' -> ' in name not removed"
+        )
+        assert any(
+            str(p).endswith("bogus -> file.txt") for p in result
+        ), f"Reverted list missing real path: {result!r}"
