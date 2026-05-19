@@ -2749,6 +2749,49 @@ def test_cloud_enabled_detection():
                 assert result["cost"] == 0.001
 
 
+def test_cloud_response_preserves_full_attempted_models_chain():
+    """Issue #1086: when the cloud response includes the full attempted-model
+    chain (camelCase, snake_case, or legacy ``modelChain``), the helper must
+    propagate every entry to callers so the cost CSV can record the abandoned
+    cloud-side attempts. Falling back to ``[modelName]`` would lose history.
+    """
+    with patch("pdd.core.cloud.CloudConfig") as mock_config:
+        mock_config.get_jwt_token.return_value = "fake_token"
+        mock_config.get_endpoint_url.return_value = "https://example.com/llmInvoke"
+
+        for response_key in ("attemptedModels", "attempted_models", "modelChain"):
+            with patch("requests.post") as mock_post:
+                mock_response = MagicMock()
+                mock_response.status_code = 200
+                mock_response.json.return_value = {
+                    "result": "cloud result",
+                    "totalCost": 0.002,
+                    "modelName": "final-model",
+                    response_key: ["first-try", "second-try", "final-model"],
+                }
+                mock_post.return_value = mock_response
+
+                from pdd.llm_invoke import _llm_invoke_cloud
+
+                result = _llm_invoke_cloud(
+                    prompt="Test",
+                    input_json={},
+                    strength=0.5,
+                    temperature=0.1,
+                    verbose=False,
+                    output_pydantic=None,
+                    output_schema=None,
+                    time=0.25,
+                    use_batch_mode=False,
+                    messages=None,
+                    language=None,
+                )
+
+                assert result["attempted_models"] == [
+                    "first-try", "second-try", "final-model"
+                ], f"chain not preserved for response key {response_key!r}: {result['attempted_models']!r}"
+
+
 # --- Issue #348: Auth Status Mismatch Tests ---
 
 def test_llm_invoke_cloud_401_clears_jwt_cache():

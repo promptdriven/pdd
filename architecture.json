@@ -1162,8 +1162,8 @@
           },
           {
             "name": "extract_cost_and_model",
-            "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]",
+            "signature": "(result: Any) -> Tuple[Any, str, List[str]]",
+            "returns": "Tuple[Any, str, List[str]]",
             "sideEffects": [
               "None"
             ]

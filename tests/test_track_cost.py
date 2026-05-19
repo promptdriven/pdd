@@ -1107,3 +1107,66 @@ def test_existing_csv_without_attempted_models_is_migrated(
     assert None not in rows[-1]
 
     mock_rprint.assert_not_called()
+
+
+def test_attempted_models_scoped_to_single_command_invocation(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """Regression for issue #1086: when two @track_cost commands share a
+    ctx.obj (chained / batched CLI run), the second command's CSV row must
+    contain ONLY its own attempted models — not those accumulated during a
+    prior command's execution. Previously _propagate_attempted_models_to_ctx
+    appended to a shared ctx.obj entry that track_cost never reset, so the
+    second row leaked the first command's fallback chain.
+    """
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    csv_path = tmp_path / "cost.csv"
+    shared_obj = {'output_cost': str(csv_path)}
+
+    @track_cost
+    def cmd_one(ctx, prompt_file: str):
+        _propagate_attempted_models_to_ctx(['m1'])
+        return ('/path/to/out1', 0.1, 'm1')
+
+    @track_cost
+    def cmd_two(ctx, prompt_file: str):
+        _propagate_attempted_models_to_ctx(['m2'])
+        return ('/path/to/out2', 0.2, 'm2')
+
+    # Use a SHARED real dict for ctx.obj across both commands so the
+    # production aliasing pattern is faithfully reproduced.
+    mock_ctx_one = MagicMock()
+    mock_ctx_one.command.name = 'cmd_one'
+    mock_ctx_one.params = {'prompt_file': '/p.txt'}
+    mock_ctx_one.obj = shared_obj
+
+    mock_ctx_two = MagicMock()
+    mock_ctx_two.command.name = 'cmd_two'
+    mock_ctx_two.params = {'prompt_file': '/p.txt'}
+    mock_ctx_two.obj = shared_obj
+
+    mock_click_context.return_value = mock_ctx_one
+    cmd_one(mock_ctx_one, '/p.txt')
+
+    mock_click_context.return_value = mock_ctx_two
+    cmd_two(mock_ctx_two, '/p.txt')
+
+    import csv as _csv
+    with open(csv_path, newline='', encoding='utf-8') as fp:
+        rows = list(_csv.DictReader(fp))
+    rows_by_command = {row['command']: row for row in rows}
+    assert 'cmd_one' in rows_by_command, f"missing cmd_one row: {rows}"
+    assert 'cmd_two' in rows_by_command, f"missing cmd_two row: {rows}"
+
+    assert rows_by_command['cmd_one']['attempted_models'] == 'm1'
+    # The critical assertion: cmd_two must NOT inherit m1 from the prior
+    # command's scope. It must contain only its own attempt.
+    assert rows_by_command['cmd_two']['attempted_models'] == 'm2', (
+        f"cmd_two leaked attempted_models from cmd_one: "
+        f"{rows_by_command['cmd_two']['attempted_models']!r}"
+    )
+    # And the shared ctx.obj should have been restored to a clean state
+    # (no 'attempted_models' key persists after the last @track_cost wrapper
+    # exits, because there was no prior value to restore to).
+    assert 'attempted_models' not in shared_obj

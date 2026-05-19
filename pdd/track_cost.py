@@ -26,6 +26,25 @@ def track_cost(func):
         if ctx is None:
             return func(*args, **kwargs)
 
+        # Scope attempted_models to a single @track_cost invocation so a
+        # chained / batched CLI run never inherits the fallback chain from a
+        # previous command on the same shared ctx.obj. Snapshot any prior
+        # value, reset it, let llm_invoke aggregate within this command,
+        # then restore the snapshot after the row is written.
+        attempted_models_scoped = False
+        prior_attempted_models_present = False
+        prior_attempted_models = None
+        if ctx.obj is not None and hasattr(ctx.obj, '__setitem__'):
+            try:
+                existing = ctx.obj.get('attempted_models') if hasattr(ctx.obj, 'get') else None
+                if existing is not None:
+                    prior_attempted_models = existing
+                    prior_attempted_models_present = True
+                ctx.obj['attempted_models'] = []
+                attempted_models_scoped = True
+            except Exception:
+                attempted_models_scoped = False
+
         start_time = datetime.now()
         result = None
         exception_raised = None
@@ -54,6 +73,36 @@ def track_cost(func):
             exception_raised = e
         finally:
             end_time = datetime.now()
+
+            # Capture the chain THIS command accumulated before we restore the
+            # prior shared value. Without this snapshot, a later @track_cost
+            # invocation on the same ctx.obj would see leftover state from a
+            # prior command (issue #1086 regression).
+            command_attempted_models: List[str] = []
+            if attempted_models_scoped and ctx.obj is not None:
+                try:
+                    current = ctx.obj.get('attempted_models') if hasattr(ctx.obj, 'get') else None
+                    if isinstance(current, list):
+                        command_attempted_models = [str(m) for m in current if m]
+                except Exception:
+                    command_attempted_models = []
+
+            # Restore the prior shared value (or remove the key entirely) so
+            # the next command starts with a clean slate.
+            if attempted_models_scoped and ctx.obj is not None:
+                try:
+                    if prior_attempted_models_present:
+                        ctx.obj['attempted_models'] = prior_attempted_models
+                    else:
+                        if hasattr(ctx.obj, 'pop'):
+                            ctx.obj.pop('attempted_models', None)
+                        else:
+                            try:
+                                del ctx.obj['attempted_models']
+                            except Exception:
+                                pass
+                except Exception:
+                    pass
 
             try:
                 # Always collect files for core dump, even if output_cost is not set
@@ -86,7 +135,7 @@ def track_cost(func):
                 should_write = (
                     exception_raised is None
                     or bool(exception_attempted)
-                    or bool(ctx.obj and ctx.obj.get('attempted_models'))
+                    or bool(command_attempted_models)
                 )
 
                 if should_write:
@@ -105,10 +154,13 @@ def track_cost(func):
                             # attempted chain.
                             cost, model_name, result_attempted = '', '', exception_attempted
 
-                        # Determine attempted_models chain
+                        # Determine attempted_models chain. Use only the chain
+                        # accumulated within THIS @track_cost invocation so
+                        # cost.csv rows never inherit a previous command's
+                        # fallback history (issue #1086 regression).
                         attempted_models_list = []
-                        if ctx.obj and ctx.obj.get('attempted_models'):
-                            attempted_models_list = ctx.obj.get('attempted_models')
+                        if command_attempted_models:
+                            attempted_models_list = command_attempted_models
                         elif result_attempted:
                             attempted_models_list = result_attempted
 

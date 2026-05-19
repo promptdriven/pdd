@@ -245,7 +245,7 @@
       - On InsufficientCreditsError: Re-raise (no fallback).
       - On CloudInvocationError: Print warning, fall back to local.
     - Cloud request payload: prompt, inputJson, messages, strength, temperature, time, verbose, outputSchema, useBatchMode, language.
-    - Cloud response: {result, totalCost, modelName, thinkingOutput}.
+    - Cloud response: `{result, totalCost, modelName, thinkingOutput, attemptedModels}`. `attemptedModels` SHOULD be the full chronological list of cloud-side model identifiers tried (final model last) so the local cost CSV can record the abandoned-then-retried chain that happened server-side (issue #1086). Callers MUST accept the camelCase `attemptedModels`, the snake_case `attempted_models`, and the legacy `modelChain` keys; when none are present the local fallback is `[modelName]` — a single-entry chain that loses any cloud-side fallback history. Returned dict shape is `{result, cost, model_name, thinking_output, attempted_models}` where `attempted_models` is the list described above.
 
 % Cloud API Documentation:
    <cloud_api_documentation>
