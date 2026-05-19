@@ -3539,6 +3539,28 @@ def _commit_and_push_if_changed(
     if result.returncode != 0:
         return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
 
+    # Capture the fixer commit's SHA right after committing so every rebase
+    # retry below can reset to the same starting point. Without this, a first
+    # rebase that fast-forwards or drops the fixer commit as empty (because the
+    # fetched PR head already contains the patch) leaves HEAD on a remote
+    # commit; a second remote-advance retry's HEAD~1..HEAD range would then
+    # describe that remote commit instead of our fix, which can resurrect work
+    # a maintainer just force-pushed away.
+    fixer_sha_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if fixer_sha_result.returncode != 0:
+        return False, (
+            "Failed to capture fixer commit SHA before push: "
+            f"{fixer_sha_result.stderr.strip() or fixer_sha_result.stdout.strip()}"
+        )
+    fixer_sha = fixer_sha_result.stdout.strip()
+    if not fixer_sha:
+        return False, "Failed to capture fixer commit SHA before push: empty rev-parse output"
+
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
     head_owner = pr_metadata.get("head_owner", "")
@@ -3578,6 +3600,7 @@ def _commit_and_push_if_changed(
             head_ref=head_ref,
             repo_owner=head_owner,
             repo_name=head_repo,
+            fixer_sha=fixer_sha,
         )
         if not rebased:
             return False, rebase_message
@@ -3611,18 +3634,25 @@ def _rebase_onto_updated_pr_head(
     head_ref: str,
     repo_owner: str,
     repo_name: str,
+    fixer_sha: str,
 ) -> Tuple[bool, str]:
     """Fetch the updated PR head and replay the local fix commit on top.
 
     Review-loop fixes can race with auto-heal or a maintainer push to the same
     PR branch. Force-pushing over those commits would discard remote work, so
     recover by rebasing before retrying the push. Fetch the exact branch ref so
-    tags with the same name cannot populate FETCH_HEAD. Rebase only the fixer
-    commit range (HEAD~1..HEAD) onto FETCH_HEAD so a force-pushed PR head cannot
-    resurrect commits the remote branch intentionally dropped. Use a plain
-    rebase: if the fixer commit conflicts with remote changes, abort and let
-    the next run review/fix from the updated PR head instead of choosing a side
-    silently.
+    tags with the same name cannot populate FETCH_HEAD. Before each rebase,
+    hard-reset the worktree to ``fixer_sha`` (captured immediately after the
+    commit step) so every retry starts from the same local state: that way the
+    ``HEAD~1..HEAD`` range always describes the original fixer commit, even if
+    a previous rebase fast-forwarded HEAD past the fix because the fetched PR
+    head already contained the patch. Without this reset, a later retry could
+    replay a remote commit instead of our fix and resurrect work a maintainer
+    force-pushed away. Rebase only the fixer commit range (HEAD~1..HEAD) onto
+    FETCH_HEAD so a force-pushed PR head cannot resurrect commits the remote
+    branch intentionally dropped. Use a plain rebase: if the fixer commit
+    conflicts with remote changes, abort and let the next run review/fix from
+    the updated PR head instead of choosing a side silently.
     """
     fetched, fetch_message = _fetch_pr_head_for_rebase(
         worktree,
@@ -3635,6 +3665,24 @@ def _rebase_onto_updated_pr_head(
         return False, (
             "Failed to refresh PR branch before retrying push: "
             f"{fetch_message}"
+        )
+
+    # Pin the local state to the original fixer commit before every rebase so
+    # the rebase range below is stable across retries. On the first retry this
+    # is effectively a no-op (HEAD already equals ``fixer_sha``); on later
+    # retries it undoes any moves a prior rebase made (fast-forward when the
+    # patch was empty, or replay onto a prior FETCH_HEAD) and reasserts the
+    # contract that we only ever replay our own commit.
+    reset = subprocess.run(
+        ["git", "reset", "--hard", fixer_sha],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if reset.returncode != 0:
+        return False, (
+            "Failed to reset to original fixer commit before rebase: "
+            f"{reset.stderr.strip() or reset.stdout.strip()}"
         )
 
     rebase = subprocess.run(

@@ -3806,6 +3806,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -3877,6 +3887,16 @@ class TestCommitAndPushIfChanged:
         def fake_run(cmd: List[str], **_kwargs: Any):
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -3926,6 +3946,16 @@ class TestCommitAndPushIfChanged:
         def fake_run(cmd: List[str], **_kwargs: Any):
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -3978,6 +4008,16 @@ class TestCommitAndPushIfChanged:
         def fake_run(cmd: List[str], **_kwargs: Any):
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -4031,6 +4071,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -4094,6 +4144,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             if "rebase" in cmd and "--abort" not in cmd:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
@@ -4141,6 +4201,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             if cmd[:3] == ["git", "fetch", "--no-tags"]:
                 if "x-access-token" not in cmd[3]:
                     return type(
@@ -4352,6 +4422,152 @@ class TestCommitAndPushIfChanged:
         assert success is False
         assert "non-fast-forward" in err
         assert not any("--force-with-lease" in cmd for cmd in calls)
+
+    def test_rebase_retry_uses_stable_fixer_sha_after_empty_rebase(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex round-3 HIGH regression: a fast-forward / empty-skip on the
+        first rebase must not let a second remote-advance retry replay a
+        stale remote commit. The retry loop captures the fixer commit's SHA
+        right after the bot commit and ``git reset --hard <fixer_sha>``
+        before every rebase, so the rebase range always describes the
+        original fixer commit even if a prior rebase fast-forwarded HEAD
+        past our fix.
+        """
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+        monkeypatch.setattr(mod, "_git_untracked_files", lambda _worktree: [])
+
+        # Two fetch-first rejections, then success on the third push.
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            if pushes < 3:
+                return False, " ! [rejected] HEAD -> feature (fetch first)"
+            return True, ""
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+
+        # Force the real ``_rebase_onto_updated_pr_head`` to run so the new
+        # ``git reset --hard <fixer_sha>`` step is actually executed.
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_head_for_rebase",
+            lambda *_a, **_kw: (True, ""),
+        )
+
+        captured_fixer_sha = "deadbeefcafebabe1234567890abcdef12345678"
+        recorded: List[List[str]] = []
+        reset_targets: List[str] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            recorded.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                # Pretend something is staged so the commit step proceeds.
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": f"{captured_fixer_sha}\n",
+                        "stderr": "",
+                    },
+                )()
+            if len(cmd) >= 3 and cmd[:3] == ["git", "reset", "--hard"]:
+                reset_targets.append(cmd[3])
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            # Everything else (add, commit, rebase) is a no-op success.
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True, message
+        assert pushes == 3
+        # Reset MUST have run exactly twice (once before each of the two
+        # rebases) and MUST have targeted the SAME fixer SHA captured at
+        # commit-time.
+        assert reset_targets == [captured_fixer_sha, captured_fixer_sha], reset_targets
+
+        # And the reset MUST precede each rebase in argv order.
+        rebase_cmd_index = [
+            i
+            for i, cmd in enumerate(recorded)
+            if "rebase" in cmd
+            and "--onto" in cmd
+            and "FETCH_HEAD" in cmd
+        ]
+        reset_cmd_index = [
+            i
+            for i, cmd in enumerate(recorded)
+            if len(cmd) >= 3 and cmd[:3] == ["git", "reset", "--hard"]
+        ]
+        assert len(rebase_cmd_index) == 2
+        assert len(reset_cmd_index) == 2
+        for reset_idx, rebase_idx in zip(reset_cmd_index, rebase_cmd_index):
+            assert reset_idx < rebase_idx, (reset_idx, rebase_idx, recorded)
+
+    def test_rebase_resets_to_supplied_fixer_sha_before_running_rebase(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Standalone contract test for ``_rebase_onto_updated_pr_head``: it
+        MUST hard-reset the worktree to the supplied ``fixer_sha`` BEFORE
+        invoking ``git rebase``, regardless of where HEAD currently sits.
+        """
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_head_for_rebase",
+            lambda *_a, **_kw: (True, ""),
+        )
+
+        recorded: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            recorded.append(list(cmd))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        success, message = mod._rebase_onto_updated_pr_head(
+            tmp_path,
+            clone_url="https://github.com/o/r.git",
+            head_ref="feature",
+            repo_owner="o",
+            repo_name="r",
+            fixer_sha=sha,
+        )
+
+        assert success is True, message
+        # First subprocess.run call MUST be the reset, second MUST be the
+        # rebase. No other commands in between.
+        assert recorded[0] == ["git", "reset", "--hard", sha]
+        assert recorded[1][:5] == [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+        ]
+        assert "rebase" in recorded[1] and "--onto" in recorded[1]
 
 
 class TestStaticAnalysisCandidateFindingsIntegration:
