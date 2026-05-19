@@ -209,7 +209,9 @@ class TestApplyArchitectureCorrections:
             {"filename": "foo_python.prompt", "dependencies": ["bar_python.prompt", "baz_python.prompt"]},
         ]
 
-        result = _apply_architecture_corrections(arch_path, architecture, corrections, quiet=True)
+        result = _apply_architecture_corrections(
+            tmp_path, corrections, architecture, quiet=True
+        )
         assert result[0]["dependencies"] == ["bar_python.prompt", "baz_python.prompt"]
 
         # Verify file was written
@@ -225,7 +227,9 @@ class TestApplyArchitectureCorrections:
             {"filename": "nonexistent_python.prompt", "dependencies": ["x_python.prompt"]},
         ]
 
-        result = _apply_architecture_corrections(arch_path, architecture, corrections, quiet=True)
+        result = _apply_architecture_corrections(
+            tmp_path, corrections, architecture, quiet=True
+        )
         assert result[0]["dependencies"] == []
 
 
@@ -749,7 +753,9 @@ class TestArchitectureSyncModules:
     def test_nested_arch_module_without_pddrc_defaults_to_arch_dir(self, tmp_path):
         """When no .pddrc claims a basename, cwd defaults to the arch file's
         own directory (preserves nested-arch isolation)."""
-        nested_dir = tmp_path / "examples" / "demo"
+        # ``services/api`` is a real nested project; ``examples/`` is excluded as
+        # a bundled-sample tree per issue #1060.
+        nested_dir = tmp_path / "services" / "api"
         nested_dir.mkdir(parents=True)
         nested_arch = nested_dir / "architecture.json"
         nested_arch.write_text(
@@ -813,6 +819,315 @@ class TestArchitectureSyncModules:
             "shared:report",
         }
         assert {module.cwd for module in report_modules} == {shared_dir}
+
+    def test_duplicate_absolute_filepaths_are_scheduled_once_and_merge_dependencies(self, tmp_path):
+        """Root and nested architecture entries for the same file should not
+        produce duplicate global sync work or lose dependency edges."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "backend/report_python.prompt",
+                        "filepath": "backend/functions/report.py",
+                        "dependencies": ["backend/config_python.prompt"],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "backend" / "functions"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "backend/report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": ["backend/models_python.prompt"],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, architecture, _arch_path = _architecture_sync_modules(tmp_path)
+
+        assert [module.basename for module in modules] == ["backend/report"]
+        assert len(architecture) == 1
+        assert architecture[0]["dependencies"] == [
+            "backend/config_python.prompt",
+            "backend/models_python.prompt",
+        ]
+        assert modules[0].entry["dependencies"] == architecture[0]["dependencies"]
+
+    def test_duplicate_output_alias_resolves_dependency_to_skipped_filename(self, tmp_path):
+        """Dependencies that name a skipped duplicate must resolve to the kept module."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "shared/report_python.prompt",
+                        "filepath": "pkg/report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "pkg"
+        nested_dir.mkdir()
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": [],
+                    },
+                    {
+                        "filename": "runner_python.prompt",
+                        "filepath": "runner.py",
+                        "dependencies": ["report_python.prompt"],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        target_keys = [module.key for module in modules]
+        graph, warnings = _build_scoped_global_dep_graph(
+            modules,
+            target_keys,
+            tmp_path,
+        )
+
+        assert "shared/report" in target_keys
+        assert "runner" in target_keys
+        assert graph["runner"] == ["shared/report"]
+        assert warnings == []
+
+    def test_duplicate_output_dependencies_resolve_in_original_scope(self, tmp_path):
+        """Merged duplicate dependencies must keep their original architecture scope."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "pkg/report.py",
+                        "dependencies": [],
+                    },
+                    {
+                        "filename": "helper_python.prompt",
+                        "filepath": "helper.py",
+                        "dependencies": [],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "pkg"
+        nested_dir.mkdir()
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": ["helper_python.prompt"],
+                    },
+                    {
+                        "filename": "helper_python.prompt",
+                        "filepath": "helper.py",
+                        "dependencies": [],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        target_keys = [module.key for module in modules]
+        graph, warnings = _build_scoped_global_dep_graph(
+            modules,
+            target_keys,
+            tmp_path,
+        )
+
+        assert "report" in target_keys
+        assert ".:helper" in target_keys
+        assert "pkg:helper" in target_keys
+        assert graph["report"] == ["pkg:helper"]
+        assert warnings == []
+
+    def test_duplicate_output_valid_dependencies_survive_malformed_kept_entry(self, tmp_path):
+        """A malformed kept dependency field must not drop valid duplicate edges."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "pkg/report.py",
+                        "dependencies": "not-a-list",
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "pkg"
+        nested_dir.mkdir()
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": ["helper_python.prompt"],
+                    },
+                    {
+                        "filename": "helper_python.prompt",
+                        "filepath": "helper.py",
+                        "dependencies": [],
+                    },
+                ]
+            ),
+            encoding="utf-8",
+        )
+
+        modules, architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        target_keys = [module.key for module in modules]
+        graph, warnings = _build_scoped_global_dep_graph(
+            modules,
+            target_keys,
+            tmp_path,
+        )
+
+        assert architecture[0]["dependencies"] == ["helper_python.prompt"]
+        assert graph["report"] == ["helper"]
+        assert warnings == []
+
+    @patch("pdd.agentic_sync._run_readonly_sync_determine_in_cwd")
+    def test_duplicate_output_analysis_uses_syncable_duplicate_candidate(
+        self, mock_determine, tmp_path
+    ):
+        """If the kept basename has no prompt, try the skipped duplicate basename."""
+        decision = MagicMock()
+        decision.operation = "generate"
+        decision.reason = "stale"
+        decision.estimated_cost = 1.25
+        mock_determine.return_value = decision
+
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "backend/report_python.prompt",
+                        "filepath": "backend/functions/report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "backend" / "functions"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_prompts = nested_dir / "prompts"
+        nested_prompts.mkdir()
+        (nested_prompts / "report_python.prompt").write_text(
+            "% nested report prompt",
+            encoding="utf-8",
+        )
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        analysis = _analyze_global_sync_modules(modules, tmp_path, quiet=True)
+
+        assert [module.key for module in modules] == ["backend/report"]
+        assert analysis.skipped_modules == []
+        assert analysis.modules_to_sync == ["backend/report"]
+        assert analysis.module_targets["backend/report"] == "report"
+        assert analysis.module_cwds["backend/report"] == nested_dir
+        mock_determine.assert_called_once()
+        assert mock_determine.call_args.kwargs["basename"] == "report"
+
+    @patch("pdd.agentic_sync._run_readonly_sync_determine_in_cwd")
+    def test_duplicate_output_analysis_checks_later_stale_candidate(
+        self, mock_determine, tmp_path
+    ):
+        """A clean first duplicate must not hide a stale later duplicate."""
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "backend/report_python.prompt",
+                        "filepath": "backend/functions/report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        root_prompts = tmp_path / "prompts" / "backend"
+        root_prompts.mkdir(parents=True)
+        (root_prompts / "report_python.prompt").write_text(
+            "% root report prompt",
+            encoding="utf-8",
+        )
+        nested_dir = tmp_path / "backend" / "functions"
+        nested_dir.mkdir(parents=True)
+        (nested_dir / "architecture.json").write_text(
+            json.dumps(
+                [
+                    {
+                        "filename": "report_python.prompt",
+                        "filepath": "report.py",
+                        "dependencies": [],
+                    }
+                ]
+            ),
+            encoding="utf-8",
+        )
+        nested_prompts = nested_dir / "prompts"
+        nested_prompts.mkdir()
+        (nested_prompts / "report_python.prompt").write_text(
+            "% nested report prompt",
+            encoding="utf-8",
+        )
+
+        def fake_determine(_cwd, **kwargs):
+            decision = MagicMock()
+            decision.reason = kwargs["basename"]
+            decision.estimated_cost = 2.5
+            decision.operation = (
+                "nothing" if kwargs["basename"] == "backend/report" else "generate"
+            )
+            return decision
+
+        mock_determine.side_effect = fake_determine
+
+        modules, _architecture, _arch_path = _architecture_sync_modules(tmp_path)
+        analysis = _analyze_global_sync_modules(modules, tmp_path, quiet=True)
+
+        assert [call.kwargs["basename"] for call in mock_determine.call_args_list] == [
+            "backend/report",
+            "report",
+        ]
+        assert analysis.skipped_modules == []
+        assert analysis.modules_to_sync == ["backend/report"]
+        assert analysis.module_targets["backend/report"] == "report"
+        assert analysis.module_cwds["backend/report"] == nested_dir
+        assert analysis.estimated_cost == 2.5
 
 
 class TestRunGlobalSync:
@@ -1764,6 +2079,29 @@ class TestResolveModuleCwd:
         })
         result = _resolve_module_cwd("components/button", tmp_path)
         assert result == sub
+
+    def test_hidden_worktree_pddrc_does_not_claim_root_module(self, tmp_path):
+        """Local worktree copies must not steal module cwd resolution."""
+        (tmp_path / "prompts" / "backend").mkdir(parents=True)
+        (tmp_path / "prompts" / "backend" / "config_python.prompt").write_text("% root prompt")
+        self._write_pddrc(tmp_path / ".pddrc", {
+            "backend": {
+                "paths": ["backend/**"],
+                "defaults": {"prompts_dir": "prompts/backend"},
+            },
+        })
+
+        worktree = tmp_path / ".worktrees" / "issue-123"
+        (worktree / "prompts" / "backend").mkdir(parents=True)
+        (worktree / "prompts" / "backend" / "config_python.prompt").write_text("% stale copy")
+        self._write_pddrc(worktree / ".pddrc", {
+            "backend": {
+                "paths": ["backend/**"],
+                "defaults": {"prompts_dir": "prompts/backend"},
+            },
+        })
+
+        assert _resolve_module_cwd("backend/config", tmp_path) == tmp_path
 
     def test_nested_pddrc_match_requires_matching_prompt_file(self, tmp_path):
         """Broad nested contexts must not hijack similarly named root modules.

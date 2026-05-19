@@ -97,17 +97,6 @@ def demonstrate_state_management():
         "test": Path("tests/test_calculator.py"),
     }
 
-    # Save fingerprint after successful operation
-    save_fingerprint(
-        basename=basename,
-        language=language,
-        operation="generate",
-        paths=paths,
-        cost=0.192,
-        model="gemini/gemini-3-pro-preview",
-    )
-    print("Saved fingerprint")
-
     # Save run report after test execution
     run_report = {
         "tests_passed": 10,
@@ -117,9 +106,35 @@ def demonstrate_state_management():
     save_run_report(basename, language, run_report)
     print("Saved run report")
 
-    # Clear stale run report before regeneration
-    clear_run_report(basename, language)
-    print("Cleared run report")
+    # After a successful regeneration that mutates code/tests/etc., invalidate
+    # the stale runtime-verification report BEFORE writing the fresh
+    # fingerprint. Required ordering (issue #1057): clear_run_report() then
+    # save_fingerprint(). If clear_run_report fails or the stale _run.json
+    # still exists afterward, skip save_fingerprint() so a fresh fingerprint
+    # never coexists with stale runtime state.
+    from pdd.operation_log import get_run_report_path
+
+    try:
+        clear_run_report(basename, language)
+        print("Cleared run report")
+    except Exception as exc:  # noqa: BLE001 - non-fatal cleanup warning
+        print(f"WARN: clear_run_report failed: {exc}")
+
+    if get_run_report_path(basename, language).exists():
+        print(
+            "WARN: stale run report still present; skipping save_fingerprint "
+            "to avoid partial-sync state (issue #1057)"
+        )
+    else:
+        save_fingerprint(
+            basename=basename,
+            language=language,
+            operation="generate",
+            paths=paths,
+            cost=0.192,
+            model="gemini/gemini-3-pro-preview",
+        )
+        print("Saved fingerprint")
 
 
 # Example CLI command using the @log_operation decorator
@@ -133,10 +148,13 @@ def generate(prompt_file: str, output: Optional[str]) -> Tuple[str, float, str]:
 
     The decorator automatically:
     1. Infers module identity from prompt_file
-    2. Clears stale run report (clears_run_report=True)
-    3. Creates initial log entry
-    4. Executes the wrapped function
-    5. Updates log entry with results
+    2. Creates initial log entry
+    3. Executes the wrapped function
+    4. Updates log entry with results
+    5. On success only: clears stale run report (clears_run_report=True)
+       and verifies deletion before saving fingerprint, so a failed command
+       never erases existing runtime verification state and a fresh fingerprint
+       cannot coexist with a stale run report (issue #1057)
     6. Saves fingerprint on success (updates_fingerprint=True)
     """
     # Simulate generation

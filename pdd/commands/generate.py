@@ -124,7 +124,7 @@ def generate(
         _DEFAULT_CODE_GENERATOR_MAIN = _code_generator_main
     if code_generator_main is None or code_generator_main is _DEFAULT_CODE_GENERATOR_MAIN:
         code_generator_main = _code_generator_main
-    
+
     # Try to import template registry
     try:
         from ..template_registry import load_template
@@ -135,7 +135,7 @@ def generate(
         # 1. Validate Mutex: Template vs Prompt File
         if template and prompt_file:
             raise click.UsageError("Cannot specify both PROMPT_FILE and --template.")
-        
+
         if not template and not prompt_file:
             raise click.UsageError("Missing argument 'PROMPT_FILE' or option '--template'.")
 
@@ -335,7 +335,7 @@ def generate(
     help="Output format: 'code' (default, uses language extension) or 'md' (markdown).",
 )
 @click.pass_context
-@log_operation(operation="example", updates_fingerprint=True)
+@log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)
 @track_cost
 def example(
     ctx: click.Context,
@@ -357,8 +357,8 @@ def example(
     except click.Abort:
         raise
     except Exception as exception:
-        handle_error(exception, "example", ctx.obj.get("quiet", False))
-        return None
+        handle_error(exception, "example", (ctx.obj or {}).get("quiet", False))
+        raise click.exceptions.Exit(1) from exception
 
 
 @click.command(name="test")
@@ -466,12 +466,12 @@ def test(
 
         # Determine mode
         is_url = args[0].startswith("http") or "github.com" in args[0]
-        
+
         if is_url and not manual:
             # Agentic Mode
             if len(args) != 1:
                 raise click.UsageError("Agentic mode requires exactly one argument (the GitHub issue URL).")
-            
+
             issue_url = args[0]
             verbose = ctx.obj.get("verbose", False) if ctx.obj else False
             quiet = ctx.obj.get("quiet", False) if ctx.obj else False
@@ -503,10 +503,10 @@ def test(
             # Manual Mode
             if len(args) != 2:
                 raise click.UsageError("Manual mode requires exactly two arguments: PROMPT_FILE and CODE_OR_EXAMPLE_FILE.")
-            
+
             prompt_file = args[0]
             code_file = args[1]
-            
+
             strength = ctx.obj.get("strength") if ctx.obj else None
             temperature = ctx.obj.get("temperature") if ctx.obj else None
 

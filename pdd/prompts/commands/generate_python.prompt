@@ -43,7 +43,7 @@
   2. **example**:
      - **Interface**: `prompt_file`, `code_file` (args), `--output`, `--format` (choice: code, md).
      - **Logic**: Call `context_generator_main`.
-     - **Decorators**: `@log_operation(operation="example", updates_fingerprint=True)`, `@track_cost`.
+     - **Decorators**: `@log_operation(operation="example", clears_run_report=True, updates_fingerprint=True)`, `@track_cost`. The `clears_run_report=True` flag mirrors the `generate` decorator so a successful `pdd example` invalidates any stale `.pdd/meta/<module>_<language>_run.json` for the affected module; without it, fingerprints would be refreshed while runtime verification state could still describe the pre-mutation example output.
 
   3. **test**: Supports Agentic (default) and Manual (`--manual`) modes.
      - **Interface**: `args` (nargs=-1), `--manual`, `--timeout-adder`, `--no-github-state`, `--output`, `--language`, `--coverage-report`, `--existing-tests` (multiple), `--target-coverage`, `--merge`.

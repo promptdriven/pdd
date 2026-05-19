@@ -14,6 +14,7 @@ from pdd.architecture_sync import (
     _find_renamed_prompt_file,
     _infer_filepath,
     _infer_module_tags,
+    _resolve_sync_paths,
     filepath_to_prompt_filename,
     generate_tags_from_architecture,
     get_architecture_entry_for_prompt,
@@ -115,6 +116,15 @@ def test_parse_tags_only_dependencies():
     assert result['reason'] is None
     assert result['interface'] is None
     assert result['dependencies'] == ['dep1.prompt', 'dep2.prompt']
+
+
+def test_parse_tags_accepts_bare_basename_dependency():
+    """Bare basename dependency tags are kept for later architecture normalization."""
+    content = "<pdd-dependency>api</pdd-dependency>"
+
+    result = parse_prompt_tags(content)
+
+    assert result['dependencies'] == ['api']
 
 
 def test_parse_tags_after_yaml_front_matter():
@@ -328,6 +338,119 @@ def test_sync_prompts_to_architecture_updates_selected_prompts_and_validates(tmp
     assert result["errors"] == []
     assert updated_arch[0]["reason"] == "New core reason"
     assert updated_arch[0]["dependencies"] == ["dep_python.prompt"]
+
+
+def test_sync_prompts_to_architecture_normalizes_basename_dependency_tags(tmp_path):
+    """Path-aware architecture sync should resolve stale basename dependency tags."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "src").mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "src" / "worker_app_Python.prompt").write_text(
+        "\n".join(
+            [
+                "<pdd-reason>Worker app</pdd-reason>",
+                "<pdd-dependency>config_python.prompt</pdd-dependency>",
+                "<pdd-dependency>services/lifecycle_Python.prompt</pdd-dependency>",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "src/worker_app_Python.prompt",
+                    "filepath": "src/worker_app.py",
+                    "description": "Worker app",
+                    "reason": "Old",
+                    "dependencies": [],
+                    "priority": 1,
+                },
+                {
+                    "filename": "src/config_Python.prompt",
+                    "filepath": "src/config.py",
+                    "description": "Config",
+                    "reason": "Config",
+                    "dependencies": [],
+                    "priority": 2,
+                },
+                {
+                    "filename": "src/services/lifecycle_Python.prompt",
+                    "filepath": "src/services/lifecycle.py",
+                    "description": "Lifecycle",
+                    "reason": "Lifecycle",
+                    "dependencies": [],
+                    "priority": 3,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = sync_prompts_to_architecture(
+        filenames=["src/worker_app_Python.prompt"],
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False,
+    )
+
+    updated_arch = json.loads(architecture_path.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert result["validation"]["valid"] is True
+    assert updated_arch[0]["dependencies"] == [
+        "src/config_Python.prompt",
+        "src/services/lifecycle_Python.prompt",
+    ]
+
+
+def test_update_architecture_from_prompt_normalizes_bare_dependency_tag(tmp_path):
+    """Bare dependency tags should resolve instead of clearing existing deps."""
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    architecture_path = tmp_path / "architecture.json"
+
+    (prompts_dir / "app_python.prompt").write_text(
+        "<pdd-dependency>api</pdd-dependency>",
+        encoding="utf-8",
+    )
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "app_python.prompt",
+                    "filepath": "pdd/app.py",
+                    "description": "App",
+                    "reason": "App",
+                    "dependencies": ["api_python.prompt"],
+                    "priority": 1,
+                },
+                {
+                    "filename": "api_python.prompt",
+                    "filepath": "pdd/api.py",
+                    "description": "API",
+                    "reason": "API",
+                    "dependencies": [],
+                    "priority": 2,
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = update_architecture_from_prompt(
+        "app_python.prompt",
+        prompts_dir=prompts_dir,
+        architecture_path=architecture_path,
+        dry_run=False,
+    )
+
+    updated_arch = json.loads(architecture_path.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert updated_arch[0]["dependencies"] == ["api_python.prompt"]
 
 
 def test_sync_prompts_to_architecture_dry_run_preserves_architecture_file(tmp_path):
@@ -561,6 +684,104 @@ def test_sync_prompts_to_architecture_prefers_nearest_cwd_project(tmp_path, monk
     assert result["updated_count"] == 1
     assert root_arch[0]["reason"] == "Original root reason"
     assert nested_arch[0]["reason"] == "Updated nested reason"
+
+
+def test_resolve_sync_paths_uses_nested_architecture_with_ancestor_prompts(tmp_path, monkeypatch):
+    """Nested architecture.json files can use an ancestor prompts directory."""
+    repo_root = tmp_path / "repo"
+    backend = repo_root / "backend" / "functions"
+    (repo_root / ".git").mkdir(parents=True)
+    (repo_root / "prompts").mkdir()
+    backend.mkdir(parents=True)
+    (backend / "architecture.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(backend)
+
+    prompts_dir, architecture_path = _resolve_sync_paths(None, None)
+
+    assert prompts_dir.resolve() == (repo_root / "prompts").resolve()
+    assert architecture_path.resolve() == (backend / "architecture.json").resolve()
+
+
+def test_nested_sync_architecture_scopes_ancestor_prompt_registration(tmp_path, monkeypatch):
+    """No-arg nested sync must not auto-register unrelated ancestor prompts."""
+    repo_root = tmp_path / "repo"
+    backend = repo_root / "backend" / "functions"
+    prompts_dir = repo_root / "prompts"
+    (repo_root / ".git").mkdir(parents=True)
+    backend.mkdir(parents=True)
+    (prompts_dir / "backend").mkdir(parents=True)
+    (prompts_dir / "unrelated_python.prompt").write_text(
+        "<pdd-reason>Unrelated module</pdd-reason>",
+        encoding="utf-8",
+    )
+    (prompts_dir / "backend" / "worker_python.prompt").write_text(
+        "<pdd-reason>Updated backend worker</pdd-reason>",
+        encoding="utf-8",
+    )
+    architecture_path = backend / "architecture.json"
+    architecture_path.write_text(
+        json.dumps(
+            [
+                {
+                    "filename": "backend/worker_python.prompt",
+                    "filepath": "worker.py",
+                    "description": "Backend worker",
+                    "reason": "Old backend worker",
+                    "dependencies": [],
+                    "priority": 1,
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(backend)
+
+    result = sync_prompts_to_architecture(dry_run=False)
+    arch_data = json.loads(architecture_path.read_text(encoding="utf-8"))
+
+    assert result["success"] is True
+    assert result["updated_count"] == 1
+    assert result["registered"] == []
+    assert [module["filename"] for module in arch_data] == [
+        "backend/worker_python.prompt"
+    ]
+    assert arch_data[0]["reason"] == "Updated backend worker"
+
+
+def test_sync_prompts_to_architecture_dry_run_reports_registrations(tmp_path, monkeypatch):
+    """Dry-run should expose prompt registrations that a real run would write."""
+    (tmp_path / ".git").mkdir()
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    (prompts_dir / "new_python.prompt").write_text(
+        "<pdd-reason>New module</pdd-reason>",
+        encoding="utf-8",
+    )
+    (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+
+    result = sync_prompts_to_architecture(dry_run=True)
+
+    assert result["success"] is True
+    assert result["registered"] == ["new_python.prompt"]
+
+
+def test_resolve_sync_paths_does_not_escape_nested_project_root(tmp_path, monkeypatch):
+    """A nested project without prompts/ must not borrow a parent project's prompts."""
+    outer = tmp_path / "outer"
+    inner = outer / "inner"
+    outer.mkdir()
+    inner.mkdir()
+    (outer / "prompts").mkdir()
+    (outer / "architecture.json").write_text("[]", encoding="utf-8")
+    (inner / ".git").mkdir()
+    (inner / "architecture.json").write_text("[]", encoding="utf-8")
+    monkeypatch.chdir(inner)
+
+    prompts_dir, architecture_path = _resolve_sync_paths(None, None)
+
+    assert prompts_dir.resolve() == (inner / "prompts").resolve()
+    assert architecture_path.resolve() == (inner / "architecture.json").resolve()
 
 
 def test_sync_prompts_to_architecture_falls_back_to_repo_root_from_nested_cwd(tmp_path, monkeypatch):
@@ -2480,6 +2701,34 @@ def test_infer_filepath_python():
     assert _infer_filepath('cli_detector_python.prompt') == 'pdd/cli_detector.py'
 
 
+def test_infer_filepath_path_aware_pascal_python():
+    """_infer_filepath reverses path-aware PascalCase Python prompt names."""
+    assert (
+        _infer_filepath('src/workers/runtime/gemini_cli_Python.prompt')
+        == 'src/workers/runtime/gemini_cli.py'
+    )
+    assert (
+        _infer_filepath('src/clients/__init___Python.prompt')
+        == 'src/clients/__init__.py'
+    )
+
+
+def test_infer_filepath_path_aware_legacy_lowercase_python():
+    """_infer_filepath keeps path-qualified legacy lowercase Python prompts path-aware."""
+    assert (
+        _infer_filepath('src/workers/runtime/gemini_cli_python.prompt')
+        == 'src/workers/runtime/gemini_cli.py'
+    )
+
+
+def test_infer_filepath_path_aware_typescript_react():
+    """_infer_filepath reverses path-aware TypeScriptReact prompt names."""
+    assert (
+        _infer_filepath('app/sheet/[id]/page_TypeScriptReact.prompt')
+        == 'app/sheet/[id]/page.tsx'
+    )
+
+
 def test_infer_filepath_llm():
     """_infer_filepath returns prompts/<filename> for _LLM.prompt files."""
     assert _infer_filepath('agentic_arch_step5_design_LLM.prompt') == 'prompts/agentic_arch_step5_design_LLM.prompt'
@@ -2488,6 +2737,7 @@ def test_infer_filepath_llm():
 def test_infer_module_tags_python():
     """_infer_module_tags returns ['module', 'python'] for _python.prompt files."""
     assert _infer_module_tags('cli_detector_python.prompt') == ['module', 'python']
+    assert _infer_module_tags('src/workers/runtime/gemini_cli_Python.prompt') == ['module', 'python']
 
 
 def test_infer_module_tags_llm():
@@ -2560,6 +2810,60 @@ def test_register_untracked_prompts_adds_include_first_entry():
         entry = next(m for m in updated if m['filename'] == 'commands_modify_python.prompt')
         assert entry['reason'] == 'Modify commands'
         assert entry['dependencies'] == ['split_main_python.prompt']
+
+
+def test_register_untracked_prompts_uses_nested_pddrc_generate_output_path(tmp_path):
+    """Nested .pddrc prompt contexts should own auto-register filepath inference."""
+    prompts_dir = tmp_path / "prompts"
+    commands_dir = prompts_dir / "commands"
+    src_runtime_dir = prompts_dir / "src" / "workers" / "runtime"
+    commands_dir.mkdir(parents=True)
+    src_runtime_dir.mkdir(parents=True)
+    arch_path = tmp_path / "architecture.json"
+
+    (tmp_path / ".pddrc").write_text(
+        """
+version: "1.0"
+contexts:
+  commands:
+    paths: ["pdd/commands/**", "prompts/commands/**"]
+    defaults:
+      prompts_dir: "prompts/commands"
+      generate_output_path: "pdd/commands/"
+  pdd_cli:
+    paths: ["pdd/**", "prompts/**"]
+    defaults:
+      prompts_dir: "prompts"
+      generate_output_path: "pdd"
+""",
+        encoding="utf-8",
+    )
+    (commands_dir / "foo_python.prompt").write_text(
+        "<pdd-reason>Foo command</pdd-reason>\n% body\n",
+        encoding="utf-8",
+    )
+    (src_runtime_dir / "gemini_cli_python.prompt").write_text(
+        "<pdd-reason>Gemini runtime</pdd-reason>\n% body\n",
+        encoding="utf-8",
+    )
+    arch_path.write_text("[]\n", encoding="utf-8")
+
+    result = register_untracked_prompts(
+        prompts_dir=prompts_dir,
+        architecture_path=arch_path,
+    )
+
+    assert set(result["registered"]) == {
+        "commands/foo_python.prompt",
+        "src/workers/runtime/gemini_cli_python.prompt",
+    }
+    updated = json.loads(arch_path.read_text(encoding="utf-8"))
+    entries = {entry["filename"]: entry for entry in updated}
+    assert entries["commands/foo_python.prompt"]["filepath"] == "pdd/commands/foo.py"
+    assert (
+        entries["src/workers/runtime/gemini_cli_python.prompt"]["filepath"]
+        == "src/workers/runtime/gemini_cli.py"
+    )
 
 
 def test_register_skips_file_without_tags():

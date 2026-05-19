@@ -12,17 +12,17 @@
       },
       {
         "name": "update_architecture_from_prompt",
-        "signature": "(prompt_filename: str, prompts_dir: Path, architecture_path: Path, dry_run: bool, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
+        "signature": "(prompt_filename: str, prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, prompt_content_override: Optional[str] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: success, updated, changes, error, warnings"
       },
       {
         "name": "sync_all_prompts_to_architecture",
-        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
+        "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: success, updated_count, skipped_count, results, errors, registered"
       },
       {
         "name": "validate_dependencies",
-        "signature": "(dependencies: List[str], prompts_dir: Path) -> Dict[str, Any]",
+        "signature": "(dependencies: List[str], prompts_dir: Path = PROMPTS_DIR) -> Dict[str, Any]",
         "returns": "Dict with keys: valid, missing, duplicates"
       },
       {
@@ -32,7 +32,7 @@
       },
       {
         "name": "get_architecture_entry_for_prompt",
-        "signature": "(prompt_filename: str, architecture_path: Path) -> Optional[Dict[str, Any]]",
+        "signature": "(prompt_filename: str, architecture_path: Path = ARCHITECTURE_JSON_PATH) -> Optional[Dict[str, Any]]",
         "returns": "Architecture entry dict or None"
       },
       {
@@ -52,7 +52,7 @@
       },
       {
         "name": "register_untracked_prompts",
-        "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool, only_files: Optional[set] = None) -> Dict[str, Any]",
+        "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: registered, skipped, errors"
       }
     ]
@@ -70,7 +70,7 @@ This module handles the synchronization of architecture metadata between `archit
 % Requirements
 1. Parse PDD metadata tags from prompt content using lxml with lenient recovery. If a prompt starts with YAML front matter delimited by `---` lines, skip that front matter before parsing PDD metadata. Only parse the header section (before the first line starting with `%`) so that example tags in body code fences or prose are never extracted as real metadata.
 2. Extract `<pdd-reason>` (single line description), `<pdd-interface>` (JSON), `<pdd-dependency>` (multiple allowed). Support double-brace escaped JSON (`{{`/`}}`) as a fallback for Python `.format()` style prompts.
-3. Sanitize dependency values: reject entries that don't end in `.prompt`, contain newlines, or exceed 100 characters.
+3. Sanitize dependency values: keep entries that end in `.prompt` and clean bare basename entries such as `api`; reject entries that contain newlines, exceed 100 characters, or look like other file paths/extensions.
 4. Update architecture.json entries from prompt file tags (only update fields with tags present — lenient). **Dependencies field (`dependencies` in architecture):** update **only** when the prompt expresses dependency intent: `has_dependency_tags` is True (the prompt contains `<pdd-dependency>` tags, including an **empty** `<pdd-dependency></pdd-dependency>` which means **explicit clear**), **or** parsed dependency tags yield a non-empty list after sanitization. If the prompt change is **reason- or interface-only** and there are **no** `<pdd-dependency>` tags, **preserve** the existing `dependencies` array in architecture.json unchanged (do not wipe edges that may still be valid from prior sync or manual curation).
 5. When updating an interface, merge function signatures rather than replacing them: the new signature must be a superset of the old one (all existing parameters preserved, new parameters added). If the new signature would remove a parameter, emit a warning but preserve it. Guard against cross-class contamination: if two signatures share no parameter names beyond `self`/`cls`, reject the merge and keep the old signature.
 6. Use `ast` module to parse Python signatures into structured parameter metadata for reliable merge/rebuild.
@@ -79,11 +79,16 @@ This module handles the synchronization of architecture metadata between `archit
 9. Validate dependencies (check file existence, detect duplicates) and validate interface structure (type must be module/cli/command/frontend with appropriate nested keys)
 10. Generate XML tags string from architecture entry for reverse direction (architecture.json -> prompt)
 11. Auto-rename: when a prompt file is not found, search for a step-number variant (e.g., step4 -> step5) and auto-update the architecture.json entry if exactly one unambiguous match exists. Use `rglob` to support subdirectory layouts.
-12. Auto-register: `register_untracked_prompts()` discovers prompt files with PDD tags that have no architecture.json entry and creates minimal entries (infer filepath and tags from filename conventions). `sync_all_prompts_to_architecture()` calls this as a pre-pass. Accepts an optional `only_files: Optional[set] = None` parameter: when provided, the function only considers prompt filenames (relative to `prompts_dir`, as POSIX paths) that are members of this set — prompts outside the set are skipped even if they have valid PDD tags and no arch entry. This scope filter is for in-workflow callers (e.g., `agentic_change_orchestrator` Step 10 post-processing) that need a narrow safety net and must not silently sweep repo-wide drift into an unrelated PR. When `only_files` is `None` (default), the full-scan behavior is preserved for standalone cleanup runs and the `sync_all_prompts_to_architecture` pre-pass.
+12. Auto-register: `register_untracked_prompts()` discovers prompt files with PDD tags that have no architecture.json entry and creates minimal entries (infer filepath and tags from filename conventions). `sync_all_prompts_to_architecture()` calls this as a pre-pass and accepts an optional `only_files: Optional[set] = None` parameter that is forwarded to `register_untracked_prompts`. When provided, the function only considers prompt filenames (relative to `prompts_dir`, as POSIX paths) that are members of this set — prompts outside the set are skipped even if they have valid PDD tags and no arch entry. This scope filter is for in-workflow callers (e.g., `agentic_change_orchestrator` Step 10 post-processing) and nested sync-architecture calls that use an ancestor prompts directory; they need a narrow safety net and must not silently sweep repo-wide drift into an unrelated architecture file. When `only_files` is `None` (default), the full-scan behavior is preserved for standalone cleanup runs and root-level `sync_all_prompts_to_architecture` usage.
 13. Filename normalization (Issue #617): `normalize_architecture_filenames()` rewrites each module's `filename` from its `filepath` so prompt filenames mirror the source directory structure (e.g., `app/api/route.ts` -> `app/api/route_TypeScript.prompt`). Import `filepath_to_prompt_filename` from `.architecture_sync_helper`. Also rewrite dependency references to use the new filenames. Skip extensionless files (e.g., Makefile).
 14. `get_architecture_entry_for_prompt` supports both exact path match and basename fallback for callers that pass just the filename without subdirectory prefix.
 15. Use Path.cwd() for default paths to work with user's project directory, not package installation
 16. **`prompt_content_override` (additive, optional)**: `update_architecture_from_prompt` accepts an optional `prompt_content_override: Optional[str] = None` kwarg. When provided, parse PDD metadata tags from this in-memory string instead of reading the file from disk. This lets the `run_metadata_sync` orchestrator hand in freshly-generated tags from the prompt-update + tag-refresh stages without an extra disk round-trip and without racing against the file write. When `None` (default), behavior is unchanged — read content from disk as before. All other parameters retain their existing semantics.
+17. Default path resolution for `sync_prompts_to_architecture()` must be cwd-anchored and project-boundary safe. Resolve explicit `prompts_dir` and `architecture_path` relative to `Path.cwd()` when they are not absolute. Without explicit paths, walk upward from cwd to find the nearest `architecture.json` and the nearest `prompts/` directory, but stop after checking the resolved `find_project_root(cwd)`. This allows a nested architecture.json to use an ancestor `prompts/` directory inside the same project, while preventing a nested project/repo with no prompts directory from borrowing a parent project's prompts or architecture. When a no-filenames sync resolves an architecture file whose parent differs from the prompts directory owner (`prompts_dir.parent`), restrict auto-registration to filenames already present in that architecture file so unrelated ancestor prompts are not registered into the nested architecture.
+18. Auto-register/inference must support path-aware PascalCase prompt filenames as well as path-qualified legacy lowercase suffixes, while preserving root legacy lowercase behavior. Examples: `src/workers/runtime/gemini_cli_Python.prompt` and `src/workers/runtime/gemini_cli_python.prompt` both infer filepath `src/workers/runtime/gemini_cli.py`; `cli_detector_python.prompt` still infers `pdd/cli_detector.py`; `src/clients/__init___Python.prompt` infers `src/clients/__init__.py`; `components/Foo_TypeScriptReact.prompt` infers `components/Foo.tsx`. Python PascalCase filenames must also infer `['module', 'python']` tags.
+18a. During auto-registration, nested `.pddrc` prompt contexts override blanket path-aware inference: if a context declares `prompts_dir: "prompts/commands"` and `generate_output_path: "pdd/commands/"`, then `commands/foo_python.prompt` must infer `pdd/commands/foo.py`. Do not apply a root catch-all `prompts` context to path-qualified source-root prompts such as `src/workers/runtime/gemini_cli_python.prompt`; those remain `src/workers/runtime/gemini_cli.py`.
+19. When prompt dependency tags are synced into architecture entries, normalize them to existing architecture filenames when unambiguous: exact match, case-insensitive exact match, unique suffix match, unique basename match, then clean bare module stem match (for example `api` -> `api_python.prompt`). Deduplicate while preserving order. Leave ambiguous or unresolved dependency strings unchanged so validation can report them instead of silently guessing.
+20. `sync_prompts_to_architecture()` must include `registered` in its returned result, including dry-run results, so callers can see which prompt registrations a real no-filenames run would write.
 
 % Dependencies
 - `lxml.etree` for XML parsing with recovery mode

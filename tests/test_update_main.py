@@ -3609,6 +3609,7 @@ def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestra
 
     with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
          patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.operation_log.clear_run_report") as mock_clear_rr, \
          patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
 
         ctx = click.Context(click.Command("update"))
@@ -3629,6 +3630,174 @@ def test_repo_mode_with_sync_metadata_false_uses_legacy_path_and_skips_orchestra
     assert mock_sync.call_count == 0
     assert mock_save_fp.call_count == mock_update_file_pair.call_count
     assert mock_save_fp.call_count >= 1
+    # Regression for issue #1057: in --repo mode without --sync-metadata, each
+    # successful pair update must clear any stale run report *before* the new
+    # fingerprint is saved, otherwise a `.pdd/meta/<basename>_<language>_run.json`
+    # from a prior runtime verification can outlive the prompt/code pair it
+    # described.
+    assert mock_clear_rr.call_count == mock_save_fp.call_count, (
+        "clear_run_report must be called once per successful pair update "
+        "alongside save_fingerprint (issue #1057)"
+    )
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_clear_run_report_failure_warns_and_continues(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+    capsys,
+):
+    # Regression for issue #1057: when clear_run_report raises in repo-mode
+    # legacy fingerprinting, we must surface a non-fatal warning (when not
+    # quiet) and still proceed to save_fingerprint, so the user is told that
+    # runtime verification state may still describe the pre-mutation files.
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch(
+             "pdd.operation_log.clear_run_report",
+             side_effect=OSError("disk full"),
+         ) as mock_clear_rr, \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
+
+        ctx = click.Context(click.Command("update"))
+        # quiet=False so the warning is emitted
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=False,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+    # clear_run_report attempted for each successful pair
+    assert mock_clear_rr.call_count == mock_update_file_pair.call_count
+    # save_fingerprint still called per pair despite clear failure
+    assert mock_save_fp.call_count == mock_update_file_pair.call_count
+    assert mock_save_fp.call_count >= 1
+    # Warning surfaced to the user
+    out = capsys.readouterr().out
+    assert "Run report clear failed" in out
+    assert "disk full" in out
+
+
+@patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})
+@patch("pdd.update_main.is_code_changed", return_value=(True, "changed"))
+@patch("pdd.update_main.get_git_changed_files", return_value=set())
+@patch("pdd.update_main.update_file_pair")
+@patch("pdd.pddrc_initializer.ensure_pddrc_for_scan")
+def test_repo_mode_clear_run_report_silent_unlink_failure_warns(
+    mock_pddrc,
+    mock_update_file_pair,
+    mock_git_changed,
+    mock_is_changed,
+    mock_arch,
+    temp_git_repo,
+    capsys,
+    tmp_path,
+):
+    """Regression for issue #1057 (round 4+): ``clear_run_report`` in
+    ``pdd/operation_log.py`` silently swallows ``OSError`` on the actual
+    ``os.remove`` (lines 317-320). Repo-mode must verify that the run report
+    is actually gone after the call, surface a non-fatal warning if it
+    remains, AND skip ``save_fingerprint`` so a fresh fingerprint cannot
+    coexist with a stale ``_run.json`` describing the pre-update files.
+    """
+    def _update(prompt_file, code_file, ctx, repo, simple=False, strength=None, temperature=None):
+        return {
+            "prompt_file": prompt_file,
+            "code_file": code_file,
+            "status": "Success",
+            "cost": 0.01,
+            "model": "mock",
+            "error": "",
+        }
+    mock_update_file_pair.side_effect = _update
+
+    # Simulate the silent-swallow path: a stale run report exists before the
+    # call, and ``clear_run_report`` is a no-op (mirroring the swallowed
+    # ``OSError`` in the real helper) so the file persists afterwards.
+    stale_report = tmp_path / "mod_python_run.json"
+    stale_report.write_text("{}", encoding="utf-8")
+
+    with patch("pdd.metadata_sync.run_metadata_sync") as mock_sync, \
+         patch("pdd.operation_log.save_fingerprint") as mock_save_fp, \
+         patch("pdd.operation_log.clear_run_report") as mock_clear_rr, \
+         patch(
+             "pdd.operation_log.get_run_report_path",
+             return_value=stale_report,
+         ), \
+         patch("pdd.operation_log.infer_module_identity", return_value=("mod", "python")):
+
+        ctx = click.Context(click.Command("update"))
+        # quiet=False so the defensive warning is emitted
+        ctx.obj = {"strength": 0.5, "temperature": 0.1, "verbose": False, "time": 0.25, "quiet": False}
+
+        result = update_main(
+            ctx=ctx,
+            input_prompt_file=None,
+            modified_code_file=None,
+            input_code_file=None,
+            output=None,
+            use_git=False,
+            repo=True,
+            sync_metadata=False,
+        )
+
+    assert result is not None
+    assert mock_sync.call_count == 0
+    # clear_run_report attempted for each successful pair, but it silently
+    # did nothing (no exception raised, no file removed).
+    assert mock_clear_rr.call_count == mock_update_file_pair.call_count
+    # save_fingerprint must be SKIPPED when the stale run report remains,
+    # so we don't claim finalized metadata while runtime verification still
+    # describes the pre-update files (issue #1057).
+    assert mock_save_fp.call_count == 0
+    # Defensive warning surfaced to the user because the report file still
+    # exists after clear_run_report returned.
+    out = capsys.readouterr().out
+    assert "Run report clear failed" in out
+    assert "still exists after" in out
+    # The file is indeed still on disk (the whole point of this regression).
+    assert stale_report.exists()
+
+
+def test_update_main_prompt_operation_log_include_has_no_invalid_selector():
+    repo_root = Path(__file__).resolve().parents[1]
+    content = (repo_root / "pdd/prompts/update_main_python.prompt").read_text(
+        encoding="utf-8"
+    )
+
+    assert "def:example_clear_run_report" not in content
+    assert (
+        "<operation_log_example><include>context/operation_log_example.py</include>"
+        "</operation_log_example>"
+    ) in content
 
 
 @patch("pdd.architecture_sync.update_architecture_from_prompt", return_value={"success": False, "updated": False, "changes": {}})

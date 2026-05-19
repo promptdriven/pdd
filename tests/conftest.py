@@ -1,16 +1,45 @@
 """Project-level pytest configuration hooks."""
 
+import atexit
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 from typing import Any
+
+# =============================================================================
+# HOME isolation (MUST happen before ANY pdd.* import)
+# =============================================================================
+# Pin HOME (and CODEX_HOME) to a per-pytest-session sandbox tempdir BEFORE any
+# pdd.* module is imported below. Two production modules compute paths via
+# ``Path.home()`` at *import time* — ``pdd/auth_service.py:20`` and
+# ``pdd/get_jwt_token.py:74`` both define
+# ``JWT_CACHE_FILE = Path.home() / ".pdd" / "jwt_cache"`` — and
+# ``_save_api_key()`` in ``pdd/cli_detector.py:463-491`` writes to
+# ``~/.pdd/api-env.{shell}`` and appends to ``~/.bashrc`` / ``~/.zshrc`` /
+# ``~/.config/fish/config.fish``. Without HOME pinning before those modules
+# load, the constants capture the developer's real home and any test that
+# exercises the write paths (directly or transitively via CLI bootstrap)
+# would overwrite real shell rc / token cache files.
+#
+# A parallel fix shipped in promptdriven/pdd_cloud#1486 for the same class of
+# bug — a test fixture overwrote ~/.codex/auth.json with a placeholder token
+# and broke the developer's Codex CLI until they re-ran ``codex login``.
+# ``tests/test_home_isolation.py`` pins these invariants.
+_PYTEST_FAKE_HOME = tempfile.mkdtemp(prefix="pdd-pytest-home-")
+atexit.register(shutil.rmtree, _PYTEST_FAKE_HOME, ignore_errors=True)
+os.environ["HOME"] = _PYTEST_FAKE_HOME
+os.environ["CODEX_HOME"] = os.path.join(_PYTEST_FAKE_HOME, ".codex")
 
 import pytest
 from dotenv import load_dotenv
 from pdd.llm_invoke import InsufficientCreditsError
 
 
-# Load environment variables from .env early in collection
+# Load environment variables from .env early in collection.
+# Note: python-dotenv's default ``override=False`` won't clobber the HOME /
+# CODEX_HOME values we just pinned above.
 load_dotenv()
 
 # Store the original PDD_PATH at module load time for restoration
@@ -42,6 +71,33 @@ _E2E_FIX_ATTRS_TO_RESTORE = (
     "_run_step11_code_cleanup",
     "run_ci_validation_loop",
 )
+
+
+@pytest.fixture(autouse=True)
+def _enforce_isolated_home(monkeypatch):
+    """Per-test re-assertion of HOME/CODEX_HOME isolation.
+
+    The module-level pinning at the top of this file handles
+    import-time path resolution. This fixture defends against tests that
+    explicitly mutate HOME (e.g. ``os.environ["HOME"] = "..."``) by
+    restoring the sandbox before the next test runs.
+    """
+    monkeypatch.setenv("HOME", _PYTEST_FAKE_HOME)
+    monkeypatch.setenv("CODEX_HOME", os.path.join(_PYTEST_FAKE_HOME, ".codex"))
+
+
+@pytest.fixture(scope="session")
+def sandbox_home() -> Path:
+    """Expose the session-scoped fake HOME pinned at conftest import time.
+
+    Regression tests in ``tests/test_home_isolation.py`` assert that
+    HOME / CODEX_HOME / ``Path.home()`` / module-level JWT_CACHE_FILE
+    constants all resolve to exactly this path. Asserting equality
+    against this fixture (rather than a hard-coded temp-root whitelist
+    like ``/tmp/``) keeps the invariant robust against CI/dev
+    environments with a custom ``TMPDIR``.
+    """
+    return Path(_PYTEST_FAKE_HOME)
 
 
 @pytest.fixture(autouse=True)
