@@ -2733,12 +2733,16 @@ def test_cloud_attempts_survive_pre_loop_setup_failure():
     )
 
 
-def test_propagate_attempted_models_replaces_when_incoming_extends_existing():
-    """Regression (codex P2): single llm_invoke calls the helper twice — once
-    from the cloud-fallback handler with the cloud-only prefix, then again on
-    local success with the full chain. When the incoming chain is a
-    prefix-extension of the existing ctx chain, the helper MUST replace so the
-    cloud prefix isn't recorded twice on ctx.obj['attempted_models'].
+def test_propagate_attempted_models_appends_repeated_chain():
+    """Regression (codex round 4, P3): two SIBLING llm_invoke calls in one
+    Click command that both produce the same multi-model chain
+    (e.g. both report ['cloud:a','cloud:b']) must compose into the
+    chronologically correct ['cloud:a','cloud:b','cloud:a','cloud:b'].
+
+    The helper is now contracted to be called AT MOST ONCE per llm_invoke
+    invocation, so the per-element append-with-dedup loop (skip only when
+    combined[-1] == name) correctly preserves the full cross-invocation
+    history.
     """
     import click
     from pdd.llm_invoke import _propagate_attempted_models_to_ctx
@@ -2746,8 +2750,10 @@ def test_propagate_attempted_models_replaces_when_incoming_extends_existing():
     ctx = click.Context(click.Command("x"), obj={})
     with ctx:
         _propagate_attempted_models_to_ctx(['cloud:a', 'cloud:b'])
-        _propagate_attempted_models_to_ctx(['cloud:a', 'cloud:b', 'local:c'])
-        assert ctx.obj['attempted_models'] == ['cloud:a', 'cloud:b', 'local:c']
+        _propagate_attempted_models_to_ctx(['cloud:a', 'cloud:b'])
+        assert ctx.obj['attempted_models'] == [
+            'cloud:a', 'cloud:b', 'cloud:a', 'cloud:b'
+        ]
 
 
 def test_propagate_attempted_models_appends_when_incoming_is_disjoint():

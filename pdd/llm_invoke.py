@@ -541,30 +541,21 @@ def _propagate_attempted_models_to_ctx(attempted_models: List[str]) -> None:
         ctx = click.get_current_context(silent=True)
         if ctx is None or ctx.obj is None or not hasattr(ctx.obj, "__setitem__"):
             return
-        # Compose with any existing chain so multiple llm_invoke calls in the
-        # same command compose into one chronological list.
+        # Compose with any existing chain so multiple sibling llm_invoke
+        # calls in one Click command compose into one chronological list.
+        # The contract is "called at most once per llm_invoke" — that
+        # invariant lets this per-element append-with-dedup loop be correct
+        # for both inter-invocation composition AND repeated identical
+        # chains (two sibling llm_invoke calls that both produced
+        # ['cloud:a','cloud:b'] correctly yield ['cloud:a','cloud:b','cloud:a','cloud:b']).
         existing = ctx.obj.get("attempted_models") or []
         if not isinstance(existing, list):
             existing = []
         incoming = [str(name) for name in attempted_models if name]
-        # Single llm_invoke now calls this helper twice (once from the
-        # cloud-fallback handler with the cloud-only prefix, then again on
-        # local success with the full chain). When the incoming chain is a
-        # prefix-extension of the existing chain, REPLACE rather than
-        # append-with-dedup — otherwise the cloud prefix would be re-appended
-        # on top of itself (the dedup loop only checks combined[-1] != name,
-        # not whole-prefix containment).
-        if (
-            existing
-            and len(incoming) >= len(existing)
-            and incoming[: len(existing)] == existing
-        ):
-            combined = list(incoming)
-        else:
-            combined = list(existing)
-            for name in incoming:
-                if not combined or combined[-1] != name:
-                    combined.append(name)
+        combined = list(existing)
+        for name in incoming:
+            if not combined or combined[-1] != name:
+                combined.append(name)
         ctx.obj["attempted_models"] = combined
     except Exception:
         # Cost tracking is best-effort; never raise from this helper.
@@ -3104,7 +3095,12 @@ def llm_invoke(
             _propagate_attempted_models_to_ctx(attempted_models_chain)
             return cloud_result
         except CloudFallbackError as e:
-            # Notify user and fall back to local execution
+            # Notify user and fall back to local execution.
+            # NOTE: do NOT call _propagate_attempted_models_to_ctx here.
+            # The "at most once per llm_invoke" contract requires that
+            # propagation happens exactly once — either inside the pre-loop
+            # setup try/except wrapper (on setup failure) or after the local
+            # candidate loop finishes (on success / all-candidates RuntimeError).
             console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
             logger.warning(f"Cloud fallback: {e}")
             _emit_llm_attribution(
@@ -3116,10 +3112,6 @@ def llm_invoke(
                 text = str(name)
                 if text and (not attempted_models_chain or attempted_models_chain[-1] != text):
                     attempted_models_chain.append(text)
-            # Propagate immediately so track_cost can still recover the cloud
-            # attempts even if pre-loop local setup raises before the candidate
-            # loop attaches the chain to a result/exception.
-            _propagate_attempted_models_to_ctx(attempted_models_chain)
         except InsufficientCreditsError as e:
             # Re-raise credit errors - user needs to know.  Attach the
             # cloud attempt so callers / track_cost can still record it.
@@ -3135,7 +3127,10 @@ def llm_invoke(
             _propagate_attempted_models_to_ctx(attempted_models_chain)
             raise
         except CloudInvocationError as e:
-            # Non-recoverable cloud error - notify and fall back
+            # Non-recoverable cloud error - notify and fall back to local.
+            # NOTE: do NOT call _propagate_attempted_models_to_ctx here for the
+            # same "at most once per llm_invoke" reason documented above on
+            # CloudFallbackError.
             console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
             logger.warning(f"Cloud invocation error: {e}")
             _emit_llm_attribution(
@@ -3147,10 +3142,6 @@ def llm_invoke(
                 text = str(name)
                 if text and (not attempted_models_chain or attempted_models_chain[-1] != text):
                     attempted_models_chain.append(text)
-            # Propagate immediately so track_cost can still recover the cloud
-            # attempts even if pre-loop local setup raises before the candidate
-            # loop attaches the chain to a result/exception.
-            _propagate_attempted_models_to_ctx(attempted_models_chain)
 
     # --- 2. Local execution uses already-validated formatted_messages ---
 
@@ -3202,6 +3193,12 @@ def llm_invoke(
             # Some exception types are immutable (e.g. some C extension errors);
             # best-effort attach only.
             pass
+        # Propagate to ctx here so track_cost can recover the cloud chain
+        # even if the exception object lost the attribute. This is the only
+        # propagation site for pre-loop setup failures (the cloud-error
+        # handlers themselves no longer propagate, to preserve the "at most
+        # once per llm_invoke" invariant).
+        _propagate_attempted_models_to_ctx(attempted_models_chain)
         raise
 
     _emit_llm_attribution(

@@ -78,14 +78,21 @@ def track_cost(func):
             # prior shared value. Without this snapshot, a later @track_cost
             # invocation on the same ctx.obj would see leftover state from a
             # prior command (issue #1086 regression).
+            #
+            # Capture regardless of whether the snapshot/restore guard at
+            # command entry fired (attempted_models_scoped). ctx.obj may have
+            # been None at entry and created inside func via
+            # ctx.ensure_object(dict), so a missing snapshot is NOT evidence
+            # that no chain was recorded — read ctx.obj['attempted_models']
+            # whenever ctx.obj is now non-None.
             command_attempted_models: List[str] = []
-            if attempted_models_scoped and ctx.obj is not None:
-                try:
-                    current = ctx.obj.get('attempted_models') if hasattr(ctx.obj, 'get') else None
+            try:
+                if ctx is not None and ctx.obj is not None and hasattr(ctx.obj, 'get'):
+                    current = ctx.obj.get('attempted_models')
                     if isinstance(current, list):
                         command_attempted_models = [str(m) for m in current if m]
-                except Exception:
-                    command_attempted_models = []
+            except Exception:
+                command_attempted_models = []
 
             # Restore the prior shared value (or remove the key entirely) so
             # the next command starts with a clean slate.

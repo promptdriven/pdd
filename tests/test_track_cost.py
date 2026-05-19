@@ -1113,6 +1113,56 @@ def test_existing_csv_without_attempted_models_is_migrated(
     mock_rprint.assert_not_called()
 
 
+def test_track_cost_captures_chain_when_ctx_obj_created_in_command(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """Regression (codex round 4, P2): when a @track_cost command starts
+    with ctx.obj is None and the wrapped func promotes it inside the call
+    (e.g. via ctx.ensure_object(dict)), the attempted_models chain that
+    llm_invoke populates on the newly-created ctx.obj must still land in
+    the CSV row. Previously the post-command capture was gated on
+    attempted_models_scoped, which is False when ctx.obj is None at entry,
+    so the captured chain stayed empty and the row's attempted_models
+    column was blank even though a chain had been recorded.
+    """
+    csv_path = tmp_path / "cost.csv"
+
+    mock_ctx = MagicMock()
+    mock_ctx.command.name = 'generate'
+    mock_ctx.params = {
+        'prompt_file': '/path/to/prompt.txt',
+        'output_cost': str(csv_path),
+        'output': '/path/to/output',
+    }
+    # Entry state: ctx.obj is None. The snapshot/restore guard in
+    # @track_cost will NOT fire because hasattr(None, '__setitem__') is
+    # False. Capture must still happen post-command.
+    mock_ctx.obj = None
+    mock_click_context.return_value = mock_ctx
+
+    @track_cost
+    def cmd(ctx, prompt_file, output):
+        # Simulate the command (or its callees, e.g. llm_invoke) promoting
+        # ctx.obj inside the call.
+        mock_ctx.obj = {
+            'output_cost': str(csv_path),
+            'attempted_models': ['m1'],
+        }
+        return (output, 1.0, 'm1')
+
+    cmd(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
+
+    import csv as _csv
+    with open(csv_path, newline='', encoding='utf-8') as fp:
+        rows = list(_csv.DictReader(fp))
+    assert rows, "Expected at least one row in cost CSV"
+    assert rows[-1]['attempted_models'] == 'm1', (
+        f"Expected captured chain 'm1', got {rows[-1]['attempted_models']!r}"
+    )
+
+    mock_rprint.assert_not_called()
+
+
 def test_attempted_models_scoped_to_single_command_invocation(
     mock_click_context, mock_rprint, tmp_path
 ):
