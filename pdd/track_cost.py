@@ -2,6 +2,7 @@ import functools
 from datetime import datetime
 import csv
 import os
+import tempfile
 import click
 from rich import print as rprint
 from typing import Any, Tuple, List
@@ -212,13 +213,30 @@ def track_cost(func):
 
                             if needs_migration:
                                 migrated_fieldnames = list(existing_header) + ['attempted_models']
-                                with open(output_cost_path, 'w', newline='', encoding='utf-8') as csvfile:
-                                    migrate_writer = csv.writer(csvfile)
-                                    migrate_writer.writerow(migrated_fieldnames)
-                                    for existing_row in existing_rows:
-                                        # Pad shorter rows so column count matches.
-                                        padded = list(existing_row) + [''] * (len(migrated_fieldnames) - len(existing_row))
-                                        migrate_writer.writerow(padded)
+                                # Write the migrated CSV to a tempfile in the SAME
+                                # directory as the original, then os.replace it
+                                # atomically. Two concurrent PDD processes hitting
+                                # a legacy 6-column cost.csv would otherwise race
+                                # on the in-place rewrite and corrupt the file.
+                                parent_dir = os.path.dirname(os.path.abspath(output_cost_path)) or "."
+                                tmp_fd, tmp_path = tempfile.mkstemp(
+                                    prefix=".cost.csv.migrate-", dir=parent_dir
+                                )
+                                try:
+                                    with os.fdopen(tmp_fd, 'w', newline='', encoding='utf-8') as tmp_file:
+                                        migrate_writer = csv.writer(tmp_file)
+                                        migrate_writer.writerow(migrated_fieldnames)
+                                        for existing_row in existing_rows:
+                                            # Pad shorter rows so column count matches.
+                                            padded = list(existing_row) + [''] * (len(migrated_fieldnames) - len(existing_row))
+                                            migrate_writer.writerow(padded)
+                                    os.replace(tmp_path, output_cost_path)
+                                except Exception:
+                                    try:
+                                        os.unlink(tmp_path)
+                                    except OSError:
+                                        pass
+                                    raise
                                 fieldnames = migrated_fieldnames
 
                         with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
