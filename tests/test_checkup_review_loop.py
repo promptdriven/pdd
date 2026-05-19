@@ -7150,3 +7150,235 @@ class TestRound7SymlinkedPackageBypassIntegration:
         # Ship-gate markers signal non-clean.
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081 codex review pass #8: sourceless-bytecode bypass.
+#
+# Round-6 finding 2 narrowed the unregistered-new-code scan to paths under
+# ``pdd/`` ending in ``.py``. Round-7 broadened the symlink case. Both still
+# leave a hole: Python imports modules under several non-``.py`` suffixes
+# (``importlib.machinery.all_suffixes()`` returns ``.py``, ``.pyc``, plus
+# platform-specific extension suffixes). A sourceless ``.pyc`` dropped at
+# ``pdd/foo_v2.pyc`` is importable as ``pdd.foo_v2`` via
+# ``importlib.machinery.SourcelessFileLoader`` with no source on disk;
+# native extension modules (``.so`` on POSIX, ``.pyd`` on Windows) are the
+# same shape. The scan MUST cover every importable suffix or the
+# ``delete-code+prompt + wipe-architecture.json + add bytecode/extension``
+# attack succeeds.
+#
+# Fix: extend the suffix filter in
+# ``_check_architecture_registry_edit_guard`` from ``".py"`` to the tuple
+# ``_IMPORTABLE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")`` so
+# ``str.endswith`` catches every shape Python will load as a module.
+# ---------------------------------------------------------------------------
+
+
+class TestRound8SourcelessBytecodeBypass:
+    """Round-8 finding: the unregistered-new-code scan in 10b must reject
+    every suffix Python can import as ``pdd.<name>`` — not just ``.py``.
+    """
+
+    def test_guard_refuses_sourceless_pyc_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact round-8 reproduction: delete the registered code+
+        prompt, wipe ``architecture.json`` to ``[]``, and drop a valid
+        ``pdd/foo_v2.pyc`` compiled from a temporary source (source
+        then removed). The bytecode is importable as ``pdd.foo_v2`` via
+        ``SourcelessFileLoader`` with no ``.py`` on disk, so a
+        ``.py``-only filter would skip it and the bypass would succeed.
+        """
+        import py_compile
+
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. wipe architecture.json to []
+        #   4. compile a sourceless .pyc into pdd/foo_v2.pyc
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        src = tmp_path / "_foo_v2_src.py"
+        src.write_text("VALUE = 42\n", encoding="utf-8")
+        py_compile.compile(
+            str(src),
+            cfile=str(tmp_path / "pdd" / "foo_v2.pyc"),
+            doraise=True,
+        )
+        src.unlink()
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.pyc",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.pyc" in reason
+
+    def test_guard_refuses_native_extension_so_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare ``pdd/foo_v2.so`` dropped at the new code path is a
+        native extension module — importable as ``pdd.foo_v2`` via the
+        extension loader. The guard isn't validating the binary format
+        here, only blocking the importable suffix; arbitrary bytes are
+        sufficient to reproduce the scan-evasion shape.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.so").write_bytes(b"\x7fELF stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.so",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.so" in reason
+
+    def test_guard_refuses_windows_extension_pyd_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """The Windows counterpart to ``.so``: a ``pdd/foo_v2.pyd``
+        native extension. The suffix filter must cover both POSIX and
+        Windows extension shapes or attackers targeting Windows
+        deployments slip past the scan.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.pyd").write_bytes(b"MZ stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.pyd",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.pyd" in reason
+
+    def test_guard_allows_pdd_fixture_txt_under_broadened_filter(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a non-importable ``pdd/fixture.txt`` under ``pdd/``
+        remains out of scope after the R8 widening. Confirms the R6
+        scope-boundary contract — only importable shapes trip the scan,
+        and data fixtures still pass.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "fixture.txt").write_text(
+            "data\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/fixture.txt",
+            ],
+        )
+        assert reason is None
+
+    def test_guard_allows_pdd_data_json_under_broadened_filter(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a ``pdd/data.json`` is also non-importable and must
+        not trip the broadened scan. Belt-and-suspenders companion to
+        the fixture.txt case, covering a common data-asset extension.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "data.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/data.json",
+            ],
+        )
+        assert reason is None

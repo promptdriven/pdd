@@ -62,6 +62,13 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
 
 DEFAULT_BLOCKING_SEVERITIES: Tuple[str, ...] = ("blocker", "critical", "medium")
 DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
+# R8: cover every suffix Python can import as a module under ``pdd/``.
+# A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
+# imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
+# file (see ``importlib.machinery.all_suffixes()``). ``.cpython-*-*.so``
+# and ``.abi3.so`` variants end with ``.so`` so the simple suffix covers
+# them. ``str.endswith`` accepts a tuple of suffixes.
+_IMPORTABLE_SUFFIXES: Tuple[str, ...] = (".py", ".pyc", ".pyo", ".so", ".pyd")
 ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
@@ -4331,9 +4338,9 @@ def _check_architecture_registry_edit_guard(
             if path.startswith("pdd/prompts/"):
                 continue
             # Round-6 finding 2: narrow the scan to generated
-            # prompt-driven code under ``pdd/`` ending in ``.py``.
-            # Anything else (tests, docs, scripts, top-level helpers)
-            # falls outside the registry-mutation scope.
+            # prompt-driven code under ``pdd/``. Anything else
+            # (tests, docs, scripts, top-level helpers) falls
+            # outside the registry-mutation scope.
             if not path.startswith("pdd/"):
                 continue
             candidate = worktree / path
@@ -4343,9 +4350,17 @@ def _check_architecture_registry_edit_guard(
             # path itself. ``Path.is_symlink()`` does NOT follow the
             # link, so it works even if the target is broken or
             # outside the worktree. Keep symlinks in scope regardless
-            # of suffix; otherwise apply the existing ``.py`` filter.
+            # of suffix; otherwise apply the importable-suffix filter.
+            #
+            # Round-8 finding: the suffix filter must cover every
+            # shape Python can import as ``pdd.<name>`` (see
+            # ``_IMPORTABLE_SUFFIXES``). A sourceless ``.pyc``
+            # bypass (delete code+prompt, drop ``pdd/foo_v2.pyc``)
+            # would otherwise slip past a ``.py``-only check while
+            # remaining importable via
+            # ``importlib.machinery.SourcelessFileLoader``.
             is_symlink = candidate.is_symlink()
-            if not is_symlink and not path.endswith(".py"):
+            if not is_symlink and not path.endswith(_IMPORTABLE_SUFFIXES):
                 continue
             # Treat either a real file or a symlink as "present on
             # disk" — symlinks are themselves part of the #1081
