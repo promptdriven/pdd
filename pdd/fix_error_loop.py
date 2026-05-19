@@ -195,7 +195,7 @@ def _normalize_agentic_result(result):
     # Fallback (shouldn't happen)
     return False, "Invalid agentic result shape", 0.0, "agentic-cli", []
 
-def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file, cwd=None):
+def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_file, cwd=None, protect_tests: bool = False):
     """
     Call (possibly monkeypatched) run_agentic_fix and normalize its return.
     """
@@ -205,6 +205,7 @@ def _safe_run_agentic_fix(*, prompt_file, code_file, unit_test_file, error_log_f
         unit_test_file=unit_test_file,
         error_log_file=error_log_file,
         cwd=cwd,
+        protect_tests=protect_tests,
     )
     return _normalize_agentic_result(res)
 # ---------------------------------------------------------------------
@@ -424,6 +425,7 @@ def fix_error_loop(unit_test_file: str,
                     unit_test_file=unit_test_file,
                     error_log_file=error_log_file,
                     cwd=None,  # Use project root (cwd), not prompt file's parent
+                    protect_tests=protect_tests,
                 )
                 if not success:
                     rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
@@ -481,6 +483,7 @@ def fix_error_loop(unit_test_file: str,
                 unit_test_file=unit_test_file,
                 error_log_file=error_log_file,
                 cwd=None,
+                protect_tests=protect_tests,
             )
             if not success:
                 rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
@@ -521,6 +524,7 @@ def fix_error_loop(unit_test_file: str,
                 unit_test_file=unit_test_file,
                 error_log_file=error_log_file,
                 cwd=None,  # Use project root (cwd), not prompt file's parent
+                protect_tests=protect_tests,
             )
             if not success:
                 rprint(f"[bold red]Agentic fix fallback failed: {agent_msg}[/bold red]")
@@ -998,6 +1002,7 @@ def fix_error_loop(unit_test_file: str,
             unit_test_file=unit_test_file,
             error_log_file=error_log_file,
             cwd=None,  # Use project root (cwd), not prompt file's parent
+            protect_tests=protect_tests,
         )
         total_cost += agent_cost
         if not agent_success:
