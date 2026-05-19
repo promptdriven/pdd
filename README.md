@@ -1928,9 +1928,10 @@ Options:
 
 PDD supports the following XML-like tags in prompt files. Note: XML-like tags (`<include>`, `<include-many>`, `<shell>`, `<web>`) are left untouched inside fenced code blocks (``` or ~~~) or inline single backticks so documentation examples remain literal.
 
-1. **`include`**: Includes file content into the prompt. The file path is always the tag body. Optional attributes extract specific parts instead of the full file:
+1. **`include`**: Includes file content into the prompt. The file path comes from the `path=` attribute when set; otherwise the tag body is used as the path. The `path=` attribute also enables the self-closing form. Optional attributes extract specific parts instead of the full file:
    ```xml
    <include>./path/to/file.txt</include>
+   <include path="./path/to/file.txt" />
    <include select="def:foo,class:Bar">src/utils.py</include>
    <include select="class:Handler" mode="interface">src/api.py</include>
    <include query="authentication flow">docs/api_reference.md</include>
