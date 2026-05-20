@@ -544,7 +544,7 @@
     }
   },
   {
-    "reason": "Creates manual testing checklist for browser-based exploratory testing via playwright-cli.",
+    "reason": "Creates manual testing checklist for browser-based exploratory testing via npx playwright.",
     "description": "Step 7 of the 18-step agentic test workflow. Creates checklist with page-by-page, user-story, and accessibility spot-check strategies.",
     "dependencies": [],
     "priority": 212,
@@ -569,7 +569,7 @@
     }
   },
   {
-    "reason": "Executes manual/exploratory browser tests against a web application using playwright-cli.",
+    "reason": "Executes manual/exploratory browser tests against a web application using npx playwright.",
     "description": "Step 8 of the 18-step agentic test workflow. Executes checklist items via playwright-cli commands and reports PASS/FAIL with evidence.",
     "dependencies": [],
     "priority": 213,
@@ -1379,9 +1379,13 @@
     }
   },
   {
-    "reason": "Recursively discovers and summarizes files in a directory using LLM with caching.",
+    "reason": "Scans and summarizes directory files via LLM, producing a CSV with per-file metadata and content-hash caching.",
     "description": "Generates overview of files in a directory. Used for context in LLM prompts.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 39,
     "filename": "summarize_directory_python.prompt",
     "filepath": "pdd/summarize_directory.py",
@@ -1396,10 +1400,7 @@
           {
             "name": "summarize_directory",
             "signature": "(directory_path: str, strength: float, temperature: float, time: float = DEFAULT_TIME, verbose: bool = False, csv_file: Optional[str] = None, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)",
-            "returns": "Tuple[str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[str, float, str]"
           }
         ]
       }
@@ -1575,9 +1576,15 @@
     }
   },
   {
-    "reason": "Automatically selects relevant code and doc includes for prompts using two-stage retrieval.",
+    "reason": "Analyzes a prompt and its directory to automatically discover and generate dependency include tags with selective extraction attributes.",
     "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "summarize_directory_python.prompt",
+      "embed_retrieve_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 45,
     "filename": "auto_include_python.prompt",
     "filepath": "pdd/auto_include.py",
@@ -1592,10 +1599,7 @@
           {
             "name": "auto_include",
             "signature": "(input_prompt: str, directory_path: str, csv_file: Optional[str] = None, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, csv_path: Optional[str] = None)",
-            "returns": "Tuple[str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[str, str, float, str]"
           }
         ]
       }
@@ -2149,9 +2153,15 @@
     }
   },
   {
-    "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
+    "reason": "Determines needed dependencies via auto_include and inserts them into a prompt, handling both new and updated includes.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "auto_include_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -2166,18 +2176,7 @@
           {
             "name": "insert_includes",
             "signature": "(input_prompt: str, directory_path: str, csv_filename: str, prompt_filename: Optional[str] = None, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, verbose: bool = False, progress_callback: Optional[Callable[[int, int], None]] = None, include_docs: bool = False, max_workers: int = 1, dedup: bool = True)",
-            "returns": "Tuple[str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "main",
-            "signature": "()",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[str, str, float, str]"
           }
         ]
       }
@@ -2216,7 +2215,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the update command.",
+    "reason": "CLI wrapper for updating prompts from modified code with repo-wide scan, agentic routing, optional metadata sync, and fingerprint finalization.",
     "description": "Command-line interface for update. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [
       "auto_include_python.prompt",
@@ -2337,7 +2336,7 @@
     }
   },
   {
-    "reason": "Classifies test/verification failure modes for failure-aware retries.",
+    "reason": "Classify pytest / verification output so `fix_error_loop` can adapt retries by failure type (syntax/import, assertion/logic, timeout/flaky).",
     "description": "Heuristic classifier (regex-based, no LLM) used by fix_error_loop to skip unproductive retries on syntax/import or timeout/flaky failures.",
     "dependencies": [],
     "priority": 64,
@@ -2389,7 +2388,7 @@
     }
   },
   {
-    "reason": "Iteratively fixes errors until tests pass.",
+    "reason": "Iterative test-fix loop with verification, failure-aware retries, and agentic fallback for unresolved failures.",
     "description": "Runs fix-test cycles with configurable retry limits. Tracks progress and cost across iterations.",
     "dependencies": [
       "failure_classification_python.prompt"
@@ -2407,44 +2406,14 @@
       "module": {
         "functions": [
           {
-            "name": "escape_brackets",
-            "signature": "(text: str) -> str",
-            "returns": "str",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, code_file_ext: str = '.py') -> Tuple[bool, bool, str, str, str, float, str]",
-            "returns": "Tuple[bool, bool, str, str, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "run_pytest_on_file",
-            "signature": "(test_file: str) -> tuple[int, int, int, str]",
-            "returns": "tuple[int, int, int, str]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "format_log_for_output",
-            "signature": "(log_structure)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test, code, prompt, error, error_file, strength, temperature, verbose=False, time=DEFAULT_TIME, code_file_ext='.py', protect_tests=False, failure_classification=None)",
+            "returns": "Tuple[bool, bool, str, str, str, float, str]"
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(unit_test_file, code_file, prompt_file, prompt, verification_program, strength, temperature, max_attempts, budget, error_log_file='error_log.txt', verbose=False, time=DEFAULT_TIME, agentic_fallback=True, protect_tests=False, use_cloud=False, test_files=None, failure_aware_retries=True)",
+            "returns": "Tuple[bool, str, str, int, float, str]"
           }
         ]
       }
@@ -2458,6 +2427,7 @@
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
+      "fix_error_loop_python.prompt",
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
       "core/cloud_python.prompt"
@@ -3025,8 +2995,8 @@
     "description": "Defines the prompt structure for agentic bug step4 reproduce. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
     "priority": 75,
-    "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
+    "filename": "agentic_bug_step5_reproduce_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step5_reproduce_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3147,8 +3117,8 @@
     "description": "Step 10 (final step) of the agentic bug workflow. Creates a draft pull request with failing tests and links it to the GitHub issue. Includes pdd fix command for resolving the bug.",
     "dependencies": [],
     "priority": 80,
-    "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
+    "filename": "agentic_bug_step12_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3505,30 +3475,6 @@
     }
   },
   {
-    "reason": "LLM prompt template for extracting dependency includes from auto-include LLM output.",
-    "description": "Defines the prompt structure for extract auto include. Invoked by the corresponding Python module to format LLM requests.",
-    "dependencies": [],
-    "priority": 95,
-    "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
-    "tags": [
-      "config",
-      "extraction",
-      "llm",
-      "template"
-    ],
-    "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
-      }
-    },
-    "position": {
-      "x": 1800,
-      "y": 0
-    }
-  },
-  {
     "reason": "LLM prompt template for extract code operations.",
     "description": "Defines the prompt structure for extract code. Invoked by the corresponding Python module to format LLM requests.",
     "dependencies": [],
@@ -3873,7 +3819,7 @@
     }
   },
   {
-    "reason": "Generates unit tests for PDD-generated code modules.",
+    "reason": "Generates unit tests for PDD-generated code modules with auth-aware test patterns.",
     "description": "Creates pytest-compatible test files based on module prompts and generated code. Tests accumulate over time to prevent regressions.",
     "dependencies": [],
     "priority": 110,
@@ -3887,9 +3833,15 @@
       "testing"
     ],
     "interface": {
-      "type": "config",
-      "config": {
-        "keys": []
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_test",
+            "signature": "(prompt_content: str, code_content: str, language: str)",
+            "returns": "str (test file content)"
+          }
+        ]
       }
     },
     "position": {
@@ -5230,7 +5182,7 @@
     }
   },
   {
-    "reason": "CLI entry point for the split command.",
+    "reason": "CLI wrapper for splitting a prompt into sub-prompt and modified-prompt.",
     "description": "Command-line interface for split. Parses arguments, orchestrates the workflow, and formats output.",
     "dependencies": [],
     "priority": 147,
@@ -5241,12 +5193,13 @@
       "python"
     ],
     "interface": {
-      "type": "cli",
-      "cli": {
-        "commands": [
+      "type": "module",
+      "module": {
+        "functions": [
           {
             "name": "split_main",
-            "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[Dict[str, str], float, str]"
+            "signature": "(ctx: click.Context, input_prompt_file: str, input_code_file: str, example_code_file: str, output_sub: Optional[str], output_modified: Optional[str]) -> Tuple[Dict[str, str], float, str]",
+            "returns": "Tuple[Dict[str, str], float, str]"
           }
         ]
       }
@@ -5289,9 +5242,13 @@
     }
   },
   {
-    "reason": "Applies targeted patches to existing code based on prompt changes.",
+    "reason": "Analyzes prompt changes and incrementally patches existing code or triggers full regeneration.",
     "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "preprocess_python.prompt",
+      "postprocess_python.prompt"
+    ],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
     "filepath": "pdd/incremental_code_generator.py",
@@ -5306,11 +5263,8 @@
         "functions": [
           {
             "name": "incremental_code_generator",
-            "signature": "(original_prompt: str, new_prompt: str, existing_code: str, language: str, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = 0.25, force_incremental: bool = False, verbose: bool = False, preprocess_prompt: bool = True) -> Tuple[Optional[str], bool, float, str]",
-            "returns": "Tuple[Optional[str], bool, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(original_prompt, new_prompt, existing_code, language, strength, temperature, time, force_incremental, verbose, preprocess_prompt)",
+            "returns": "Tuple[Optional[str], bool, float, str]"
           }
         ]
       }
@@ -5489,7 +5443,7 @@
     }
   },
   {
-    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, invokes orchestrator.",
+    "reason": "CLI entry point for agentic architecture workflow: detects GitHub issue URLs, fetches issue content, discovers cross-project context, invokes orchestrator.",
     "description": "Entry point module for agentic architecture generation. Detects GitHub issue URLs, fetches issue content and comments via gh API, ensures repository context, then invokes the orchestrator. Also wraps guarded incremental PRD-to-architecture propagation for issue URLs and local PRD files, including shell-safe target-directory validation, repo-relative status paths, subproject sync hints, and GitHub status comment redaction.",
     "dependencies": [
       "agentic_architecture_orchestrator_python.prompt",
@@ -5564,15 +5518,15 @@
         "commands": [
           {
             "name": "generate",
-            "description": "Generate code from a prompt, patch existing code incrementally, or run guarded agentic architecture generation with explicit experimental PRD propagation opt-in."
+            "description": "Generate code from prompt or trigger agentic architecture from GitHub issue"
           },
           {
             "name": "test",
-            "description": "Generate or enhance tests through agentic issue mode or manual prompt/code mode."
+            "description": "Generate or enhance unit tests (agentic or manual mode)"
           },
           {
             "name": "example",
-            "description": "Generate context examples from a prompt and code file."
+            "description": "Generate context examples from prompt and code"
           }
         ]
       }
@@ -5611,7 +5565,7 @@
     }
   },
   {
-    "reason": "Applies guarded incremental PRD changes to architecture.json and related prompts without full regeneration.",
+    "reason": "Incrementally propagates PRD changes into architecture.json and affected prompt Requirements using validated targeted patches.",
     "description": "Reads a PRD diff from hash/provenance metadata and ignored local raw-baseline cache, asks the LLM for a structured architecture patch, validates dependency, prompt filename, filepath, and file invariants deterministically, rejects unsafe or secret-like code filepaths before reads, retries invalid patches with explicit validation feedback, writes targeted architecture updates atomically, validates prompt previews under the write lock to avoid lost edits, syncs prompt metadata tags, creates prompts for new modules, deletes prompts for removed modules, updates prompt Requirements through detect_change/change, and avoids persisting raw PRD or GitHub issue/comment text in tracked metadata.",
     "dependencies": [
       "architecture_sync_python.prompt",
@@ -5634,13 +5588,13 @@
         "functions": [
           {
             "name": "run_incremental_prd_propagation",
-            "signature": "(prd_source: str, *, architecture_path: Path | str, prompts_dir: Path | str, project_root: Path | str | None, issue_content: Optional[str], dry_run: bool, verbose: bool, quiet: bool, strength: float, temperature: float, time: float, max_patch_attempts: int, update_prompt_requirements: bool, generate_new_prompts: bool)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(prd_source: str, *, architecture_path: Path | str = \"architecture.json\", prompts_dir: Path | str = \"prompts\", project_root: Path | str | None = None, issue_content: Optional[str] = None, dry_run: bool = False, verbose: bool = False, quiet: bool = False, strength: float = DEFAULT_STRENGTH, temperature: float = 0.0, time: float = DEFAULT_TIME, max_patch_attempts: int = 3, update_prompt_requirements: bool = True, generate_new_prompts: bool = True) -> Tuple[bool, str, float, str, List[str]]",
+            "returns": "Tuple of success flag, message, cost, model, and changed files"
           },
           {
             "name": "apply_architecture_patch",
-            "signature": "(raw_architecture: Any, patch: ArchitecturePatch)",
-            "returns": "PatchApplication"
+            "signature": "(raw_architecture: Any, patch: ArchitecturePatch) -> PatchApplication",
+            "returns": "Validated in-memory architecture patch application result"
           }
         ]
       }
@@ -5743,11 +5697,11 @@
   },
   {
     "reason": "Classifies whether a bug root cause is in code implementation or prompt specification.",
-    "description": "Step 5.5 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
+    "description": "Step 7 of the agentic bug workflow. Classifies whether a bug root cause is in the code implementation or in the prompt specification itself.",
     "dependencies": [],
     "priority": 166,
-    "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filename": "agentic_bug_step7_prompt_classification_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step7_prompt_classification_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5766,12 +5720,12 @@
     }
   },
   {
-    "reason": "Generates E2E tests that verify the bug at a system level.",
+    "reason": "Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).",
     "description": "Step 9 of the agentic bug workflow. Generates and runs end-to-end tests that verify a bug at the system integration level.",
     "dependencies": [],
     "priority": 167,
-    "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
+    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6051,7 +6005,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for analyzing documentation changes needed.",
+    "reason": "LLM template: analyzes doc changes and discovers associated documents for atomic sync at change-time.",
     "description": "Step 5 of the agentic change workflow. Analyzes how documentation should change to support the new feature.",
     "dependencies": [],
     "priority": 178,
@@ -6147,7 +6101,7 @@
     }
   },
   {
-    "reason": "LLM prompt template for implementing prompt changes in a git worktree.",
+    "reason": "LLM template: implements prompt and doc changes atomically, including Step 5's associated-document edits in the same commit.",
     "description": "Step 9 of the agentic change workflow. Implements the prompt changes (modifying .prompt files and documentation) in a git worktree; scoped to prompt/doc edits only.",
     "dependencies": [],
     "priority": 182,
@@ -6213,7 +6167,9 @@
   {
     "reason": "CLI entry point for the 11-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.",
     "description": "Entry point for the agentic E2E fix command. Parses issue URL, finds associated worktree, and delegates to the E2E fix orchestrator.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_e2e_fix_orchestrator_python.prompt"
+    ],
     "priority": 184,
     "filename": "agentic_e2e_fix_python.prompt",
     "filepath": "pdd/agentic_e2e_fix.py",
@@ -6558,8 +6514,7 @@
     "reason": "Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.",
     "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, plan enhancement, coverage assessment, manual testing, regression tests, test generation, plan validation, and PR submission.",
     "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
+      "agentic_common_python.prompt"
     ],
     "priority": 196,
     "filename": "agentic_test_orchestrator_python.prompt",
@@ -7288,34 +7243,22 @@
           {
             "name": "run_agentic_sync",
             "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[bool, str, float, str]"
           },
           {
             "name": "run_global_sync",
             "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder is forwarded via sync_options so --timeout-adder stretches the per-module wall-clock cap on the global-sync path the same way it does on run_agentic_sync"
-            ]
+            "returns": "Tuple[bool, str, float, str]"
           },
           {
             "name": "_is_github_issue_url",
             "signature": "(s: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "bool"
           },
           {
             "name": "_parse_llm_response",
             "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]",
-            "returns": "Tuple[List[str], bool, List[Dict]]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[List[str], bool, List[Dict]]"
           }
         ]
       }
@@ -7670,7 +7613,8 @@
       "inputs": {
         "project_root": "Absolute path to the project root directory",
         "architecture_path": "Absolute path to the architecture JSON file to update"
-      }
+      },
+      "output": "Writes updated architecture file in-place with position (x, y integers) on every module. Outputs one-line summary."
     }
   },
   {
@@ -7703,7 +7647,9 @@
   {
     "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
     "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 221,
     "filename": "ci_validation_python.prompt",
     "filepath": "pdd/ci_validation.py",
@@ -8284,7 +8230,7 @@
     }
   },
   {
-    "reason": "LLM prompt for agentic split step 0: intent classification from target file + optional user flag.",
+    "reason": "LLM prompt for agentic split step 0: classify the user's intent so later steps can re-weight their rubric. Intent is inferred from the target file, optional user-provided hint, and project signals. Defaults to REDUCE_MONOLITH.",
     "description": "Step 0 of agentic split. Infers user intent (REDUCE_MONOLITH, ENABLE_PARALLEL_WORK, EXTRACT_REUSABLE_LAYER, REDUCE_TEST_TIME) from target and CLI hints; step 4 re-weights rubric by intent.",
     "dependencies": [
       "agentic_split_orchestrator_python.prompt"
@@ -8311,7 +8257,7 @@
     }
   },
   {
-    "reason": "LLM prompt for agentic split step 6a: per-child phase extraction analysis before step 6.",
+    "reason": "LLM prompt for agentic split step 6a: for one child, decide whether its dominant symbol contains multiple responsibilities that should be extracted as phase helpers. Agent-only judgment — no line thresholds in Python.",
     "description": "Step 6a of agentic split. Detects whether the largest symbol inside each child warrants phase helper extraction; produces phase_plan consumed by step 6.",
     "dependencies": [
       "agentic_split_orchestrator_python.prompt"
@@ -8338,7 +8284,7 @@
     }
   },
   {
-    "reason": "LLM prompt for agentic split step 9: refine-check decision after repair.",
+    "reason": "LLM prompt for agentic split step 9: after the main pipeline and repair have completed, decide whether any child remains too monolithic for its responsibility and should trigger a second refinement pass. Agent-only judgment — no line thresholds in Python.",
     "description": "Step 9 of agentic split. Evaluates whether the largest child is still too monolithic and warrants a focused refinement pass (step 6a + step 6 rerun on that child).",
     "dependencies": [
       "agentic_split_orchestrator_python.prompt"
@@ -8409,9 +8355,11 @@
     }
   },
   {
-    "reason": "Shared worktree setup, git-scope guards, and agentic output parsing helpers used by multiple orchestrators.",
+    "reason": "Shared worktree setup, git-scope guards, and agentic output parsing helpers for orchestrators.",
     "description": "Provides setup_worktree, get_git_root, resolve_main_ref, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker. Used by bug, split, and change orchestrators.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 224,
     "filename": "agentic_common_worktree_python.prompt",
     "filepath": "pdd/agentic_common_worktree.py",
@@ -8427,18 +8375,58 @@
       "module": {
         "functions": [
           {
-            "name": "setup_worktree",
-            "signature": "(cwd: Path, issue_number: int, quiet: bool, *, resume_existing: bool = False, branch_prefix: str = 'fix', worktree_prefix: str = 'fix')",
-            "returns": "Tuple[Optional[Path], Optional[str]]"
-          },
-          {
             "name": "get_git_root",
             "signature": "(cwd: Path)",
             "returns": "Optional[Path]"
           },
           {
+            "name": "worktree_exists",
+            "signature": "(cwd: Path, worktree_path: Path)",
+            "returns": "bool"
+          },
+          {
+            "name": "branch_exists",
+            "signature": "(cwd: Path, branch: str)",
+            "returns": "bool"
+          },
+          {
+            "name": "remove_worktree",
+            "signature": "(cwd: Path, worktree_path: Path)",
+            "returns": "Tuple[bool, str]"
+          },
+          {
+            "name": "delete_branch",
+            "signature": "(cwd: Path, branch: str)",
+            "returns": "Tuple[bool, str]"
+          },
+          {
             "name": "resolve_main_ref",
             "signature": "(git_root: Path)",
+            "returns": "str"
+          },
+          {
+            "name": "setup_worktree",
+            "signature": "(cwd, issue_number, quiet, *, resume_existing, branch_prefix, worktree_prefix)",
+            "returns": "Tuple[Optional[Path], Optional[str]]"
+          },
+          {
+            "name": "get_modified_and_untracked",
+            "signature": "(cwd: Path)",
+            "returns": "List[str]"
+          },
+          {
+            "name": "check_target_file_unchanged",
+            "signature": "(cwd, target_file, baseline_sha)",
+            "returns": "Tuple[bool, Optional[str]]"
+          },
+          {
+            "name": "revert_out_of_scope_changes_with_dirs",
+            "signature": "(cwd, allowed_dirs, allowed_files)",
+            "returns": "List[Path]"
+          },
+          {
+            "name": "extract_block_marker",
+            "signature": "(output, name)",
             "returns": "str"
           }
         ]
@@ -8450,9 +8438,11 @@
     }
   },
   {
-    "reason": "Resolves language-specific lint commands (ruff, eslint, etc.) used by split validation and repair.",
+    "reason": "Provides deterministic lint-command resolution for Python files (ruff + mypy).",
     "description": "Returns a list of LintCommand objects for a given file; empty list signals agentic fallback.",
-    "dependencies": [],
+    "dependencies": [
+      "get_test_command_python.prompt"
+    ],
     "priority": 223,
     "filename": "get_lint_commands_python.prompt",
     "filepath": "pdd/get_lint_commands.py",
@@ -8482,10 +8472,10 @@
     "reason": "Defines the main PDDCLI click.Group, global CLI options, result callback, and duplicate-guard recording.",
     "description": "Core CLI logic: PDDCLI click.Group, global options, entry function, and result callback that records only successful runs to the duplicate guard store.",
     "dependencies": [
-      "dump_python.prompt",
-      "errors_python.prompt",
-      "utils_python.prompt",
-      "duplicate_cli_guard_python.prompt",
+      "core/dump_python.prompt",
+      "core/errors_python.prompt",
+      "core/utils_python.prompt",
+      "core/duplicate_cli_guard_python.prompt",
       "agentic_common_python.prompt",
       "auto_update_python.prompt",
       "track_cost_python.prompt"
@@ -8807,6 +8797,1231 @@
     "position": {
       "x": 24600,
       "y": 800
+    }
+  },
+  {
+    "reason": "Validates prompt-level completeness: all modules have prompt files, prompts capture module specs, dependencies correct.",
+    "description": "Validates prompt-level completeness: all modules have prompt files, prompts capture module specs, dependencies correct.",
+    "dependencies": [
+      "agentic_arch_step9_prompts_LLM.prompt"
+    ],
+    "priority": 236,
+    "filename": "agentic_arch_step10_completeness_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step10_completeness_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_completeness",
+            "signature": "(architecture_json: str, prd_summary: str, issue_content: str)",
+            "returns": "str ('VALID' or list of completeness errors)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
+    "description": "Validates .pddrc configuration using pdd sync --dry-run for each module.",
+    "dependencies": [
+      "agentic_arch_step10_completeness_LLM.prompt"
+    ],
+    "priority": 237,
+    "filename": "agentic_arch_step11_sync_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step11_sync_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_sync",
+            "signature": "(architecture_json: str)",
+            "returns": "str ('VALID' or list of sync errors)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
+    "description": "Validates dependency graph: ensures priorities are correct so dependencies are generated before dependents.",
+    "dependencies": [
+      "agentic_arch_step11_sync_LLM.prompt"
+    ],
+    "priority": 238,
+    "filename": "agentic_arch_step12_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step12_deps_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_dependency_graph",
+            "signature": "()",
+            "returns": "str ('VALID' or list of dependency errors)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
+    "description": "Fixes validation errors from a single failed validation step (completeness, sync, or dependencies).",
+    "dependencies": [
+      "agentic_arch_step12_deps_LLM.prompt"
+    ],
+    "priority": 239,
+    "filename": "agentic_arch_step13_fix_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step13_fix_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_validation",
+            "signature": "(failed_step: str, failed_output: str)",
+            "returns": "str (list of fixes applied)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Assesses PRD complexity and auto-creates sub-issues if too complex for single-project generation.",
+    "description": "Assesses PRD complexity and auto-creates sub-issues if too complex for single-project generation.",
+    "dependencies": [
+      "agentic_arch_step1_analyze_prd_LLM.prompt"
+    ],
+    "priority": 240,
+    "filename": "agentic_arch_step1b_complexity_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step1b_complexity_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "assess_complexity",
+            "signature": "(issue_content: str, step1_output: str)",
+            "returns": "str ('MANAGEABLE' or 'COMPLEX' with splitting strategies)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Scans existing codebase to detect installed packages, code patterns, reusable modules, and naming conventions.",
+    "description": "Scans existing codebase to detect installed packages, code patterns, reusable modules, and naming conventions.",
+    "dependencies": [
+      "agentic_arch_step2_analyze_LLM.prompt"
+    ],
+    "priority": 241,
+    "filename": "agentic_arch_step2b_codebase_scan_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step2b_codebase_scan_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "scan_codebase",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str)",
+            "returns": "str (codebase profile with packages, patterns, reusable modules)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.",
+    "description": "Designs core data entities, relationships, storage decisions, and schema/ORM recommendations informed by tech stack research.",
+    "dependencies": [
+      "agentic_arch_step3_research_LLM.prompt"
+    ],
+    "priority": 242,
+    "filename": "agentic_arch_step4_data_model_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step4_data_model_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "design_data_model",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str)",
+            "returns": "str (data model with entities, relationships, storage decisions)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
+    "description": "Designs module breakdown with dependency graph, priority ordering, and interface specifications.",
+    "dependencies": [
+      "agentic_arch_step4_data_model_LLM.prompt"
+    ],
+    "priority": 243,
+    "filename": "agentic_arch_step5_design_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step5_design_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "design_modules",
+            "signature": "(issue_content: str, step1_output: str, step2_output: str, step3_output: str, step4_output: str)",
+            "returns": "str (module list with dependencies, priorities, interfaces)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Validates module design completeness against original PRD before expensive generation steps.",
+    "description": "Validates module design completeness against original PRD before expensive generation steps.",
+    "dependencies": [
+      "agentic_arch_step5_design_LLM.prompt"
+    ],
+    "priority": 244,
+    "filename": "agentic_arch_step5b_completeness_gate_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step5b_completeness_gate_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_module_design_completeness",
+            "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str)",
+            "returns": "str ('VALID' or list of coverage gaps)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Fixes module design gaps identified by the completeness gate, adding missing modules to the design.",
+    "description": "Fixes module design gaps identified by the completeness gate, adding missing modules to the design.",
+    "dependencies": [
+      "agentic_arch_step5b_completeness_gate_LLM.prompt"
+    ],
+    "priority": 245,
+    "filename": "agentic_arch_step5b_fix_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step5b_fix_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "fix_module_design",
+            "signature": "(issue_content: str, step1_output: str, step4_output: str, step5_output: str, completeness_errors: str)",
+            "returns": "str (corrected module design)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
+    "description": "Finds relevant API docs and code examples per module to populate context_urls in architecture.json.",
+    "dependencies": [
+      "agentic_arch_step5_design_LLM.prompt"
+    ],
+    "priority": 246,
+    "filename": "agentic_arch_step6_research_deps_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step6_research_deps_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "research_deps",
+            "signature": "(issue_content: str, step5_output: str)",
+            "returns": "str (enriched module list with web resource URLs)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
+    "description": "Generates complete architecture.json with proper priority ordering, dependencies, and context_urls from prior analysis.",
+    "dependencies": [
+      "agentic_arch_step6_research_deps_LLM.prompt"
+    ],
+    "priority": 247,
+    "filename": "agentic_arch_step7_generate_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step7_generate_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_architecture",
+            "signature": "(issue_content: str, step1-6_outputs: str)",
+            "returns": "str (valid JSON array matching architecture schema)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Reviews architecture.json against PRD and naming registry, fixing naming inconsistencies, missing dependencies, and structural issues before prompt generation.",
+    "description": "Reviews architecture.json against PRD and naming registry, fixing naming inconsistencies, missing dependencies, and structural issues before prompt generation.",
+    "dependencies": [
+      "agentic_arch_step7_generate_LLM.prompt"
+    ],
+    "priority": 248,
+    "filename": "agentic_arch_step7b_review_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step7b_review_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "review_architecture",
+            "signature": "(architecture_json: str, step1_output: str, step2_output: str, step4_output: str)",
+            "returns": "str ('REVIEW_RESULT: CLEAN' or 'REVIEW_RESULT: FIXED (N issues)')"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates shared context documents (data dictionary, API contracts, integration points) as structured YAML files that are included in module prompts via include tags, ensuring cross-module consistency at sync time.",
+    "description": "Generates shared context documents (data dictionary, API contracts, integration points) as structured YAML files that are included in module prompts via include tags, ensuring cross-module consistency at sync time.",
+    "dependencies": [
+      "agentic_arch_step8_pddrc_LLM.prompt"
+    ],
+    "priority": 249,
+    "filename": "agentic_arch_step8_5_context_docs_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step8_5_context_docs_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_context_docs",
+            "signature": "(step2_output: str, step4_output: str, step2b_output: str, step7_output: str)",
+            "returns": "str (list of generated context document files)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
+    "description": "Generates and validates .pddrc configuration file based on architecture.json, ensuring proper context mapping and output path templates.",
+    "dependencies": [
+      "agentic_arch_step7_generate_LLM.prompt"
+    ],
+    "priority": 250,
+    "filename": "agentic_arch_step8_pddrc_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step8_pddrc_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_pddrc",
+            "signature": "(architecture_json: str)",
+            "returns": "str (path to .pddrc file)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
+    "description": "Generates prompt files for all modules defined in architecture.json, placing them in the correct directories based on .pddrc configuration.",
+    "dependencies": [
+      "agentic_arch_step8_pddrc_LLM.prompt"
+    ],
+    "priority": 251,
+    "filename": "agentic_arch_step9_prompts_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step9_prompts_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "generate_prompts",
+            "signature": "(architecture_json: str, pddrc_content: str)",
+            "returns": "str (list of generated prompt files)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Cross-file consistency audit of all generated prompt files, catching and fixing naming inconsistencies across prompts before validation.",
+    "description": "Cross-file consistency audit of all generated prompt files, catching and fixing naming inconsistencies across prompts before validation.",
+    "dependencies": [
+      "agentic_arch_step9_prompts_LLM.prompt"
+    ],
+    "priority": 252,
+    "filename": "agentic_arch_step9b_cross_audit_LLM.prompt",
+    "filepath": "prompts/agentic_arch_step9b_cross_audit_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "cross_audit_prompts",
+            "signature": "(step2_output: str, step7_output: str)",
+            "returns": "str ('AUDIT_RESULT: CONSISTENT' or 'AUDIT_RESULT: INCONSISTENT' with fixes applied)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).",
+    "description": "Generates E2E tests that verify the bug at a system level (gated by Step 10 E2E_NEEDED classification).",
+    "dependencies": [],
+    "priority": 253,
+    "filename": "agentic_bug_step11_e2e_test_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step11_e2e_test_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module"
+    }
+  },
+  {
+    "reason": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
+    "description": "Creates draft PR with failing tests and PDD fix command for step 10 of agentic bug workflow.",
+    "dependencies": [],
+    "priority": 254,
+    "filename": "agentic_bug_step12_pr_LLM.prompt",
+    "filepath": "prompts/agentic_bug_step12_pr_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "command",
+      "command": {
+        "name": "agentic_bug_step10",
+        "description": "Generate draft PR with failing tests and link to GitHub issue"
+      }
+    }
+  },
+  {
+    "reason": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
+    "description": "Discovers API keys needed by the user's configured models, checking existence across shell, .env, and PDD config with source transparency.",
+    "dependencies": [],
+    "priority": 255,
+    "filename": "api_key_scanner_python.prompt",
+    "filepath": "pdd/api_key_scanner.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "scan_environment",
+            "signature": "() -> Dict[str, KeyInfo]",
+            "returns": "Dict[str, KeyInfo]"
+          },
+          {
+            "name": "get_provider_key_names",
+            "signature": "() -> List[str]",
+            "returns": "List[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Centralized config resolution for all commands, ensuring consistent priority ordering.",
+    "description": "Centralized config resolution for all commands, ensuring consistent priority ordering.",
+    "dependencies": [],
+    "priority": 256,
+    "filename": "config_resolution_python.prompt",
+    "filepath": "pdd/config_resolution.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "resolve_effective_config",
+            "signature": "(ctx, resolved_config, param_overrides=None)",
+            "returns": "Dict[str, Any]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
+    "description": "Provides precise extraction of file content based on criteria like lines, AST, and regex for selective includes.",
+    "dependencies": [],
+    "priority": 257,
+    "filename": "content_selector_python.prompt",
+    "filepath": "pdd/content_selector.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "ContentSelector.select",
+            "signature": "(content: str, selectors: list[str], file_path: str = None, mode: str = \"full\")",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Defines durable debug snapshot (core dump) requirements for PDD CLI + sync.",
+    "description": "Defines durable debug snapshot (core dump) requirements for PDD CLI + sync.",
+    "dependencies": [],
+    "priority": 258,
+    "filename": "core_dump_requirements_LLM.prompt",
+    "filepath": "prompts/core_dump_requirements_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "core_dump_requirements",
+            "signature": "()",
+            "returns": "Specification (text)"
+          },
+          {
+            "name": "acceptance_criteria",
+            "signature": "()",
+            "returns": "List[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Cross-sub-issue reconciliation: audits shared types, API contracts, and enum values across related sub-issues to prevent inconsistencies.",
+    "description": "Cross-sub-issue reconciliation: audits shared types, API contracts, and enum values across related sub-issues to prevent inconsistencies.",
+    "dependencies": [],
+    "priority": 259,
+    "filename": "cross_issue_reconcile_LLM.prompt",
+    "filepath": "prompts/cross_issue_reconcile_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "reconcile_sub_issues",
+            "signature": "(architecture_json: str, related_issues: str)",
+            "returns": "str ('RECONCILE_RESULT: CONSISTENT' or 'RECONCILE_RESULT: CONFLICTS_FIXED' with FILES_MODIFIED)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "CLI subcommand that garbage-collects orphaned .pdd/extracts/ entries not referenced by any prompt.",
+    "description": "CLI subcommand that garbage-collects orphaned .pdd/extracts/ entries not referenced by any prompt.",
+    "dependencies": [
+      "include_query_extractor_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
+    "priority": 260,
+    "filename": "extracts_prune_python.prompt",
+    "filepath": "pdd/extracts_prune.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "pdd extracts prune",
+            "description": "Delete orphaned extracts cache entries not referenced by any prompt file."
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.",
+    "description": "Persistent Firecrawl scrape cache using SQLite with TTL, URL normalization, and LRU cleanup.",
+    "dependencies": [],
+    "priority": 261,
+    "filename": "firecrawl_cache_python.prompt",
+    "filepath": "pdd/firecrawl_cache.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "get_firecrawl_cache",
+            "signature": "() -> FirecrawlCache",
+            "returns": "FirecrawlCache"
+          },
+          {
+            "name": "clear_firecrawl_cache",
+            "signature": "() -> int",
+            "returns": "int"
+          },
+          {
+            "name": "get_firecrawl_cache_stats",
+            "signature": "() -> dict",
+            "returns": "dict"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Frontend API contract and client module for local server, architecture workflows, remote cloud sessions, and WebSockets.",
+    "description": "Frontend API contract and client module for local server, architecture workflows, remote cloud sessions, and WebSockets.",
+    "dependencies": [],
+    "priority": 262,
+    "filename": "frontend/api_typescript.prompt",
+    "filepath": "prompts/frontend/api_typescript.prompt",
+    "tags": [
+      "module"
+    ],
+    "interface": {
+      "type": "frontend",
+      "frontend": {
+        "pages": [
+          {
+            "name": "api",
+            "route": "N/A (utility module)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Manages a sequential task queue for pdd commands with auto/manual execution modes and persistence.",
+    "description": "Manages a sequential task queue for pdd commands with auto/manual execution modes and persistence.",
+    "dependencies": [],
+    "priority": 263,
+    "filename": "frontend/hooks/useTaskQueue_typescript.prompt",
+    "filepath": "prompts/frontend/hooks/useTaskQueue_typescript.prompt",
+    "tags": [
+      "module"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "useTaskQueue",
+            "signature": "(options?: UseTaskQueueOptions)",
+            "returns": "Object"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Handles semantic extraction from files using LLMs with persistent caching for reproducibility.",
+    "description": "Handles semantic extraction from files using LLMs with persistent caching for reproducibility.",
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
+    "priority": 264,
+    "filename": "include_query_extractor_python.prompt",
+    "filepath": "pdd/include_query_extractor.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "IncludeQueryExtractor.extract",
+            "signature": "(file_path: str, query: str)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "description": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "dependencies": [
+      "path_resolution_python.prompt",
+      "server/token_counter_python.prompt"
+    ],
+    "priority": 265,
+    "filename": "llm_invoke_python.prompt",
+    "filepath": "pdd/llm_invoke.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "llm_invoke",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "setup_file_logging",
+            "signature": "(log_file_path=None)",
+            "returns": "None"
+          },
+          {
+            "name": "set_verbose_logging",
+            "signature": "(verbose=False)",
+            "returns": "None"
+          },
+          {
+            "name": "set_quiet_logging",
+            "signature": "()",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
+    "description": "Tests individual models via litellm.completion() with direct API key passing and diagnostics.",
+    "dependencies": [],
+    "priority": 266,
+    "filename": "model_tester_python.prompt",
+    "filepath": "pdd/model_tester.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "test_model_interactive",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.",
+    "description": "Creates and auto-generates .pddrc configuration files with sensible defaults, including multi-context support for monorepos.",
+    "dependencies": [],
+    "priority": 267,
+    "filename": "pddrc_initializer_python.prompt",
+    "filepath": "pdd/pddrc_initializer.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "offer_pddrc_init",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "infer_contexts_from_scan",
+            "signature": "(scan_dir: str, repo_root: str, code_files: List[str]) -> Dict[str, Dict]",
+            "returns": "Dict[str, Dict]"
+          },
+          {
+            "name": "ensure_pddrc_for_scan",
+            "signature": "(scan_dir: str, repo_root: str, code_files: List[str], quiet: bool = False) -> Optional[Path]",
+            "returns": "Optional[Path]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Post-generation conformance verification: checks generated code against architecture.json interface declarations for symbol and convention mismatches.",
+    "description": "Post-generation conformance verification: checks generated code against architecture.json interface declarations for symbol and convention mismatches.",
+    "dependencies": [],
+    "priority": 268,
+    "filename": "post_gen_verify_LLM.prompt",
+    "filepath": "prompts/post_gen_verify_LLM.prompt",
+    "tags": [
+      "llm"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "verify_conformance",
+            "signature": "(architecture_entry: dict, generated_code: str)",
+            "returns": "str ('PASS' or 'FAIL' with mismatch details)"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "description": "Preprocesses prompt files by resolving include/shell/web tags, handling selective extraction, and escaping curly braces.",
+    "dependencies": [
+      "path_resolution_python.prompt",
+      "content_selector_python.prompt"
+    ],
+    "priority": 269,
+    "filename": "preprocess_python.prompt",
+    "filepath": "pdd/preprocess.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "preprocess",
+            "signature": "(prompt, recursive, double_curly_brackets, exclude_keys, _seen)",
+            "returns": "str"
+          },
+          {
+            "name": "get_file_path",
+            "signature": "(file_name)",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
+    "description": "Manages LLM providers: browse reference CSV to add models, custom providers, and model removal with shell-aware credential storage.",
+    "dependencies": [
+      "api_key_scanner_python.prompt"
+    ],
+    "priority": 270,
+    "filename": "provider_manager_python.prompt",
+    "filepath": "pdd/provider_manager.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "add_provider_from_registry",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "add_custom_provider",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "remove_models_by_provider",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "remove_individual_models",
+            "signature": "() -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "parse_api_key_vars",
+            "signature": "(api_key_field: str) -> List[str]",
+            "returns": "List[str]"
+          },
+          {
+            "name": "is_multi_credential",
+            "signature": "(api_key_field: str) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "REST API endpoints for architecture.json validation and bidirectional sync with prompt files.",
+    "description": "REST API endpoints for architecture.json validation and bidirectional sync with prompt files.",
+    "dependencies": [
+      "architecture_sync_python.prompt",
+      "agentic_common_python.prompt",
+      "load_prompt_template_python.prompt"
+    ],
+    "priority": 271,
+    "filename": "server/routes/architecture_python.prompt",
+    "filepath": "pdd/server/routes/architecture.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "validate_architecture",
+            "signature": "(request: ValidateArchitectureRequest)",
+            "returns": "ValidationResult"
+          },
+          {
+            "name": "sync_from_prompts",
+            "signature": "(request: SyncRequest)",
+            "returns": "SyncResult"
+          },
+          {
+            "name": "generate_tags_for_prompt",
+            "signature": "(request: GenerateTagsRequest)",
+            "returns": "GenerateTagsResult"
+          },
+          {
+            "name": "rearrange_graph_layout",
+            "signature": "(request: RearrangeRequest)",
+            "returns": "RearrangeResult"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "FastAPI route for browsing and inspecting the .pdd/extracts/ LLM extraction cache via the pdd connect web UI.",
+    "description": "FastAPI route for browsing and inspecting the .pdd/extracts/ LLM extraction cache via the pdd connect web UI.",
+    "dependencies": [
+      "include_query_extractor_python.prompt",
+      "preprocess_python.prompt"
+    ],
+    "priority": 272,
+    "filename": "server/routes/extracts_python.prompt",
+    "filepath": "pdd/server/routes/extracts.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "GET /api/v1/extracts",
+            "signature": "(check_freshness: bool = true)",
+            "returns": "ExtractListResponse"
+          },
+          {
+            "name": "GET /api/v1/extracts/{cache_key}",
+            "signature": "(cache_key: str)",
+            "returns": "ExtractContent"
+          },
+          {
+            "name": "GET /api/v1/extracts/for-prompt",
+            "signature": "(prompt_path: str)",
+            "returns": "list[PromptExtractInfo]"
+          },
+          {
+            "name": "POST /api/v1/extracts/prune",
+            "signature": "(dry_run: bool = false)",
+            "returns": "PruneResponse"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Utility for expanding path templates with dynamic placeholders for project layout generation.",
+    "description": "Utility for expanding path templates with dynamic placeholders for project layout generation.",
+    "dependencies": [],
+    "priority": 273,
+    "filename": "template_expander_python.prompt",
+    "filepath": "pdd/template_expander.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "expand_template",
+            "signature": "(template: str, context: Dict[str, Any])",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Defines shared path construction helpers used by sync and architecture workflows.",
+    "description": "Defines shared path construction helpers used by sync and architecture workflows.",
+    "dependencies": [],
+    "priority": 274,
+    "filename": "construct_paths_python.prompt",
+    "filepath": "pdd/construct_paths.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Validates prompt include directives and reports invalid include targets or selectors.",
+    "description": "Validates prompt include directives and reports invalid include targets or selectors.",
+    "dependencies": [],
+    "priority": 275,
+    "filename": "validate_prompt_includes_python.prompt",
+    "filepath": "pdd/validate_prompt_includes.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Builds architecture dependency metadata for automatically detected prompt dependencies.",
+    "description": "Builds architecture dependency metadata for automatically detected prompt dependencies.",
+    "dependencies": [],
+    "priority": 276,
+    "filename": "auto_deps_architecture_python.prompt",
+    "filepath": "pdd/auto_deps_architecture.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Loads named prompt templates from packaged prompt locations.",
+    "description": "Loads named prompt templates from packaged prompt locations.",
+    "dependencies": [],
+    "priority": 277,
+    "filename": "load_prompt_template_python.prompt",
+    "filepath": "pdd/load_prompt_template.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Detects conflicting prompt requirements across prompt text and included context.",
+    "description": "Detects conflicting prompt requirements across prompt text and included context.",
+    "dependencies": [],
+    "priority": 278,
+    "filename": "conflicts_in_prompts_python.prompt",
+    "filepath": "pdd/conflicts_in_prompts.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Generates and manages user-story driven test artifacts.",
+    "description": "Generates and manages user-story driven test artifacts.",
+    "dependencies": [],
+    "priority": 279,
+    "filename": "user_story_tests_python.prompt",
+    "filepath": "pdd/user_story_tests.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Captures diagnostic core dumps for CLI error reporting.",
+    "description": "Captures diagnostic core dumps for CLI error reporting.",
+    "dependencies": [],
+    "priority": 280,
+    "filename": "core/dump_python.prompt",
+    "filepath": "pdd/core/dump.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Centralizes CLI error formatting and handling.",
+    "description": "Centralizes CLI error formatting and handling.",
+    "dependencies": [],
+    "priority": 281,
+    "filename": "core/errors_python.prompt",
+    "filepath": "pdd/core/errors.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Provides shared core CLI utility helpers.",
+    "description": "Provides shared core CLI utility helpers.",
+    "dependencies": [],
+    "priority": 282,
+    "filename": "core/utils_python.prompt",
+    "filepath": "pdd/core/utils.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
+    }
+  },
+  {
+    "reason": "Counts tokens for server-side request and prompt handling.",
+    "description": "Counts tokens for server-side request and prompt handling.",
+    "dependencies": [],
+    "priority": 283,
+    "filename": "server/token_counter_python.prompt",
+    "filepath": "pdd/server/token_counter.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module"
+    },
+    "position": {
+      "x": 0,
+      "y": 0
     }
   }
 ]

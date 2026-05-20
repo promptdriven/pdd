@@ -430,8 +430,13 @@ elif [ "${TASK_INDEX}" -ge "${SYNC_REGRESSION_START}" ] && [ "${TASK_INDEX}" -le
     CASE_NUM="${SYNC_CASE_IDS[$SYNC_OFFSET]}"
     # 10 min was tight for case_7 (complex sync data_processor — strength 0.3,
     # 1 attempt, $5 budget; legit LLM completion + scaffold can run 8-10 min).
-    # 15 min gives realistic headroom without weakening fail-fast for hangs.
-    export PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-900}"
+    # The target-coverage shard can also exceed 15 min on Cloud Batch while
+    # waiting on real LLM/test-generation work, so give that shard 20 min.
+    if [ "${CASE_NUM}" = "15" ]; then
+        export PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-1200}"
+    else
+        export PDD_CMD_TIMEOUT="${PDD_CMD_TIMEOUT:-900}"
+    fi
     run_test "sync_regression" "case_${CASE_NUM}" \
         bash tests/sync_regression.sh "${CASE_NUM}"
 

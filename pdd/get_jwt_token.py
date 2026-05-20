@@ -551,7 +551,7 @@ class FirebaseAuthenticator:
         except requests.exceptions.ConnectionError as e:
             raise NetworkError(f"Failed to connect to Firebase: {e}")
         except requests.exceptions.RequestException as e:
-            if e.response and e.response.status_code == 400:
+            if e.response is not None and e.response.status_code == 400:
                 error_data = e.response.json()
                 if error_data.get("error", {}).get("message") == "INVALID_REFRESH_TOKEN":
                     self._delete_stored_refresh_token()

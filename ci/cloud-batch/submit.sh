@@ -28,7 +28,23 @@ _with_timeout() {
 
 # Snapshot pre-existing multiprocessing PIDs so we can later identify gcloud-leaked workers.
 _pre_gcloud_workers="$(pgrep -f 'multiprocessing\.spawn|multiprocessing\.resource_tracker' 2>/dev/null | sort -u || true)"
-trap 'cleanup_leaked_gcloud_workers' EXIT
+SOURCE_LIST_FILE=""
+SOURCE_TAR=""
+STREAMING_DIR=""
+
+cleanup_source_upload() {
+    :
+}
+
+cleanup_streaming_dir() {
+    [ -n "${STREAMING_DIR:-}" ] && rm -rf "${STREAMING_DIR}"
+}
+
+cleanup_all() {
+    cleanup_source_upload
+    cleanup_streaming_dir
+    cleanup_leaked_gcloud_workers
+}
 
 # Sweep gcloud's leaked multiprocessing workers that this script spawned.
 # Scope is bounded by the pre-script snapshot: only workers that didn't exist before
@@ -54,6 +70,7 @@ cleanup_leaked_gcloud_workers() {
     sleep 1
     kill -KILL "${term_pids[@]}" 2>/dev/null || true
 }
+trap cleanup_all EXIT
 
 # ── Prepare source path allowlist ─────────────────────────────────────────
 cd "${REPO_ROOT}"
@@ -93,6 +110,13 @@ fi
 # ── Upload source tarball ─────────────────────────────────────────────────
 echo "=== Uploading source tarball ==="
 SOURCE_GCS="gs://${BUCKET}/${JOB_RUN_ID}/source/pdd-source.tar.gz"
+SOURCE_TAR="$(mktemp "/tmp/pdd-source.${JOB_RUN_ID}.XXXXXX")"
+cleanup_source_upload() {
+    rm -f "${SOURCE_LIST_FILE:-}" /tmp/.pddrc_pddcloud /tmp/.pdd-package-version
+    if [ -n "${SOURCE_TAR:-}" ]; then
+        rm -f "${SOURCE_TAR}" "${SOURCE_TAR}.gz"
+    fi
+}
 # Only include directories needed for tests (skip demos/, experiments/, etc.)
 # Use the current working tree so local fixes can be validated without an
 # intermediate commit, but derive the file list from git so ignored files
@@ -107,14 +131,14 @@ if [ -f "ci/cloud-batch/test-durations.json" ] && ! grep -Fxq "ci/cloud-batch/te
     echo "ci/cloud-batch/test-durations.json" >> "${SOURCE_LIST_FILE}"
 fi
 
-COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar -cf /tmp/pdd-source.tar -T "${SOURCE_LIST_FILE}"
+COPYFILE_DISABLE=1 COPY_EXTENDED_ATTRIBUTES_DISABLE=1 tar -cf "${SOURCE_TAR}" -T "${SOURCE_LIST_FILE}"
 rm -f "${SOURCE_LIST_FILE}"
 
 # Include pdd_cloud .pddrc if available (for TestActualPddrcConfiguration tests)
 PARENT_PDDRC="${REPO_ROOT}/../.pddrc"
 if [ -f "${PARENT_PDDRC}" ]; then
     cp "${PARENT_PDDRC}" /tmp/.pddrc_pddcloud
-    tar -C /tmp -rf /tmp/pdd-source.tar .pddrc_pddcloud
+    tar -C /tmp -rf "${SOURCE_TAR}" .pddrc_pddcloud
     rm /tmp/.pddrc_pddcloud
 fi
 
@@ -139,13 +163,13 @@ else
     PDD_PACKAGE_VERSION="${_pdd_major}.${_pdd_minor}.${_pdd_next_patch}.dev${_pdd_distance}"
 fi
 printf '%s\n' "${PDD_PACKAGE_VERSION}" > /tmp/.pdd-package-version
-tar -C /tmp -rf /tmp/pdd-source.tar .pdd-package-version
+tar -C /tmp -rf "${SOURCE_TAR}" .pdd-package-version
 rm /tmp/.pdd-package-version
 
-gzip -f /tmp/pdd-source.tar
+gzip -f "${SOURCE_TAR}"
 
-gcloud storage cp --quiet /tmp/pdd-source.tar.gz "${SOURCE_GCS}"
-rm /tmp/pdd-source.tar.gz
+gcloud storage cp --quiet "${SOURCE_TAR}.gz" "${SOURCE_GCS}"
+rm "${SOURCE_TAR}.gz"
 echo "Uploaded to ${SOURCE_GCS}"
 
 # ── Prepare job templates ─────────────────────────────────────────────────
@@ -188,7 +212,7 @@ rm /tmp/pdd-batch-job-spot.json /tmp/pdd-batch-job-std.json
 echo "=== Polling for completion (${POLL_INTERVAL}s intervals, ${POLL_TIMEOUT}s timeout) ==="
 ELAPSED=0
 STREAMING_DIR=$(mktemp -d)
-trap 'rm -rf "${STREAMING_DIR}"; cleanup_leaked_gcloud_workers' EXIT
+trap cleanup_all EXIT
 
 TOTAL=77  # 76 (spot) + 1 (standard)
 STREAM_FAILURES=0

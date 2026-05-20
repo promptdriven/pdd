@@ -1875,8 +1875,8 @@ def code_generator_main(
                         console.print(f"[yellow]Cloud execution timed out ({get_cloud_timeout()}s). Falling back to local.[/yellow]")
                         current_execution_is_local = True
                     except requests.exceptions.HTTPError as e:
-                        status_code = e.response.status_code if e.response else 0
-                        err_content = e.response.text[:200] if e.response else "No response content"
+                        status_code = e.response.status_code if e.response is not None else 0
+                        err_content = e.response.text[:200] if e.response is not None else "No response content"
 
                         # Non-recoverable errors: do NOT fall back to local
                         if status_code == 402:  # Insufficient credits
