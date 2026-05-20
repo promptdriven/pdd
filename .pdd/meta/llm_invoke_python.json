@@ -1,13 +1,13 @@
 {
-  "pdd_version": "0.0.233",
-  "timestamp": "2026-05-18T17:46:38.973139+00:00",
-  "command": "fix",
-  "prompt_hash": "b79e36ee84766cd774e5d98c67db28caa4571f4287d543b49ff664b8ff757939",
-  "code_hash": "05fc34244f9404d62d5e7be412b82c4296b4ae2a79b3a4de99db997d5be31a64",
+  "pdd_version": "0.0.241",
+  "timestamp": "2026-05-20T20:45:14.609851+00:00",
+  "command": "example",
+  "prompt_hash": "79413861ff48fbf7f0bef0ebff5c4925b418cc33bec73297295c26c7249d2982",
+  "code_hash": "2553e7ebf937c46e81f630288336d6c3509eefc76f4c7cd8315d60adc38b831c",
   "example_hash": "48c5aece0ddd153f95ec8a53802d2173d4da12a920b398c5feebb307b9958417",
-  "test_hash": "77abe4bbe877214327133b5c9121f467799aebbf6dabcedcc164a01de0c3d0d6",
+  "test_hash": "761bab34fe6574cb7d9251bdbf4785c2fa72785ecdf7ca03d0c5d4094adc45eb",
   "test_files": {
-    "test_llm_invoke.py": "77abe4bbe877214327133b5c9121f467799aebbf6dabcedcc164a01de0c3d0d6",
+    "test_llm_invoke.py": "761bab34fe6574cb7d9251bdbf4785c2fa72785ecdf7ca03d0c5d4094adc45eb",
     "test_llm_invoke_csv_model_registration.py": "1583b5e076fe5227a11f3d1079034ab4a21bc6131a3433f37bd68e35a99ba49e",
     "test_llm_invoke_integration.py": "2eb4bd2565761a4148762c6fb73c887cb6e12ff962742e05f5c2d4d62b47aaf9",
     "test_llm_invoke_nested_schema.py": "c983a19874abacc3e0ea9d6ca2ec87495960d2dd96d4e93be4039ed1bc995b9b",
@@ -15,7 +15,10 @@
     "test_llm_invoke_vertex_retry.py": "eafe91ba9376dc7e2da36faf3cd2de3cef50f70cf1c4fc5655e373deb7f50c26"
   },
   "include_deps": {
+    "context/auth_service_example.py": "4b6d2c8c9e13d1edc0d9805ee0c07657494cbf31dffe2bb0029b72975674a8cf",
     "context/path_resolution_example.py": "15ba84fd11c61af8fa12dcb19d63d42f0cb09b747542bf20e69650b8ff4ac137",
-    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254"
+    "context/python_preamble.prompt": "0388ed131bf986f8752e1bc4c81e4da0460cfe2908ec8c60b1314edbab768254",
+    "pdd/core/cloud.py": "0487c0b989996af144df3af1c818a6eeafe52fd209710e5a54eb43990c89ae97",
+    "pdd/server/token_counter.py": "3391a7c708713e3d370bf9e981a837f1f7ade08af75d69f402301dbf65a79c9a"
   }
 }

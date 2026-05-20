@@ -1562,6 +1562,149 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
                     assert response['result'].field2 == 42
 
 
+def test_llm_invoke_accumulates_attempted_models_across_calls_in_ctx_obj(
+    mock_set_llm_cache,
+):
+    """Regression for issue #897 / PR #1056.
+
+    A single tracked CLI command (e.g. `pdd generate`) can invoke
+    `llm_invoke` multiple times — for example code generation followed by
+    postprocess, or trace + extract. Each `llm_invoke` call must ACCUMULATE
+    its model attempts onto the running `ctx.obj['attempted_models']` list
+    rather than overwrite it, so the resulting `cost.csv` reflects every
+    fallback that happened during the command, not just the last call's
+    history.
+    """
+    import click
+
+    # Custom mock data: every model uses the LiteLLM completion path
+    # (structured_output=False) so we can drive the test with a single
+    # `litellm.completion` mock without dragging in the Responses-API path.
+    mock_data = [
+        MockModelInfoData(  # Base model at strength=0.5
+            provider='Anthropic', model='claude-3', input=0.025, output=0.035,
+            coding_arena_elo=1500, structured_output=False, base_url="",
+            api_key="ANTHROPIC_API_KEY", max_tokens="", max_completion_tokens="",
+            reasoning_type='none', max_reasoning_tokens=0,
+        ),
+        MockModelInfoData(  # Fallback candidate
+            provider='Google', model='gemini-pro', input=0.015, output=0.025,
+            coding_arena_elo=1400, structured_output=False, base_url="",
+            api_key="GOOGLE_API_KEY", max_tokens="", max_completion_tokens="",
+            reasoning_type='none', max_reasoning_tokens=0,
+        ),
+    ]
+    mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+    numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                    'max_completion_tokens', 'max_reasoning_tokens']
+    for col in numeric_cols:
+        if col in mock_df.columns:
+            mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+    mock_df['input'] = mock_df['input'].fillna(0.0)
+    mock_df['output'] = mock_df['output'].fillna(0.0)
+    mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+    mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+    mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+    mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+    mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+    mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+        "PDD_FORCE_LOCAL": "1",
+    }
+
+    # Stand-alone Click context — at runtime `track_cost` provides this with
+    # an empty `attempted_models` slot; we let llm_invoke fill it via
+    # `click.get_current_context(silent=True)`.
+    cmd = click.Command(name="generate")
+    ctx = click.Context(cmd, obj={})
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=mock_df), \
+         patch.dict(os.environ, all_keys), \
+         ctx:
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # Call 1: first model raises AuthenticationError -> fallback to next.
+            call1_first_error = openai.AuthenticationError(
+                message="Mocked auth failure on claude-3",
+                response=httpx.Response(
+                    status_code=401,
+                    request=httpx.Request("POST", "http://test"),
+                ),
+                body=None,
+            )
+            call1_second_response = create_mock_litellm_response(
+                "fallback ok", model_name='gemini-pro',
+            )
+            # Call 2: single-attempt success on claude-3 (the base model).
+            call2_response = create_mock_litellm_response(
+                "ok", model_name='claude-3',
+            )
+
+            mock_completion.side_effect = [
+                call1_first_error,
+                call1_second_response,
+                call2_response,
+            ]
+
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                       {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                first = llm_invoke(
+                    prompt="First {topic}",
+                    input_json={"topic": "a"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+                second = llm_invoke(
+                    prompt="Second {topic}",
+                    input_json={"topic": "b"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+
+    # Each call's return dict carries its own local history (this still works).
+    assert first['attempted_models'][-1] == first['model_name']
+    assert second['attempted_models'] == [second['model_name']]
+    assert len(first['attempted_models']) >= 2, (
+        f"First call should have at least 2 attempts (failed + retry), got: "
+        f"{first['attempted_models']!r}"
+    )
+
+    # The ctx.obj history is what `track_cost` reads to populate the
+    # `attempted_models` CSV column. It must contain BOTH calls' attempts in
+    # chronological order — overwriting it would hide call 1's fallback.
+    accumulated = ctx.obj.get('attempted_models')
+    assert isinstance(accumulated, list), (
+        f"ctx.obj['attempted_models'] should be a list after llm_invoke, "
+        f"got {accumulated!r}"
+    )
+
+    expected_minimum_length = len(first['attempted_models']) + len(second['attempted_models'])
+    assert len(accumulated) >= expected_minimum_length, (
+        f"Expected ctx.obj['attempted_models'] to accumulate >= "
+        f"{expected_minimum_length} entries across both calls, got "
+        f"{len(accumulated)}: {accumulated!r}"
+    )
+
+    # First call's local history must be a prefix of the accumulated list.
+    first_len = len(first['attempted_models'])
+    assert accumulated[:first_len] == first['attempted_models'], (
+        f"First call's attempts must come first in the accumulated history; "
+        f"prefix was {accumulated[:first_len]!r}, expected "
+        f"{first['attempted_models']!r}"
+    )
+
+    # Second call's local history must be the suffix.
+    second_len = len(second['attempted_models'])
+    assert accumulated[-second_len:] == second['attempted_models'], (
+        f"Second call's attempts must come last in the accumulated history; "
+        f"suffix was {accumulated[-second_len:]!r}, expected "
+        f"{second['attempted_models']!r}"
+    )
+
+
 def test_llm_invoke_responses_api_returns_attempted_models(mock_load_models, mock_set_llm_cache):
     """The OpenAI Responses API success path must include `attempted_models`
     in the returned dict and the last entry must equal `model_name`."""

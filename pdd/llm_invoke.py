@@ -2984,8 +2984,33 @@ def llm_invoke(
     # local fallback so callers (and `track_cost`) can record the full path.
     attempted_models: List[str] = []
 
+    # Snapshot any attempts already accumulated on `ctx.obj` by earlier
+    # `llm_invoke` calls within the same tracked CLI command (e.g. `pdd
+    # generate` invoking code generation followed by postprocess). Each call
+    # contributes only its own attempts to `attempted_models`, but the
+    # cross-call history on `ctx.obj` must be the union — otherwise an earlier
+    # fallback gets overwritten when track_cost reads the CSV column.
+    _prior_ctx_attempts: List[str] = []
+    try:
+        import click as _click_for_prior  # local import; llm_invoke must work without click
+        _ctx_for_prior = _click_for_prior.get_current_context(silent=True)
+        if (
+            _ctx_for_prior is not None
+            and isinstance(_ctx_for_prior.obj, dict)
+        ):
+            _existing = _ctx_for_prior.obj.get('attempted_models')
+            if isinstance(_existing, list):
+                _prior_ctx_attempts = list(_existing)
+    except Exception:
+        pass
+
     def _publish_attempted_models() -> None:
-        """Best-effort: mirror attempted_models onto Click ctx.obj for track_cost."""
+        """Best-effort: mirror attempted_models onto Click ctx.obj for track_cost.
+
+        Preserves attempts contributed by earlier llm_invoke calls within the
+        same tracked command by writing `_prior_ctx_attempts + list(attempted_models)`
+        rather than overwriting with just the current call's history.
+        """
         try:
             import click as _click  # local import; llm_invoke must work without click
             click_ctx = _click.get_current_context(silent=True)
@@ -2997,7 +3022,7 @@ def llm_invoke(
             if click_ctx.obj is None:
                 click_ctx.obj = {}
             if isinstance(click_ctx.obj, dict):
-                click_ctx.obj['attempted_models'] = list(attempted_models)
+                click_ctx.obj['attempted_models'] = _prior_ctx_attempts + list(attempted_models)
         except Exception:
             pass
 

@@ -233,9 +233,15 @@
     - Publish progress to the Click context for non-LLM consumers (e.g. `track_cost`):
       attempt to read `click.get_current_context(silent=True)`; if a context is returned and
       `ctx.obj` is a dict (initialize an empty dict on `ctx.obj` only if `ctx.obj is None`,
-      never overwrite a non-dict), set `ctx.obj['attempted_models'] = list(attempted_models)` after
-      each append. When no Click context exists (library usage, tests), this is a silent no-op —
-      never raise from the context publication step.
+      never overwrite a non-dict). At the top of `llm_invoke`, snapshot any existing
+      `ctx.obj['attempted_models']` ONCE as `prior_ctx_attempts` (a copy of the list, or `[]`
+      when missing or non-list). After each `attempted_models.append(...)` set
+      `ctx.obj['attempted_models'] = prior_ctx_attempts + list(attempted_models)`. This
+      accumulates the running history across multiple `llm_invoke` calls inside a single
+      tracked CLI command (e.g. `pdd generate` invoking generation followed by postprocess);
+      overwriting with just `list(attempted_models)` would hide an earlier call's fallback in
+      the cost CSV. When no Click context exists (library usage, tests), this is a silent
+      no-op — never raise from the context publication step.
 
 % Cloud Execution:
     - Define three cloud-related exceptions:
