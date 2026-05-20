@@ -1320,6 +1320,80 @@ class TestHealModule:
             "/repo/newmod.py",
         ]
 
+    def test_heal_update_lazy_resolution_with_real_file_passes_new_gate(self, tmp_path):
+        """Issue #1106 sibling regression: prove the new preset-but-missing
+        existence gate accepts lazy-resolved prompts whose file actually
+        exists on disk.
+
+        The patched test above (`test_update_without_prompt_path_resolves_after_update`)
+        keeps its fake `/repo/...` path for command-shape coverage by
+        stubbing `Path.exists`. That stub makes the gate trivially happy,
+        so it no longer proves the gate accepts a real lazy-resolved file.
+        This sibling exercises that contract end-to-end: real `tmp_path`
+        prompt + code, no `Path.exists` patch, mock `_resolve_paths` to
+        return the real Path. The heal must reach `_run_metadata_sync_safe`
+        and complete successfully without tripping the new gate.
+        """
+        from pdd.ci_drift_heal import _heal_update
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        real_prompt = prompts_dir / "lazymod_python.prompt"
+        real_prompt.write_text("Prompt body for lazymod\n")
+        real_code = tmp_path / "lazymod.py"
+        real_code.write_text("def lazymod(): return 1\n")
+
+        drift = DriftInfo(
+            "lazymod",
+            "python",
+            "update",
+            "Code exists without prompt — needs pdd update",
+            code_path=str(real_code),
+            prompt_path=None,  # forces the lazy block to resolve from disk
+        )
+
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True) as mock_pdd, \
+             patch(
+                 "pdd.ci_drift_heal._resolve_paths",
+                 return_value={"prompt": real_prompt, "code": real_code},
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True,
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._enforce_structural_invariants", return_value=True,
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._snapshot_metadata_state_for", return_value={},
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True,
+             ) as mock_sync:
+            result = _heal_update(drift, env={}, skip_set=set())
+
+        # Heal proceeded past the new fail-close gate (the real file exists)
+        # AND reached metadata sync — the contract we want.
+        assert result is True, (
+            "Lazy-resolved prompt that actually exists on disk must pass "
+            "the new preset-but-missing gate and proceed to metadata sync."
+        )
+        assert mock_sync.called, (
+            "metadata_sync must be invoked after the gate accepts the "
+            "lazy-resolved real file — otherwise the gate is too strict."
+        )
+        # First positional arg is the resolved prompt path (str form).
+        assert mock_sync.call_args.args[0] == str(real_prompt)
+        # No fail-close flags set — this is the happy lazy-resolution path.
+        assert drift.metadata_finalization_failed is False
+        assert drift.metadata_finalized is True
+        # Follow-up `pdd example` ran with the freshly-resolved real path.
+        example_calls = [
+            c for c in mock_pdd.call_args_list
+            if len(c[0]) >= 1 and len(c[0][0]) >= 5 and c[0][0][4] == "example"
+        ]
+        assert len(example_calls) == 1
+        assert example_calls[0][0][0][-2] == str(real_prompt)
+        assert example_calls[0][0][0][-1] == str(real_code)
+
     def test_example_drift_missing_prompt_path_fails_closed(self):
         """example drift without a resolved prompt path fails without running pdd."""
         drift = DriftInfo("api", "python", "example", "stale", code_path="/repo/api.py")
@@ -1428,14 +1502,16 @@ class TestHealModule:
             "boundary surfaces this as a hard heal failure, not a silent "
             "skip."
         )
-        assert drift.metadata_finalization_error, (
-            "metadata_finalization_error must be populated with an explicit "
-            "reason describing the missing prompt."
-        )
-        assert "missing" in drift.metadata_finalization_error.lower() or \
-            "exist" in drift.metadata_finalization_error.lower(), (
-            f"metadata_finalization_error should mention the missing prompt; "
-            f"got {drift.metadata_finalization_error!r}"
+        # Lock down the exact error string so any future drift in the
+        # message gets caught — downstream log surfaces and CI failure
+        # messages key off this exact string per the prompt-encoded
+        # Requirement 8 contract.
+        assert drift.metadata_finalization_error == (
+            "prompt_path set but missing on disk post-update"
+        ), (
+            f"metadata_finalization_error must match the prompt-encoded "
+            f"Requirement-8 contract verbatim; got "
+            f"{drift.metadata_finalization_error!r}"
         )
         # Sibling state: must NOT be marked finalized when we fail-closed.
         assert getattr(drift, "metadata_finalized", False) is False, (

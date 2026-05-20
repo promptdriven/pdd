@@ -1103,11 +1103,29 @@ def _finalize_single_file_fingerprint(
             )
         return
 
-    from .operation_log import (
-        _clear_run_report_before_fingerprint,
-        infer_module_identity,
-        save_fingerprint,
-    )
+    # Wrap the import itself so the user's successful update tuple is never
+    # broken by an import-time failure (e.g. `_clear_run_report_before_fingerprint`
+    # gets renamed in a future operation_log refactor — it's a private
+    # underscore-prefixed name and therefore more fragile than the public
+    # `clear_run_report` / `infer_module_identity` / `save_fingerprint`
+    # alongside it). An ImportError raised here would propagate up to
+    # `update_main`'s outer `except Exception: return None`, converting a
+    # successful `(prompt, cost, model)` tuple to None — which violates the
+    # issue #1106 acceptance criterion: best-effort metadata cleanup must
+    # never fail the successful update tuple.
+    try:
+        from .operation_log import (
+            _clear_run_report_before_fingerprint,
+            infer_module_identity,
+            save_fingerprint,
+        )
+    except ImportError as exc:
+        if not quiet:
+            rprint(
+                f"[warning][metadata] Could not import finalization helpers: "
+                f"{exc}[/warning]"
+            )
+        return
     basename, language = infer_module_identity(prompt_path)
     if not (basename and language):
         if not quiet:

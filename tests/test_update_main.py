@@ -3342,6 +3342,81 @@ def test_finalize_single_file_fingerprint_warns_about_stale_run_report_even_when
     )
 
 
+def test_finalize_single_file_fingerprint_swallows_import_error_for_helpers(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    # Issue #1106 codex review (blocking finding): the helper imports inside
+    # `_finalize_single_file_fingerprint` MUST be wrapped so an ImportError
+    # (e.g. `_clear_run_report_before_fingerprint` renamed by a future
+    # operation_log refactor — it's a private name and therefore more
+    # fragile than the public symbols alongside it) cannot propagate out
+    # and convert the caller's successful `(prompt, cost, model)` tuple
+    # to None via `update_main`'s outer `except Exception`. Simulate the
+    # failure by injecting a broken `pdd.operation_log` stand-in into
+    # `sys.modules` for the duration of the call so the function-local
+    # `from .operation_log import (...)` re-import raises ImportError on
+    # the helper name.
+    import sys
+    import types
+
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt body\n")
+    code_path = tmp_path / "foo.py"
+    code_path.write_text("def foo(): return 1\n")
+    monkeypatch.chdir(tmp_path)
+
+    # Build a stand-in module that lacks `_clear_run_report_before_fingerprint`
+    # (and the other helpers) so the `from .operation_log import (...)`
+    # statement raises ImportError. Keep the original module reference so
+    # other tests in the same session see it after this test exits.
+    fake_module = types.ModuleType("pdd.operation_log")
+    save_fingerprint_mock = MagicMock()
+    fake_module.save_fingerprint = save_fingerprint_mock  # would be patched, but should never be reached
+
+    real_module = sys.modules.get("pdd.operation_log")
+    monkeypatch.setitem(sys.modules, "pdd.operation_log", fake_module)
+    try:
+        # The helper imports use a relative `from .operation_log import (...)`
+        # statement; the import machinery resolves that via `pdd.operation_log`
+        # in sys.modules. Our stand-in lacks the needed names, so the
+        # `from ... import (a, b, c)` raises ImportError at the `a` lookup.
+        try:
+            _finalize_single_file_fingerprint(
+                prompt_path=prompt_path,
+                code_path=code_path,
+                sync_metadata=False,
+                dry_run=False,
+                quiet=False,
+                cost=0.0,
+                model="test-model",
+            )
+        except ImportError as exc:
+            pytest.fail(
+                f"_finalize_single_file_fingerprint must NOT propagate an "
+                f"ImportError out — best-effort metadata cleanup may not "
+                f"break the caller's successful update tuple. Got: {exc!r}"
+            )
+    finally:
+        if real_module is not None:
+            sys.modules["pdd.operation_log"] = real_module
+
+    # save_fingerprint must not have been called: we never resolved the
+    # helpers, so writing a fingerprint without first clearing the stale
+    # run report would defeat the issue #1106 invariant.
+    save_fingerprint_mock.assert_not_called()
+    # A user-facing warning must surface so the operator knows finalization
+    # was skipped (it is informational, not status fluff).
+    captured = " ".join(capsys.readouterr().out.split())
+    assert "Could not import finalization helpers" in captured, (
+        f"Expected a 'Could not import finalization helpers' warning "
+        f"when the import wrapping fires; got stdout: {captured!r}"
+    )
+
+
 def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
     mock_ctx,
     minimal_input_files,
