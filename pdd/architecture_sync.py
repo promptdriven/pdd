@@ -481,11 +481,17 @@ def _infer_module_tags(filename: str) -> List[str]:
     return ['module']
 
 
-def _normalize_dependency_filenames(
-    dependencies: List[str],
-    arch_data: List[Dict[str, Any]],
-) -> List[str]:
-    """Resolve prompt dependency tags to architecture filenames when unambiguous."""
+def build_dependency_resolver(arch_data: List[Dict[str, Any]]):
+    """
+    F11 third-party codex review: precompute the dependency resolution index
+    once per arch_data, return a callable ``resolve(dep) -> filename``.
+
+    Callers that resolve many deps against the same arch_data (e.g., the
+    validator's per-entry forward check or the sync graph builder) should
+    build the resolver once and reuse it, instead of paying O(N) index
+    construction per dep. Suffix-by-slash matching is also precomputed into
+    a dict so the resolver is O(1) average per dep instead of O(N).
+    """
     all_filenames = {
         filename
         for module in arch_data
@@ -495,15 +501,28 @@ def _normalize_dependency_filenames(
     by_exact_lower: Dict[str, List[str]] = {}
     by_basename_lower: Dict[str, List[str]] = {}
     by_bare_stem_lower: Dict[str, List[str]] = {}
+    by_slash_suffix_lower: Dict[str, List[str]] = {}
     language_suffixes = [
         suffix
         for language in _EXT_TO_LANGUAGE.values()
         for suffix in (f"_{language}", f"_{language.lower()}")
     ]
     for filename in all_filenames:
-        by_exact_lower.setdefault(filename.lower(), []).append(filename)
+        flower = filename.lower()
+        by_exact_lower.setdefault(flower, []).append(filename)
         basename = Path(filename).name
         by_basename_lower.setdefault(basename.lower(), []).append(filename)
+        # Precompute slash-suffix index: for each "/<tail>" tail in the filename,
+        # bucket the filename. Lookup becomes O(1) per dep instead of scanning
+        # all filenames per dep.
+        idx = 0
+        while True:
+            slash = flower.find("/", idx)
+            if slash < 0:
+                break
+            suffix = flower[slash:]  # includes leading "/"
+            by_slash_suffix_lower.setdefault(suffix, []).append(filename)
+            idx = slash + 1
         if basename.endswith(".prompt"):
             stem = basename[:-len(".prompt")]
             for suffix in language_suffixes:
@@ -512,30 +531,46 @@ def _normalize_dependency_filenames(
                     by_bare_stem_lower.setdefault(bare_stem.lower(), []).append(filename)
                     break
 
+    def resolve(dependency: str) -> str:
+        """Return the path-qualified arch filename for ``dependency`` when unambiguous,
+        else the normalized form of ``dependency`` unchanged."""
+        normalized = _normalize_prompt_filename(dependency)
+        if normalized in all_filenames:
+            return normalized
+        n_lower = normalized.lower()
+        exact_matches = by_exact_lower.get(n_lower, [])
+        if len(exact_matches) == 1:
+            return exact_matches[0]
+        suffix_matches = by_slash_suffix_lower.get(f"/{n_lower}", [])
+        if len(suffix_matches) == 1:
+            return suffix_matches[0]
+        basename_matches = by_basename_lower.get(Path(normalized).name.lower(), [])
+        if len(basename_matches) == 1:
+            return basename_matches[0]
+        if "/" not in normalized:
+            bare_matches = by_bare_stem_lower.get(n_lower, [])
+            if len(bare_matches) == 1:
+                return bare_matches[0]
+        return normalized
+
+    return resolve
+
+
+def _normalize_dependency_filenames(
+    dependencies: List[str],
+    arch_data: List[Dict[str, Any]],
+) -> List[str]:
+    """Resolve prompt dependency tags to architecture filenames when unambiguous.
+
+    Thin wrapper over ``build_dependency_resolver`` that preserves the original
+    multi-call API. Callers resolving many deps should call
+    ``build_dependency_resolver(arch_data)`` once and reuse the resolver.
+    """
+    resolve = build_dependency_resolver(arch_data)
     normalized_dependencies: List[str] = []
     seen: set[str] = set()
     for dependency in dependencies:
-        normalized = _normalize_prompt_filename(dependency)
-        resolved = normalized
-        if normalized not in all_filenames:
-            exact_matches = by_exact_lower.get(normalized.lower(), [])
-            suffix_matches = [
-                filename
-                for filename in all_filenames
-                if filename.lower().endswith(f"/{normalized.lower()}")
-            ]
-            if len(exact_matches) == 1:
-                resolved = exact_matches[0]
-            elif len(suffix_matches) == 1:
-                resolved = suffix_matches[0]
-            else:
-                basename_matches = by_basename_lower.get(Path(normalized).name.lower(), [])
-                if len(basename_matches) == 1:
-                    resolved = basename_matches[0]
-                elif "/" not in normalized:
-                    bare_matches = by_bare_stem_lower.get(normalized.lower(), [])
-                    if len(bare_matches) == 1:
-                        resolved = bare_matches[0]
+        resolved = resolve(dependency)
         if resolved not in seen:
             normalized_dependencies.append(resolved)
             seen.add(resolved)

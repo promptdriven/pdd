@@ -710,6 +710,8 @@ def _pdd_dependency_modules(
     prompt_path: Path,
     self_mod: str,
     arch_data: Optional[List[Dict[str, Any]]] = None,
+    *,
+    dep_resolver: Optional[Any] = None,
 ) -> set[str]:
     """
     Return path-preserving module keys declared via ``<pdd-dependency>`` tags in
@@ -742,16 +744,22 @@ def _pdd_dependency_modules(
     if not content:
         return set()
 
-    from .architecture_sync import parse_prompt_tags, _normalize_dependency_filenames
+    from .architecture_sync import parse_prompt_tags, build_dependency_resolver
 
     modules: set[str] = set()
     tags = parse_prompt_tags(content)
     raw_deps = list(tags.get("dependencies", []) or [])
-    if arch_data:
-        resolved = _normalize_dependency_filenames(raw_deps, arch_data)
+    # F11 third-party codex review: prefer a precomputed resolver when the caller
+    # passes one (saves rebuilding the resolution index per arch entry). Fall back
+    # to building one on demand if only arch_data was provided, or skip resolution
+    # entirely when neither is available.
+    if dep_resolver is None and arch_data:
+        dep_resolver = build_dependency_resolver(arch_data)
+    if dep_resolver is not None:
+        resolved_iter = (dep_resolver(d) for d in raw_deps)
     else:
-        resolved = raw_deps
-    for dep in resolved:
+        resolved_iter = iter(raw_deps)
+    for dep in resolved_iter:
         m = _path_preserving_module_key(dep)
         if m and m != self_mod:
             modules.add(m)
@@ -802,6 +810,13 @@ def cross_validate_architecture_with_prompt_includes(
         if b:
             filename_to_basename[fn] = b
 
+    # F11 third-party codex review: build the dependency resolver index ONCE
+    # for the whole validation run instead of rebuilding it per arch entry in
+    # _pdd_dependency_modules. Each entry then reuses the same precomputed
+    # indices via dep_resolver(dep). Avoids O(N) index construction per entry.
+    from .architecture_sync import build_dependency_resolver
+    dep_resolver = build_dependency_resolver(arch_data)
+
     for entry in arch_data:
         fn = entry.get("filename") or ""
         if not fn:
@@ -827,12 +842,24 @@ def cross_validate_architecture_with_prompt_includes(
                 include_modules.add(m)
                 include_proof.setdefault(m, inc)
 
-        tag_modules = _pdd_dependency_modules(prompt_path, mod_base, arch_data)
+        tag_modules = _pdd_dependency_modules(
+            prompt_path, mod_base, dep_resolver=dep_resolver
+        )
         forward_declared = include_modules | tag_modules
 
+        # F10 third-party codex review: arch-listed deps may be bare (stale
+        # hand-edits like ``["fix_python.prompt"]`` when the real entry is
+        # ``server/fix_python.prompt``). Resolve via the same precomputed
+        # dep_resolver before keying so the validator sees the same edges the
+        # graph builder will resolve to.
         arch_modules: set[str] = set()
+        dep_fn_to_resolved: Dict[str, str] = {}
         for dep_fn in entry.get("dependencies", []):
-            db = filename_to_basename.get(dep_fn)
+            if not isinstance(dep_fn, str):
+                continue
+            resolved_fn = dep_resolver(dep_fn)
+            dep_fn_to_resolved[dep_fn] = resolved_fn
+            db = filename_to_basename.get(resolved_fn)
             if db and db != mod_base:
                 arch_modules.add(db)
 
@@ -841,7 +868,8 @@ def cross_validate_architecture_with_prompt_includes(
                 (
                     df
                     for df in entry.get("dependencies", [])
-                    if filename_to_basename.get(df) == d
+                    if isinstance(df, str)
+                    and filename_to_basename.get(dep_fn_to_resolved.get(df, df)) == d
                 ),
                 None,
             )
