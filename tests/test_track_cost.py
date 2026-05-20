@@ -1463,3 +1463,126 @@ def test_release_atomic_lock_does_not_unlink_after_steal(tmp_path):
 
     # Cleanup for tmp_path teardown.
     os.unlink(lock_path)
+
+
+def test_migration_skips_write_on_lock_failure(mock_click_context, mock_rprint, tmp_path):
+    """Regression (5th-pass review, finding 1): when migration is needed
+    but the lock can't be acquired (contended timeout or unsupported
+    filesystem), the write MUST be skipped — not fall through unlocked
+    while the original holder is still in the migration critical section.
+    Falling through reopens the lost-row race.
+    """
+    import csv as _csv
+    csv_path = tmp_path / "cost.csv"
+    # Pre-existing 6-column legacy CSV — migration will trigger.
+    csv_path.write_text(
+        "timestamp,model,command,cost,input_files,output_files\n"
+        "2026-01-01T00:00:00.000,gpt-4,sync,0.01,a.py,b.py\n",
+        encoding="utf-8",
+    )
+    legacy_content = csv_path.read_text(encoding="utf-8")
+
+    mock_ctx = create_mock_context(
+        'sync',
+        {'prompt_file': '/p.txt', 'output_cost': str(csv_path), 'output': '/o.txt'},
+        obj={'output_cost': str(csv_path)}
+    )
+    mock_click_context.return_value = mock_ctx
+
+    @track_cost
+    def cmd(ctx_arg, prompt_file, output):
+        return (output, 0.5, 'm1')
+
+    # Force lock acquisition to fail by patching _acquire_atomic_lock.
+    with patch('pdd.track_cost._acquire_atomic_lock', return_value=(None, True)):
+        cmd(mock_ctx, '/p.txt', output='/o.txt')
+
+    # The CSV must be byte-identical to the legacy content — NOT migrated,
+    # NOT appended unlocked. The lost-row race only matters if we wrote;
+    # by skipping, we leave the file safe for the real holder.
+    after = csv_path.read_text(encoding="utf-8")
+    assert after == legacy_content, (
+        "migration with failed lock must skip the write entirely; got:\n" + after
+    )
+    # A loud warning must have fired so the user knows the row was lost.
+    warn_calls = [c.args[0] for c in mock_rprint.call_args_list]
+    assert any('could not acquire CSV lock for legacy migration' in w for w in warn_calls), (
+        f"Expected migration-skip warning; got rprint calls: {warn_calls!r}"
+    )
+
+
+def test_acquire_atomic_lock_retries_on_partial_nonce_write(tmp_path, monkeypatch):
+    """Regression (5th-pass review, finding 2): when nonce write fails or
+    is partial, the acquire must close + unlink + retry rather than
+    returning a malformed lock file that future processes wait 10 minutes
+    on (the mtime stale threshold for unparseable nonces).
+    """
+    import os as _os
+    from pdd import track_cost as _tc
+
+    lock_path = str(tmp_path / "cost.csv.lock")
+
+    # Patch os.write to fail the FIRST call only — second call (after
+    # cleanup + retry) succeeds normally.
+    real_write = _os.write
+    call_count = {'n': 0}
+
+    def flaky_write(fd, data):
+        call_count['n'] += 1
+        if call_count['n'] == 1:
+            # Simulate partial write — returns fewer bytes than data.
+            return 0
+        return real_write(fd, data)
+
+    monkeypatch.setattr(_tc.os, 'write', flaky_write)
+
+    handle, contended = _tc._acquire_atomic_lock(lock_path)
+    try:
+        assert handle is not None, (
+            "acquire must retry after partial-write failure; got None"
+        )
+        # After the first failed write, the file must have been cleaned
+        # up (no malformed lock left behind). The second attempt succeeds
+        # and the file now contains our valid nonce.
+        with open(lock_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        assert '-' in content and content.startswith(str(os.getpid())), (
+            f"after retry the lock file must contain our nonce; got {content!r}"
+        )
+    finally:
+        _tc._release_atomic_lock(handle, lock_path)
+
+    assert not os.path.exists(lock_path), (
+        "after release, the lock file must be unlinked"
+    )
+
+
+def test_release_atomic_lock_unlinks_malformed_lock(tmp_path):
+    """Regression (5th-pass review, finding 3): when the lock file
+    exists but has no parseable nonce (e.g. truncated externally),
+    release MUST still unlink the file. Leaving it behind would block
+    every subsequent PDD invocation for the mtime stale window.
+    """
+    import os as _os
+    from pdd import track_cost as _tc
+
+    lock_path = str(tmp_path / "cost.csv.lock")
+
+    # Acquire normally.
+    handle, _ = _tc._acquire_atomic_lock(lock_path)
+    assert handle is not None, "initial acquire must succeed"
+
+    # Truncate the file content so _read_lock_owner returns None.
+    with open(lock_path, 'w', encoding='utf-8') as f:
+        f.write('')
+
+    # Release with a malformed (empty) lock file. Previously the release
+    # would silently return; now it unlinks because we hold the
+    # O_EXCL-acquired fd.
+    _tc._release_atomic_lock(handle, lock_path)
+
+    assert not _os.path.exists(lock_path), (
+        "release must unlink an unparseable lock that we created via "
+        "O_EXCL; otherwise future PDD invocations are blocked for the "
+        "mtime stale window."
+    )

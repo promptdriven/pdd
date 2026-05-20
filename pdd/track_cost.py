@@ -117,17 +117,11 @@ def _acquire_atomic_lock(
     safety-net when the lock file is malformed.
     """
     nonce = f"{os.getpid()}-{uuid.uuid4().hex}"
+    nonce_bytes = nonce.encode()
     saw_contention = False
     for _ in range(_LOCK_RETRY_MAX):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
-            try:
-                os.write(fd, nonce.encode())
-            except OSError:
-                # Failure to write the nonce is non-fatal but the safety
-                # check on release won't be able to verify ownership.
-                pass
-            return (fd, nonce), False
         except FileExistsError:
             saw_contention = True
             if _is_stale_lock(lock_path):
@@ -137,20 +131,50 @@ def _acquire_atomic_lock(
                     pass
                 continue
             time.sleep(_LOCK_RETRY_INTERVAL)
+            continue
         except OSError:
             # Filesystem doesn't support O_EXCL semantics; degrade
             # silently (no contention was observed, just unsupported).
             return None, False
+
+        # Now we hold the fd. Nonce write MUST succeed for ownership to be
+        # verifiable on release and staleness via PID-alive on contention.
+        # If it fails (disk full, fd revoked, process signaled mid-write),
+        # close + unlink so we don't leak a malformed lock file other
+        # processes will wait the mtime threshold on.
+        try:
+            written = os.write(fd, nonce_bytes)
+            if written != len(nonce_bytes):
+                raise OSError("partial nonce write")
+        except OSError:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            try:
+                os.unlink(lock_path)
+            except OSError:
+                pass
+            time.sleep(_LOCK_RETRY_INTERVAL)
+            continue
+        return (fd, nonce), False
     return None, saw_contention
 
 
 def _release_atomic_lock(handle: Optional[Tuple[int, str]], lock_path: str) -> None:
     """Release the lock acquired by :func:`_acquire_atomic_lock`.
 
-    Only unlinks ``lock_path`` when the file's nonce still matches ours.
-    Prevents the release-after-stale-steal race: if our lock was stolen
-    by another process, that other process now owns the lock file and we
-    must NOT delete it.
+    Resolution rules — strongest-evidence-first:
+      - If the lock file is gone, no-op (already cleaned).
+      - If the file's nonce matches ours, unlink (normal release).
+      - If the file's nonce DOES NOT match ours, leave alone (our lock
+        was stolen during execution; the new owner now holds the path).
+      - If the file exists but is unreadable / has no parseable nonce,
+        unlink anyway: we acquired the path via O_EXCL and the malformed
+        content can only be our own write that didn't complete (the
+        acquire path now rejects partial nonce writes, so in practice
+        this only fires when the lock file was truncated by something
+        external — leaving it would block future PDD invocations).
 
     Best-effort: errors during close/read/unlink are swallowed so cost
     tracking never breaks the wrapped command.
@@ -162,9 +186,16 @@ def _release_atomic_lock(handle: Optional[Tuple[int, str]], lock_path: str) -> N
         os.close(fd)
     except OSError:
         pass
+    if not os.path.exists(lock_path):
+        return
     owner = _read_lock_owner(lock_path)
     if owner is None:
-        # Lock file already gone or unreadable; nothing more to do.
+        # File exists but content is unparseable; we hold the
+        # O_EXCL-acquired fd, so clean up to avoid leaking the lock.
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
         return
     _, recorded = owner
     if recorded == our_nonce:
@@ -356,33 +387,55 @@ def track_cost(func):
                         fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files', 'attempted_models']
                         file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
 
-                        # Serialize the migration+append critical section
-                        # across concurrent PDD processes via a cross-
-                        # platform exclusive lock file (O_CREAT|O_EXCL).
-                        # Without the lock, two processes hitting a legacy
-                        # 6-column cost.csv would each peek-then-migrate-
-                        # then-append independently and the second
-                        # os.replace would overwrite the first's appended
-                        # row (lost-update race). Lock acquisition is
-                        # best-effort: on filesystems that don't support
-                        # O_EXCL semantics or after the 30s retry budget,
-                        # fall through to the unlocked atomic-rename path
-                        # (still safer than in-place rewrite, just not
-                        # safe against the inter-process race) — and emit
-                        # a warning so the user is informed when the
-                        # lock was unavailable.
+                        # Cheap pre-lock peek: does the file need migration?
+                        # Migration is the only operation that requires
+                        # cross-process serialization (it's a read-modify-
+                        # write of the whole file). A pure append to an
+                        # already-migrated file is safe without a lock on
+                        # POSIX because O_APPEND guarantees atomicity for
+                        # writes up to PIPE_BUF (≥4096 bytes; our rows are
+                        # well under that). This split means a stuck or
+                        # filesystem-unsupported lock no longer reopens the
+                        # lost-row race on the normal append path.
+                        needs_migration_likely = False
+                        if file_has_content:
+                            try:
+                                with open(output_cost_path, 'r', newline='', encoding='utf-8') as _peek:
+                                    _peek_header = next(csv.reader(_peek), None)
+                                if _peek_header is not None and 'attempted_models' not in _peek_header:
+                                    needs_migration_likely = True
+                            except OSError:
+                                pass
+
+                        # Lock acquisition policy:
+                        #   - Migration needed → MUST hold the lock; on
+                        #     contended timeout or unsupported filesystem,
+                        #     SKIP the write entirely (better to lose one
+                        #     cost row than to corrupt the legacy CSV).
+                        #   - Pure append → acquire best-effort; on any
+                        #     failure, fall through to unlocked append
+                        #     (relying on POSIX O_APPEND atomicity).
                         lock_path = output_cost_path + ".lock"
-                        lock_handle, lock_contended = _acquire_atomic_lock(lock_path)
-                        if lock_handle is None and lock_contended:
-                            # Only warn on real contention (FileExistsError
-                            # observed during retry); silent fallthrough on
-                            # filesystems that don't support O_EXCL.
-                            rprint(
-                                "[yellow]track_cost: could not acquire CSV "
-                                "lock after 30s; writing without serialization. "
-                                "Concurrent PDD processes may interleave rows "
-                                "during legacy cost.csv migration.[/yellow]"
-                            )
+                        lock_handle = None
+                        lock_contended = False
+                        if needs_migration_likely:
+                            lock_handle, lock_contended = _acquire_atomic_lock(lock_path)
+                            if lock_handle is None:
+                                rprint(
+                                    "[yellow]track_cost: could not acquire "
+                                    "CSV lock for legacy migration "
+                                    f"({'contended' if lock_contended else 'unsupported'}); "
+                                    "skipping this cost row to avoid corrupting "
+                                    f"{output_cost_path}.[/yellow]"
+                                )
+                                # Skip the write — return without recording.
+                                if exception_raised is not None:
+                                    raise exception_raised
+                                return result
+                        else:
+                            lock_handle, lock_contended = _acquire_atomic_lock(lock_path)
+                            # On pure-append, lock failure is acceptable —
+                            # POSIX O_APPEND atomicity handles small rows.
 
                         try:
                             # If file exists with an older header that
