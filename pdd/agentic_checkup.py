@@ -517,11 +517,9 @@ def run_agentic_checkup(
 
     # 6. Parse JSON report from step 7 output
     step7_output = ""
-    # The orchestrator doesn't return step outputs directly, so we try to
-    # extract JSON from the final message or rely on what the agent posted.
-    # The orchestrator returns "Checkup complete" on success, but the step 7
-    # agent should have posted a comment + output JSON. We treat orchestrator
-    # success as overall success.
+    # The orchestrator returns "Checkup complete" only after enforcing Step 7's
+    # structured verdict. In PR mode it owns the final report comment after a
+    # successful push/reverify, so callers can trust the return tuple.
 
     if not quiet:
         console.print(f"[bold]Checkup complete:[/bold] {orch_message}")

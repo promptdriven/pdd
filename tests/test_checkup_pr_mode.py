@@ -24,6 +24,29 @@ from pdd.agentic_change import _parse_pr_url
 from pdd.commands.checkup import checkup
 
 
+# Step 7's prompt requires a structured JSON verdict as the LAST block of
+# output. Round-4 Finding 1 added `_step7_passed`, which fails-closed when
+# that JSON is missing or reports failure. Tests that simulate a clean Step
+# 7 now must emit both the legacy "All Issues Fixed" loop-exit sentinel AND
+# the matching JSON payload.
+STEP7_CLEAN_JSON = (
+    '```json\n'
+    '{\n'
+    '  "success": true,\n'
+    '  "message": "verification passed",\n'
+    '  "issue_aligned": true,\n'
+    '  "issues": [],\n'
+    '  "changed_files": []\n'
+    '}\n'
+    '```'
+)
+
+
+def _step7_clean_output(label: str = "All Issues Fixed") -> str:
+    """Standard step-7 stub output for tests that simulate a passing run."""
+    return f"{label}\n{STEP7_CLEAN_JSON}"
+
+
 # ---------------------------------------------------------------------------
 # _parse_pr_url
 # ---------------------------------------------------------------------------
@@ -240,7 +263,7 @@ class TestOrchestratorPrMode:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             # Signal "All Issues Fixed" from step 7 to exit loop on first pass.
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -288,6 +311,80 @@ class TestOrchestratorPrMode:
             f"Step 8 must be skipped in PR mode; invoked: {invoked_steps}"
         )
 
+    def test_pr_mode_max_iterations_without_sentinel_fails_before_push(
+        self, tmp_path: Path
+    ) -> None:
+        """A clean-looking JSON verdict without the loop sentinel is not enough."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            if step_num == 7:
+                return (
+                    True,
+                    '{"success": true, "issue_aligned": true, '
+                    '"issues": [], "message": "clean but missing sentinel"}',
+                    0.0,
+                    "fake-model",
+                )
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ) as run_mock, patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ) as clear_mock, patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed"
+        ) as push_mock:
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False
+        assert "did not verify all issues fixed" in msg.lower()
+        invoked_steps = [c.args[0] for c in run_mock.call_args_list]
+        assert invoked_steps.count(7) == 3
+        assert 8 not in invoked_steps
+        push_mock.assert_not_called()
+        clear_mock.assert_not_called()
+
     def test_pr_mode_context_populated(self, tmp_path: Path) -> None:
         """PR-mode fields must land in the context dict passed to step prompts."""
         from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
@@ -296,7 +393,7 @@ class TestOrchestratorPrMode:
 
         def capture_step(step_num, _name, context, **_kw):  # noqa: ANN001
             captured_contexts.append(dict(context))
-            output = "All Issues Fixed" if step_num == 7 else f"out-{step_num}"
+            output = _step7_clean_output() if step_num == 7 else f"out-{step_num}"
             return (True, output, 0.0, "fake")
 
         with patch(
@@ -352,7 +449,7 @@ class TestOrchestratorPrMode:
 
         def capture_step(step_num, _name, context, **_kw):  # noqa: ANN001
             captured_contexts.append(dict(context))
-            output = "All Issues Fixed" if step_num == 7 else f"out-{step_num}"
+            output = _step7_clean_output() if step_num == 7 else f"out-{step_num}"
             return (True, output, 0.0, "fake")
 
         with patch(
@@ -637,7 +734,7 @@ class TestPrModeFixPushBack:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             executed_steps.append(step_num)
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         wt = tmp_path / "wt"
@@ -704,6 +801,92 @@ class TestPrModeFixPushBack:
         push_mock.assert_called_once()
         assert push_mock.call_args.args[0] == wt
 
+    def test_pr_mode_posts_final_report_only_after_successful_push(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        events: list[str] = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                'All Issues Fixed\n{"success": true, "issue_aligned": true, '
+                '"issues": []}'
+                if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        def fake_push(*_args, **_kwargs):  # noqa: ANN001
+            events.append("push")
+            return (True, "Pushed fixes to PR branch.")
+
+        def fake_pr_comment(*_args, **_kwargs):  # noqa: ANN001
+            events.append("pr_comment")
+            return True
+
+        def fake_issue_comment(*_args, **_kwargs):  # noqa: ANN001
+            events.append("issue_comment")
+            return True
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            side_effect=fake_push,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment",
+            side_effect=fake_pr_comment,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment",
+            side_effect=fake_issue_comment,
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=True,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True, msg
+        assert events == ["push", "pr_comment", "issue_comment"]
+
 
 # ---------------------------------------------------------------------------
 # Resume — full PR-identity guard (Greg review #2)
@@ -768,7 +951,7 @@ class TestPrResumeWorktreeRecreation:
         recreated.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -881,7 +1064,7 @@ class TestStateIdentityPrHeadSha:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             executed_steps.append(step_num)
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -982,7 +1165,7 @@ class TestStateIdentityPrHeadSha:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             executed_steps.append(step_num)
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -1104,7 +1287,7 @@ class TestStateIdentityPrHeadSha:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             executed_steps.append(step_num)
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -1220,7 +1403,7 @@ class TestPrModePushFailureDiagnostics:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -1252,7 +1435,11 @@ class TestPrModePushFailureDiagnostics:
             "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
             # Called once on push failure to capture the local commit SHA.
             return_value="local_commit_sha_222",
-        ):
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment"
+        ) as pr_comment_mock, patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment"
+        ) as issue_comment_mock:
             success, msg, _cost, _model = run_agentic_checkup_orchestrator(
                 issue_url="https://github.com/o/r/issues/99",
                 issue_content="stub",
@@ -1267,7 +1454,7 @@ class TestPrModePushFailureDiagnostics:
                 quiet=True,
                 no_fix=False,
                 timeout_adder=0.0,
-                use_github_state=False,
+                use_github_state=True,
                 pr_url="https://github.com/o/r/pull/200",
                 pr_owner="o",
                 pr_repo="r",
@@ -1294,6 +1481,8 @@ class TestPrModePushFailureDiagnostics:
             "Persisted step_outputs['pr_push'] must include the local "
             f"commit SHA; got: {saved_pr_push!r}"
         )
+        pr_comment_mock.assert_not_called()
+        issue_comment_mock.assert_not_called()
 
     def test_push_failure_message_handles_empty_rev_parse_sha(
         self, tmp_path: Path
@@ -1309,7 +1498,7 @@ class TestPrModePushFailureDiagnostics:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -1402,7 +1591,7 @@ class TestPrModePushFailureDiagnostics:
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
             seen_labels.append(_kwargs.get("label", ""))
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -1480,7 +1669,7 @@ class TestPrModePushFailureDiagnostics:
         def fake_step(step_num, *_args, **kwargs):  # noqa: ANN001
             if kwargs.get("label") == "step7_post_push_reverify":
                 return True, "Verifier did not confirm clean final head.", 0.0, "fake"
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return True, output, 0.0, "fake"
 
         with patch(
@@ -1546,7 +1735,7 @@ class TestPrModePushFailureDiagnostics:
 
         def fake_step(step_num, *_args, **kwargs):  # noqa: ANN001
             seen_labels.append(kwargs.get("label", ""))
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return True, output, 0.0, "fake"
 
         with patch(
@@ -1625,7 +1814,7 @@ class TestPrModeGuardsBeforePush:
         wt.mkdir()
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
-            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
         with patch(
@@ -1880,6 +2069,19 @@ class TestPrModeSourceArtifacts:
         assert "including those local fixes" in prompt
         assert "{pr_push_output}" in prompt
 
+    def test_step7_prompt_does_not_post_pre_push_comments_in_pr_mode(self) -> None:
+        prompt = (
+            Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_checkup_step7_verify_LLM.prompt"
+        ).read_text(encoding="utf-8")
+
+        assert "gh pr comment" not in prompt
+        assert "post to **BOTH**" not in prompt
+        assert "do NOT post GitHub comments from Step 7" in prompt
+        assert "orchestrator posts the final PR/issue report after" in prompt
+
     def test_architecture_records_agentic_checkup_cwd_parameter(self) -> None:
         arch_path = Path(__file__).resolve().parent.parent / "architecture.json"
         architecture = json.loads(arch_path.read_text(encoding="utf-8"))
@@ -1894,6 +2096,33 @@ class TestPrModeSourceArtifacts:
         )
 
         assert "cwd: Optional[Path]" in run_checkup["signature"]
+
+    def test_architecture_records_checkup_orchestrator_pr_mode_contract(self) -> None:
+        arch_path = Path(__file__).resolve().parent.parent / "architecture.json"
+        architecture = json.loads(arch_path.read_text(encoding="utf-8"))
+        module = next(
+            item
+            for item in architecture
+            if item.get("filename") == "agentic_checkup_orchestrator_python.prompt"
+        )
+        functions = module["interface"]["module"]["functions"]
+        function_names = {fn.get("name") for fn in functions}
+        run_fn = next(
+            fn for fn in functions if fn.get("name") == "run_agentic_checkup_orchestrator"
+        )
+
+        assert "pr_url: Optional[str]" in run_fn["signature"]
+        assert "pr_number: Optional[int]" in run_fn["signature"]
+        assert "reasoning_time: Optional[float]" in run_fn["signature"]
+        assert "pushes back to the same PR" in module["reason"]
+        assert "re-runs Step 7 after a rebase-on-updated-head push" in module["description"]
+        assert "posts final PR/issue reports only after" in module["description"]
+        assert "checkup_review_loop_python.prompt" in module["dependencies"]
+        assert "_setup_pr_worktree" in function_names
+        assert "_commit_and_push_if_changed" in function_names
+        assert "_check_prompt_source_guard" in function_names
+        assert "_check_architecture_registry_edit_guard" in function_names
+        assert "_format_pr_mode_final_report" in function_names
 
     def test_final_checkup_helper_is_in_prompt_and_context_sources(self) -> None:
         root = Path(__file__).resolve().parent.parent
@@ -1921,3 +2150,361 @@ class TestPrModeSourceArtifacts:
             fn for fn in functions if fn.get("name") == "_run_final_checkup_on_pr"
         )
         assert "cwd: Path" in helper["signature"]
+
+
+# ---------------------------------------------------------------------------
+# Round-4 Finding 1: gate the orchestrator on Step 7's JSON verdict.
+#
+# Before this gate, Step 7 could report `issue_aligned: false` (PR-mode) or
+# unfixed critical issues and the orchestrator would still push to the PR
+# (in fix mode) or invoke step 8 (in issue mode), clear state, and return
+# `(True, "Checkup complete", ...)`. Downstream consumers (pdd-issue,
+# pdd_cloud) trust the return tuple, so a bad PR could be marked green.
+# These tests pin the new fail-closed behavior in `_step7_passed`.
+# ---------------------------------------------------------------------------
+
+
+def _step7_output(
+    *,
+    success: bool = True,
+    issue_aligned: bool | None = True,
+    issues: list[dict] | None = None,
+    message: str = "ok",
+    include_sentinel: bool = True,
+) -> str:
+    """Render a fake Step 7 output containing the structured JSON verdict."""
+    payload: dict = {
+        "success": success,
+        "message": message,
+        "issues": issues if issues is not None else [],
+        "changed_files": [],
+    }
+    if issue_aligned is not None:
+        payload["issue_aligned"] = issue_aligned
+    body = "```json\n" + json.dumps(payload) + "\n```"
+    if include_sentinel and success:
+        body = "All Issues Fixed\n" + body
+    return body
+
+
+class TestStep7PassedHelper:
+    """Unit tests for `_step7_passed` parsing semantics."""
+
+    def test_step7_parse_failure_fails_closed(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed("not even close to JSON", pr_mode=True)
+        assert passed is False
+        assert "Step 7 verdict JSON could not be parsed" in reason
+
+    def test_empty_step7_output_fails_closed(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed("", pr_mode=False)
+        assert passed is False
+        assert "Step 7 verdict JSON could not be parsed" in reason
+
+    def test_success_false_fails_in_issue_mode(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(success=False, issue_aligned=None,
+                            include_sentinel=False, message="tests still red")
+        passed, reason = _step7_passed(out, pr_mode=False)
+        assert passed is False
+        assert "success=false" in reason
+
+    def test_issue_aligned_false_fails_in_pr_mode(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(success=True, issue_aligned=False,
+                            message="PR is unrelated to issue")
+        passed, reason = _step7_passed(out, pr_mode=True)
+        assert passed is False
+        assert "issue_aligned=false" in reason
+
+    def test_issue_aligned_ignored_in_issue_mode(self) -> None:
+        """issue_aligned is PR-mode only — issue mode must not require it."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(success=True, issue_aligned=False)
+        passed, _reason = _step7_passed(out, pr_mode=False)
+        assert passed is True
+
+    def test_unfixed_critical_issue_fails(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "low", "fixed": False,
+                 "module": "x", "description": "minor"},
+                {"severity": "critical", "fixed": False,
+                 "module": "auth", "description": "leaks token"},
+            ],
+        )
+        passed, reason = _step7_passed(out, pr_mode=True)
+        assert passed is False
+        assert "unfixed critical" in reason
+        assert "auth" in reason
+
+    def test_fixed_critical_passes(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": True,
+                 "module": "auth", "description": "leaked token"},
+            ],
+        )
+        passed, _reason = _step7_passed(out, pr_mode=True)
+        assert passed is True
+
+    def test_clean_pr_mode_passes(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        out = _step7_output(success=True, issue_aligned=True)
+        passed, _reason = _step7_passed(out, pr_mode=True)
+        assert passed is True
+
+
+def _run_orch_with_fake_step7(
+    tmp_path: Path,
+    fake_step7: str,
+    *,
+    no_fix: bool = False,
+) -> tuple:
+    """Run the orchestrator in PR fix mode with a configurable step-7 output.
+
+    Returns ``(success, message, push_mock, executed_steps)``.
+    """
+    from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+    executed = []
+
+    def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+        executed.append(step_num)
+        if step_num == 7:
+            return (True, fake_step7, 0.0, "fake-model")
+        return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+    wt = tmp_path / "wt"
+    wt.mkdir()
+
+    with patch(
+        "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+        return_value=(wt, None),
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.load_workflow_state",
+        return_value=(None, None),
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.save_workflow_state",
+        return_value=None,
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+    ) as clear_mock, patch(
+        "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+        return_value={
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef",
+        },
+        create=True,
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+        return_value=(True, "Pushed fixes to PR branch."),
+        create=True,
+    ) as push_mock, patch(
+        "pdd.agentic_checkup_orchestrator._git_changed_files",
+        return_value=[],
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+        return_value=None,
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+        return_value=None,
+    ):
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_content="stub",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=99,
+            issue_title="stub",
+            architecture_json="{}",
+            pddrc_content="",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            no_fix=no_fix,
+            timeout_adder=0.0,
+            use_github_state=False,
+            pr_url="https://github.com/o/r/pull/200",
+            pr_owner="o",
+            pr_repo="r",
+            pr_number=200,
+        )
+
+    return success, msg, push_mock, executed, clear_mock
+
+
+class TestStep7GateInPrFixMode:
+    """Finding 1: in PR fix mode, the orchestrator must NOT push when Step 7
+    reports `issue_aligned: false` or unfixed critical issues, and must
+    return failure so callers don't mark the run green.
+    """
+
+    def test_pr_mode_returns_failure_when_step7_issue_aligned_false(
+        self, tmp_path: Path
+    ) -> None:
+        step7 = _step7_output(
+            success=True, issue_aligned=False, message="PR is unrelated"
+        )
+        success, msg, push_mock, _executed, clear_mock = _run_orch_with_fake_step7(
+            tmp_path, step7
+        )
+        assert success is False
+        assert "issue_aligned=false" in msg
+        push_mock.assert_not_called()
+        # State must NOT be cleared on gate failure (operator may resume).
+        clear_mock.assert_not_called()
+
+    def test_pr_mode_returns_failure_when_step7_has_unfixed_critical(
+        self, tmp_path: Path
+    ) -> None:
+        step7 = _step7_output(
+            success=True,
+            issue_aligned=True,
+            issues=[
+                {"severity": "critical", "fixed": False,
+                 "module": "billing", "description": "double charge"},
+            ],
+        )
+        success, msg, push_mock, _executed, _clear = _run_orch_with_fake_step7(
+            tmp_path, step7
+        )
+        assert success is False
+        assert "unfixed critical" in msg
+        push_mock.assert_not_called()
+
+    def test_pr_mode_returns_success_when_step7_clean(self, tmp_path: Path) -> None:
+        step7 = _step7_output(success=True, issue_aligned=True)
+        success, msg, push_mock, executed, _clear = _run_orch_with_fake_step7(
+            tmp_path, step7
+        )
+        assert success is True, msg
+        # Push must be invoked exactly once when the gate passes.
+        push_mock.assert_called_once()
+        # Step 8 must still be skipped in PR mode.
+        assert 8 not in executed
+
+
+class TestStep7GateInNoFixPrMode:
+    """Finding 1: --no-fix linear path also gates on Step 7 verdict."""
+
+    def test_no_fix_pr_mode_returns_failure_when_step7_says_no(
+        self, tmp_path: Path
+    ) -> None:
+        step7 = _step7_output(
+            success=True, issue_aligned=False, message="not related"
+        )
+        success, msg, _push_mock, _executed, _clear = _run_orch_with_fake_step7(
+            tmp_path, step7, no_fix=True
+        )
+        assert success is False
+        assert "issue_aligned=false" in msg
+
+    def test_no_fix_pr_mode_returns_success_when_step7_clean(
+        self, tmp_path: Path
+    ) -> None:
+        step7 = _step7_output(success=True, issue_aligned=True)
+        success, msg, _push_mock, _executed, _clear = _run_orch_with_fake_step7(
+            tmp_path, step7, no_fix=True
+        )
+        assert success is True, msg
+
+
+class TestStep7GateInIssueMode:
+    """Finding 1: in issue mode (non-PR), the same gate prevents step 8
+    (PR creation) from running when Step 7 reports failure. Opening a PR
+    that contains unfixed critical issues is the same anti-pattern as
+    pushing one to an existing PR.
+    """
+
+    def test_issue_mode_skips_step8_when_step7_fails_after_max_iter(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import (
+            MAX_FIX_VERIFY_ITERATIONS,
+            run_agentic_checkup_orchestrator,
+        )
+
+        # Step 7 always reports an unfixed critical — the loop exhausts
+        # MAX_FIX_VERIFY_ITERATIONS without "All Issues Fixed", then the
+        # JSON gate must prevent step 8 from running.
+        failing_step7 = _step7_output(
+            success=True,
+            issue_aligned=None,
+            issues=[
+                {"severity": "critical", "fixed": False,
+                 "module": "core", "description": "still broken"},
+            ],
+            include_sentinel=False,
+        )
+
+        executed = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed.append(step_num)
+            if step_num == 7:
+                return (True, failing_step7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ) as clear_mock:
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+            )
+
+        # Loop must have run MAX_FIX_VERIFY_ITERATIONS times, each touching
+        # step 7. Step 8 must NOT have been invoked because the gate fired.
+        assert success is False
+        assert "unfixed critical" in msg
+        step7_count = sum(1 for s in executed if s == 7)
+        assert step7_count == MAX_FIX_VERIFY_ITERATIONS, executed
+        assert 8 not in executed
+        clear_mock.assert_not_called()

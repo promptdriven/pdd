@@ -24,8 +24,11 @@ from rich.console import Console
 
 from .agentic_common import (
     DEFAULT_MAX_RETRIES,
+    _sanitize_comment_body,
     clear_workflow_state,
     load_workflow_state,
+    post_pr_comment,
+    post_step_comment,
     run_agentic_task,
     save_workflow_state,
     substitute_template_variables,
@@ -369,6 +372,110 @@ def _github_token_from_env() -> str:
     )
 
     return fn()
+
+
+def _step7_passed(step7_output: str, pr_mode: bool) -> Tuple[bool, str]:
+    """Parse Step 7's JSON report and decide whether the checkup may proceed.
+
+    The Step 7 prompt (``agentic_checkup_step7_verify_LLM.prompt``) requires
+    a structured JSON report as the last block of output, shaped like::
+
+        {{
+          "success": true/false,
+          "issue_aligned": true/false,    # PR mode only — REQUIRED
+          "issues": [
+            {{"severity": "critical|medium|low", "fixed": true/false, ...}},
+            ...
+          ],
+          ...
+        }}
+
+    Returns ``(passed, failure_reason)`` where ``passed`` is True iff:
+
+    * ``success`` is ``True``;
+    * in PR mode, ``issue_aligned`` is ``True``;
+    * no entry in ``issues`` has ``severity == "critical"`` and ``fixed != True``.
+
+    Fails closed: if no JSON object can be extracted, returns
+    ``(False, "Step 7 verdict JSON could not be parsed: ...")`` so the
+    orchestrator never proceeds on an ambiguous verdict (Finding 1 of the
+    round-3 external review). Reuses the JSON-extraction helper defined in
+    :mod:`pdd.agentic_checkup` via a lazy import to avoid a circular module
+    dependency at orchestrator import time.
+    """
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _extract_json_from_text,
+    )
+
+    if not step7_output or not step7_output.strip():
+        return (
+            False,
+            "Step 7 verdict JSON could not be parsed: empty step 7 output.",
+        )
+
+    payload = _extract_json_from_text(step7_output)
+    if payload is None:
+        snippet = step7_output.strip()
+        if len(snippet) > 200:
+            snippet = snippet[:200] + "..."
+        return (
+            False,
+            f"Step 7 verdict JSON could not be parsed (fail-closed): {snippet}",
+        )
+
+    if payload.get("success") is not True:
+        return (
+            False,
+            f"Step 7 reported success=false. "
+            f"Message: {payload.get('message') or '<no message>'}",
+        )
+
+    if pr_mode and payload.get("issue_aligned") is not True:
+        return (
+            False,
+            f"Step 7 reported issue_aligned=false — PR does not resolve the "
+            f"source issue. Message: "
+            f"{payload.get('message') or '<no message>'}",
+        )
+
+    issues = payload.get("issues")
+    if isinstance(issues, list):
+        unfixed_critical: List[str] = []
+        for issue in issues:
+            if not isinstance(issue, dict):
+                continue
+            severity = str(issue.get("severity", "")).lower()
+            if severity != "critical":
+                continue
+            if issue.get("fixed") is True:
+                continue
+            module = issue.get("module") or issue.get("file") or "<unknown>"
+            desc = (
+                issue.get("description")
+                or issue.get("fix_description")
+                or "<no description>"
+            )
+            unfixed_critical.append(f"{module}: {desc}")
+        if unfixed_critical:
+            joined = "; ".join(unfixed_critical[:5])
+            more = "" if len(unfixed_critical) <= 5 else (
+                f" (+{len(unfixed_critical) - 5} more)"
+            )
+            return (
+                False,
+                f"Step 7 reported unfixed critical issues: {joined}{more}",
+            )
+
+    return True, ""
+
+
+def _format_pr_mode_final_report(step7_output: str, push_message: str) -> str:
+    """Build the trusted post-push PR/issue comment body."""
+    body = step7_output.strip()
+    push_message = push_message.strip()
+    if push_message:
+        body = f"{body}\n\n### PR Push Status\n{push_message}"
+    return _sanitize_comment_body(body)
 
 
 def _setup_pr_worktree(
@@ -1017,7 +1124,47 @@ def run_agentic_checkup_orchestrator(
                 total_cost,
                 last_model_used,
             )
+        # Round-4 Finding 1 follow-through: re-apply the strict JSON gate
+        # to the post-push reverify output. The "All Issues Fixed" string
+        # alone is just a loop-exit sentinel; the structured verdict is
+        # what tells us the rebased tree actually satisfies the contract.
+        passed, reason = _step7_passed(output, pr_mode=pr_mode)
+        if not passed:
+            return (
+                False,
+                f"Post-push verification failed Step 7 gate: {reason}",
+                total_cost,
+                last_model_used,
+            )
         return None
+
+    def _post_pr_mode_final_report(final_step7_output: str) -> None:
+        if not (
+            pr_mode
+            and use_github_state
+            and pr_owner
+            and pr_repo
+            and pr_number is not None
+            and final_step7_output.strip()
+        ):
+            return
+
+        body = _format_pr_mode_final_report(
+            final_step7_output,
+            context.get("pr_push_output", ""),
+        )
+        post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+        post_step_comment(
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            issue_number=issue_number,
+            step_num=7,
+            total_steps=TOTAL_STEPS,
+            description="Verification & Final Report",
+            output=final_step7_output,
+            cwd=cwd,
+            body=body,
+        )
 
     # ==================================================================
     # PR mode: create the PR-branch worktree up-front. All subsequent steps
@@ -1144,6 +1291,7 @@ def run_agentic_checkup_orchestrator(
             _save_state()
 
         # Run step 7.
+        nofix_step7_output = ""
         if 7 >= start_step:
             name7, desc7 = step_map[7]
             if not quiet:
@@ -1163,9 +1311,21 @@ def run_agentic_checkup_orchestrator(
                 return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
             success, output, cost, model = result
+            nofix_step7_output = output
             abort = _handle_step_result(7, success, output, cost, model)
             if abort is not None:
                 return abort
+        else:
+            # Resume path that already cached step 7's output.
+            nofix_step7_output = step_outputs.get("7", "")
+
+        # Round-4 Finding 1: gate the --no-fix verification path too.
+        # No push happens here, but pdd-issue / pdd_cloud consume the
+        # return tuple. Returning success when Step 7 reported failure
+        # would be the same anti-pattern as the fix-mode push case.
+        nofix_gate_passed, nofix_gate_reason = _step7_passed(
+            nofix_step7_output, pr_mode=pr_mode
+        )
 
         # Skip step 8.
         if 8 >= start_step:
@@ -1176,6 +1336,13 @@ def run_agentic_checkup_orchestrator(
             context["step8_output"] = skipped_output
             last_completed_step_to_save = 8
             _save_state()
+
+        if not nofix_gate_passed:
+            if not quiet:
+                console.print(
+                    f"[red]Step 7 gate failed (--no-fix): {nofix_gate_reason}[/red]"
+                )
+            return False, nofix_gate_reason, total_cost, last_model_used
 
     else:
         # --- Fix mode: iterative loop over steps 3-7 ---
@@ -1289,12 +1456,57 @@ def run_agentic_checkup_orchestrator(
             _save_state()
 
         if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and "All Issues Fixed" not in step7_output:
+            max_msg = (
+                f"Checkup did not verify all issues fixed after "
+                f"{MAX_FIX_VERIFY_ITERATIONS} fix-verify iterations."
+            )
+            max_reason = max_msg
+            max_gate_passed, max_gate_reason = _step7_passed(
+                step7_output, pr_mode=pr_mode
+            )
+            if not max_gate_passed:
+                max_reason = f"{max_msg} {max_gate_reason}"
             if not quiet:
                 console.print(
-                    f"[yellow]Warning: Max fix-verify iterations "
-                    f"({MAX_FIX_VERIFY_ITERATIONS}) reached. "
-                    f"Proceeding to PR creation.[/yellow]"
+                    f"[red]{max_reason} Not pushing fixes or creating a PR.[/red]"
                 )
+            if pr_mode:
+                step_outputs["pr_push"] = f"Skipped push because: {max_reason}"
+                context["pr_push_output"] = step_outputs["pr_push"]
+            else:
+                step_outputs["8"] = f"Skipped step 8 because: {max_reason}"
+                context["step8_output"] = step_outputs["8"]
+            _save_state()
+            return False, max_reason, total_cost, last_model_used
+
+        # --------------------------------------------------------------
+        # Round-4 Finding 1: gate the orchestrator on Step 7's structured
+        # verdict BEFORE pushing to a PR or creating one. Without this
+        # gate, the loop printed a warning and pushed anyway, so a PR
+        # with `issue_aligned: false` or unfixed critical issues could be
+        # marked green by downstream consumers.
+        # --------------------------------------------------------------
+        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode)
+        if not gate_passed:
+            if not quiet:
+                console.print(
+                    f"[red]Step 7 gate failed: {gate_reason}[/red]"
+                )
+            if pr_mode:
+                skip_msg = f"Skipped push because: {gate_reason}"
+                step_outputs["pr_push"] = skip_msg
+                context["pr_push_output"] = skip_msg
+            else:
+                skip_msg = f"Skipped step 8 because: {gate_reason}"
+                step_outputs["8"] = skip_msg
+                context["step8_output"] = skip_msg
+            # Persist the gate signal but do NOT clear workflow state — an
+            # operator may want to resume after fixing the underlying
+            # issue. Return failure so callers (pdd-issue, pdd_cloud,
+            # operators) see the gate fired instead of receiving a
+            # success message for a checkup that did not pass.
+            _save_state()
+            return False, gate_reason, total_cost, last_model_used
 
         # ==============================================================
         # Section 3: Step 8 (create PR) — after the loop
@@ -1386,6 +1598,7 @@ def run_agentic_checkup_orchestrator(
                 post_push_abort = _run_post_push_reverify_if_needed(push_message)
                 if post_push_abort is not None:
                     return post_push_abort
+                _post_pr_mode_final_report(step_outputs.get("7", step7_output))
             if 8 >= start_step:
                 if not quiet:
                     console.print(

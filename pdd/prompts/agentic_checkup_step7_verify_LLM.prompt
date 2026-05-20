@@ -116,22 +116,21 @@ In **PR mode**, `issue_aligned` is REQUIRED.
 Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode) `issue_aligned` is true AND no critical findings remain in the PR's diff.
 Set `"success": false` otherwise.
 
-6. **Post the final summary** as a GitHub comment — route by mode:
+6. **Prepare the final summary** — route by mode:
 
    - **Issue mode** (`pr_mode` = `false`): post to the issue thread only.
      ```
      gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
      ```
 
-   - **PR mode** (`pr_mode` = `true`): post to **BOTH** the PR thread (for human reviewers of the PR) AND the source issue thread (the canonical location downstream consumers fetch from). Order: PR comment first, then issue comment with the same body. Do NOT skip the issue post — it is part of the contract with the consumer.
-     ```
-     # 1. Post to the PR (human reviewers see verdict in PR context)
-     gh pr comment {pr_number} --repo {pr_owner}/{pr_repo} --body "..."
-     # 2. Mirror to the issue (consumers fetch Step-7 from the issue thread)
-     gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-     ```
+   - **PR mode** (`pr_mode` = `true`): do NOT post GitHub comments from
+     Step 7. In full PR mode, this verification pass runs before generated
+     fixes are pushed to the PR branch, so a pre-push comment can be falsely
+     clean if the later push fails. Output the markdown summary and final JSON
+     only; the orchestrator posts the final PR/issue report after the pushed
+     PR head has been verified.
 
-Your comment should follow this format:
+Your markdown summary should follow this format:
 
 ```markdown
 ## Step 7/8: Verification & Final Report (Iteration {fix_verify_iteration})
@@ -167,6 +166,7 @@ Your comment should follow this format:
 - The JSON report MUST be the last output — this is parsed programmatically
 - Always re-run tests even in --no-fix mode to confirm the baseline
 - Report ALL issues found across all steps, whether fixed or not
-- Always post your findings as a GitHub comment before outputting the JSON
+- In issue mode, post your findings as a GitHub comment before outputting the JSON
+- In PR mode, do NOT post GitHub comments from Step 7; output the markdown summary and JSON only
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
 - **Exit signal**: If ALL tests pass (unit + integration + e2e) AND the build succeeds with no remaining issues, you MUST include the exact text "All Issues Fixed" in your output. If ANY test fails or build issues remain, do NOT output "All Issues Fixed" — instead clearly list remaining issues so the next iteration can fix them
