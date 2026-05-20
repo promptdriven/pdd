@@ -14,7 +14,7 @@ import ast
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from lxml import etree
 
@@ -577,6 +577,67 @@ def _normalize_dependency_filenames(
     return normalized_dependencies
 
 
+def _prompt_dependency_union(
+    prompt_path: Path,
+    tags: Dict[str, Any],
+    arch_data: List[Dict[str, Any]],
+    self_filename: Optional[str] = None,
+) -> Tuple[List[str], bool]:
+    """Re-converge a prompt's architecture dependencies from the union of
+    ``<pdd-dependency>`` tags AND module-prompt ``<include>`` targets.
+
+    Per issue #1061 union semantics, both kinds of tag are architecture edges:
+    a declared dep is satisfied by either. The writer side of metadata sync
+    must therefore re-converge to the same union the validator reads, or it
+    will strip include-backed edges and immediately re-introduce reverse drift
+    (``<include>``s module X but architecture.json does not list it).
+
+    Order: ``<pdd-dependency>`` tags first (preserving prompt declaration order),
+    then any module-prompt include targets not already covered. Dedup is
+    first-occurrence preserving so a prompt that lists the same module twice
+    yields a single entry. Self-includes are filtered out by
+    ``_module_prompt_include_dependencies`` via path-preserving key equality
+    against ``self_filename`` (or None when registering a brand-new prompt).
+
+    Returns:
+        ``(union_filenames, has_dependency_intent)``.
+
+        ``union_filenames`` is normalized via ``_normalize_dependency_filenames``
+        against ``arch_data`` so bare entries like ``"fix_python.prompt"``
+        resolve to their unambiguous path-qualified arch filename. Include
+        targets that do not match any existing arch filename are kept literal
+        so the next validation pass surfaces them as orphans (don't silently
+        drop user-authored include declarations).
+
+        ``has_dependency_intent`` is True when the prompt expresses ANY
+        dependency intent — ``<pdd-dependency>`` tags (including the empty
+        explicit-clear form) OR module-prompt ``<include>``s. When False, the
+        caller MUST preserve the existing ``architecture.json`` dependencies
+        list: a reason/interface-only edit should not wipe pre-existing edges.
+
+    Lazy import: ``_module_prompt_include_dependencies`` lives in
+    ``agentic_sync`` which already imports from this module — lazy import here
+    avoids a load-time cycle. Same pattern the validator uses.
+    """
+    from .agentic_sync import _module_prompt_include_dependencies  # noqa: WPS433
+
+    declared = list(tags.get("dependencies", []) or [])
+    has_dep_tags = tags.get("has_dependency_tags", False) or bool(declared)
+    include_deps = _module_prompt_include_dependencies(
+        prompt_path, self_filename=self_filename
+    )
+    if not has_dep_tags and not include_deps:
+        return [], False
+
+    combined: List[str] = []
+    seen: set[str] = set()
+    for dep in declared + include_deps:
+        if dep and dep not in seen:
+            combined.append(dep)
+            seen.add(dep)
+    return _normalize_dependency_filenames(combined, arch_data), True
+
+
 def register_untracked_prompts(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
@@ -654,11 +715,24 @@ def register_untracked_prompts(
         module_tags = _infer_module_tags(filename)
         reason = tags['reason'] or f'Auto-registered module: {filename}'
 
+        # Populate the new entry's dependencies from the union of
+        # ``<pdd-dependency>`` tags AND module-prompt ``<include>`` targets
+        # (issue #1061 union semantics). Without this, a freshly registered
+        # entry whose prompt declares includes-only deps starts life with
+        # empty arch.dependencies and the validator immediately reports
+        # reverse drift on the next run. The include target may not yet
+        # match any arch.json filename (registration order) — in that case
+        # ``_prompt_dependency_union`` leaves it literal so the next
+        # validation pass surfaces it instead of silently dropping it.
+        union_dependencies, _ = _prompt_dependency_union(
+            prompt_file, tags, arch_data, self_filename=filename
+        )
+
         max_priority += 1
         entry = {
             'reason': reason,
             'description': reason,
-            'dependencies': tags['dependencies'],
+            'dependencies': union_dependencies,
             'priority': max_priority,
             'filename': filename,
             'filepath': filepath,
@@ -1106,20 +1180,22 @@ def update_architecture_from_prompt(
                 module_entry['interface'] = merged_interface
                 updated = True
 
-        # Update dependencies only when <pdd-dependency> metadata is present in the prompt.
-        # Reason/interface-only updates must not clear architecture.json dependencies (those may
-        # still reflect include-based or manually curated edges).
-        # Empty <pdd-dependency></pdd-dependency> still counts (has_dependency_tags) and clears deps.
-        should_update_deps = (
-            tags.get('has_dependency_tags', False) or bool(tags['dependencies'])
+        # Re-converge architecture.json ``dependencies`` from the union of the
+        # prompt's ``<pdd-dependency>`` tags AND its module-prompt ``<include>``
+        # targets (issue #1061 union semantics). Reason/interface-only updates
+        # with no dependency intent must NOT clear existing arch deps; those
+        # may still reflect manually curated edges. An empty
+        # ``<pdd-dependency></pdd-dependency>`` is still an explicit-clear and
+        # is counted via ``has_dependency_tags``.
+        union_dependencies, has_dep_intent = _prompt_dependency_union(
+            prompt_path, tags, arch_data, self_filename=prompt_filename
         )
-        if should_update_deps:
+        if has_dep_intent:
             old_deps = module_entry.get('dependencies', [])
-            tag_dependencies = _normalize_dependency_filenames(tags['dependencies'], arch_data)
             # Compare as sets to detect changes (order-independent)
-            if set(old_deps) != set(tag_dependencies):
-                changes['dependencies'] = {'old': old_deps, 'new': tag_dependencies}
-                module_entry['dependencies'] = tag_dependencies
+            if set(old_deps) != set(union_dependencies):
+                changes['dependencies'] = {'old': old_deps, 'new': union_dependencies}
+                module_entry['dependencies'] = union_dependencies
                 updated = True
 
         # 6. Write back to architecture.json (if updated and not dry run)
