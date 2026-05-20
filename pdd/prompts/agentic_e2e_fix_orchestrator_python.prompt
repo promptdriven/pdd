@@ -7,13 +7,16 @@
   "module": {
     "functions": [
       {"name": "run_agentic_e2e_fix_orchestrator", "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)", "returns": "Tuple[bool, str, float, str, List[str]]"},
-      {"name": "push_with_retry", "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True, force_with_lease_on_non_fast_forward: bool = True) -> Tuple[bool, str]", "returns": "Tuple[bool, str]", "sideEffects": ["Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true", "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"]}
+      {"name": "push_with_retry", "signature": "(cwd: Path, *, remote: str = 'origin', repo_owner: str, repo_name: str, refspec: str = 'HEAD', set_upstream: bool = True, force_with_lease_on_non_fast_forward: bool = True) -> Tuple[bool, str]", "returns": "Tuple[bool, str]", "sideEffects": ["Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true", "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"]},
+      {"name": "_run_final_checkup_on_pr", "signature": "(*, issue_url: str, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float]) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"}
     ]
   }
 }
 </pdd-interface>
 
 <pdd-dependency>agentic_bug_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
+<pdd-dependency>ci_validation_python.prompt</pdd-dependency>
 
 <pdd.agentic_e2e_fix_orchestrator>
 <include select="def:_check_e2e_environment,def:_verify_tests_independently,def:_extract_test_files,def:_get_modified_and_untracked,def:_detect_meaningful_changes,def:_is_noise_path,def:push_with_retry,def:_run_final_checkup_on_pr,def:_run_step11_code_cleanup,def:_classify_verification_failure,def:_is_intermediate_file,def:_commit_and_push,def:_revert_out_of_scope_changes,def:_check_staleness,def:_reevaluate_step3_not_a_bug_on_resume,def:_resolve_cached_step9_output,def:_resolve_step9_loop_token,def:_apply_step9_resolved_token,pattern:/VERIFY_TIMEOUT_SECONDS/,pattern:/_fallback_scan_was_capped/,pattern:/MAX_FALLBACK_TEST_FILES/,pattern:/E2E_FIX_STEP_TIMEOUTS/,pattern:/NOT_A_BUG_TERMINAL_SUCCESS_ON_RESUME/,pattern:/NOT_A_BUG_TERMINAL_SUCCESS_MESSAGE/">context/agentic_e2e_fix_orchestrator_example.py</include>

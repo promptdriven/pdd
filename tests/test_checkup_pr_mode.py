@@ -12,6 +12,7 @@ The orchestrator tests stub out `_run_single_step` so no LLM calls happen.
 """
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -1392,6 +1393,7 @@ class TestPrModePushFailureDiagnostics:
 
         wt = tmp_path / "wt"
         wt.mkdir()
+        seen_labels: list[str] = []
 
         # Exact string from checkup_review_loop._commit_and_push_if_changed.
         rebased_msg = (
@@ -1399,6 +1401,7 @@ class TestPrModePushFailureDiagnostics:
         )
 
         def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            seen_labels.append(_kwargs.get("label", ""))
             output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
             return (True, output, 0.0, "fake-model")
 
@@ -1460,6 +1463,145 @@ class TestPrModePushFailureDiagnostics:
             "message verbatim into step_outputs['pr_push']; got: "
             f"{saved_pr_push!r}"
         )
+        assert sum(label.startswith("step7_iter") for label in seen_labels) == 1
+        assert seen_labels.count("step7_post_push_reverify") == 1
+
+    def test_rebased_push_failure_to_reverify_fails_checkup(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        rebased_msg = (
+            "Pushed fixes to PR branch after rebasing onto updated PR head."
+        )
+
+        def fake_step(step_num, *_args, **kwargs):  # noqa: ANN001
+            if kwargs.get("label") == "step7_post_push_reverify":
+                return True, "Verifier did not confirm clean final head.", 0.0, "fake"
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return True, output, 0.0, "fake"
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ) as clear_mock, patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, rebased_msg),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False
+        assert "Post-push verification" in msg
+        clear_mock.assert_not_called()
+
+    def test_plain_push_does_not_run_post_push_reverify(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        seen_labels: list[str] = []
+
+        def fake_step(step_num, *_args, **kwargs):  # noqa: ANN001
+            seen_labels.append(kwargs.get("label", ""))
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return True, output, 0.0, "fake"
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True
+        assert sum(label.startswith("step7_iter") for label in seen_labels) == 1
+        assert "step7_post_push_reverify" not in seen_labels
 
 
 # ---------------------------------------------------------------------------
@@ -1722,3 +1864,60 @@ class TestReviewLoopPrRoutingSeparation:
 
         loop_mock.assert_called_once()
         orch_mock.assert_not_called()
+
+
+class TestPrModeSourceArtifacts:
+    def test_step7_prompt_verifies_current_pr_worktree_with_local_fixes(self) -> None:
+        prompt = (
+            Path(__file__).resolve().parent.parent
+            / "pdd"
+            / "prompts"
+            / "agentic_checkup_step7_verify_LLM.prompt"
+        ).read_text(encoding="utf-8")
+
+        assert "independent of any local fixes" not in prompt
+        assert "current PR worktree" in prompt
+        assert "including those local fixes" in prompt
+        assert "{pr_push_output}" in prompt
+
+    def test_architecture_records_agentic_checkup_cwd_parameter(self) -> None:
+        arch_path = Path(__file__).resolve().parent.parent / "architecture.json"
+        architecture = json.loads(arch_path.read_text(encoding="utf-8"))
+        module = next(
+            item
+            for item in architecture
+            if item.get("filename") == "agentic_checkup_python.prompt"
+        )
+        functions = module["interface"]["module"]["functions"]
+        run_checkup = next(
+            fn for fn in functions if fn.get("name") == "run_agentic_checkup"
+        )
+
+        assert "cwd: Optional[Path]" in run_checkup["signature"]
+
+    def test_final_checkup_helper_is_in_prompt_and_context_sources(self) -> None:
+        root = Path(__file__).resolve().parent.parent
+        prompt = (
+            root / "pdd" / "prompts" / "agentic_e2e_fix_orchestrator_python.prompt"
+        ).read_text(encoding="utf-8")
+        context = (
+            root / "context" / "agentic_e2e_fix_orchestrator_example.py"
+        ).read_text(encoding="utf-8")
+        architecture = json.loads(
+            (root / "architecture.json").read_text(encoding="utf-8")
+        )
+
+        assert "def:_run_final_checkup_on_pr" in prompt
+        assert "def _run_final_checkup_on_pr" in context
+        assert "cwd=cwd" in context
+
+        module = next(
+            item
+            for item in architecture
+            if item.get("filename") == "agentic_e2e_fix_orchestrator_python.prompt"
+        )
+        functions = module["interface"]["module"]["functions"]
+        helper = next(
+            fn for fn in functions if fn.get("name") == "_run_final_checkup_on_pr"
+        )
+        assert "cwd: Path" in helper["signature"]

@@ -666,6 +666,7 @@ def run_agentic_checkup_orchestrator(
         "pr_owner": pr_owner or "",
         "pr_repo": pr_repo or "",
         "pr_number": str(pr_number) if pr_number is not None else "",
+        "pr_push_output": "",
     }
 
     total_cost = 0.0
@@ -968,6 +969,54 @@ def run_agentic_checkup_orchestrator(
                 consecutive_provider_failures = 0
 
         _save_state()
+        return None
+
+    def _run_post_push_reverify_if_needed(
+        push_message: str,
+    ) -> Optional[Tuple[bool, str, float, str]]:
+        """Re-run Step 7 when push rebased local fixes onto a newer PR head."""
+        if "after rebasing onto updated PR head" not in push_message:
+            return None
+
+        name7, desc7 = step_map[7]
+        if not quiet:
+            console.print(
+                f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7} "
+                f"(post-push reverify)..."
+            )
+
+        result = _run_single_step(
+            7,
+            name7,
+            context,
+            cwd=cwd,
+            step_cwd=current_cwd if worktree_path else cwd,
+            verbose=verbose,
+            quiet=quiet,
+            label="step7_post_push_reverify",
+            timeout_adder=timeout_adder,
+            reasoning_time=reasoning_time,
+        )
+        if result is None:
+            template_name = f"agentic_checkup_step7_{name7}_LLM"
+            return (
+                False,
+                f"Missing prompt template: {template_name}",
+                total_cost,
+                last_model_used,
+            )
+
+        success, output, cost, model = result
+        abort = _handle_step_result(7, success, output, cost, model)
+        if abort is not None:
+            return abort
+        if not success or "All Issues Fixed" not in output:
+            return (
+                False,
+                "Post-push verification did not confirm the final rebased PR head is clean.",
+                total_cost,
+                last_model_used,
+            )
         return None
 
     # ==================================================================
@@ -1334,6 +1383,9 @@ def run_agentic_checkup_orchestrator(
                     return False, enriched, total_cost, last_model_used
                 if not quiet:
                     console.print(f"[green]{push_message}[/green]")
+                post_push_abort = _run_post_push_reverify_if_needed(push_message)
+                if post_push_abort is not None:
+                    return post_push_abort
             if 8 >= start_step:
                 if not quiet:
                     console.print(

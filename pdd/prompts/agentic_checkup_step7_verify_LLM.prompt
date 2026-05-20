@@ -59,6 +59,10 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 {step6_3_output}
 </step6_3_output>
 
+<pr_push_output>
+{pr_push_output}
+</pr_push_output>
+
 % Your Task
 
 1. **Re-run the build** to confirm no build errors remain
@@ -79,7 +83,7 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 
    - **Issue mode** (default; `pr_mode` = `false`): "Did the fixes applied in Steps 6.1–6.3 resolve the issue described in `<issue_content>`, with no new regressions?" Set `success` true if yes, false otherwise.
 
-   - **PR mode** (`pr_mode` = `true`): "Does the PR at `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow has run analysis steps inside the PR's worktree (NOT the issue-author's HEAD). The verdict you must produce here is whether the PR's diff, on its own, addresses the issue's intent — independent of any local fixes. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
+   - **PR mode** (`pr_mode` = `true`): "Does the current PR worktree for `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow runs inside the PR worktree (NOT the issue-author's HEAD). When fix mode is enabled, Steps 6.1-6.3 may have applied local checkup fixes that are not pushed until after Step 7. Your verdict must evaluate the current worktree state, including those local fixes, because this is the exact tree that will be committed and pushed back to the same PR if verification passes. If `<pr_push_output>` says the push rebased onto an updated PR head, this is a post-push verification pass and you must verify that final rebased worktree head. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR worktree's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
 
 5. **Generate the final JSON report**
 

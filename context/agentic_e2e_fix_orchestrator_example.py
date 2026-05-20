@@ -54,6 +54,45 @@ def mock_run_agentic_task(
     return False, f"Unexpected label: {label}", 0.0, "gpt-4.1"
 
 
+def _run_final_checkup_on_pr(
+    *,
+    issue_url: str,
+    repo_owner: str,
+    repo_name: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    timeout_adder: float,
+    use_github_state: bool,
+    reasoning_time: float | None,
+) -> tuple[bool, str, float, str]:
+    """Run full PR-mode checkup against the current branch's open PR."""
+    from pdd.agentic_checkup import run_agentic_checkup
+    from pdd.ci_validation import _find_open_pr_number
+
+    pr_number = _find_open_pr_number(repo_owner, repo_name, cwd)
+    if pr_number is None:
+        return (
+            True,
+            "No open PR found for current branch; skipping final checkup",
+            0.0,
+            "",
+        )
+
+    pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/{pr_number}"
+    return run_agentic_checkup(
+        issue_url=issue_url,
+        verbose=verbose,
+        quiet=quiet,
+        no_fix=False,
+        timeout_adder=timeout_adder,
+        use_github_state=use_github_state,
+        reasoning_time=reasoning_time,
+        pr_url=pr_url,
+        cwd=cwd,
+    )
+
+
 def main() -> None:
     """Run a local demonstration of the orchestrator with mocked dependencies."""
     with TemporaryDirectory() as temp_dir:
