@@ -30,6 +30,9 @@ from .agentic_common import (
     GITHUB_STATE_MARKER_START,
     GITHUB_STATE_MARKER_END,
     _revert_out_of_scope_changes,
+    extract_step_report,
+    normalize_step_comments_state,
+    post_step_comment_once,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1785,6 +1788,7 @@ def run_agentic_e2e_fix_orchestrator(
     dev_unit_states: Dict[str, Any] = {}
     skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
+    step_comments_set: Set[int] = set()
     resumed_from_state = False
     # On resume, restore the workflow-start file snapshot so guards that diff
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
@@ -1840,6 +1844,10 @@ def run_agentic_e2e_fix_orchestrator(
             saved_sha = loaded_state.get("initial_sha")
             if isinstance(saved_sha, str) and saved_sha:
                 resumed_initial_sha = saved_sha
+
+            step_comments_set = normalize_step_comments_state(
+                loaded_state.get("step_comments")
+            )
 
             # Issue #1034 (codex P2 follow-up): restore the current cycle's
             # start snapshot so the resume-time cycle-waste-breaker can prove
@@ -2041,6 +2049,7 @@ def run_agentic_e2e_fix_orchestrator(
             "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
             "last_saved_at": datetime.now().isoformat(),
             "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
             "initial_file_hashes": dict(initial_file_hashes),
             "initial_sha": initial_sha,
             # Persist None when the resumed cycle's baseline is unverified
@@ -2473,6 +2482,24 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_success:
                     step_outputs[str(step_num)] = step_output
                     last_completed_step = step_num
+                    try:
+                        _report_body = extract_step_report(step_output)
+                        if _report_body:
+                            _step_desc = STEP_DESCRIPTIONS.get(step_num, "")
+                            _comment_body = (
+                                f"## Step {step_num}/11: {_step_desc}\n\n{_report_body}"
+                            )
+                            post_step_comment_once(
+                                repo_owner=repo_owner,
+                                repo_name=repo_name,
+                                issue_number=issue_number,
+                                step_num=current_cycle * 10000 + step_num,
+                                body=_comment_body,
+                                posted_steps=step_comments_set,
+                                cwd=cwd,
+                            )
+                    except Exception as _exc:  # pylint: disable=broad-except
+                        console.print(f"[yellow]post_step_comment_once failed: {_exc}[/yellow]")
                 else:
                     step_outputs[str(step_num)] = f"FAILED: {step_output}"
                     # Don't update last_completed_step - keep it at previous value
@@ -2535,6 +2562,7 @@ def run_agentic_e2e_fix_orchestrator(
                     "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
                     "last_saved_at": datetime.now().isoformat(),
                     "github_comment_id": github_comment_id,
+                    "step_comments": sorted(step_comments_set),
                     # Workflow-start snapshot — restored on resume so direct-edit
                     # detection survives interruption.
                     "initial_file_hashes": dict(initial_file_hashes),
@@ -2969,6 +2997,7 @@ def run_agentic_e2e_fix_orchestrator(
             "changed_files": changed_files,
             "last_saved_at": datetime.now().isoformat(),
             "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
             # Issue #1034 codex P2 follow-up: persist workflow-start and
             # cycle-start snapshots so resume after an interrupt still has
             # the data needed for direct-edit detection and the cycle-waste-
@@ -3020,6 +3049,7 @@ def run_agentic_e2e_fix_orchestrator(
                 "changed_files": changed_files,
                 "last_saved_at": datetime.now().isoformat(),
                 "github_comment_id": github_comment_id,
+                "step_comments": sorted(step_comments_set),
                 # Issue #1034 codex P2 follow-up: persist workflow-start and
                 # cycle-start snapshots so resume after a fatal exception
                 # still has the data needed for direct-edit detection and

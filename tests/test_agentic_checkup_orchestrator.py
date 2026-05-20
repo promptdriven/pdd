@@ -1853,3 +1853,68 @@ class TestBetweenIterationsResume:
         assert "step8" in called_labels
         # Should NOT have any iter1 labels (all were completed before resume)
         assert not any("iter1" in lbl for lbl in called_labels)
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The checkup orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with a composite-key
+    encoding (fractional 6.1/6.2/6.3 and iterated fix-verify loop)."""
+
+    def test_success_path_posts_step_comment_once(self, mock_dependencies, default_args):
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.return_value = (
+            True,
+            "<step_report>step report body</step_report>\nAll Issues Fixed",
+            0.1,
+            "gpt-4",
+        )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 1
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_does_not_call_helper(
+        self, mock_dependencies, default_args
+    ):
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.return_value = (True, "Step output. All Issues Fixed", 0.1, "gpt-4")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count == 0
+
+    def test_post_exception_does_not_break_run(self, mock_dependencies, default_args):
+        mock_run, _, _, _ = mock_dependencies
+        mock_run.return_value = (
+            True,
+            "<step_report>some report</step_report>\nAll Issues Fixed",
+            0.1,
+            "gpt-4",
+        )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
+
+        assert success is True

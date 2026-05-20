@@ -9647,3 +9647,92 @@ class TestIssue1033Step2ResumeReverification:
         assert "verification_failed_on_resume" in section_body_lower
         assert "_verify_tests_independently" in section_body
         assert "deferred post-step-9 success" in section_body_lower
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The e2e_fix orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with cycle-keyed
+    composite ints (`cycle * 10000 + step_num`)."""
+
+    def test_success_path_posts_step_comment_once(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False, reasoning_time=None):
+            if "step3" in label:
+                return (
+                    True,
+                    "<step_report>step 3 report</step_report>\nNOT_A_BUG",
+                    0.1, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert mock_post_once.call_count >= 1
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_does_not_call_helper(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False, reasoning_time=None):
+            if "step3" in label:
+                return (True, "NOT_A_BUG", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        assert mock_post_once.call_count == 0
+
+    def test_post_exception_does_not_break_run(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False, reasoning_time=None):
+            if "step3" in label:
+                return (
+                    True,
+                    "<step_report>step 3 report</step_report>\nNOT_A_BUG",
+                    0.1, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            # The run completes (success may be False due to NOT_A_BUG), but
+            # the helper exception must not propagate.
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)

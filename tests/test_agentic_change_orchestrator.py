@@ -5306,3 +5306,152 @@ class TestDetectWorktreeChangesRename1080:
         assert expected in files, (
             f"Filename containing ' -> ' was mis-parsed; got {files!r}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The change orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with step_num for linear
+    steps and `iter * 100 + step_num` for review-loop steps 11/12."""
+
+    def test_success_path_posts_step_comment_once(self, mock_dependencies, temp_cwd):
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                return (True, "<step_report>step 11</step_report>\nNo Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_does_not_call_helper(self, mock_dependencies, temp_cwd):
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (True, "FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+            if label == "step10":
+                return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/o/r/pull/1", 0.2, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        assert success is True
+        assert mock_post_once.call_count == 0
+
+    def test_post_exception_does_not_break_run(self, mock_dependencies, temp_cwd):
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                return (True, "<step_report>step 11</step_report>\nNo Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            success, _, _, _, _ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        assert success is True

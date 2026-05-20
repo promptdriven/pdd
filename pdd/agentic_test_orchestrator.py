@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 
 from .agentic_common import (
     run_agentic_task,
@@ -24,6 +24,9 @@ from .agentic_common import (
     DEFAULT_MAX_RETRIES,
     set_agentic_progress,
     clear_agentic_progress,
+    extract_step_report,
+    normalize_step_comments_state,
+    post_step_comment_once,
 )
 from .pytest_output import _find_project_root
 from .load_prompt_template import load_prompt_template
@@ -344,6 +347,9 @@ def run_agentic_test_orchestrator(
         github_comment_id = None
         worktree_path = None
 
+    step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
+    state["step_comments"] = sorted(step_comments_set)
+
     context: Dict[str, Any] = {
         "issue_url": issue_url,
         "issue_content": issue_content,
@@ -466,13 +472,53 @@ def run_agentic_test_orchestrator(
         )
         return step_success, step_output, step_cost, step_model
 
+    def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
+        """Project (step_num, iteration) -> deterministic non-negative int.
+
+        Encoding ``iteration * 10000 + int(round(step_num * 10))`` handles
+        fractional steps (5.5 -> 55) and iterated loop bodies. Result is
+        unique for iteration in [1, 999] and step_num in [0, 999.9].
+        """
+        return iteration * 10000 + int(round(float(step_num) * 10))
+
+    def _maybe_post_step_comment(
+        step_num: Union[int, float],
+        description: str,
+        step_output: str,
+        iteration: int = 1,
+    ) -> None:
+        """Post a trusted per-step success comment; log-and-continue on error."""
+        try:
+            report_body = extract_step_report(step_output)
+            if not report_body:
+                return
+            comment_body = (
+                f"## Step {step_num}/18: {description}\n\n{report_body}"
+            )
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=_step_comment_key(step_num, iteration),
+                body=comment_body,
+                posted_steps=step_comments_set,
+                cwd=current_work_dir,
+            )
+            state["step_comments"] = sorted(step_comments_set)
+        except Exception as exc:  # pylint: disable=broad-except
+            console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+
     def save_state(step_num: Union[int, float], step_output: str, success: bool,
-                   *, completed_step_override: Optional[Union[int, float]] = None) -> None:
+                   *, completed_step_override: Optional[Union[int, float]] = None,
+                   description: Optional[str] = None,
+                   iteration: int = 1) -> None:
         nonlocal github_comment_id
         context[f"step{step_num}_output"] = step_output
         if success:
             state["step_outputs"][str(step_num)] = step_output
             state["last_completed_step"] = completed_step_override if completed_step_override is not None else step_num
+            if description is not None:
+                _maybe_post_step_comment(step_num, description, step_output, iteration)
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
         state["total_cost"] = total_cost
@@ -540,7 +586,7 @@ def run_agentic_test_orchestrator(
             context["enhanced_test_plan"] = step_output
             context["step5b_output"] = step_output
 
-        save_state(step_num, step_output, step_success)
+        save_state(step_num, step_output, step_success, description=description)
 
         if stop_reason:
             return finish_hard_stop(step_num, stop_reason)
@@ -578,7 +624,8 @@ def run_agentic_test_orchestrator(
             total_cost += step_cost
             model_used = step_model
             context[f"step{step_num}_output"] = step_output
-            save_state(step_num, step_output, step_success)
+            save_state(step_num, step_output, step_success,
+                       description="Assess automated test coverage")
             coverage_gaps = _extract_int_tag(step_output, "COVERAGE_GAPS")
             if coverage_gaps == 0:
                 run_manual = False
@@ -602,7 +649,8 @@ def run_agentic_test_orchestrator(
                 total_cost += step_cost
                 model_used = step_model
                 context[f"step{step_num}_output"] = step_output
-                save_state(step_num, step_output, step_success)
+                save_state(step_num, step_output, step_success,
+                           description="Create manual testing checklist")
                 if not step_success and not quiet:
                     console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
                 if not quiet:
@@ -647,7 +695,9 @@ def run_agentic_test_orchestrator(
                     total_cost += step_cost
                     model_used = step_model
                     context[f"step{step_num}_output"] = step_output
-                    save_state(step_num, step_output, step_success)
+                    save_state(step_num, step_output, step_success,
+                               description=f"Manual browser testing (iteration {iteration})",
+                               iteration=iteration)
 
                 issues_found = _extract_int_tag(context.get("step8_output", ""), "ISSUES_FOUND")
 
@@ -668,7 +718,9 @@ def run_agentic_test_orchestrator(
                             if f not in changed_files:
                                 changed_files.append(f)
                         context["files_to_stage"] = ", ".join(changed_files)
-                        save_state(step_num, step_output, step_success)
+                        save_state(step_num, step_output, step_success,
+                                   description=f"Create regression tests (iteration {iteration})",
+                                   iteration=iteration)
 
                 # Step 10
                 step_num = 10
@@ -682,7 +734,9 @@ def run_agentic_test_orchestrator(
                         total_cost += step_cost
                         model_used = step_model
                         context[f"step{step_num}_output"] = step_output
-                        save_state(step_num, step_output, step_success)
+                        save_state(step_num, step_output, step_success,
+                                   description=f"Validate regression tests (iteration {iteration})",
+                                   iteration=iteration)
 
                 # Step 11
                 step_num = 11
@@ -696,7 +750,9 @@ def run_agentic_test_orchestrator(
                     total_cost += step_cost
                     model_used = step_model
                     context[f"step{step_num}_output"] = step_output
-                    save_state(step_num, step_output, step_success)
+                    save_state(step_num, step_output, step_success,
+                               description=f"Check checklist completion (iteration {iteration})",
+                               iteration=iteration)
                     checklist_status = _extract_tag(step_output, "CHECKLIST_STATUS") or "PARTIAL"
 
                 if checklist_status.upper() == "COMPLETE":
@@ -785,7 +841,7 @@ def run_agentic_test_orchestrator(
         if step_num == 13:
             context["test_results"] = step_output
 
-        save_state(step_num, step_output, step_success)
+        save_state(step_num, step_output, step_success, description=description)
 
         stop_reason = _check_hard_stop(step_num, step_output)
         if stop_reason:

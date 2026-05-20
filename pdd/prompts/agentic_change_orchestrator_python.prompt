@@ -256,6 +256,27 @@ Track consecutive steps where output contains "All agent providers failed":
 - Increment counter on provider failure, reset to 0 on any success or non-provider failure
 - If 3+ consecutive provider failures: post step comment, save state, return `(False, "Aborting: N consecutive steps failed — agent providers unavailable", ...)`
 
+% Per-Step Success Comments (Trusted Posting)
+
+The orchestrator owns user-visible per-step `## Step N/13:` comments on the GitHub issue, posted via `gh issue comment` with trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` themselves for successful step progress; they emit a single `<step_report>...</step_report>` block in their final response, and the orchestrator extracts it and posts it once per step.
+
+1. **Helpers**: Import from `pdd.agentic_common`:
+   - `extract_step_report(step_output: str) -> Optional[str]` — returns the trimmed contents of the LAST `<step_report>` block, or `None` if absent/malformed. Missing or malformed report MUST NOT fail the run; the raw step output is preserved in `state["step_outputs"]` regardless.
+   - `post_step_comment_once(*, repo_owner, repo_name, issue_number, step_num: int, body: str, posted_steps: Set[int], cwd) -> bool` — redacts secrets, truncates to GitHub's comment cap, posts via `gh issue comment`, and mutates `posted_steps` to add `step_num` on success. No-op when `step_num` is already in `posted_steps`. Returns `True` on success-or-already-posted, `False` on `gh` failure or missing CLI. Keyword-only signature.
+   - `normalize_step_comments_state(raw) -> Set[int]` — coerces persisted `step_comments` (list/set/None/legacy dict/malformed) into a `Set[int]` of integer step indices for in-memory use.
+
+2. **State shape**: `state["step_comments"]` persists as a sorted `List[int]` of step indices whose trusted success-comment has been posted. Immediately after `load_workflow_state`, hydrate to `Set[int]` via `normalize_step_comments_state(state.get("step_comments"))` and write `state["step_comments"] = sorted(set)` back so the on-disk form stays canonical. Persist back as a sorted list before every `save_workflow_state` call (normal completion AND hard-stop / failure early-returns).
+
+3. **Posting protocol** inside the per-step loop (applied to steps 1-10 with `step_num` as the integer key; steps 11/12 use the iteration-keyed encoding below; step 13 uses `step_num=13`):
+   - On a successful step, compute `report_body = extract_step_report(step_output)`. If `None`, skip posting and continue (do not fail the run).
+   - Otherwise build the comment body as `f"## Step {step_num}/13: {description}\n\n{report_body}"` and call `post_step_comment_once(repo_owner=..., repo_name=..., issue_number=..., step_num=step_num, body=body, posted_steps=step_comments_set, cwd=current_work_dir)`.
+   - After the call returns, persist the canonical sorted form: `state["step_comments"] = sorted(step_comments_set)` and rely on the subsequent `save_workflow_state` call to flush it. The set is mutated in place by the helper, so unconditional re-assignment after the call is safe and survives a contract refactor.
+   - Any exception from `extract_step_report` / `post_step_comment_once` / persistence MUST be log-and-continue (never raise into the orchestrator loop). Use `console.print` for the warning.
+
+4. **Review loop (steps 11-12)**: iteration-keyed integer encoding `iteration * 100 + step_num` (so iter=1, step=11 -> 111; iter=2, step=11 -> 211; iter=1, step=12 -> 112). This makes re-runs across review iterations get distinct `posted_steps` keys (otherwise the second iteration's report would silently dedupe against the first).
+
+5. **Relationship to the legacy `post_step_comment()` path**: The existing `post_step_comment()` call under `% Early Exit Conditions (Hard Stops)` and `% Consecutive Provider Failure Tracking` is UNCHANGED. Hard-stop failure comments and 3-consecutive-provider-failure abort comments continue to flow through the legacy helper. The new `post_step_comment_once` is strictly additive — it covers the success-comment case that previously had no first-party posting path and was being filled (incorrectly) by the model invoking `gh issue comment` itself.
+
 % Architecture Sanitization (After Step 10)
 
 After Step 10 completes, sanitize architecture.json in the worktree:
@@ -424,7 +445,7 @@ To avoid re-running completed steps when the workflow is paused (e.g., for clari
 - On state file read/write errors, log warning and continue without persistence
 
 % Dependencies
-Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`
+Import from `agentic_common`: `run_agentic_task`, `DEFAULT_MAX_RETRIES`, `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, `substitute_template_variables`, `validate_cached_state`, `post_step_comment`, `set_agentic_progress`, `clear_agentic_progress`, `extract_step_report`, `post_step_comment_once`, `normalize_step_comments_state`
 Import from `pdd.preprocess`: `preprocess`
 Import from `pdd.architecture_sync`: `_merge_interface_signatures`, `register_untracked_prompts`
 Note: `CHANGE_STEP_TIMEOUTS` is defined locally in this module (see Per-Step Timeouts section)

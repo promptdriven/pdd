@@ -961,3 +961,120 @@ def test_test_orchestrator_check_hard_stop_patterns_functional():
     assert result is None, (
         "Test orchestrator step 3 casual mention must not trigger without STOP_CONDITION tag"
     )
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The test orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with a composite-key
+    encoding (fractional step 5.5 and iterated manual-testing loop)."""
+
+    def test_success_path_posts_step_comment_once(self, mock_deps, default_args):
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False):
+            if label == "step4":
+                return (
+                    True,
+                    "<step_report>step 4</step_report>\nTEST_TYPE: api\nTEST_FRAMEWORK: pytest",
+                    0.1, "anthropic",
+                )
+            if label == "step12":
+                return (
+                    True,
+                    "<step_report>step 12</step_report>\nFILES_CREATED: tests/test_api.py",
+                    0.1, "anthropic",
+                )
+            if label == "step17":
+                return (
+                    True,
+                    "<step_report>step 17</step_report>\nPR Created: https://github.com/o/r/pull/10",
+                    0.1, "anthropic",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_does_not_call_helper(
+        self, mock_deps, default_args
+    ):
+        """Steps that omit the <step_report> block must not invoke the helper."""
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False):
+            if label == "step4":
+                return (True, "TEST_TYPE: api", 0.1, "anthropic")
+            if label == "step12":
+                return (True, "FILES_CREATED: tests/test_api.py", 0.1, "anthropic")
+            if label == "step17":
+                return (True, "PR Created: https://github.com/o/r/pull/10", 0.1, "anthropic")
+            return (True, f"Output for {label} (no report block)", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True
+        assert mock_post_once.call_count == 0
+
+    def test_post_exception_does_not_break_run(self, mock_deps, default_args):
+        """Exceptions raised by the helper must be log-and-continue."""
+        mocks = mock_deps
+
+        def side_effect(instruction, cwd, *, verbose=False, quiet=False, label="",
+                        timeout=None, max_retries=1, retry_delay=5.0, deadline=None,
+                        use_playwright=False):
+            if label == "step4":
+                return (
+                    True,
+                    "<step_report>step 4</step_report>\nTEST_TYPE: api",
+                    0.1, "anthropic",
+                )
+            if label == "step12":
+                return (
+                    True,
+                    "<step_report>step 12</step_report>\nFILES_CREATED: tests/test_api.py",
+                    0.1, "anthropic",
+                )
+            if label == "step17":
+                return (
+                    True,
+                    "<step_report>step 17</step_report>\nPR Created: https://github.com/o/r/pull/10",
+                    0.1, "anthropic",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "anthropic")
+
+        mocks["run"].side_effect = side_effect
+
+        with patch(
+            "pdd.agentic_test_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            success, _, _, _, _ = run_agentic_test_orchestrator(**default_args)
+
+        assert success is True

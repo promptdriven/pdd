@@ -18,14 +18,17 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Set, Tuple, Union
 
 from rich.console import Console
 
 from .agentic_common import (
     DEFAULT_MAX_RETRIES,
     clear_workflow_state,
+    extract_step_report,
     load_workflow_state,
+    normalize_step_comments_state,
+    post_step_comment_once,
     run_agentic_task,
     save_workflow_state,
     substitute_template_variables,
@@ -708,6 +711,11 @@ def run_agentic_checkup_orchestrator(
         if changed_files:
             context["files_to_stage"] = ", ".join(changed_files)
 
+    if state is None:
+        step_comments_set: Set[int] = set()
+    else:
+        step_comments_set = normalize_step_comments_state(state.get("step_comments"))
+
     # Step definitions (step 6 split into 6.1/6.2/6.3 sub-steps).
     steps: List[Tuple[Union[int, float], str, str]] = [
         (1,   "discover",         "Discovering project structure and tech stack"),
@@ -747,6 +755,7 @@ def run_agentic_checkup_orchestrator(
             pr_number=pr_number,
             pr_owner=pr_owner,
             pr_repo=pr_repo,
+            step_comments=sorted(step_comments_set),
         )
         github_comment_id = save_workflow_state(
             cwd=cwd, issue_number=issue_number, workflow_type="checkup",
@@ -755,6 +764,40 @@ def run_agentic_checkup_orchestrator(
             use_github_state=use_github_state,
             github_comment_id=github_comment_id,
         )
+
+    def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
+        """Project (step_num, iteration) -> deterministic non-negative int.
+
+        Encoding ``iteration * 10000 + int(round(step_num * 10))`` handles
+        fractional steps (6.1 -> 61) and the iterated fix-verify loop.
+        """
+        return iteration * 10000 + int(round(float(step_num) * 10))
+
+    def _maybe_post_step_comment(
+        step_num: Union[int, float],
+        description: str,
+        step_output: str,
+        iteration: int = 1,
+    ) -> None:
+        """Post a trusted per-step success comment; log-and-continue on error."""
+        try:
+            report_body = extract_step_report(step_output)
+            if not report_body:
+                return
+            comment_body = (
+                f"## Step {step_num}/{TOTAL_STEPS}: {description}\n\n{report_body}"
+            )
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=_step_comment_key(step_num, iteration),
+                body=comment_body,
+                posted_steps=step_comments_set,
+                cwd=current_cwd,
+            )
+        except Exception as exc:  # pylint: disable=broad-except
+            console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
 
     def _is_provider_failure(output: str) -> bool:
         return "All agent providers failed" in output
@@ -765,6 +808,8 @@ def run_agentic_checkup_orchestrator(
         output: str,
         cost: float,
         model: str,
+        description: str = "",
+        iteration: int = 1,
     ) -> Optional[Tuple[bool, str, float, str]]:
         """Process a step result — update context, save state.
 
@@ -801,6 +846,8 @@ def run_agentic_checkup_orchestrator(
             step_outputs[step_key] = output
             last_completed_step_to_save = step_num
             consecutive_provider_failures = 0
+            if description:
+                _maybe_post_step_comment(step_num, description, output, iteration)
         else:
             step_outputs[step_key] = f"FAILED: {output}"
             if _is_provider_failure(output):
@@ -874,7 +921,7 @@ def run_agentic_checkup_orchestrator(
 
         success, output, cost, model = result
 
-        abort = _handle_step_result(step_num, success, output, cost, model)
+        abort = _handle_step_result(step_num, success, output, cost, model, description=description)
         if abort is not None:
             return abort
 
@@ -917,7 +964,7 @@ def run_agentic_checkup_orchestrator(
                 return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
             success, output, cost, model = result
-            abort = _handle_step_result(step_num, success, output, cost, model)
+            abort = _handle_step_result(step_num, success, output, cost, model, description=description)
             if abort is not None:
                 return abort
             if not success and _is_provider_failure(output):
@@ -964,7 +1011,7 @@ def run_agentic_checkup_orchestrator(
                 return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
             success, output, cost, model = result
-            abort = _handle_step_result(7, success, output, cost, model)
+            abort = _handle_step_result(7, success, output, cost, model, description=desc7)
             if abort is not None:
                 return abort
 
@@ -1070,7 +1117,10 @@ def run_agentic_checkup_orchestrator(
                     return (False, f"Missing prompt template: {tmpl_name}", total_cost, last_model_used)
 
                 success, output, cost, model = result
-                abort = _handle_step_result(step_num, success, output, cost, model)
+                abort = _handle_step_result(
+                    step_num, success, output, cost, model,
+                    description=description, iteration=fix_verify_iteration,
+                )
                 if abort is not None:
                     return abort
 
@@ -1136,7 +1186,7 @@ def run_agentic_checkup_orchestrator(
                 return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
             success, output, cost, model = result
-            abort = _handle_step_result(8, success, output, cost, model)
+            abort = _handle_step_result(8, success, output, cost, model, description=desc8)
             if abort is not None:
                 return abort
 
@@ -1179,6 +1229,7 @@ def _build_state(
     pr_number: Optional[int] = None,
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
+    step_comments: Optional[List[int]] = None,
 ) -> Dict:
     """Build a serialisable state dict for persistence.
 
@@ -1207,4 +1258,5 @@ def _build_state(
         "pr_number": pr_number,
         "pr_owner": pr_owner,
         "pr_repo": pr_repo,
+        "step_comments": list(step_comments) if step_comments else [],
     }
