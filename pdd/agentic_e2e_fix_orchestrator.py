@@ -35,7 +35,7 @@ from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
 from .pytest_output import run_pytest_and_capture_output
-from .ci_validation import run_ci_validation_loop
+from .ci_validation import _find_open_pr_number, run_ci_validation_loop
 
 # Constants
 STEP_NAMES = {
@@ -1573,6 +1573,43 @@ def _commit_and_push(
         return False, f"Push failed: {push_err}"
 
 
+def _run_final_checkup_on_pr(
+    *,
+    issue_url: str,
+    repo_owner: str,
+    repo_name: str,
+    cwd: Path,
+    verbose: bool,
+    quiet: bool,
+    timeout_adder: float,
+    use_github_state: bool,
+    reasoning_time: Optional[float],
+) -> Tuple[bool, str, float, str]:
+    """Run full PR-mode checkup against the current branch's open PR."""
+    pr_number = _find_open_pr_number(repo_owner, repo_name, cwd)
+    if pr_number is None:
+        return (
+            True,
+            "No open PR found for current branch; skipping final checkup",
+            0.0,
+            "",
+        )
+
+    pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/{pr_number}"
+    from .agentic_checkup import run_agentic_checkup
+
+    return run_agentic_checkup(
+        issue_url=issue_url,
+        verbose=verbose,
+        quiet=quiet,
+        no_fix=False,
+        timeout_adder=timeout_adder,
+        use_github_state=use_github_state,
+        reasoning_time=reasoning_time,
+        pr_url=pr_url,
+    )
+
+
 def _run_step11_code_cleanup(
     *,
     cwd: Path,
@@ -2916,6 +2953,29 @@ def run_agentic_e2e_fix_orchestrator(
                     "No CI checks detected",
                 }:
                     final_message = ci_message
+
+                checkup_success, checkup_message, checkup_cost, checkup_model = (
+                    _run_final_checkup_on_pr(
+                        issue_url=issue_url,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout_adder=timeout_adder,
+                        use_github_state=use_github_state,
+                        reasoning_time=reasoning_time,
+                    )
+                )
+                total_cost += checkup_cost
+                if checkup_model:
+                    model_used = checkup_model
+                if not checkup_success:
+                    return False, checkup_message, total_cost, model_used, changed_files
+                if checkup_message not in {
+                    "No open PR found for current branch; skipping final checkup",
+                }:
+                    final_message = checkup_message
 
                 clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
                 return True, final_message, total_cost, model_used, changed_files

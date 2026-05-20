@@ -326,22 +326,6 @@ def checkup(
                 "(e.g., https://github.com/org/repo/issues/123).",
                 param_hint="'--issue'",
             )
-        # PR mode without --no-fix would generate fix commits inside the
-        # PR-mode worktree (.pdd/worktrees/checkup-pr-N/) and never push
-        # them back to the PR — silently abandoning the work and confusing
-        # the user (who sees "Checkup complete" with no indication that
-        # fixes exist on a local branch). Push-back is a separate follow-up;
-        # until it lands, force --no-fix when --pr is set and warn so the
-        # user can re-invoke without --pr if they wanted fixes applied.
-        if not no_fix and not review_loop:
-            click.echo(
-                "Warning: --pr forces --no-fix because push-back to the PR "
-                "is not yet implemented. Generated fixes inside the PR "
-                "worktree would not reach the PR. Re-invoke without --pr "
-                "(or with an issue TARGET) to apply fixes.",
-                err=True,
-            )
-            no_fix = True
         effective_issue_url = issue_url_opt
     else:
         if not target:

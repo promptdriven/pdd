@@ -273,6 +273,28 @@ def _resolve_pr_remote(
     return None
 
 
+def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
+    """Lazy wrapper around the review-loop PR metadata helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _fetch_pr_metadata as fetch,
+    )
+
+    return fetch(owner, repo, pr_number)
+
+
+def _commit_and_push_if_changed(
+    worktree: Path,
+    pr_metadata: Dict[str, str],
+    message: str,
+) -> Tuple[bool, str]:
+    """Lazy wrapper around the shared PR-head commit/push helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _commit_and_push_if_changed as commit_and_push,
+    )
+
+    return commit_and_push(worktree, pr_metadata, message)
+
+
 def _setup_pr_worktree(
     cwd: Path,
     pr_owner: str,
@@ -1105,6 +1127,23 @@ def run_agentic_checkup_orchestrator(
         # ==============================================================
 
         if pr_mode:
+            assert pr_owner is not None
+            assert pr_repo is not None
+            assert pr_number is not None
+            if worktree_path is not None:
+                pr_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+                push_ok, push_message = _commit_and_push_if_changed(
+                    worktree_path,
+                    pr_metadata,
+                    f"fix: apply checkup fixes for #{issue_number}",
+                )
+                step_outputs["pr_push"] = push_message
+                context["pr_push_output"] = push_message
+                _save_state()
+                if not push_ok:
+                    return False, push_message, total_cost, last_model_used
+                if not quiet:
+                    console.print(f"[green]{push_message}[/green]")
             if 8 >= start_step:
                 if not quiet:
                     console.print(

@@ -2731,7 +2731,7 @@ pdd verify --max-attempts 5 --budget 2.5 --output-code src/calc_verified.py --ou
 
 Run an automated health check on a project from a GitHub issue. The checkup workflow explores the project, identifies problems (missing deps, build errors, interface mismatches, failing tests, orphan pages, inconsistent API patterns), optionally fixes them, writes regression and e2e tests, and creates a PR.
 
-`checkup` can also verify an existing pull request against its source issue. The default PR mode is verification-only; the optional review-loop mode runs a reviewer/fixer loop that can commit and push fixes back to the PR branch.
+`checkup` can also run against an existing pull request and its source issue. Default PR mode runs the standard checkup steps on the PR branch, can commit and push generated fixes back to that same PR, and skips PR creation because the PR already exists. Use `--no-fix` for verification-only PR checks, or `--review-loop` for the separate reviewer/fixer loop.
 
 ```
 pdd [GLOBAL OPTIONS] checkup [OPTIONS] [GITHUB_ISSUE_URL]
@@ -2776,7 +2776,7 @@ Options:
 
 **Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
 
-**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch), keeping the user's working directory clean.
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, `checkup/pr-{N}` for PR mode), keeping the user's working directory clean.
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
@@ -2784,7 +2784,7 @@ Options:
 
 Each step posts its findings as a comment on the GitHub issue, providing a detailed audit trail.
 
-**PR Verification Mode**: Use `--pr` and `--issue` to verify an existing PR against the issue it is intended to resolve. Without `--review-loop`, this mode remains verification-only and refuses to apply fixes or push to the PR branch.
+**PR Mode**: Use `--pr` and `--issue` to run checkup against an existing PR and the issue it is intended to resolve. By default this runs the full standard checkup flow on the PR worktree, commits eligible generated fixes, pushes them back to the same PR branch, and skips step 8 because the PR already exists. Add `--no-fix` when you want verification-only behavior.
 
 **Review-Loop Mode**: Add `--review-loop` to PR mode when you want PDD to use a primary reviewer and separate fixer on the same PR. The loop uses one isolated worktree for the PR branch, treats the active reviewer as the authority, sends every valid finding to the fixer, commits and pushes successful fixes back to the PR head ref, then re-runs the active reviewer to verify the fixes and perform another full PR review. Failed pushes abort before verification, and active reviewer provider failures remain not-clean. Use `--reviewer-fallback` when the primary reviewer is known to be fragile in a given environment; the fallback reviewer is opt-in and distinct from the fixer.
 
@@ -2801,8 +2801,14 @@ pdd checkup --no-fix https://github.com/myorg/myrepo/issues/42
 # With extra timeout for large projects
 pdd checkup --timeout-adder 120 https://github.com/myorg/myrepo/issues/42
 
-# Verify an existing PR against its source issue without applying fixes
+# Run full checkup against an existing PR and push fixes to that PR
 pdd checkup \
+  --pr https://github.com/myorg/myrepo/pull/123 \
+  --issue https://github.com/myorg/myrepo/issues/42
+
+# Verify an existing PR without applying fixes
+pdd checkup \
+  --no-fix \
   --pr https://github.com/myorg/myrepo/pull/123 \
   --issue https://github.com/myorg/myrepo/issues/42
 

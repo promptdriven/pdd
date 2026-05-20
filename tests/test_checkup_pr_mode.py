@@ -580,17 +580,14 @@ class TestStateModeTagging:
 
 
 # ---------------------------------------------------------------------------
-# CLI: --pr forces --no-fix
+# CLI: --pr allows full fix mode
 # ---------------------------------------------------------------------------
 
 
-class TestPrForcesNoFix:
-    """Without ``--no-fix``, ``--pr`` would generate fix commits inside
-    ``.pdd/worktrees/checkup-pr-N/`` and never push them — silent fix dump.
-    Until push-back is implemented, the CLI must force ``--no-fix`` and warn.
-    """
+class TestPrAllowsFixMode:
+    """PR mode is the final gate for pdd-issue, so it must be allowed to fix."""
 
-    def test_pr_without_no_fix_forces_no_fix_and_warns(self) -> None:
+    def test_pr_without_no_fix_keeps_fix_mode(self) -> None:
         runner = CliRunner()
         with patch(
             "pdd.commands.checkup.run_agentic_checkup",
@@ -606,10 +603,9 @@ class TestPrForcesNoFix:
             )
 
         assert result.exit_code == 0, result.output
-        assert "forces --no-fix" in result.output or "forces --no-fix" in (result.stderr_bytes or b"").decode()
-        # Underlying call must have been invoked with no_fix=True regardless
-        # of what the user passed (or didn't).
-        assert run_mock.call_args.kwargs["no_fix"] is True
+        assert "forces --no-fix" not in result.output
+        assert "forces --no-fix" not in (result.stderr_bytes or b"").decode()
+        assert run_mock.call_args.kwargs["no_fix"] is False
 
     def test_pr_with_no_fix_does_not_warn(self) -> None:
         runner = CliRunner()
@@ -630,6 +626,75 @@ class TestPrForcesNoFix:
         assert result.exit_code == 0, result.output
         assert "forces --no-fix" not in result.output
         assert run_mock.call_args.kwargs["no_fix"] is True
+
+
+class TestPrModeFixPushBack:
+    def test_pr_mode_commits_and_pushes_generated_fixes(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        executed_steps = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed_steps.append(step_num)
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+            create=True,
+        ) as metadata_mock, patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+            create=True,
+        ) as push_mock:
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True, msg
+        assert executed_steps == [1, 2, 3, 4, 5, 6.1, 6.2, 6.3, 7]
+        metadata_mock.assert_called_once_with("o", "r", 200)
+        push_mock.assert_called_once()
+        assert push_mock.call_args.args[0] == wt
 
 
 # ---------------------------------------------------------------------------
@@ -670,51 +735,85 @@ class TestPrResumeWorktreeRecreation:
     `_setup_worktree(cwd, issue_number, ...)` which builds an issue-mode
     worktree from HEAD — silently running all subsequent steps against the
     wrong code.
-
-    Verified at the source level rather than via full orchestrator setup
-    (which has many other dependencies); the orchestrator branch we care
-    about is small and easy to read. We assert the production code path
-    routes by mode.
     """
 
-    def test_resume_branch_routes_by_mode(self) -> None:
-        """The resume worktree-recreation branch must dispatch by mode.
+    def test_resume_missing_pr_worktree_uses_pr_setup_behaviorally(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
-        Reads the orchestrator source and asserts that within the
-        `if wt_path_str:` resume block, both `_setup_pr_worktree` and
-        `_setup_worktree` are referenced and gated on `pr_mode`. A
-        regression that removes the PR-mode branch (back to always
-        calling `_setup_worktree`) would fail this check.
-        """
-        from pathlib import Path
-        import re
+        saved_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "last_completed_step": 2,
+            "worktree_path": str(tmp_path / "missing-wt"),
+            "step_outputs": {"1": "done", "2": "done"},
+            "total_cost": 0.0,
+            "model_used": "fake",
+            "fix_verify_iteration": 0,
+            "previous_fixes": "",
+        }
+        recreated = tmp_path / "recreated-pr-wt"
+        recreated.mkdir()
 
-        src = Path(
-            "pdd/agentic_checkup_orchestrator.py"
-        ).read_text(encoding="utf-8")
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
 
-        # Locate the resume worktree-recreation block.
-        m = re.search(
-            r"# Restore worktree path from state(.*?)# Step definitions",
-            src,
-            re.DOTALL,
-        )
-        assert m, "could not locate the resume worktree-recreation block"
-        block = m.group(1)
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(saved_state, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(recreated, None),
+        ) as setup_pr, patch(
+            "pdd.agentic_checkup_orchestrator._setup_worktree"
+        ) as setup_issue, patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+            create=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "No changes to push."),
+            create=True,
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
 
-        assert "_setup_pr_worktree" in block, (
-            "PR-mode resume must call _setup_pr_worktree, not _setup_worktree"
+        assert success is True, msg
+        setup_pr.assert_called_once_with(
+            tmp_path, "o", "r", 200, True, resume_existing=True
         )
-        assert "_setup_worktree" in block, (
-            "issue-mode resume must still call _setup_worktree"
-        )
-        assert "if pr_mode:" in block, (
-            "resume worktree recreation must branch on pr_mode"
-        )
-        # _setup_pr_worktree is called with full PR identity (owner+repo+number).
-        assert (
-            "_setup_pr_worktree(" in block
-            and "pr_owner" in block
-            and "pr_repo" in block
-            and "pr_number" in block
-        ), "_setup_pr_worktree must be called with pr_owner, pr_repo, pr_number"
+        setup_issue.assert_not_called()

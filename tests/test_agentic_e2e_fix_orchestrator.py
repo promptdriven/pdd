@@ -5454,6 +5454,50 @@ class TestStep11CodeCleanup:
             assert success is True
             mock_step11.assert_called_once()
 
+    def test_final_checkup_pr_gate_runs_after_ci_success(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """pdd-issue must finish by running full checkup on the PR it created."""
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Checkup complete", 0.0, "model"),
+        ) as checkup_mock:
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, msg
+        checkup_mock.assert_called_once()
+        assert checkup_mock.call_args.kwargs["pr_url"] == (
+            "https://github.com/owner/repo/pull/77"
+        )
+        assert checkup_mock.call_args.kwargs["no_fix"] is False
+
 
 # ---------------------------------------------------------------------------
 # Regression tests for issue #1155: _verify_tests_independently safety nets
