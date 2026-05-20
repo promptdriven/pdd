@@ -1001,9 +1001,10 @@ Validation is **lenient**:
 ### Relationship to Other Tags
 
 **`<pdd-dependency>` vs `<include>`**:
-- `<pdd-dependency>`: Declares architectural dependency (updates `architecture.json`)
-- `<include>`: Injects content into prompt for LLM context (does NOT affect architecture)
-- Use both when appropriate - they serve different purposes
+- `<pdd-dependency>NAME_lang.prompt</pdd-dependency>`: explicit architectural dependency declaration. Always written to `architecture.json`.
+- `<include>` of a **module prompt** — any path resolving to a `*.prompt` file that names an architecture module (e.g. `<include>helper_python.prompt</include>`, `<include path="helper_python.prompt"/>`, even with `mode="interface"` / `select=` / `query=` / `lines=`): also an architectural edge. Sync unions module-prompt includes with `<pdd-dependency>` tags when computing `architecture.json` dependencies, so an `<include>` of another module's prompt is sufficient on its own.
+- `<include>` of a **non-prompt source file** (e.g. `<include mode="interface">src/utils.py</include>`, `<include select="def:foo">src/foo.py</include>`): LLM context only, **not** an architecture edge.
+- Use `<pdd-dependency>` for module deps you want declared even when the prompt does not pull in the full module prompt; use `<include>` of the module prompt when the LLM also needs that prompt's content. Both forms register as architecture edges — the validator treats them as equivalent.
 
 **`<pdd-*>` tags vs `<pdd>` comments**:
 - `<pdd-reason>`, `<pdd-interface>`, `<pdd-dependency>`: Metadata tags (processed by sync tool)
