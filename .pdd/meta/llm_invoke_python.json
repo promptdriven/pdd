@@ -2,9 +2,9 @@
   "pdd_version": "0.0.245",
   "timestamp": "2026-05-20T21:47:25.663458+00:00",
   "command": "example",
-  "prompt_hash": "08f20f2e33886688d14103186bc55760a745b23e9bbe2626a0a7a6c4e1c1528c",
+  "prompt_hash": "ce43b505ea639d1be1810a69314e79ac114be16bc1fcd2eda6a68843d74b7ecf",
   "code_hash": "6a6d4038c1aa807d08ba5bc25a5a781d4a2e117549ca77c81aea2790efb8b48c",
-  "example_hash": "78bdd173d8b89bd7b18b506f68134c91ec3d973fd4c2b27d7407fa2049fb76ad",
+  "example_hash": "17324f86442ab3cc55c995319ded801d8625615b460ebc3db352ad4bc9d94aba",
   "test_hash": "9cec35eb0aa6a0f9cc67d14fd2e5efd8ea4c237561a593bea973eb549cfd48eb",
   "test_files": {
     "test_llm_invoke.py": "9cec35eb0aa6a0f9cc67d14fd2e5efd8ea4c237561a593bea973eb549cfd48eb",
