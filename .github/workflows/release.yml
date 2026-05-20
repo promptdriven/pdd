@@ -85,3 +85,30 @@ jobs:
           else
             gh release create "$tag" --generate-notes --verify-tag --target main
           fi
+
+      - name: Post release notes to Discord
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DISCORD_WEBHOOK_URL:-}" ]; then
+            echo "DISCORD_WEBHOOK_URL not set; skipping Discord post."
+            exit 0
+          fi
+          tag="${{ github.ref_name }}"
+          notes=$(gh release view "$tag" --json body --jq .body)
+          url="https://github.com/${REPO}/releases/tag/${tag}"
+          # Discord embed description max is 4096 chars; truncate with ellipsis to stay safe.
+          if [ ${#notes} -gt 4000 ]; then
+            notes="${notes:0:4000}…"
+          fi
+          payload=$(jq -n \
+            --arg title "Release $tag" \
+            --arg url "$url" \
+            --arg description "$notes" \
+            '{embeds:[{title:$title,url:$url,description:$description,color:3447003}]}')
+          curl -sS -f -X POST -H "Content-Type: application/json" \
+            -d "$payload" "$DISCORD_WEBHOOK_URL"
+          echo "Posted release notes for $tag to Discord."

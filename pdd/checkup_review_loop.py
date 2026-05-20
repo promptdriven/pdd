@@ -3850,25 +3850,27 @@ def _redact_secret(text: str, secret: str) -> str:
 def _git_changed_files(worktree: Path) -> List[str]:
     """Return the list of changed paths in ``worktree``.
 
-    Uses ``git status --porcelain=v1 -z`` so renames and copies report
-    BOTH the new path AND the old path as discrete entries. The earlier
-    ``--porcelain`` (non-``-z``) parser collapsed a rename into the
-    literal string ``"old -> new"``, which never matched any registered
-    code-path key (issue #1063 rename-handling gap). Tracking both paths
-    is the right answer for every existing caller:
+    Delegates parsing to :func:`pdd.git_porcelain.parse_porcelain_z` and
+    :func:`pdd.git_porcelain.iter_changed_paths` so the shared helper
+    handles every edge case identically across the codebase. The helper:
 
-      - ``_check_prompt_source_guard`` MUST see the old path so a rename
-        of a registered code file without its prompt is treated as
-        drift.
-      - ``_run_fix`` records the change set in the FixResult artifact
-        for auditing; a rename's old + new paths is strictly more
-        informative than the ``"a -> b"`` literal.
-      - ``_commit_and_push_if_changed`` only uses the truthiness of the
-        list to decide whether to stage; semantics unchanged.
+      - Surfaces BOTH the new AND old paths for ``R`` (rename) records
+        so callers see the rename as a single drift signal.
+      - Surfaces ONLY the new (destination) path for ``C`` (copy)
+        records. A copy's source is referenced by git but is NOT
+        modified, so emitting it as a "changed" path would falsely
+        flag the source as touched. (Earlier hand-rolled parsers
+        emitted the copy source too — that was a latent bug because
+        ``_check_prompt_source_guard`` would refuse a fix on a copy
+        source's prompt-owned module even though the source was never
+        modified.)
+      - Uses ``os.fsdecode`` so non-UTF-8 paths round-trip via the
+        surrogate-escape mechanism. The subprocess captures raw bytes
+        (``text=False``) to preserve every byte verbatim.
 
-    Untracked files ARE surfaced (as ``?? path`` records); this matches
-    the original ``--porcelain`` default and lets the guard catch a fixer
-    that adds a NEW registered code module without its prompt.
+    Untracked files ARE surfaced (``?? path`` records); this matches
+    the original ``--porcelain`` default and lets the guard catch a
+    fixer that adds a NEW registered code module without its prompt.
     ``_git_untracked_files`` exists separately for the staging path,
     which needs the explicit untracked list to feed into ``git add --``.
 
@@ -3881,39 +3883,16 @@ def _git_changed_files(worktree: Path) -> List[str]:
     a new package at ``pdd/foo_v2/__init__.py`` and slip past the
     guard).
     """
+    from .git_porcelain import iter_changed_paths, parse_porcelain_z
+
     result = subprocess.run(
         ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
         cwd=worktree,
         capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
         return []
-    # ``-z`` emits records joined by NUL with no trailing NUL on the
-    # last record. Splitting on NUL is correct; drop any empty tail.
-    raw_entries = [e for e in result.stdout.split("\0") if e]
-    files: List[str] = []
-    i = 0
-    while i < len(raw_entries):
-        entry = raw_entries[i]
-        # Each record begins with a two-char status XY plus a space,
-        # followed by the path. ``-z`` preserves paths exactly (no
-        # quoting), so ``entry[3:]`` is the literal new-or-only path.
-        if len(entry) < 4:
-            i += 1
-            continue
-        status = entry[:2]
-        path = entry[3:]
-        files.append(path)
-        # Rename ('R') and copy ('C') in either column emit a SECOND
-        # record carrying the old path. Consume it as a separate changed
-        # path so callers see both sides of the rename.
-        if "R" in status or "C" in status:
-            i += 1
-            if i < len(raw_entries):
-                files.append(raw_entries[i])
-        i += 1
-    return files
+    return list(iter_changed_paths(parse_porcelain_z(result.stdout)))
 
 
 def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
