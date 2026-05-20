@@ -1583,6 +1583,55 @@ def _fetch_pr_head_sha(repo_owner: str, repo_name: str, pr_number: int) -> str:
     return str(metadata.get("head_sha", "") or "")
 
 
+def _read_checkup_worktree_head_sha(cwd: Path, pr_number: int) -> str:
+    """Read HEAD SHA of the PR-mode checkup worktree.
+
+    The checkup orchestrator creates ``.pdd/worktrees/checkup-pr-{N}/``
+    under the repository's git root and runs Step 7 verification (plus
+    any rebased push) against that worktree. After ``run_agentic_checkup``
+    returns, the worktree's HEAD is the *exact* SHA the checkup's verdict
+    and push apply to.
+
+    Comparing this SHA to the live PR remote head SHA is what
+    distinguishes "checkup pushed" from "external party pushed during
+    checkup". On equality, the checkup's verdict covers the current PR
+    head; on divergence, the PR advanced past what was verified and
+    pdd-issue must NOT green-light it.
+
+    Returns the worktree HEAD SHA or empty string on any failure.
+    """
+    try:
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if toplevel.returncode != 0:
+        return ""
+    git_root = Path(toplevel.stdout.strip())
+
+    worktree = git_root / ".pdd" / "worktrees" / f"checkup-pr-{pr_number}"
+    if not worktree.exists():
+        return ""
+
+    try:
+        rev = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if rev.returncode != 0:
+        return ""
+    return rev.stdout.strip()
+
+
 def _run_final_checkup_on_pr(
     *,
     issue_url: str,
@@ -1667,11 +1716,45 @@ def _run_final_checkup_on_pr(
     if post_checkup_head_sha == pre_checkup_head_sha:
         return checkup_success, checkup_message, checkup_cost, checkup_model
 
+    # Round-5 finding: the PR head can advance externally during the
+    # final checkup (maintainer push, another bot, etc.). Treating EVERY
+    # SHA delta as a checkup push would re-validate CI on code that
+    # Step 7 never saw, green-lighting an unverified head. The checkup
+    # worktree's HEAD is the authoritative "last verified/pushed" SHA;
+    # if it differs from the remote PR head, an external push raced us.
+    checkup_worktree_head_sha = _read_checkup_worktree_head_sha(cwd, pr_number)
+    if not checkup_worktree_head_sha:
+        return (
+            False,
+            (
+                "Final checkup completed but the checkup worktree HEAD SHA "
+                "was unavailable; cannot prove the PR remote head matches "
+                "what was verified. Failing closed to avoid green-lighting "
+                "an unverified head."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+    if checkup_worktree_head_sha != post_checkup_head_sha:
+        return (
+            False,
+            (
+                f"PR head advanced to {post_checkup_head_sha[:8]} during "
+                f"final checkup but the checkup worktree last verified "
+                f"{checkup_worktree_head_sha[:8]}. External push during "
+                f"checkup detected — re-run pdd-issue so the new head is "
+                f"verified by Step 7 before CI re-validation."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+
     if not quiet:
         console.print(
-            f"[yellow]Final checkup advanced PR head "
-            f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}); "
-            f"re-validating CI on new head...[/yellow]"
+            f"[yellow]Final checkup pushed to PR head "
+            f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}, "
+            f"verified by checkup worktree); re-validating CI on new "
+            f"head...[/yellow]"
         )
 
     # The checkup pushes from its OWN worktree (.pdd/worktrees/checkup-pr-N),

@@ -9755,14 +9755,21 @@ class TestFinalCheckupForwardsCwd:
         assert not checkup_mock.called
 
 
-class TestFinalCheckupPostCIMutationHole:
-    """Codex round-3 FM1: final checkup must re-validate CI when it pushes.
+class TestFinalCheckupHeadSafetyChecks:
+    """Round-3 FM1 + Round-5: head-SHA invariants the final checkup must enforce.
 
-    The final checkup runs with ``no_fix=False`` after CI has already passed
-    on the pre-checkup PR head. If the checkup pushes additional fixes, the
-    PR head SHA advances to code that CI never validated. These tests lock
-    in the contract: the orchestrator snapshots head SHA before/after; only
-    if it changed does it re-run CI with ``max_retries=0`` (verify-only).
+    Round-3 closed the post-CI mutation hole: when the checkup pushes
+    fixes, CI must be re-validated against the new head. Round-5 closed
+    the external-push race: an external party (maintainer, bot) advancing
+    the PR during the checkup must NOT slip through as a checkup self-push
+    because Step 7's verdict applies to the checkup worktree's HEAD, not
+    to an externally-advanced remote.
+
+    The current contract:
+      - pre == post  → no head movement; return checkup result unchanged
+      - pre != post and worktree == post → checkup self-push; re-validate CI
+      - pre != post and worktree != post → external push raced; fail closed
+      - any SHA fetch empty → fail closed
     """
 
     def _common_args(self, tmp_path):
@@ -9815,6 +9822,11 @@ class TestFinalCheckupPostCIMutationHole:
             "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
             side_effect=["aaaaaaaa", "bbbbbbbb"],
         ), patch(
+            # Checkup worktree HEAD matches the post-checkup remote head:
+            # the SHA advance is the checkup's own push, not an external one.
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="bbbbbbbb",
+        ), patch(
             "pdd.agentic_checkup.run_agentic_checkup",
             return_value=(True, "checkup ok", 0.5, "fake-model"),
         ), patch(
@@ -9853,6 +9865,9 @@ class TestFinalCheckupPostCIMutationHole:
             "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
             side_effect=["aaaaaaaa", "bbbbbbbb"],
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="bbbbbbbb",
+        ), patch(
             "pdd.agentic_checkup.run_agentic_checkup",
             return_value=(True, "checkup ok", 0.5, "fake-model"),
         ), patch(
@@ -9868,6 +9883,77 @@ class TestFinalCheckupPostCIMutationHole:
         assert "post-push CI re-validation failed" in msg
         assert "aaaaaaaa" in msg and "bbbbbbbb" in msg
         assert cost == pytest.approx(0.5)
+
+    def test_external_push_during_checkup_fails_closed(self, tmp_path):
+        """Round-5 finding: an external party advancing the PR head during
+        the final checkup must NOT slip through.
+
+        The checkup worktree's HEAD records the SHA the checkup actually
+        verified/pushed. If the remote PR head differs, the PR advanced past
+        what Step 7 verified — re-validating CI alone would green-light an
+        unreviewed head.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "external_pushed_sha_xxxx"],
+        ), patch(
+            # Checkup worktree saw a different SHA than the post-checkup
+            # remote head — an external push happened during the checkup.
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="checkup_worktree_sha_yyy",
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is False, (
+            "External push during checkup must fail closed — Step 7's "
+            "verdict applies to the worktree HEAD, not the advanced remote"
+        )
+        assert "External push during" in msg or "advanced" in msg
+        assert not ci_mock.called, (
+            "CI re-validation must not run when the head divergence is "
+            "external — re-running CI on unverified code would mask the "
+            "race"
+        )
+
+    def test_missing_checkup_worktree_head_sha_fails_closed(self, tmp_path):
+        """If we can't read the checkup worktree HEAD, we can't prove the
+        remote head matches what was verified. Fail closed."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "bbbbbbbb"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="",
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is False
+        assert "checkup worktree HEAD SHA" in msg
+        assert not ci_mock.called
 
     def test_missing_pre_head_sha_fails_closed(self, tmp_path):
         from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr

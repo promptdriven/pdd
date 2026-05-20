@@ -64,6 +64,45 @@ def _fetch_pr_head_sha(repo_owner: str, repo_name: str, pr_number: int) -> str:
     return str(metadata.get("head_sha", "") or "")
 
 
+def _read_checkup_worktree_head_sha(cwd: Path, pr_number: int) -> str:
+    """Read HEAD SHA of the PR-mode checkup worktree.
+
+    The checkup orchestrator creates .pdd/worktrees/checkup-pr-{N}/ under
+    the repo's git root. After run_agentic_checkup returns, that worktree's
+    HEAD is the *exact* SHA the checkup's verdict and push apply to.
+    Comparing it to the live PR remote SHA distinguishes a checkup
+    self-push from an external party advancing the PR during the checkup.
+    """
+    import subprocess
+    try:
+        toplevel = subprocess.run(
+            ["git", "rev-parse", "--show-toplevel"],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if toplevel.returncode != 0:
+        return ""
+    worktree = Path(toplevel.stdout.strip()) / ".pdd" / "worktrees" / f"checkup-pr-{pr_number}"
+    if not worktree.exists():
+        return ""
+    try:
+        rev = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if rev.returncode != 0:
+        return ""
+    return rev.stdout.strip()
+
+
 def _run_final_checkup_on_pr(
     *,
     issue_url: str,
@@ -144,6 +183,38 @@ def _run_final_checkup_on_pr(
 
     if post_checkup_head_sha == pre_checkup_head_sha:
         return checkup_success, checkup_message, checkup_cost, checkup_model
+
+    # The PR head moved during the checkup, but we cannot assume the
+    # checkup itself moved it. The worktree HEAD is the authoritative
+    # "last verified/pushed" SHA; if it does not equal the remote PR head,
+    # an external party advanced the PR during the checkup and Step 7
+    # never saw the new code.
+    checkup_worktree_head_sha = _read_checkup_worktree_head_sha(cwd, pr_number)
+    if not checkup_worktree_head_sha:
+        return (
+            False,
+            (
+                "Final checkup completed but the checkup worktree HEAD SHA "
+                "was unavailable; cannot prove the PR remote head matches "
+                "what was verified. Failing closed to avoid green-lighting "
+                "an unverified head."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+    if checkup_worktree_head_sha != post_checkup_head_sha:
+        return (
+            False,
+            (
+                f"PR head advanced to {post_checkup_head_sha[:8]} during "
+                f"final checkup but the checkup worktree last verified "
+                f"{checkup_worktree_head_sha[:8]}. External push during "
+                f"checkup detected — re-run pdd-issue so the new head is "
+                f"verified by Step 7 before CI re-validation."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
 
     # Pass post_checkup_head_sha as the override — the checkup pushed from
     # its own worktree, so cwd's local HEAD is stale.
