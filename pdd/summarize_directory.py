@@ -234,12 +234,15 @@ def summarize_directory(
     results_data: List[Dict[str, str]] = []
     total_cost = 0.0
     last_model_name = "cached"
-    # Aggregate attempted-model chains from every per-file llm_invoke call so
-    # we can propagate the full chronological list to the parent Click ctx
-    # after the (potentially threaded) loop completes. Worker threads' ctx
-    # is thread-local — propagating from inside the worker would not reach
-    # the @track_cost decorator on the parent command.
-    aggregated_attempted_models: List[str] = []
+    # Threaded path only: aggregate per-worker chains and propagate from the
+    # main thread after the executor completes. Worker threads' Click ctx is
+    # thread-local — propagating from inside the worker would not reach the
+    # @track_cost decorator on the parent command. Serial paths
+    # (max_workers == 1) MUST NOT aggregate-and-propagate; llm_invoke's
+    # own ctx propagation (round-4 contract) already lands the chain on
+    # ctx.obj['attempted_models'], and a second propagate would record
+    # each entry twice (e.g. 'm1;m1' for one LLM call).
+    threaded_aggregated_chain: List[str] = []
 
     # Step 6: Iterate through files with progress reporting
     total_files = len(files)
@@ -310,15 +313,14 @@ def summarize_directory(
                 if progress_callback:
                     progress_callback(completed, total_files)
             for i in sorted(chains_by_index):
-                aggregated_attempted_models.extend(chains_by_index[i])
+                threaded_aggregated_chain.extend(chains_by_index[i])
     elif progress_callback:
         for i, file_path in enumerate(files):
             progress_callback(i + 1, total_files)
-            cost, model, chain = _process_file(i, file_path)
+            cost, model, _chain = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
-            aggregated_attempted_models.extend(chain)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
     elif verbose:
@@ -332,29 +334,27 @@ def summarize_directory(
         ) as progress:
             task = progress.add_task("[cyan]Processing files...", total=len(files))
             for i, file_path in enumerate(files):
-                cost, model, chain = _process_file(i, file_path)
+                cost, model, _chain = _process_file(i, file_path)
                 total_cost += cost
                 if model != "cached":
                     last_model_name = model
-                aggregated_attempted_models.extend(chain)
                 if csv_path:
                     _flush_csv_to_disk(results_data, csv_path)
                 progress.advance(task)
     else:
         for i, file_path in enumerate(files):
-            cost, model, chain = _process_file(i, file_path)
+            cost, model, _chain = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
-            aggregated_attempted_models.extend(chain)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
 
-    # Best-effort propagation to the main thread's Click context so the
-    # @track_cost decorator on the parent command records the full chain.
-    # The helper is a no-op when there's no active Click context.
-    if aggregated_attempted_models:
-        _propagate_attempted_models_to_ctx(aggregated_attempted_models)
+    # Best-effort propagation to the main thread's Click context for the
+    # THREADED path only. The helper is a no-op when there's no active
+    # Click context.
+    if max_workers > 1 and threaded_aggregated_chain:
+        _propagate_attempted_models_to_ctx(threaded_aggregated_chain)
 
     # Step 7: Merge in existing entries that were not part of this scan.
     # This preserves cached summaries for files outside the current
@@ -501,6 +501,20 @@ def _process_single_file_logic(
         })
 
     except Exception as e:
+        # Harvest llm_invoke's exception-attached chain (set by the round-2
+        # pre-loop wrapper and the all-candidates RuntimeError). Worker
+        # threads in summarize_directory's parallel path can't reach the
+        # parent Click ctx, so the only way to recover the attempted chain
+        # from a failed file is via this exception attribute. Use the same
+        # dedup pattern as llm_invoke's chain-building loop (skip only when
+        # the new entry equals the last appended entry; do NOT pre-dedupe
+        # across the boundary — that was the round-5 anti-pattern).
+        failed_chain = getattr(e, 'attempted_models', None) or []
+        if isinstance(failed_chain, list):
+            for entry in failed_chain:
+                text = str(entry)
+                if text and (not attempted_models or attempted_models[-1] != text):
+                    attempted_models.append(text)
         console.print(f"[bold red]Error processing file {file_path}:[/bold red] {e}")
         results_data.append({
             'full_path': rel_path,

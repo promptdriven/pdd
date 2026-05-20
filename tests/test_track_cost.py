@@ -171,7 +171,10 @@ def test_csv_header_written_if_file_exists_but_empty(mock_click_context, mock_op
          mock.patch.dict(os.environ, {'PDD_OUTPUT_COST_PATH': '/tmp/cost_abc.csv'}):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
-    mock_open_file.assert_called_once_with('/tmp/cost_abc.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/tmp/cost_abc.csv', 'a', newline='', encoding='utf-8')
 
     handle = mock_open_file()
     # Header MUST be written when file is empty
@@ -225,7 +228,10 @@ def test_output_cost_path_via_param(mock_click_context, mock_open_file, mock_rpr
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path and mode
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -263,8 +269,10 @@ def test_output_cost_path_via_env(mock_click_context, mock_open_file, mock_rprin
     with mock.patch('os.path.isfile', return_value=False):
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
-    # Ensure that open was called with the path from environment variable
-    mock_open_file.assert_called_once_with('/env/path/cost.csv', 'a', newline='', encoding='utf-8')
+    # Ensure that open was called with the path from environment variable.
+    # Lock-file open (cost.csv.lock) now happens alongside; assert the
+    # cost.csv 'a' open occurred, not that it was the ONLY open call.
+    mock_open_file.assert_any_call('/env/path/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -301,7 +309,10 @@ def test_csv_header_written_if_file_not_exists(mock_click_context, mock_open_fil
         result = sample_command(mock_ctx, '/path/to/prompt.txt', output='/path/to/output')
 
     # Ensure that open was called once
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -340,7 +351,10 @@ def test_cost_and_model_extracted_correctly(mock_click_context, mock_open_file, 
         result = train_command(mock_ctx, '/path/to/input.txt', output='/path/to/output')
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -380,7 +394,10 @@ def test_result_tuple_too_short(mock_click_context, mock_open_file, mock_rprint)
         result = short_result_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -421,7 +438,10 @@ def test_input_output_files_collected(mock_click_context, mock_open_file, mock_r
         result = process_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt')
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -467,7 +487,10 @@ def test_multiple_input_output_files(mock_click_context, mock_open_file, mock_rp
         )
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -544,7 +567,10 @@ def test_non_string_file_parameters(mock_click_context, mock_open_file, mock_rpr
         result = mixed_command(mock_ctx, '/path/to/input.txt', output_file='/path/to/output.txt', config={'key': 'value'})
 
     # Ensure that open was called with the correct path
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -598,7 +624,10 @@ def test_non_tuple_result(mock_click_context, mock_open_file, mock_rprint):
         result = non_tuple_command(mock_ctx, '/path/to/prompt.txt')
 
     # Ensure that open was called
-    mock_open_file.assert_called_once_with('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
+    # Lock-file open (cost.csv.lock) now happens alongside the cost.csv
+    # append; assert the cost.csv 'a' open occurred, not that it was the
+    # ONLY open call.
+    mock_open_file.assert_any_call('/path/to/cost.csv', 'a', newline='', encoding='utf-8')
 
     # Retrieve the file handle to check written content
     handle = mock_open_file()
@@ -1224,3 +1253,82 @@ def test_attempted_models_scoped_to_single_command_invocation(
     # (no 'attempted_models' key persists after the last @track_cost wrapper
     # exits, because there was no prior value to restore to).
     assert 'attempted_models' not in shared_obj
+
+
+import sys
+
+
+@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX-only fcntl lock')
+def test_migration_serialized_by_lock(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """Regression (codex round-7 finding 3): concurrent @track_cost
+    invocations against a legacy 6-column cost.csv must not lose rows
+    to the migrate+append race. The fcntl flock serializes both the
+    migration and the subsequent append on POSIX.
+
+    This is a structural smoke test using threads (which serialize via
+    the GIL during the critical section) — full multi-process race
+    coverage would require subprocess fixture machinery. The
+    flock acquire/release code path is exercised end-to-end, proving
+    the lock is opened/closed correctly and the migration completes
+    under the lock.
+    """
+    import threading
+
+    csv_path = tmp_path / "cost.csv"
+    # Pre-existing 6-column CSV (legacy schema).
+    csv_path.write_text(
+        "timestamp,model,command,cost,input_files,output_files\n"
+        "2026-01-01T00:00:00.000,gpt-4,sync,0.01,a.py,b.py\n",
+        encoding="utf-8",
+    )
+
+    def _do_append(model_name):
+        # Each thread gets its own mock ctx so command-name doesn't collide.
+        ctx = MagicMock()
+        ctx.command.name = 'generate'
+        ctx.params = {
+            'prompt_file': '/p.txt',
+            'output_cost': str(csv_path),
+            'output': '/o.txt',
+        }
+        ctx.obj = {'output_cost': str(csv_path)}
+
+        @track_cost
+        def cmd(ctx_arg, prompt_file, output):
+            return (output, 0.5, model_name)
+
+        # Each thread needs its own get_current_context patch — patch the
+        # underlying module-level function so all threads see the same patch
+        # but it returns the per-thread mock ctx via a thread-local sentinel.
+        # Simpler: use a per-thread patch context manager.
+        with patch('pdd.track_cost.click.get_current_context', return_value=ctx):
+            cmd(ctx, '/p.txt', output='/o.txt')
+
+    threads = [
+        threading.Thread(target=_do_append, args=('m1',)),
+        threading.Thread(target=_do_append, args=('m2',)),
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    content = csv_path.read_text(encoding='utf-8')
+    lines = [line for line in content.splitlines() if line.strip()]
+    # Header (migrated, 7-column) + 1 original legacy row + 2 new rows.
+    assert len(lines) == 4, (
+        f"expected 4 lines (1 header + 1 legacy + 2 new), got "
+        f"{len(lines)}: {lines!r}"
+    )
+    assert 'attempted_models' in lines[0], (
+        f"header must be migrated to 7-column, got: {lines[0]!r}"
+    )
+    # Both new rows must be present (no lost-update).
+    joined = '\n'.join(lines)
+    assert ',m1,' in joined and ',m2,' in joined, (
+        f"both appended rows must survive the race; got:\n{joined}"
+    )
+
+    mock_rprint.assert_not_called()

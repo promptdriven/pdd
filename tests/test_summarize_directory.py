@@ -1921,6 +1921,75 @@ class TestMaxWorkers:
 
         assert abs(cost - 0.5) < 1e-9, f"Expected 0.5 total cost for 5 files, got {cost}"
 
+    def test_serial_path_does_not_double_propagate_attempted_models(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """Regression (codex round-7 finding 1): serial path
+        (max_workers == 1) must NOT call _propagate_attempted_models_to_ctx
+        from the orchestrator — llm_invoke's own ctx propagation already
+        lands the chain on ctx.obj['attempted_models'] from the main
+        thread. A second propagation would record each entry twice
+        (e.g. 'm1;m1' for one LLM call).
+        """
+        (tmp_path / "a.py").write_text("a")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm, \
+             patch('pdd.summarize_directory._propagate_attempted_models_to_ctx') as mock_propagate:
+            mock_llm.return_value = {
+                'result': FileSummary(file_summary="S", key_exports=["x"], dependencies=["y"]),
+                'cost': 0.1,
+                'model_name': "m1",
+                'attempted_models': ['m1'],
+            }
+            summarize_directory(
+                directory_path=str(tmp_path / "*.py"),
+                strength=0.5,
+                temperature=0.0,
+                max_workers=1,
+            )
+
+        assert mock_propagate.call_count == 0, (
+            "Serial path must not double-propagate; llm_invoke already "
+            "covers ctx propagation on the main thread. "
+            f"Got {mock_propagate.call_count} call(s): "
+            f"{[c.args for c in mock_propagate.call_args_list]}"
+        )
+
+    def test_worker_exception_chain_recovered_by_aggregator(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """Regression (codex round-7 finding 2): when a worker's llm_invoke
+        raises with an `attempted_models` attribute attached (set by
+        llm_invoke's round-2 pre-loop wrapper / all-candidates RuntimeError),
+        _process_single_file_logic must harvest that chain in its broad
+        except block so the threaded aggregator can still propagate it.
+        Worker threads can't reach the parent ctx, so the exception
+        attribute is the ONLY recovery path.
+        """
+        (tmp_path / "a.py").write_text("a")
+
+        exc = RuntimeError("simulated llm exhaustion")
+        exc.attempted_models = ['m1', 'm2']
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=exc), \
+             patch('pdd.summarize_directory._propagate_attempted_models_to_ctx') as mock_propagate:
+            summarize_directory(
+                directory_path=str(tmp_path / "*.py"),
+                strength=0.5,
+                temperature=0.0,
+                max_workers=2,
+            )
+
+        # Threaded aggregator must have propagated the recovered chain.
+        assert mock_propagate.call_count == 1, (
+            f"Expected 1 propagate call from threaded aggregator, got "
+            f"{mock_propagate.call_count}"
+        )
+        propagated = mock_propagate.call_args.args[0]
+        assert propagated == ['m1', 'm2'], (
+            f"Expected exception-attached chain ['m1','m2'], got {propagated}"
+        )
+
     def test_max_workers_propagates_attempted_models_to_main_ctx(
         self, tmp_path, mock_load_prompt_template
     ):

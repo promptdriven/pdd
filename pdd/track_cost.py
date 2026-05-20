@@ -7,6 +7,16 @@ import click
 from rich import print as rprint
 from typing import Any, Tuple, List
 
+# POSIX file-lock for serializing CSV migration + append between concurrent
+# PDD processes. Windows lacks fcntl; on those platforms the lock is a no-op
+# and the write path degrades to atomic-rename-only (still safer than
+# in-place rewrite, just not safe against the lost-update race the lock
+# prevents on POSIX).
+try:
+    import fcntl  # type: ignore[import]
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
+
 __all__ = ['track_cost', 'extract_cost_and_model', 'collect_files', 'wrapper', 'looks_like_file']
 
 def wrapper(*args, **kwargs):
@@ -189,61 +199,106 @@ def track_cost(func):
                         fieldnames = ['timestamp', 'model', 'command', 'cost', 'input_files', 'output_files', 'attempted_models']
                         file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
 
-                        # If file exists with an older header that doesn't include
-                        # 'attempted_models', migrate it in place so DictReader can
-                        # expose the new column properly. Peek only the header on
-                        # every call; load and rewrite rows ONLY when migration is
-                        # actually needed, to keep append cost O(1) over the
-                        # lifetime of a long-lived cost CSV.
-                        if file_has_content:
-                            existing_header = None
-                            existing_rows = []
-                            needs_migration = False
+                        # Serialize the migration+append critical section
+                        # across concurrent PDD processes via an exclusive
+                        # POSIX flock on a sibling lock file. Without the
+                        # lock, two processes hitting a legacy 6-column
+                        # cost.csv would each peek-then-migrate-then-append
+                        # independently and the second os.replace would
+                        # overwrite the first's appended row (lost-update
+                        # race). Lock acquisition is best-effort: on
+                        # Windows (no fcntl) or any flock failure, fall
+                        # through to the unlocked atomic-rename path, which
+                        # is still safer than in-place rewrite — just not
+                        # safe against the inter-process race.
+                        lock_file = None
+                        lock_acquired = False
+                        if fcntl is not None:
                             try:
-                                with open(output_cost_path, 'r', newline='', encoding='utf-8') as existing:
-                                    reader = csv.reader(existing)
-                                    existing_header = next(reader, None)
-                                    if existing_header is not None and 'attempted_models' not in existing_header:
-                                        needs_migration = True
-                                        existing_rows = list(reader)
+                                lock_path = output_cost_path + ".lock"
+                                lock_file = open(lock_path, 'a+')
+                                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+                                lock_acquired = True
                             except Exception:
+                                if lock_file is not None:
+                                    try:
+                                        lock_file.close()
+                                    except Exception:
+                                        pass
+                                    lock_file = None
+
+                        try:
+                            # If file exists with an older header that
+                            # doesn't include 'attempted_models', migrate it
+                            # in place so DictReader can expose the new
+                            # column properly. Peek only the header on
+                            # every call; load and rewrite rows ONLY when
+                            # migration is actually needed, to keep append
+                            # cost O(1) over the lifetime of a long-lived
+                            # cost CSV. RE-READ under the lock — another
+                            # process may have migrated between our
+                            # pre-lock check and lock acquisition.
+                            # Recompute file_has_content too, in case another
+                            # process just created/extended the file.
+                            file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
+                            if file_has_content:
                                 existing_header = None
                                 existing_rows = []
                                 needs_migration = False
-
-                            if needs_migration:
-                                migrated_fieldnames = list(existing_header) + ['attempted_models']
-                                # Write the migrated CSV to a tempfile in the SAME
-                                # directory as the original, then os.replace it
-                                # atomically. Two concurrent PDD processes hitting
-                                # a legacy 6-column cost.csv would otherwise race
-                                # on the in-place rewrite and corrupt the file.
-                                parent_dir = os.path.dirname(os.path.abspath(output_cost_path)) or "."
-                                tmp_fd, tmp_path = tempfile.mkstemp(
-                                    prefix=".cost.csv.migrate-", dir=parent_dir
-                                )
                                 try:
-                                    with os.fdopen(tmp_fd, 'w', newline='', encoding='utf-8') as tmp_file:
-                                        migrate_writer = csv.writer(tmp_file)
-                                        migrate_writer.writerow(migrated_fieldnames)
-                                        for existing_row in existing_rows:
-                                            # Pad shorter rows so column count matches.
-                                            padded = list(existing_row) + [''] * (len(migrated_fieldnames) - len(existing_row))
-                                            migrate_writer.writerow(padded)
-                                    os.replace(tmp_path, output_cost_path)
+                                    with open(output_cost_path, 'r', newline='', encoding='utf-8') as existing:
+                                        reader = csv.reader(existing)
+                                        existing_header = next(reader, None)
+                                        if existing_header is not None and 'attempted_models' not in existing_header:
+                                            needs_migration = True
+                                            existing_rows = list(reader)
                                 except Exception:
-                                    try:
-                                        os.unlink(tmp_path)
-                                    except OSError:
-                                        pass
-                                    raise
-                                fieldnames = migrated_fieldnames
+                                    existing_header = None
+                                    existing_rows = []
+                                    needs_migration = False
 
-                        with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
-                            writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
-                            if not file_has_content:
-                                writer.writeheader()
-                            writer.writerow(row)
+                                if needs_migration:
+                                    migrated_fieldnames = list(existing_header) + ['attempted_models']
+                                    # Write the migrated CSV to a tempfile
+                                    # in the SAME directory as the original,
+                                    # then os.replace it atomically.
+                                    parent_dir = os.path.dirname(os.path.abspath(output_cost_path)) or "."
+                                    tmp_fd, tmp_path = tempfile.mkstemp(
+                                        prefix=".cost.csv.migrate-", dir=parent_dir
+                                    )
+                                    try:
+                                        with os.fdopen(tmp_fd, 'w', newline='', encoding='utf-8') as tmp_file:
+                                            migrate_writer = csv.writer(tmp_file)
+                                            migrate_writer.writerow(migrated_fieldnames)
+                                            for existing_row in existing_rows:
+                                                # Pad shorter rows so column count matches.
+                                                padded = list(existing_row) + [''] * (len(migrated_fieldnames) - len(existing_row))
+                                                migrate_writer.writerow(padded)
+                                        os.replace(tmp_path, output_cost_path)
+                                    except Exception:
+                                        try:
+                                            os.unlink(tmp_path)
+                                        except OSError:
+                                            pass
+                                        raise
+                                    fieldnames = migrated_fieldnames
+
+                            with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
+                                writer = csv.DictWriter(csvfile, fieldnames=fieldnames, extrasaction='ignore')
+                                if not file_has_content:
+                                    writer.writeheader()
+                                writer.writerow(row)
+                        finally:
+                            if lock_file is not None:
+                                try:
+                                    if lock_acquired and fcntl is not None:
+                                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+                                except Exception:
+                                    pass
+                                try:
+                                    lock_file.close()
+                                except Exception:
+                                    pass
 
             except Exception as e:
                 rprint(f"[red]Error tracking cost: {e}[/red]")
