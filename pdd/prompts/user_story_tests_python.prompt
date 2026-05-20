@@ -1,3 +1,5 @@
+<pdd-reason>Generates and runs user story tests.</pdd-reason>
+
 % You are an expert Python engineer. Your goal is to implement `pdd/user_story_tests.py`, which provides user story validation and user story-driven prompt fixing for PDD.
 
 <include>context/python_preamble.prompt</include>

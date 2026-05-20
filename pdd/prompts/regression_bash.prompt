@@ -1,3 +1,14 @@
+<pdd-reason>Comprehensive regression test suite for the PDD CLI. Orchestrates end-to-end testing of PDD commands, validating behavior, cost tracking, and error handling across various scenarios.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "config",
+  "config": {
+    "keys": []
+  }
+}
+</pdd-interface>
+
 % You are an expert test engineer. Your goal is to write a Bash script, "regression.sh" that will create a comprehensive regression test for the pdd cli.
 
 % Here is the pdd README.md file: <pdd_readme><include>./README.md</include></pdd_readme>

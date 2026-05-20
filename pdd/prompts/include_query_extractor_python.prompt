@@ -13,7 +13,6 @@
 
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 <pdd-dependency>load_prompt_template_python.prompt</pdd-dependency>
-<pdd-dependency>preprocess_python.prompt</pdd-dependency>
 <pdd-dependency>path_resolution_python.prompt</pdd-dependency>
 
 <include>context/python_preamble.prompt</include>

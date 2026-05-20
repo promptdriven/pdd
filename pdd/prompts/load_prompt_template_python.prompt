@@ -1,3 +1,5 @@
+<pdd-reason>Loads and caches prompt templates from the prompts directory.</pdd-reason>
+
 % Write a function 'load_prompt_template' that loads a prompt file into a string.
 
 <include>../context/python_preamble.prompt</include>

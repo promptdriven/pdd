@@ -119,3 +119,21 @@ Auto-deps (`pdd auto-deps` / `insert_includes`) now automatically determines *wh
 
 - **`README.md`** — Tag syntax fixed to canonical format; `pdd extracts prune` docs
 - **`docs/prompting_guide.md`** — Selective include syntax, selector reference, LLM extraction docs; all examples use canonical body-content format
+---
+
+## Issue #1103: Improved Sync Output and Model Labeling
+
+### Changes
+
+- **Prompts**: Standardized "Model:" label and suppression logic across all main commands (`bug_main`, `code_generator_main`, `update_main`, `checkup`, `maintenance`, `modify`).
+- **Sync Output**: Updated `sync_orchestration_python.prompt` and `one_session_sync_python.prompt` to provide descriptive success summaries (e.g., "Completed: generate, example, test") and standardized failure summaries.
+- **Robust Fallback**: Enhanced `sync_main_python.prompt` to handle cases where upstream components return literal "None" or "No details." strings.
+- **Architecture Metadata**:
+    - Resolved circular dependency between `preprocess` and `include_query_extractor`.
+    - Corrected filepaths for moved files (`regression.sh`, `run_generated.py`, `prompt_tester.py`).
+    - Registered missing core prompts (`construct_paths`, `load_prompt_template`, etc.) by adding missing PDD tags.
+    - Cleaned up dead entries and duplicate dependencies.
+
+### Documentation Justification (Issue #5 from Step 11)
+
+- **README.md** and **docs/whitepaper.md** were kept out of scope for output changes. A repository-wide audit confirmed that these files do not contain hardcoded "No sync operations required" messages or other specific CLI output examples that were invalidated by the improved summary logic. General command usage descriptions remain accurate.

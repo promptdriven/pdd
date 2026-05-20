@@ -1,3 +1,5 @@
+<pdd-reason>Detects and reports conflicts within prompt files.</pdd-reason>
+
 % You are an expert Python engineer. Your goal is to write a Python function, "conflicts_in_prompts", that takes two prompts as input and finds conflicts between them and suggests how to resolve those conflicts.
 
 <include>./context/python_preamble.prompt</include>
