@@ -1,7 +1,7 @@
 % Module: validate_arch_includes
-% Purpose: Cross-validate architecture.json dependency entries against <include> tags in prompts.
+% Purpose: Cross-validate architecture.json dependency entries against &lt;include&gt; tags in prompts.
 % Phase 5: surface drift between declarative architecture dependencies and the module
-% prompts the LLM actually pulls in via <include>.
+% prompts the LLM actually pulls in via &lt;include&gt;.
 
 % Dependencies (imported from sibling modules):
 %   - .architecture_registry: BUNDLED_SAMPLE_TOPLEVEL_DIRS, extract_modules,
@@ -22,11 +22,11 @@
 % Responsibilities
 % ============================================================
 % This module provides cross-validation between architecture.json dependency
-% declarations and the actual <include> / <pdd-dependency> tags found in prompt files.
+% declarations and the actual &lt;include&gt; / &lt;pdd-dependency&gt; tags found in prompt files.
 % It detects two kinds of drift:
 %   1. Forward mismatch: architecture.json lists a dependency on module X, but the
-%      prompt file has no <include> or <pdd-dependency> referencing that module's prompt.
-%   2. Reverse mismatch: a prompt <include>s another module's prompt, but
+%      prompt file has no &lt;include&gt; or &lt;pdd-dependency&gt; referencing that module's prompt.
+%   2. Reverse mismatch: a prompt &lt;include&gt;s another module's prompt, but
 %      architecture.json dependencies do not list that module.
 %
 % Path-qualified modules (F4): comparison keys preserve the directory prefix so
@@ -36,10 +36,10 @@
 % working unchanged.
 % It also provides a generation-time contract preflight for existing modules:
 %   3. Prompt contract/context mismatch: a prompt declares a broad module interface
-%      while <include>ing only a selected slice of the existing output source.
+%      while &lt;include&gt;ing only a selected slice of the existing output source.
 %      For existing modules, a partial self-include must cover every declared public
 %      symbol that already exists in the output file, or the prompt must use a full
-%      self-include. In staged strict mode, when a prompt-local <pdd-interface>
+%      self-include. In staged strict mode, when a prompt-local &lt;pdd-interface&gt;
 %      declares public symbols already present in the existing output file, the prompt
 %      must include the existing module source context at all; no-self-include is a
 %      hard failure for that prompt-local contract. Keep legacy prompts without
@@ -70,7 +70,7 @@
 %   - Returns None when no module key can be derived.
 
 % _module_prompt_include_target(include_path: str) -> Optional[str]
-%   - Map an <include> path to a path-preserving module key only when it names
+%   - Map an &lt;include&gt; path to a path-preserving module key only when it names
 %     another module prompt (i.e. path ends with ".prompt"). Returns a directory-
 %     qualified key (``"commands/fix"``) when the include is path-qualified, or
 %     the bare stem (``"fix"``) for unqualified legacy paths (F4 third-party
@@ -104,10 +104,10 @@
 %     *,
 %     dep_resolver: Optional[Callable[[str], str]] = None,
 % ) -> set[str]
-%   - Return path-preserving module keys declared via <pdd-dependency> tags in
+%   - Return path-preserving module keys declared via &lt;pdd-dependency&gt; tags in
 %     the prompt header.
-%   - Per docs/prompting_guide.md, <pdd-dependency> is the authoritative
-%     architectural declaration and a module-prompt <include> is ALSO an
+%   - Per docs/prompting_guide.md, &lt;pdd-dependency&gt; is the authoritative
+%     architectural declaration and a module-prompt &lt;include&gt; is ALSO an
 %     architecture edge under the union semantics. The forward check accepts
 %     either as proof that the prompt has declared the dependency.
 %   - Uses parse_prompt_tags from .architecture_sync to extract "dependencies"
@@ -116,7 +116,7 @@
 %   - F7 third-party codex review: when ``dep_resolver`` is supplied (preferred,
 %     reused across all entries in one validation run) OR when ``arch_data`` is
 %     supplied, raw declarations are first run through the resolver so a bare
-%     ``<pdd-dependency>fix_python.prompt</pdd-dependency>`` resolves to its
+%     ``&lt;pdd-dependency&gt;fix_python.prompt&lt;/pdd-dependency&gt;`` resolves to its
 %     unambiguous path-qualified arch entry (e.g. ``server/fix_python.prompt``)
 %     BEFORE path-preserving keying. Without this step a bare declaration would
 %     key to ``"fix"`` while the arch dep keys to ``"server/fix"`` and the
@@ -133,12 +133,12 @@
 %     is present, because those forms do not guarantee full implementation source.
 
 % _extract_include_references(prompt_content: str) -> List[_IncludeReference]
-%   - Parse raw <include ...>target</include> and self-closing
-%     <include path="..." /> tags, preserving include attributes.
+%   - Parse raw &lt;include ...&gt;target&lt;/include&gt; and self-closing
+%     &lt;include path="..." /&gt; tags, preserving include attributes.
 %   - Match preprocess include grammar:
-%       * body path: <include>path.py</include>
-%       * path attribute: <include path="path.py">ignored_body.py</include>
-%       * self-closing path attribute: <include path="path.py" />
+%       * body path: &lt;include&gt;path.py&lt;/include&gt;
+%       * path attribute: &lt;include path="path.py"&gt;ignored_body.py&lt;/include&gt;
+%       * self-closing path attribute: &lt;include path="path.py" /&gt;
 %   - When path= is present, it takes precedence over body content.
 %   - This must parse plain prompt text and not require the prompt to be valid XML.
 
@@ -184,12 +184,12 @@
 %     require_prompt_local_source_context: bool = False,
 % ) -> List[str]
 %   - Generation-time preflight used before the LLM is called.
-%   - Load declared module symbols from both <pdd-interface> and matching architecture.json.
-%   - If the prompt includes the output source file with a full <include>, return [].
+%   - Load declared module symbols from both &lt;pdd-interface&gt; and matching architecture.json.
+%   - If the prompt includes the output source file with a full &lt;include&gt;, return [].
 %   - If the prompt includes the output source file with select=/lines=/query= or
 %     mode="interface", require deterministic implementation context to cover every
 %     declared public symbol that already exists in output_path.
-%   - If a prompt-local <pdd-interface> declares symbols already present in
+%   - If a prompt-local &lt;pdd-interface&gt; declares symbols already present in
 %     output_path, the prompt has no self-include of output_path, and
 %     require_prompt_local_source_context=True, return a hard failure saying the
 %     prompt includes no existing module source context. This staged strict mode
@@ -212,15 +212,15 @@
 % ) -> List[str]
 %
 % Compare each architecture entry's "dependencies" (as path-preserving module
-% keys) with module targets of <include> tags in the corresponding prompt file.
+% keys) with module targets of &lt;include&gt; tags in the corresponding prompt file.
 %
-% A declared dependency is satisfied if the prompt either <include>s the
-% dependency's prompt OR declares it via <pdd-dependency>. Both are
+% A declared dependency is satisfied if the prompt either &lt;include&gt;s the
+% dependency's prompt OR declares it via &lt;pdd-dependency&gt;. Both are
 % architecture edges under the union semantics (see prompting_guide.md and
 % agentic_sync_identify_modules_LLM.prompt).
 %
-% The reverse direction (<include> of a module prompt without a matching
-% arch dep) still warns; drift between <pdd-dependency> tags and
+% The reverse direction (&lt;include&gt; of a module prompt without a matching
+% arch dep) still warns; drift between &lt;pdd-dependency&gt; tags and
 % architecture.json is handled by architecture_sync, not this check.
 %
 % Non-module includes (docs, preambles, etc.) are ignored via
@@ -241,9 +241,9 @@
 %      entry. This is a precomputed O(1)-per-dep index, not a per-call scan.
 %   3. For each entry with a valid filename and module key:
 %      a. Resolve prompt path; if file not found, emit a skip warning and continue.
-%      b. Extract <include> targets from the prompt file, filter to module prompt
+%      b. Extract &lt;include&gt; targets from the prompt file, filter to module prompt
 %         keys (via _module_prompt_include_target), excluding self.
-%      c. Extract <pdd-dependency> modules via _pdd_dependency_modules, passing
+%      c. Extract &lt;pdd-dependency&gt; modules via _pdd_dependency_modules, passing
 %         the shared dep_resolver so bare declarations resolve to their
 %         unambiguous path-qualified arch entries before keying.
 %      d. forward_declared = include_modules | tag_modules
@@ -257,13 +257,13 @@
 %      f. For each module in (arch_modules - forward_declared): emit forward
 %         mismatch warning including the dependency filename proof if available
 %         (preserving the original raw dep string in the message).
-%         Warning format: "architecture.json / <include> mismatch: {fn!r} declares
-%         dependency on module {d!r}{extra} but the prompt has no <include> or
-%         <pdd-dependency> of that module's prompt"
+%         Warning format: "architecture.json / &lt;include&gt; mismatch: {fn!r} declares
+%         dependency on module {d!r}{extra} but the prompt has no &lt;include&gt; or
+%         &lt;pdd-dependency&gt; of that module's prompt"
 %      g. For each module in (include_modules - arch_modules): emit reverse
 %         mismatch warning including the include path proof.
-%         Warning format: "architecture.json / <include> mismatch: {fn!r}
-%         <include>s module {i!r} ({inc_s!r}) but architecture.json dependencies
+%         Warning format: "architecture.json / &lt;include&gt; mismatch: {fn!r}
+%         &lt;include&gt;s module {i!r} ({inc_s!r}) but architecture.json dependencies
 %         do not list that module"
 %   4. Return list of warning strings (empty if no mismatches).
 
