@@ -1674,6 +1674,11 @@ def _run_final_checkup_on_pr(
             f"re-validating CI on new head...[/yellow]"
         )
 
+    # The checkup pushes from its OWN worktree (.pdd/worktrees/checkup-pr-N),
+    # so ``cwd``'s local HEAD is stale relative to the PR remote. Without the
+    # override below, ``run_ci_validation_loop`` would use ``_get_head_sha(cwd)``
+    # as the expected head and burn the poll timeout waiting for the remote
+    # to match a SHA it will never reach.
     revalidate_success, revalidate_message, revalidate_cost = run_ci_validation_loop(
         cwd=cwd,
         repo_owner=repo_owner,
@@ -1684,6 +1689,7 @@ def _run_final_checkup_on_pr(
         run_agentic_task_fn=run_agentic_task,
         timeout=ci_validation_timeout,
         quiet=quiet,
+        expected_head_sha_override=post_checkup_head_sha,
     )
 
     total_cost = checkup_cost + revalidate_cost

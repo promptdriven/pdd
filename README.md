@@ -2108,7 +2108,7 @@ You can configure environment-variable keys using `pdd setup` or by setting them
 
 #### Agentic E2E Fix Mode
 
-For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an 11-step iterative workflow to fix both unit tests and e2e tests across your codebase, including post-push CI validation and code cleanup.
+For fixing end-to-end tests that span multiple dev units, use the agentic E2E fix mode by passing a GitHub issue URL (typically created by `pdd bug`). This mode orchestrates an iterative 11-step workflow followed by a final PR-mode checkup gate, fixing both unit tests and e2e tests across your codebase, validating CI, and cleaning up code.
 
 **How it Works:**
 

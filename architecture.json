@@ -6207,9 +6207,23 @@
             ]
           },
           {
+            "name": "_fetch_pr_head_sha",
+            "signature": "(repo_owner: str, repo_name: str, pr_number: int) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Calls gh api repos/{owner}/{repo}/pulls/{n} via the shared _fetch_pr_metadata helper",
+              "Best-effort: returns empty string on any failure so callers can fail closed"
+            ]
+          },
+          {
             "name": "_run_final_checkup_on_pr",
-            "signature": "(*, issue_url: str, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float]) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]"
+            "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: str, ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]",
+            "sideEffects": [
+              "Snapshots PR remote head SHA before/after run_agentic_checkup",
+              "If the PR head SHA advanced (the checkup pushed fixes), re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
+              "Fails closed when either pre- or post-checkup head SHA cannot be fetched — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
+            ]
           }
         ]
       }
@@ -7818,8 +7832,11 @@
         "functions": [
           {
             "name": "run_ci_validation_loop",
-            "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet)",
-            "returns": "Tuple[bool, str, float]"
+            "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)",
+            "returns": "Tuple[bool, str, float]",
+            "sideEffects": [
+              "expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"
+            ]
           },
           {
             "name": "post_ci_failure_comment",

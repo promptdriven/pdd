@@ -9833,6 +9833,15 @@ class TestFinalCheckupPostCIMutationHole:
             "CI re-validation after checkup push must be verify-only "
             "(no further fixing on top of fixes)"
         )
+        # Round-4 Finding 1: the override is REQUIRED, not optional.
+        # Without it, run_ci_validation_loop reads _get_head_sha(cwd) — but
+        # the checkup pushed from a different worktree, so cwd's HEAD is
+        # stale. The poll would wait for the remote PR head to match the
+        # old local HEAD and burn the timeout.
+        assert (
+            ci_mock.call_args.kwargs["expected_head_sha_override"]
+            == "bbbbbbbb"
+        ), "CI re-validation must wait for the post-checkup remote head"
 
     def test_changed_head_revalidates_ci_and_fails_when_ci_fails(self, tmp_path):
         from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
