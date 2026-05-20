@@ -25,9 +25,10 @@ default (no API):
     pdd prompt lint --report formalization --json
 
 --live (real API keys):
-  Runs ``lib/live_pipeline.sh`` (bash): snapshots prompts/code/tests under
-  ``reports/artifacts/``, writes unified diffs under ``reports/diffs/``, then
-  clarify → ``pdd --force generate`` → ``pdd test`` → pytest.
+  Runs ``lib/live_pipeline.sh`` (bash): **before** clarify runs generate → test →
+  pytest on the codegen work copy; **clarify** applies ``--ambiguity --apply``;
+  **after** runs the same stack again. Snapshots and diffs cover prompts, ``src/``,
+  and ``tests/`` before vs after.
 """
 from __future__ import annotations
 
@@ -57,8 +58,10 @@ _VAGUE_NAME = "foo_vague_python.prompt"
 _FORMALIZED_NAME = "foo_formalized_python.prompt"
 _CODEGEN_NAME = "foo_codegen_python.prompt"
 _WORK_NAME = "foo_work_python.prompt"
-_SRC_NAME = "foo_work.py"
-_TEST_NAME = "test_foo_work.py"
+_SRC_BEFORE = "foo_work_before.py"
+_SRC_AFTER = "foo_work_after.py"
+_TEST_BEFORE = "test_foo_work_before.py"
+_TEST_AFTER = "test_foo_work_after.py"
 
 # Exit code reserved for "LLM unavailable" (over quota, auth-broken, no model
 # in the fallback chain answered). The pytest live test maps this to skip().
@@ -77,8 +80,10 @@ def _paths() -> dict[str, Path]:
         "formalized": root / "prompts" / _FORMALIZED_NAME,
         "codegen": root / "prompts" / _CODEGEN_NAME,
         "work": root / "prompts" / _WORK_NAME,
-        "src": root / "src" / _SRC_NAME,
-        "test": root / "tests" / _TEST_NAME,
+        "src_before": root / "src" / _SRC_BEFORE,
+        "src_after": root / "src" / _SRC_AFTER,
+        "test_before": root / "tests" / _TEST_BEFORE,
+        "test_after": root / "tests" / _TEST_AFTER,
         "reports": reports,
         "artifacts": reports / "artifacts",
         "diffs": reports / "diffs",
@@ -426,9 +431,15 @@ def _print_comparison(rows: list[dict[str, Any]]) -> None:
 
 
 def _cleanup(paths: dict[str, Path]) -> None:
-    for key in ("work", "src", "test"):
-        if paths[key].exists():
+    for key in ("work", "src_before", "src_after", "test_before", "test_after"):
+        if key in paths and paths[key].exists():
             paths[key].unlink()
+    for legacy in (
+        _DEMO_DIR / "src" / "foo_work.py",
+        _DEMO_DIR / "tests" / "test_foo_work.py",
+    ):
+        if legacy.exists():
+            legacy.unlink()
     for sub in ("src", "tests"):
         d = _DEMO_DIR / sub
         if not d.exists():
