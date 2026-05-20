@@ -1828,7 +1828,16 @@ def test_cloud_fix_errors_success(mock_get_jwt, mock_post):
     }
     mock_post.return_value = mock_response
 
-    update_ut, update_code, fixed_ut, fixed_code, analysis, cost, model = cloud_fix_errors(
+    (
+        update_ut,
+        update_code,
+        fixed_ut,
+        fixed_code,
+        analysis,
+        cost,
+        model,
+        attempted_models,
+    ) = cloud_fix_errors(
         unit_test="original unit test",
         code="original code",
         prompt="test prompt",
@@ -1848,6 +1857,8 @@ def test_cloud_fix_errors_success(mock_get_jwt, mock_post):
     assert analysis == "Analysis of fix"
     assert cost == 0.05
     assert model == "cloud-fix-model"
+    # Non-conforming server (no attemptedModels): degraded fallback chain.
+    assert attempted_models == ["cloud:cloud-fix-model"]
 
     # Verify request was made correctly
     mock_post.assert_called_once()
@@ -1979,7 +1990,8 @@ def test_fix_error_loop_uses_cloud_when_use_cloud_true(mock_pytest, mock_cloud_f
             "fixed code",
             "Cloud analysis",
             0.05,   # cost
-            "cloud-model"
+            "cloud-model",
+            ["cloud:cloud-model"],  # attempted_models (issue #1086)
         )
 
         success, final_ut, final_code, attempts, cost, model = fix_error_loop(

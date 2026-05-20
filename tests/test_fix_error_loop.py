@@ -1251,9 +1251,74 @@ def test_cloud_fix_errors_success(mock_cloud_config, mock_requests):
     result = cloud_fix_errors(
         "test", "code", "prompt", "error", "err_file", 0.5, 0.1
     )
-    
-    assert result == (True, True, "new_test", "new_code", "fixed it", 0.05, "cloud-gpt")
+
+    # Non-conforming server (no attemptedModels): degraded fallback chain
+    # is the single-entry [cloud:<modelName>].
+    assert result == (
+        True, True, "new_test", "new_code", "fixed it", 0.05, "cloud-gpt",
+        ["cloud:cloud-gpt"],
+    )
     mock_requests.post.assert_called_once()
+
+def test_cloud_fix_errors_parses_attempted_models(mock_cloud_config, mock_requests):
+    """Regression (PR #1087, issue #1086): the cloud /fixCode response
+    includes the full chronological cloud-side model chain in
+    `attemptedModels`. cloud_fix_errors MUST parse it and return it as
+    the 8th tuple slot, with each entry prefixed by `cloud:`. The
+    aliases `attempted_models` and `modelChain` are also accepted for
+    backward compatibility.
+    """
+    mock_cloud_config.get_jwt_token.return_value = "fake_token"
+    mock_cloud_config.get_endpoint_url.return_value = "http://api/fix"
+
+    # Canonical camelCase key.
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "updateUnitTest": True,
+        "updateCode": True,
+        "fixedUnitTest": "new_test",
+        "fixedCode": "new_code",
+        "analysis": "fixed it",
+        "totalCost": 0.05,
+        "modelName": "gemini-2.5-pro",
+        "attemptedModels": ["gemini-2.5-flash", "gemini-2.5-pro"],
+    }
+    mock_requests.post.return_value = mock_response
+
+    result = cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+
+    assert result[7] == ["cloud:gemini-2.5-flash", "cloud:gemini-2.5-pro"], (
+        f"Expected prefixed cloud chain in slot 7, got {result[7]!r}"
+    )
+
+    # snake_case alias.
+    mock_response.json.return_value = {
+        "updateUnitTest": True,
+        "updateCode": True,
+        "fixedUnitTest": "new_test",
+        "fixedCode": "new_code",
+        "analysis": "fixed it",
+        "totalCost": 0.05,
+        "modelName": "gpt-4o",
+        "attempted_models": ["gpt-4", "gpt-4o"],
+    }
+    result = cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+    assert result[7] == ["cloud:gpt-4", "cloud:gpt-4o"]
+
+    # Legacy modelChain alias.
+    mock_response.json.return_value = {
+        "updateUnitTest": True,
+        "updateCode": True,
+        "fixedUnitTest": "new_test",
+        "fixedCode": "new_code",
+        "analysis": "fixed it",
+        "totalCost": 0.05,
+        "modelName": "claude-sonnet",
+        "modelChain": ["claude-opus", "claude-sonnet"],
+    }
+    result = cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+    assert result[7] == ["cloud:claude-opus", "cloud:claude-sonnet"]
+
 
 def test_cloud_fix_errors_no_token(mock_cloud_config):
     """Test error when no JWT token is available."""
@@ -1371,7 +1436,7 @@ def test_fix_error_loop_cloud_mode(mock_subprocess, mock_cloud, mock_pytest, moc
     """Test that use_cloud=True calls cloud_fix_errors."""
     code, test, prompt = mock_files
     mock_pytest.side_effect = [(1, 0, 0, "Fail"), (0, 0, 0, "Pass")]
-    mock_cloud.return_value = (False, True, "", "cloud_code", "analysis", 0.2, "cloud-model")
+    mock_cloud.return_value = (False, True, "", "cloud_code", "analysis", 0.2, "cloud-model", ["cloud:cloud-model"])
     mock_subprocess.return_value.returncode = 0
     
     success, _, _, attempts, cost, _ = fix_error_loop(

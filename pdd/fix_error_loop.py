@@ -6,7 +6,7 @@ import shutil
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import List, Tuple, Optional
 
 import requests
 from rich import print as rprint
@@ -16,6 +16,7 @@ from rich.panel import Panel
 # Relative import from an internal module.
 from .get_language import get_language
 from .fix_errors_from_unit_tests import fix_errors_from_unit_tests
+from .llm_invoke import _propagate_attempted_models_to_ctx
 from . import DEFAULT_TIME  # Import DEFAULT_TIME
 from .python_env_detector import detect_host_python_executable
 from .agentic_fix import run_agentic_fix
@@ -52,7 +53,7 @@ def cloud_fix_errors(
     code_file_ext: str = ".py",
     protect_tests: bool = False,
     failure_classification: str | None = None,
-) -> Tuple[bool, bool, str, str, str, float, str]:
+) -> Tuple[bool, bool, str, str, str, float, str, List[str]]:
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
 
@@ -81,6 +82,12 @@ def cloud_fix_errors(
         - analysis: Analysis/explanation of fixes
         - total_cost: Cost of the operation
         - model_name: Name of model used
+        - attempted_models: Ordered list of cloud-side model identifiers
+          tried, each prefixed with ``cloud:``. Accepts the camelCase
+          ``attemptedModels``, snake_case ``attempted_models``, and legacy
+          ``modelChain`` response keys per the issue #1086 cloud contract;
+          falls back to ``[model_name]`` with a warning when none are
+          present (non-conforming server degraded mode).
 
     Raises:
         RuntimeError: When cloud execution fails with non-recoverable error
@@ -135,10 +142,32 @@ def cloud_fix_errors(
         update_unit_test = response_data.get("updateUnitTest", False)
         update_code = response_data.get("updateCode", False)
 
+        # Issue #1086 cloud contract: parse the chronological cloud-side model
+        # chain. Accept the canonical camelCase key plus snake_case and legacy
+        # `modelChain` aliases for backward compatibility, and degrade to a
+        # single-entry chain when the server is non-conforming.
+        raw_chain = (
+            response_data.get("attemptedModels")
+            or response_data.get("attempted_models")
+            or response_data.get("modelChain")
+        )
+        if not raw_chain:
+            console.print(
+                "[yellow]Cloud /fixCode response omitted attemptedModels "
+                "(issue #1086) — degrading to single-entry chain from "
+                "modelName.[/yellow]"
+            )
+            raw_chain = [model_name] if model_name else []
+        attempted_models = [
+            str(m) if str(m).startswith("cloud:") else f"cloud:{m}"
+            for m in raw_chain
+            if m
+        ]
+
         if verbose:
             console.print(f"[cyan]Cloud fix completed. Model: {model_name}, Cost: ${total_cost:.6f}[/cyan]")
 
-        return update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name
+        return update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name, attempted_models
 
     except requests.exceptions.Timeout:
         raise RuntimeError(f"Cloud fix timed out after {get_cloud_timeout()}s")
@@ -699,10 +728,24 @@ def fix_error_loop(unit_test_file: str,
             # Format the log for the LLM - includes local test results
             formatted_log = format_log_for_output(log_structure)
 
+            # attempted_models is only populated by the cloud path (8-tuple
+            # return); local fix_errors_from_unit_tests returns a 7-tuple and
+            # routes its chain through llm_invoke's own ctx propagation.
+            attempted_models: List[str] = []
+
             if use_cloud:
                 # Use cloud LLM for fix - local test results passed via formatted_log
                 try:
-                    updated_unit_test, updated_code, fixed_unit_test, fixed_code, analysis, cost, model_name = cloud_fix_errors(
+                    (
+                        updated_unit_test,
+                        updated_code,
+                        fixed_unit_test,
+                        fixed_code,
+                        analysis,
+                        cost,
+                        model_name,
+                        attempted_models,
+                    ) = cloud_fix_errors(
                         unit_test=unit_test_contents,
                         code=code_contents,
                         prompt=prompt,
@@ -716,6 +759,12 @@ def fix_error_loop(unit_test_file: str,
                         protect_tests=protect_tests,
                         failure_classification=failure_hint,
                     )
+                    # Surface the cloud-side chain on the active Click ctx
+                    # so the @track_cost decorator records it on the fix
+                    # command's cost.csv row even when the legacy 6-tuple
+                    # return shape of fix_main discards attempted_models.
+                    if attempted_models:
+                        _propagate_attempted_models_to_ctx(attempted_models)
                 except RuntimeError as cloud_err:
                     # Cloud failed - fall back to local if it's a recoverable error
                     if "Insufficient credits" in str(cloud_err) or "Authentication failed" in str(cloud_err) or "Access denied" in str(cloud_err):
