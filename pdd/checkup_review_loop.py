@@ -4363,8 +4363,25 @@ def _check_architecture_registry_edit_guard(
             # would otherwise slip past a ``.py``-only check while
             # remaining importable via
             # ``importlib.machinery.SourcelessFileLoader``.
+            #
+            # Round-9 finding: the suffix match must be
+            # case-insensitive. Python's own
+            # ``importlib.machinery`` suffix matching is
+            # case-insensitive on case-insensitive filesystems
+            # (Windows; macOS HFS+/APFS in default case-insensitive
+            # mode), so ``pdd/foo_v2.PY`` is importable as
+            # ``pdd.foo_v2`` exactly like ``pdd/foo_v2.py``. A
+            # case-sensitive ``str.endswith`` against the lowercase
+            # ``_IMPORTABLE_SUFFIXES`` tuple would let an uppercase
+            # or mixed-case suffix (``.PY``, ``.PYC``, ``.So``)
+            # slip past the scan. Lowercase the path side of the
+            # comparison; ``_IMPORTABLE_SUFFIXES`` is already
+            # lowercase so the tuple does not need re-casing.
             is_symlink = candidate.is_symlink()
-            if not is_symlink and not path.endswith(_IMPORTABLE_SUFFIXES):
+            if (
+                not is_symlink
+                and not path.lower().endswith(_IMPORTABLE_SUFFIXES)
+            ):
                 continue
             # Treat either a real file or a symlink as "present on
             # disk" — symlinks are themselves part of the #1081

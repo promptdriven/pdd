@@ -7344,6 +7344,121 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.pyw" in reason
 
+    def test_guard_refuses_uppercase_py_suffix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-9 follow-up: an uppercase ``pdd/foo_v2.PY`` is
+        importable as ``pdd.foo_v2`` on case-insensitive filesystems
+        (Windows; macOS HFS+/APFS in default case-insensitive mode)
+        because Python's ``importlib.machinery`` suffix matching is
+        case-insensitive. A case-sensitive ``str.endswith`` against
+        the lowercase ``_IMPORTABLE_SUFFIXES`` tuple would let the
+        bypass slip past the scan; lowercasing the path side of the
+        comparison closes the hole.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.PY").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.PY",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.PY" in reason
+
+    def test_guard_refuses_uppercase_pyc_suffix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-9 follow-up companion: an uppercase ``pdd/foo_v2.PYC``
+        slips past a case-sensitive ``.pyc`` check the same way ``.PY``
+        slips past ``.py``. The byte contents don't matter for the
+        scan — the filter only inspects the path string — so a stub
+        payload reproduces the importable-suffix shape.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.PYC").write_bytes(b"\x00\x00 stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.PYC",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.PYC" in reason
+
+    def test_guard_refuses_mixed_case_so_suffix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-9 follow-up belt-and-suspenders: a mixed-case
+        ``pdd/foo_v2.So`` native-extension suffix must also trip the
+        scan. Confirms the case-insensitive comparison handles every
+        mixed-case permutation, not just fully uppercase suffixes.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.So").write_bytes(b"\x7fELF stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.So",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.So" in reason
+
     def test_guard_allows_pdd_fixture_txt_under_broadened_filter(
         self, tmp_path: Path
     ) -> None:
