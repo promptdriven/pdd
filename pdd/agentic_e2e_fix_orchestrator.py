@@ -1573,9 +1573,20 @@ def _commit_and_push(
         return False, f"Push failed: {push_err}"
 
 
+def _fetch_pr_head_sha(repo_owner: str, repo_name: str, pr_number: int) -> str:
+    """Best-effort fetch of the PR's remote head SHA. Empty string on failure."""
+    try:
+        from .checkup_review_loop import _fetch_pr_metadata  # pylint: disable=import-outside-toplevel
+        metadata = _fetch_pr_metadata(repo_owner, repo_name, pr_number)
+    except Exception:  # noqa: BLE001 — best-effort; empty means "can't compare"
+        return ""
+    return str(metadata.get("head_sha", "") or "")
+
+
 def _run_final_checkup_on_pr(
     *,
     issue_url: str,
+    issue_number: int,
     repo_owner: str,
     repo_name: str,
     cwd: Path,
@@ -1584,8 +1595,18 @@ def _run_final_checkup_on_pr(
     timeout_adder: float,
     use_github_state: bool,
     reasoning_time: Optional[float],
+    ci_step_template: str,
+    ci_validation_timeout: float,
 ) -> Tuple[bool, str, float, str]:
-    """Run full PR-mode checkup against the current branch's open PR."""
+    """Run full PR-mode checkup against the current branch's open PR.
+
+    Closes the post-CI mutation hole: the final checkup gate runs with
+    ``no_fix=False`` and may push generated fixes to the PR head. CI passed
+    against the head SHA we observed before this call, so any push advances
+    the PR to code that has not been CI-validated. We snapshot the PR head
+    SHA before and after; if it advanced, we re-run ``run_ci_validation_loop``
+    with ``max_retries=0`` (verify-only — no further fixing on top of fixes).
+    """
     pr_number = _find_open_pr_number(repo_owner, repo_name, cwd)
     if pr_number is None:
         return (
@@ -1595,10 +1616,12 @@ def _run_final_checkup_on_pr(
             "",
         )
 
+    pre_checkup_head_sha = _fetch_pr_head_sha(repo_owner, repo_name, pr_number)
+
     pr_url = f"https://github.com/{repo_owner}/{repo_name}/pull/{pr_number}"
     from .agentic_checkup import run_agentic_checkup
 
-    return run_agentic_checkup(
+    checkup_success, checkup_message, checkup_cost, checkup_model = run_agentic_checkup(
         issue_url=issue_url,
         verbose=verbose,
         quiet=quiet,
@@ -1609,6 +1632,73 @@ def _run_final_checkup_on_pr(
         pr_url=pr_url,
         cwd=cwd,
     )
+
+    if not checkup_success:
+        return checkup_success, checkup_message, checkup_cost, checkup_model
+
+    if not pre_checkup_head_sha:
+        # Fail closed: without the pre-checkup SHA we cannot tell whether the
+        # checkup pushed new commits on top of the CI-validated head. Returning
+        # success here would re-introduce the post-CI mutation hole.
+        return (
+            False,
+            (
+                "Final checkup completed but the pre-checkup PR head SHA was "
+                "unavailable; cannot verify whether checkup pushed new commits "
+                "that bypass CI. Re-run after confirming gh access."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+
+    post_checkup_head_sha = _fetch_pr_head_sha(repo_owner, repo_name, pr_number)
+    if not post_checkup_head_sha:
+        return (
+            False,
+            (
+                "Final checkup completed but the post-checkup PR head SHA was "
+                "unavailable; cannot verify whether checkup pushed new commits "
+                "that bypass CI. Re-run after confirming gh access."
+            ),
+            checkup_cost,
+            checkup_model,
+        )
+
+    if post_checkup_head_sha == pre_checkup_head_sha:
+        return checkup_success, checkup_message, checkup_cost, checkup_model
+
+    if not quiet:
+        console.print(
+            f"[yellow]Final checkup advanced PR head "
+            f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}); "
+            f"re-validating CI on new head...[/yellow]"
+        )
+
+    revalidate_success, revalidate_message, revalidate_cost = run_ci_validation_loop(
+        cwd=cwd,
+        repo_owner=repo_owner,
+        repo_name=repo_name,
+        issue_number=issue_number,
+        max_retries=0,
+        step_template=ci_step_template,
+        run_agentic_task_fn=run_agentic_task,
+        timeout=ci_validation_timeout,
+        quiet=quiet,
+    )
+
+    total_cost = checkup_cost + revalidate_cost
+    if not revalidate_success:
+        return (
+            False,
+            (
+                f"Final checkup pushed fixes ({pre_checkup_head_sha[:8]}->"
+                f"{post_checkup_head_sha[:8]}) but post-push CI re-validation "
+                f"failed: {revalidate_message}"
+            ),
+            total_cost,
+            checkup_model,
+        )
+    return True, checkup_message, total_cost, checkup_model
 
 
 def _run_step11_code_cleanup(
@@ -2958,6 +3048,7 @@ def run_agentic_e2e_fix_orchestrator(
                 checkup_success, checkup_message, checkup_cost, checkup_model = (
                     _run_final_checkup_on_pr(
                         issue_url=issue_url,
+                        issue_number=issue_number,
                         repo_owner=repo_owner,
                         repo_name=repo_name,
                         cwd=cwd,
@@ -2966,6 +3057,8 @@ def run_agentic_e2e_fix_orchestrator(
                         timeout_adder=timeout_adder,
                         use_github_state=use_github_state,
                         reasoning_time=reasoning_time,
+                        ci_step_template=step10_template,
+                        ci_validation_timeout=E2E_FIX_STEP_TIMEOUTS[10] + timeout_adder,
                     )
                 )
                 total_cost += checkup_cost

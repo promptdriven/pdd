@@ -5484,6 +5484,10 @@ class TestStep11CodeCleanup:
             return_value=77,
             create=True,
         ), patch(
+            # Same SHA before/after → no push happened, no CI re-validation.
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            return_value="aaaaaaaa",
+        ), patch(
             "pdd.agentic_checkup.run_agentic_checkup",
             return_value=(True, "Checkup complete", 0.0, "model"),
         ) as checkup_mock:
@@ -9701,11 +9705,15 @@ class TestFinalCheckupForwardsCwd:
             "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
             return_value=200,
         ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            return_value="aaaaaaaa",
+        ), patch(
             "pdd.agentic_checkup.run_agentic_checkup",
             return_value=(True, "ok", 0.0, "fake-model"),
         ) as checkup_mock:
             _run_final_checkup_on_pr(
                 issue_url="https://github.com/o/r/issues/99",
+                issue_number=99,
                 repo_owner="o",
                 repo_name="r",
                 cwd=tmp_path,
@@ -9714,6 +9722,8 @@ class TestFinalCheckupForwardsCwd:
                 timeout_adder=0.0,
                 use_github_state=False,
                 reasoning_time=None,
+                ci_step_template="ignored",
+                ci_validation_timeout=60.0,
             )
 
         assert checkup_mock.call_args.kwargs["cwd"] == tmp_path
@@ -9727,6 +9737,7 @@ class TestFinalCheckupForwardsCwd:
         ), patch("pdd.agentic_checkup.run_agentic_checkup") as checkup_mock:
             success, msg, _cost, _model = _run_final_checkup_on_pr(
                 issue_url="https://github.com/o/r/issues/99",
+                issue_number=99,
                 repo_owner="o",
                 repo_name="r",
                 cwd=tmp_path,
@@ -9735,8 +9746,194 @@ class TestFinalCheckupForwardsCwd:
                 timeout_adder=0.0,
                 use_github_state=False,
                 reasoning_time=None,
+                ci_step_template="ignored",
+                ci_validation_timeout=60.0,
             )
 
         assert success is True
         assert "No open PR" in msg
         assert not checkup_mock.called
+
+
+class TestFinalCheckupPostCIMutationHole:
+    """Codex round-3 FM1: final checkup must re-validate CI when it pushes.
+
+    The final checkup runs with ``no_fix=False`` after CI has already passed
+    on the pre-checkup PR head. If the checkup pushes additional fixes, the
+    PR head SHA advances to code that CI never validated. These tests lock
+    in the contract: the orchestrator snapshots head SHA before/after; only
+    if it changed does it re-run CI with ``max_retries=0`` (verify-only).
+    """
+
+    def _common_args(self, tmp_path):
+        return dict(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_number=99,
+            repo_owner="o",
+            repo_name="r",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            timeout_adder=0.0,
+            use_github_state=False,
+            reasoning_time=None,
+            ci_step_template="ignored",
+            ci_validation_timeout=60.0,
+        )
+
+    def test_unchanged_head_skips_ci_revalidation(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "aaaaaaaa"],
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is True
+        assert msg == "checkup ok"
+        assert cost == 0.5
+        assert not ci_mock.called, "CI must not re-run when PR head is unchanged"
+
+    def test_changed_head_revalidates_ci_and_succeeds_when_ci_passes(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "bbbbbbbb"],
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.1),
+        ) as ci_mock:
+            success, msg, cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is True
+        assert msg == "checkup ok"
+        assert cost == pytest.approx(0.6)
+        ci_mock.assert_called_once()
+        assert ci_mock.call_args.kwargs["max_retries"] == 0, (
+            "CI re-validation after checkup push must be verify-only "
+            "(no further fixing on top of fixes)"
+        )
+
+    def test_changed_head_revalidates_ci_and_fails_when_ci_fails(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "bbbbbbbb"],
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(False, "Required check 'lint' failed", 0.0),
+        ):
+            success, msg, cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is False
+        assert "pushed fixes" in msg
+        assert "post-push CI re-validation failed" in msg
+        assert "aaaaaaaa" in msg and "bbbbbbbb" in msg
+        assert cost == pytest.approx(0.5)
+
+    def test_missing_pre_head_sha_fails_closed(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["", "bbbbbbbb"],
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is False, (
+            "Missing pre-checkup SHA must fail closed — otherwise we'd "
+            "silently re-introduce the post-CI mutation hole"
+        )
+        assert "pre-checkup PR head SHA" in msg
+        assert not ci_mock.called
+
+    def test_missing_post_head_sha_fails_closed(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", ""],
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is False
+        assert "post-checkup PR head SHA" in msg
+        assert not ci_mock.called
+
+    def test_failed_checkup_short_circuits_before_revalidation(self, tmp_path):
+        """When the checkup itself fails, we propagate the failure as-is and
+        do NOT compare head SHAs or re-run CI — there's no push to verify."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            return_value="aaaaaaaa",
+        ) as sha_mock, patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(False, "Step 7 gate failed", 0.3, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, cost, _model = _run_final_checkup_on_pr(
+                **self._common_args(tmp_path)
+            )
+
+        assert success is False
+        assert msg == "Step 7 gate failed"
+        assert cost == 0.3
+        assert not ci_mock.called
+        # Only the pre-checkup SHA is fetched; the post-checkup fetch must
+        # not happen because the checkup failed before any push.
+        assert sha_mock.call_count == 1

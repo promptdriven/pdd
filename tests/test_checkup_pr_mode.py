@@ -801,7 +801,7 @@ class TestPrModeFixPushBack:
         push_mock.assert_called_once()
         assert push_mock.call_args.args[0] == wt
 
-    def test_pr_mode_posts_final_report_only_after_successful_push(
+    def test_pr_mode_successful_push_posts_report_in_correct_order(
         self, tmp_path: Path
     ) -> None:
         from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
@@ -1481,8 +1481,18 @@ class TestPrModePushFailureDiagnostics:
             "Persisted step_outputs['pr_push'] must include the local "
             f"commit SHA; got: {saved_pr_push!r}"
         )
-        pr_comment_mock.assert_not_called()
-        issue_comment_mock.assert_not_called()
+        # Codex round-3 FM2: the canonical PR/issue report MUST post on
+        # the push-failure path too. Step 7 ran and produced a verdict;
+        # silencing the report leaves downstream consumers (pdd-issue,
+        # reviewers) with no record of what was checked. The body must
+        # include the enriched push-failure diagnostic via the PR Push
+        # Status section (``_format_pr_mode_final_report``).
+        pr_comment_mock.assert_called_once()
+        body = pr_comment_mock.call_args.args[3]
+        assert "PR Push Status" in body
+        assert str(wt) in body
+        assert "local_commit_sha_222" in body
+        issue_comment_mock.assert_called_once()
 
     def test_push_failure_message_handles_empty_rev_parse_sha(
         self, tmp_path: Path
@@ -2508,3 +2518,413 @@ class TestStep7GateInIssueMode:
         assert step7_count == MAX_FIX_VERIFY_ITERATIONS, executed
         assert 8 not in executed
         clear_mock.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Codex round-3 FM2: canonical PR/issue report must post on every PR-mode
+# return path where Step 7 produced a verdict.
+#
+# Step 7's PR-mode prompt suppresses agent commenting because the
+# orchestrator owns the canonical report. Until this round, the orchestrator
+# only posted it after a successful fix-mode push — leaving --no-fix,
+# gate-fail, guard-refusal, and push-failure paths silent.
+# ---------------------------------------------------------------------------
+
+
+class TestCanonicalReportOnEveryPRModeReturnPath:
+    """Each PR-mode return path that has run Step 7 must post the canonical
+    report via ``_post_pr_mode_final_report``.
+
+    Tests patch ``post_pr_comment`` and assert it was called with the
+    PR-mode targets (owner, repo, number) and a body derived from the
+    Step 7 verdict.
+    """
+
+    _GATE_PASS_STEP7 = (
+        "## Verification\n"
+        "issue_aligned: true\n"
+        "All Issues Fixed\n"
+        '```json\n{"success": true, "issue_aligned": true, "issues": []}\n```'
+    )
+
+    _GATE_FAIL_STEP7 = (
+        "## Verification\n"
+        "issue_aligned: false\n"
+        '```json\n{"success": false, "issue_aligned": false, '
+        '"issues": [{"severity": "critical", "fixed": false}]}\n```'
+    )
+
+    def _common_kwargs(self, tmp_path: Path) -> dict:
+        return dict(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_content="stub",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=99,
+            issue_title="stub",
+            architecture_json="{}",
+            pddrc_content="",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            timeout_adder=0.0,
+            use_github_state=True,
+            pr_url="https://github.com/o/r/pull/200",
+            pr_owner="o",
+            pr_repo="r",
+            pr_number=200,
+        )
+
+    def _setup_pr_mode_patches(self, tmp_path: Path, step_side_effect):
+        """Bundle of patches every PR-mode orchestrator test needs."""
+        wt = tmp_path / "wt"
+        wt.mkdir(exist_ok=True)
+        return [
+            patch(
+                "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+                return_value=(wt, None),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._run_single_step",
+                side_effect=step_side_effect,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.load_workflow_state",
+                return_value=(None, None),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.save_workflow_state",
+                return_value=None,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={
+                    "clone_url": "https://github.com/o/r.git",
+                    "head_ref": "change/test",
+                    "head_owner": "o",
+                    "head_repo": "r",
+                    "head_sha": "deadbeef",
+                },
+            ),
+        ]
+
+    @staticmethod
+    def _enter_all(patchers):
+        return [p.__enter__() for p in patchers]
+
+    @staticmethod
+    def _exit_all(patchers):
+        for p in patchers:
+            p.__exit__(None, None, None)
+
+    def test_no_fix_gate_pass_posts_canonical_report(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        step_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_step_comment",
+                step_comment_mock,
+            ),
+        ]
+
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = True
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is True
+        pr_comment_mock.assert_called_once()
+        # post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+        args = pr_comment_mock.call_args.args
+        assert args[0] == "o"
+        assert args[1] == "r"
+        assert args[2] == 200
+        assert "issue_aligned: true" in args[3]
+
+    def test_no_fix_gate_fail_posts_canonical_report(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_FAIL_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+        ]
+
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = True
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        pr_comment_mock.assert_called_once(), (
+            "Gate-fail must still post the canonical report — Step 7 ran, "
+            "downstream consumers need the verdict in writing"
+        )
+        body = pr_comment_mock.call_args.args[3]
+        assert "issue_aligned: false" in body
+
+    def test_fix_mode_gate_fail_posts_canonical_report(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_FAIL_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+                return_value=(True, "Pushed fixes to PR branch."),
+            ),
+        ]
+
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = False
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        pr_comment_mock.assert_called_once(), (
+            "Fix-mode gate-fail must post the canonical report — Step 7 "
+            "produced a verdict before the gate blocked the push"
+        )
+
+    def test_registry_refusal_posts_canonical_report(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+                return_value="REFUSED: architecture-registry edit detected",
+            ),
+        ]
+
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = False
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        assert "REFUSED" in msg
+        pr_comment_mock.assert_called_once(), (
+            "Registry-guard refusal must post the canonical report — "
+            "Step 7 verdict is still meaningful even when the push is "
+            "blocked"
+        )
+        body = pr_comment_mock.call_args.args[3]
+        assert "REFUSED" in body, (
+            "Refusal reason must surface in the PR comment, not just "
+            "the Step 7 verdict"
+        )
+
+    def test_prompt_source_refusal_posts_canonical_report(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+                return_value="",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+                return_value="REFUSED: prompt-source edit detected",
+            ),
+        ]
+
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = False
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        assert "REFUSED" in msg
+        pr_comment_mock.assert_called_once(), (
+            "Prompt-source-guard refusal must post the canonical report"
+        )
+        body = pr_comment_mock.call_args.args[3]
+        assert "REFUSED" in body, (
+            "Refusal reason must surface in the PR comment, not just "
+            "the Step 7 verdict"
+        )
+
+    def test_push_failure_posts_canonical_report(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+                return_value="",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+                return_value="",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+                return_value=(False, "Push failed: remote rejected"),
+            ),
+        ]
+
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = False
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        assert "Push failed" in msg
+        pr_comment_mock.assert_called_once(), (
+            "Push failure must still post the canonical report — Step 7 "
+            "ran successfully; the failure is downstream of the verdict"
+        )
+
+    def test_post_push_reverify_failure_posts_canonical_report(
+        self, tmp_path: Path
+    ) -> None:
+        """When ``_commit_and_push_if_changed`` rebases onto an advancing PR
+        head, the orchestrator re-runs Step 7 against the rebased tree. If
+        that reverify fails the gate, the orchestrator must still post the
+        canonical report — Step 7 produced a verdict (the rebased one),
+        which downstream consumers need."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        step7_outputs = iter([self._GATE_PASS_STEP7, self._GATE_FAIL_STEP7])
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, next(step7_outputs), 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._setup_pr_mode_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+                return_value="",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+                return_value="",
+            ),
+            patch(
+                # Push succeeds AND signals a rebase — this is the trigger
+                # for ``_run_post_push_reverify_if_needed`` to re-run Step 7.
+                "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+                return_value=(
+                    True,
+                    "Pushed fixes to PR branch after rebasing onto updated PR head.",
+                ),
+            ),
+        ]
+
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = False
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False, (
+            "Post-push reverify must fail the workflow when the rebased "
+            "tree no longer satisfies the gate"
+        )
+        pr_comment_mock.assert_called_once(), (
+            "Post-push reverify failure must post the canonical report — "
+            "Step 7 ran (twice); downstream consumers need the rebased "
+            "verdict in writing"
+        )
+        body = pr_comment_mock.call_args.args[3]
+        # The body should reflect the rebased (failing) Step 7 verdict,
+        # not the pre-push (passing) one — ``_run_single_step`` refreshes
+        # ``step_outputs["7"]`` each call.
+        assert "issue_aligned: false" in body

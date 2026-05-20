@@ -58,7 +58,9 @@ from ..core.errors import handle_error
     type=str,
     default=None,
     help=(
-        "PR-mode: verify this existing pull request instead of creating a new one. "
+        "PR-mode: run the full checkup against this existing pull request "
+        "instead of creating a new one. Unless --no-fix is set, eligible "
+        "generated fixes are committed and pushed back to the PR head ref. "
         "Requires --issue. TARGET must NOT be passed."
     ),
 )
@@ -252,8 +254,11 @@ def checkup(
 
     \b
     GitHub mode (default): TARGET is an issue URL.
-    PR mode: pass --pr <pr-url> and --issue <issue-url> to verify an existing PR
-             against its source issue without creating a new PR.
+    PR mode: pass --pr <pr-url> and --issue <issue-url> to run the full
+             checkup against an existing PR. Unless --no-fix is set, the
+             fix/verify loop runs against the PR worktree and any eligible
+             generated fixes are committed and pushed back to the PR head
+             ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
     """

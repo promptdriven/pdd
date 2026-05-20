@@ -1342,7 +1342,19 @@ def run_agentic_checkup_orchestrator(
                 console.print(
                     f"[red]Step 7 gate failed (--no-fix): {nofix_gate_reason}[/red]"
                 )
+            # Post the canonical PR/issue final report even when the gate
+            # fails: Step 7's PR-mode prompt suppresses agent commenting
+            # because the orchestrator owns the report. Skipping the post
+            # here leaves downstream consumers (pdd-issue, reviewers) with
+            # no record of what was checked or why it failed.
+            _post_pr_mode_final_report(nofix_step7_output)
             return False, nofix_gate_reason, total_cost, last_model_used
+
+        # No-fix gate passed: post the canonical report so PR consumers see
+        # the verification verdict. The fix-mode equivalent runs after the
+        # push at the bottom of this function; the no-fix path never pushes,
+        # so we post here.
+        _post_pr_mode_final_report(nofix_step7_output)
 
     else:
         # --- Fix mode: iterative loop over steps 3-7 ---
@@ -1477,6 +1489,11 @@ def run_agentic_checkup_orchestrator(
                 step_outputs["8"] = f"Skipped step 8 because: {max_reason}"
                 context["step8_output"] = step_outputs["8"]
             _save_state()
+            # Step 7's PR-mode prompt suppresses agent commenting because
+            # the orchestrator owns the canonical report. Post it here so
+            # the PR thread records the max-iteration verdict instead of
+            # going silent.
+            _post_pr_mode_final_report(step_outputs.get("7", step7_output))
             return False, max_reason, total_cost, last_model_used
 
         # --------------------------------------------------------------
@@ -1506,6 +1523,11 @@ def run_agentic_checkup_orchestrator(
             # operators) see the gate fired instead of receiving a
             # success message for a checkup that did not pass.
             _save_state()
+            # Step 7's PR-mode prompt suppresses agent commenting because
+            # the orchestrator owns the canonical report. Post it on the
+            # gate-fail path too so the PR thread shows the verdict
+            # instead of going silent.
+            _post_pr_mode_final_report(step_outputs.get("7", step7_output))
             return False, gate_reason, total_cost, last_model_used
 
         # ==============================================================
@@ -1543,6 +1565,10 @@ def run_agentic_checkup_orchestrator(
                     step_outputs["pr_push"] = registry_refusal
                     context["pr_push_output"] = registry_refusal
                     _save_state()
+                    # Step 7 already ran successfully; the registry guard
+                    # blocks the push, not the verdict. Post the canonical
+                    # report so the PR records why the push was refused.
+                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
                     return False, registry_refusal, total_cost, last_model_used
 
                 prompt_refusal = _check_prompt_source_guard(
@@ -1556,6 +1582,11 @@ def run_agentic_checkup_orchestrator(
                     step_outputs["pr_push"] = prompt_refusal
                     context["pr_push_output"] = prompt_refusal
                     _save_state()
+                    # Step 7 already ran successfully; the prompt-source
+                    # guard blocks the push, not the verdict. Post the
+                    # canonical report so the PR records why the push was
+                    # refused.
+                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
                     return False, prompt_refusal, total_cost, last_model_used
 
                 push_ok, push_message = _commit_and_push_if_changed(
@@ -1592,11 +1623,22 @@ def run_agentic_checkup_orchestrator(
                     step_outputs["pr_push"] = enriched
                     context["pr_push_output"] = enriched
                     _save_state()
+                    # Step 7 already ran successfully; the push itself
+                    # failed. Post the canonical report so the PR records
+                    # the verdict and the enriched failure context.
+                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
                     return False, enriched, total_cost, last_model_used
                 if not quiet:
                     console.print(f"[green]{push_message}[/green]")
                 post_push_abort = _run_post_push_reverify_if_needed(push_message)
                 if post_push_abort is not None:
+                    # Step 7 ran twice (pre-push + post-rebase reverify).
+                    # The reverify produced a verdict before failing; post
+                    # the canonical report so PR consumers see the failure
+                    # context. ``step_outputs["7"]`` is refreshed by
+                    # ``_run_single_step``'s persistence so it reflects the
+                    # latest (post-rebase) verdict.
+                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
                     return post_push_abort
                 _post_pr_mode_final_report(step_outputs.get("7", step7_output))
             if 8 >= start_step:

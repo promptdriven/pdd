@@ -2125,6 +2125,7 @@ The workflow analyzes the GitHub issue to extract test information, then iterati
 9. **Verify All**: Final verification that all tests pass locally
 10. **CI Validation**: Poll external CI, retrieve logs on failure, and run an LLM fix loop to remediate CI-specific issues (lint, artifacts, build)
 11. **Code Cleanup**: Review all changes from the workflow and clean up code quality issues (debug statements, unused imports, duplicated code); revert if tests fail
+12. **Final PR Checkup Gate**: After CI passes, run the full `pdd checkup --pr` against the PR head. If the checkup pushes additional fixes, CI is re-validated on the new head before the workflow returns success
 
 **Resumable Operations:**
 
