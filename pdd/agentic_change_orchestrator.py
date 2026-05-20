@@ -1937,19 +1937,23 @@ def run_agentic_change_orchestrator(
             state["last_completed_step"] = step_num
             try:
                 report_body = extract_step_report(step_output)
-                if report_body:
-                    comment_body = (
-                        f"## Step {step_num}/13: {description}\n\n{report_body}"
+                if not report_body:
+                    report_body = (
+                        f"_Step {step_num} completed; no `<step_report>` block "
+                        "returned by agent. Raw output retained in workflow state._"
                     )
-                    post_step_comment_once(
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        issue_number=issue_number,
-                        step_num=step_num,
-                        body=comment_body,
-                        posted_steps=step_comments_set,
-                        cwd=current_work_dir,
-                    )
+                comment_body = (
+                    f"## Step {step_num}/13: {description}\n\n{report_body}"
+                )
+                post_step_comment_once(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=step_num,
+                    body=comment_body,
+                    posted_steps=step_comments_set,
+                    cwd=current_work_dir,
+                )
             except Exception as exc:  # pylint: disable=broad-except
                 console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
             state["step_comments"] = sorted(step_comments_set)
@@ -2000,17 +2004,21 @@ def run_agentic_change_orchestrator(
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
             try:
                 s11_report = extract_step_report(s11_output)
-                if s11_report:
-                    post_step_comment_once(
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        issue_number=issue_number,
-                        step_num=review_iteration * 100 + 11,
-                        body=f"## Step 11/13: Review (iteration {review_iteration})\n\n{s11_report}",
-                        posted_steps=step_comments_set,
-                        cwd=current_work_dir,
+                if not s11_report:
+                    s11_report = (
+                        "_Step 11 completed; no `<step_report>` block returned "
+                        "by agent. Raw output retained in workflow state._"
                     )
-                    state["step_comments"] = sorted(step_comments_set)
+                post_step_comment_once(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=review_iteration * 100 + 11,
+                    body=f"## Step 11/13: Review (iteration {review_iteration})\n\n{s11_report}",
+                    posted_steps=step_comments_set,
+                    cwd=current_work_dir,
+                )
+                state["step_comments"] = sorted(step_comments_set)
             except Exception as exc:  # pylint: disable=broad-except
                 console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
             if _review_loop_no_issues(s11_output):
@@ -2034,17 +2042,21 @@ def run_agentic_change_orchestrator(
             state["previous_fixes"] = previous_fixes
             try:
                 s12_report = extract_step_report(s12_output)
-                if s12_report:
-                    post_step_comment_once(
-                        repo_owner=repo_owner,
-                        repo_name=repo_name,
-                        issue_number=issue_number,
-                        step_num=review_iteration * 100 + 12,
-                        body=f"## Step 12/13: Fix (iteration {review_iteration})\n\n{s12_report}",
-                        posted_steps=step_comments_set,
-                        cwd=current_work_dir,
+                if not s12_report:
+                    s12_report = (
+                        "_Step 12 completed; no `<step_report>` block returned "
+                        "by agent. Raw output retained in workflow state._"
                     )
-                    state["step_comments"] = sorted(step_comments_set)
+                post_step_comment_once(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=review_iteration * 100 + 12,
+                    body=f"## Step 12/13: Fix (iteration {review_iteration})\n\n{s12_report}",
+                    posted_steps=step_comments_set,
+                    cwd=current_work_dir,
+                )
+                state["step_comments"] = sorted(step_comments_set)
             except Exception as exc:  # pylint: disable=broad-except
                 console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
             save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
@@ -2160,17 +2172,21 @@ def run_agentic_change_orchestrator(
              return False, "PR Creation failed", total_cost, model_used, changed_files
         try:
             s13_report = extract_step_report(s13_output)
-            if s13_report:
-                post_step_comment_once(
-                    repo_owner=repo_owner,
-                    repo_name=repo_name,
-                    issue_number=issue_number,
-                    step_num=13,
-                    body=f"## Step 13/13: Create PR and link to issue\n\n{s13_report}",
-                    posted_steps=step_comments_set,
-                    cwd=current_work_dir,
+            if not s13_report:
+                s13_report = (
+                    "_Step 13 completed; no `<step_report>` block returned "
+                    "by agent. Raw output retained in workflow state._"
                 )
-                state["step_comments"] = sorted(step_comments_set)
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=13,
+                body=f"## Step 13/13: Create PR and link to issue\n\n{s13_report}",
+                posted_steps=step_comments_set,
+                cwd=current_work_dir,
+            )
+            state["step_comments"] = sorted(step_comments_set)
         except Exception as exc:  # pylint: disable=broad-except
             console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
         pr_url = "Unknown"; url_match = re.search(r"https://github.com/\S+/pull/\d+", s13_output)

@@ -491,7 +491,10 @@ def run_agentic_test_orchestrator(
         try:
             report_body = extract_step_report(step_output)
             if not report_body:
-                return
+                report_body = (
+                    f"_Step {step_num} completed; no `<step_report>` block "
+                    "returned by agent. Raw output retained in workflow state._"
+                )
             comment_body = (
                 f"## Step {step_num}/18: {description}\n\n{report_body}"
             )

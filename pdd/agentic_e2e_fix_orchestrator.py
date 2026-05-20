@@ -2484,20 +2484,25 @@ def run_agentic_e2e_fix_orchestrator(
                     last_completed_step = step_num
                     try:
                         _report_body = extract_step_report(step_output)
-                        if _report_body:
-                            _step_desc = STEP_DESCRIPTIONS.get(step_num, "")
-                            _comment_body = (
-                                f"## Step {step_num}/11: {_step_desc}\n\n{_report_body}"
+                        if not _report_body:
+                            _report_body = (
+                                f"_Step {step_num} completed; no `<step_report>` "
+                                "block returned by agent. Raw output retained in "
+                                "workflow state._"
                             )
-                            post_step_comment_once(
-                                repo_owner=repo_owner,
-                                repo_name=repo_name,
-                                issue_number=issue_number,
-                                step_num=current_cycle * 10000 + step_num,
-                                body=_comment_body,
-                                posted_steps=step_comments_set,
-                                cwd=cwd,
-                            )
+                        _step_desc = STEP_DESCRIPTIONS.get(step_num, "")
+                        _comment_body = (
+                            f"## Step {step_num}/11: {_step_desc}\n\n{_report_body}"
+                        )
+                        post_step_comment_once(
+                            repo_owner=repo_owner,
+                            repo_name=repo_name,
+                            issue_number=issue_number,
+                            step_num=current_cycle * 10000 + step_num,
+                            body=_comment_body,
+                            posted_steps=step_comments_set,
+                            cwd=cwd,
+                        )
                     except Exception as _exc:  # pylint: disable=broad-except
                         console.print(f"[yellow]post_step_comment_once failed: {_exc}[/yellow]")
                 else:

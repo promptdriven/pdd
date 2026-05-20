@@ -5371,7 +5371,7 @@ class TestTrustedStepCommentPosting:
             assert isinstance(c.kwargs["step_num"], int)
             assert "posted_steps" in c.kwargs
 
-    def test_step_report_missing_does_not_call_helper(self, mock_dependencies, temp_cwd):
+    def test_step_report_missing_posts_fallback_comment(self, mock_dependencies, temp_cwd):
         mocks = mock_dependencies
         mock_run = mocks["run"]
 
@@ -5406,7 +5406,12 @@ class TestTrustedStepCommentPosting:
             )
 
         assert success is True
-        assert mock_post_once.call_count == 0
+        assert mock_post_once.call_count >= 10
+        assert any(
+            "no `<step_report>` block returned by agent" in c.kwargs["body"]
+            and "Raw output retained in workflow state" in c.kwargs["body"]
+            for c in mock_post_once.call_args_list
+        )
 
     def test_post_exception_does_not_break_run(self, mock_dependencies, temp_cwd):
         mocks = mock_dependencies
