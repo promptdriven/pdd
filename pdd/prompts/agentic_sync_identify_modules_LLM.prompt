@@ -129,38 +129,66 @@ Review the `dependencies` field for each identified module in architecture.json.
 
 ### Authoritative Source Rule (HARD BOUNDARY)
 
-The **prompt file's `<pdd-dependency>` tags are the single source of truth** for architectural
-dependencies. `architecture.json` is a derived view; the prompt's `<pdd-dependency>` declarations
-must always win.
+The **prompt file is the single source of truth** for architectural dependencies.
+`architecture.json` is a derived view; the prompt's declarations must always win.
+A dependency edge can be declared by the prompt in either of two ways, and the
+re-convergence code (`_declared_prompt_dependencies` in `pdd/agentic_sync.py`) treats
+them as a **union**:
 
-- A dependency belongs in `architecture.json["dependencies"]` **if and only if** the prompt file
-  declares it via `<pdd-dependency>NAME_lang.prompt</pdd-dependency>`.
-- `<include>` directives (in any form, including `mode="interface"`, `select="def:..."`,
-  `select="class:..."`, `select="lines:..."`, `query="..."`, or a plain full-file include) are
-  **LLM context only** and MUST NOT be treated as architectural dependencies.
-  - Pulling in a helper's interface for the model to read does not make that helper a
-    dependency edge. Only `<pdd-dependency>` does.
-- MUST NOT propose adding a dependency to `architecture.json` unless the prompt file already
-  declares it with `<pdd-dependency>`.
+1. A `<pdd-dependency>NAME_lang.prompt</pdd-dependency>` tag, OR
+2. An `<include>` directive whose effective target is another **module prompt** — i.e.
+   the target ends in `.prompt` and names an architecture module. Module-prompt
+   `<include>`s are architectural edges **regardless of attributes** (`mode="interface"`,
+   `select="def:..."`, `select="class:..."`, `select="lines:..."`, `query="..."`, plain
+   full-file include, or self-closing `<include path="..." />`). The validator
+   (`cross_validate_architecture_with_prompt_includes`) requires the architecture entry
+   to list any module prompt referenced by `<include>`, so stripping these would
+   re-create the inverse #1061 drift.
+
+Only **non-prompt source-file `<include>`s** (e.g. `pdd/foo.py`, `context/example.py`)
+are LLM context only. For those, an `<include>` carrying any of `mode="interface"`,
+non-empty `select=`, non-empty `query=`, or non-empty `lines=` is **context only** and
+MUST NOT be treated as an architectural dependency. A plain full-file `<include>` of a
+non-prompt source file is also context only.
+
+In short:
+- `<include>...module_prompt_lang.prompt</include>` → **always an architecture edge**, even
+  with `mode="interface"` / `select=` / `query=` / `lines=` / `path=`.
+- `<include select="def:x" mode="interface">pdd/foo.py</include>` → **context only**, NOT
+  an architecture edge.
+
+Rules for proposing corrections:
+- A dependency belongs in `architecture.json["dependencies"]` **if and only if** the prompt
+  declares it via *either* a `<pdd-dependency>` tag *or* an `<include>` whose target is
+  another module prompt.
+- MUST NOT propose adding a dependency to `architecture.json` unless the prompt declares it
+  via one of those two mechanisms.
 - MUST NOT propose removing a `<pdd-dependency>`-declared edge from `architecture.json`.
+- MUST NOT propose removing an edge that is backed by a module-prompt `<include>`, even
+  when that include carries `mode="interface"` / `select=` / `query=` / `lines=`.
 - If `architecture.json` currently lists a dependency that the prompt does NOT declare via
-  `<pdd-dependency>`, that is drift and the correction is to **remove** it from
+  either mechanism, that is drift and the correction is to **remove** it from
   `architecture.json` (not to fabricate a `<pdd-dependency>` tag).
 
 ### Validation Procedure
 
 For each module identified in Task 1:
-1. Read its prompt file's `<pdd-dependency>` tags — this is the authoritative dependency set.
+1. Read its prompt file. Collect the **declared dependency union**:
+   - all `<pdd-dependency>NAME_lang.prompt</pdd-dependency>` targets, PLUS
+   - all `<include>` effective targets (the `path=` attribute when set, else the body)
+     that end in `.prompt` and name an architecture module — regardless of any
+     `mode="interface"` / `select=` / `query=` / `lines=` attribute.
 2. Compare to the `dependencies` array in `architecture.json` for that module.
 3. If they match exactly, the module is consistent.
-4. If they differ, the corrected `dependencies` array MUST equal the set declared by the
-   prompt's `<pdd-dependency>` tags — nothing more, nothing less.
+4. If they differ, the corrected `dependencies` array MUST equal the declared union from
+   step 1 — nothing more, nothing less. In particular, do NOT strip a module-prompt
+   `<include>`-backed edge just because the include carries selector attributes.
 
 If, after applying this rule, every identified module is consistent, output `DEPS_VALID: true`.
 Otherwise output `DEPS_VALID: false` and emit corrections that align `architecture.json` to
-the prompt's `<pdd-dependency>` declarations.
+the declared union.
 
-### Worked Example (non-dependency include)
+### Worked Example A (context-only include of a NON-prompt source file)
 
 A prompt file contains:
 ```xml
@@ -171,14 +199,37 @@ A prompt file contains:
 </pdd.sync_order.extract_includes_from_file>
 ```
 
-The selected-interface `<include>` of `pdd/sync_order.py` is **context only**.
-The authoritative dependency set is `["agentic_update_LLM.prompt"]`.
+The selected-interface `<include>` of `pdd/sync_order.py` targets a **non-prompt source
+file** (`.py`), so it is **context only**. The authoritative dependency set is
+`["agentic_update_LLM.prompt"]`.
 
 If `architecture.json` currently has
 `["agentic_update_LLM.prompt", "sync_order_python.prompt"]`,
 the correction is to set it back to `["agentic_update_LLM.prompt"]`. Do NOT propose adding
 `<pdd-dependency>sync_order_python.prompt</pdd-dependency>` to the prompt, and do NOT keep
 `sync_order_python.prompt` in `architecture.json["dependencies"]`.
+
+### Worked Example B (module-prompt include IS a dep, even with attributes)
+
+A prompt file contains:
+```xml
+<pdd-dependency>agentic_update_LLM.prompt</pdd-dependency>
+...
+<include select="def:helper_fn" mode="interface">b_python.prompt</include>
+```
+
+The `<include>` targets a **module prompt** (`b_python.prompt`), so it is an
+**architectural edge regardless of attributes**. Even though `mode="interface"` and
+`select="def:helper_fn"` are present, the validator will require
+`architecture.json["dependencies"]` for this module to list `b_python.prompt`. The
+declared union is therefore
+`["agentic_update_LLM.prompt", "b_python.prompt"]`.
+
+If `architecture.json` currently has only `["agentic_update_LLM.prompt"]`, the correction
+is to set it to `["agentic_update_LLM.prompt", "b_python.prompt"]` — the
+module-prompt `<include>` adds the edge automatically, no new `<pdd-dependency>` tag is
+needed. Do NOT propose stripping `b_python.prompt` from `architecture.json` just because
+the `<include>` carries `select=` / `mode="interface"`.
 
 ## Output Format
 You MUST output the following markers exactly as shown:

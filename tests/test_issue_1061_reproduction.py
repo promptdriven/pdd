@@ -1647,3 +1647,98 @@ def test_m1_iter5_self_closing_then_body_form_both_added_as_deps(
         "architecture.json must list both b_python.prompt and "
         f"c_python.prompt as deps of a_python.prompt; got {a['dependencies']!r}"
     )
+
+
+def test_f1_prompt_specifies_module_prompt_include_is_dep() -> None:
+    """[F1 / third-party codex review] The rendered identify-modules LLM
+    prompt MUST tell the model that a ``<include>`` whose target is another
+    **module prompt** is an architectural dependency *regardless of
+    attributes* (``mode="interface"`` / ``select=`` / ``query=`` / ``lines=``
+    / ``path=``).
+
+    The previous wording said "<include> directives (in any form, including
+    mode='interface', select='def:...', etc.) are LLM context only and MUST
+    NOT be treated as architectural dependencies." That was a flat
+    contradiction of the actual re-convergence code in
+    ``_declared_prompt_dependencies`` (``pdd/agentic_sync.py``), which
+    treats module-prompt includes as part of the authoritative dep union
+    so they survive the validator (``cross_validate_architecture_with_prompt_includes``).
+    An LLM following the contradictory rule would correctly return
+    ``DEPS_VALID: true`` after the LLM call, the correction code path
+    would never engage, and ``validate-arch-includes`` would then flag the
+    missing module-prompt edge — the exact #1061 inverse drift.
+
+    This test asserts the rendered prompt now:
+    1) explicitly identifies module-prompt includes as architectural edges,
+    2) ties that rule to the word "architecture" (not just generic "deps"),
+    3) calls out that attributes do not change the classification, and
+    4) does NOT carry the prior contradictory "any form" wording that
+       lumped module-prompt includes with context-only source includes.
+    """
+    rendered = _render_identify_modules_prompt(
+        issue_content="Validate dependencies for issue #1061.",
+        arch_json="[]",
+        issue_number=1061,
+    )
+
+    # 1) The prompt must explicitly use the term "module prompt" (or
+    #    "module-prompt") together with the word "architecture" so the
+    #    classification rule is unambiguous.
+    lower = rendered.lower()
+    assert ("module prompt" in lower) or ("module-prompt" in lower), (
+        "Prompt must explicitly name 'module prompt' / 'module-prompt' "
+        "includes as a distinct class — got rendered template that does "
+        "not mention them."
+    )
+    assert "architecture" in lower, (
+        "Prompt must tie the module-prompt include rule to the word "
+        "'architecture' so the LLM links the rule to architecture.json deps"
+    )
+
+    # 2) The prompt must explicitly say module-prompt includes are deps
+    #    *regardless of attributes*. We don't pin a single phrasing, but
+    #    the prompt must couple "module prompt" with a "regardless"-style
+    #    qualifier so an LLM cannot read it as "only when bare include".
+    assert ("regardless of attributes" in lower) or (
+        "regardless of any" in lower
+    ) or ("always an architecture edge" in lower), (
+        "Prompt must state that module-prompt includes are architectural "
+        "edges regardless of attributes (e.g. 'regardless of attributes', "
+        "'regardless of any ... attribute', or 'always an architecture edge')."
+    )
+
+    # 3) The prompt must explicitly enumerate the attributes that do NOT
+    #    demote a module-prompt include to context-only. mode="interface"
+    #    is the canonical #1055 / #1061 shape and must appear in the rule.
+    assert 'mode="interface"' in rendered, (
+        "Prompt must explicitly call out mode=\"interface\" in the "
+        "module-prompt include rule"
+    )
+    assert ("select=" in rendered) or ('select="def:' in rendered), (
+        "Prompt must explicitly call out select= as an attribute that "
+        "does NOT demote a module-prompt include"
+    )
+
+    # 4) The prior contradictory wording — "<include> directives (in any
+    #    form, including mode='interface', select='def:...', etc.) are
+    #    LLM context only" — must be GONE. It is the direct contradiction
+    #    of the production re-convergence behavior and the root cause of
+    #    the third-party F1 finding.
+    contradictory_lower = (
+        "<include> directives (in any form, including".lower()
+    )
+    assert contradictory_lower not in lower, (
+        "Prompt must NOT carry the prior 'in any form ... are LLM context "
+        "only' rule that contradicts the production correction code in "
+        "_declared_prompt_dependencies (pdd/agentic_sync.py)."
+    )
+
+    # 5) Worked Example B must exist: a module-prompt include with
+    #    selector attributes that IS treated as a dep. Without this
+    #    counter-example the LLM only sees the existing
+    #    non-prompt-source-file context-only example and may overgeneralize.
+    assert "b_python.prompt" in rendered, (
+        "Prompt must carry a worked example whose <include> target is a "
+        "module prompt (e.g. b_python.prompt) so the LLM has a concrete "
+        "example of an attribute-bearing module-prompt include that IS a dep."
+    )
