@@ -15,9 +15,49 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 
+from .agentic_sync_runner import _basename_from_architecture_filename
 from .architecture_include_validation import resolve_architecture_prompt_path
 from .architecture_registry import extract_modules, find_architecture_for_project, find_project_root
+from .architecture_sync import _normalize_prompt_filename
 from .sync_order import extract_module_from_include
+
+
+def _path_preserving_module_key(filename: str) -> Optional[str]:
+    """Return a path-preserving module key for an include or arch filename.
+
+    Strategy:
+      * For ``.prompt`` paths, canonicalize with
+        ``_normalize_prompt_filename`` (strip ``./`` and leading
+        ``prompts/``) and derive the basename via
+        ``_basename_from_architecture_filename`` so directory segments
+        are preserved (``"commands/fix_python.prompt"`` → ``"commands/fix"``,
+        ``"fix_python.prompt"`` → ``"fix"``). This is the iter-2 path-
+        preserving rule from ``_apply_architecture_corrections``
+        (``pdd/agentic_sync.py``).
+      * For non-prompt context paths (e.g. ``context/models_example.py``),
+        fall back to ``extract_module_from_include`` which strips
+        ``_example`` / language suffix and returns the bare module name
+        (``"context/models_example.py"`` → ``"models"``). Auto-deps
+        treats those example paths as bare-module references because
+        there is no architectural notion of a directory-qualified
+        example module — the example is just a context pointer.
+
+    The two-mode key keeps prompt-to-prompt comparison path-preserving
+    (closing codex third-party F2) while preserving the long-standing
+    example-path → module mapping the auto-deps writer relies on
+    (regression-checked by
+    ``test_merge_maps_example_path_include_to_module_arch_entry``).
+
+    Returns ``None`` when no module key can be derived (LLM-only suffix,
+    empty string, etc.).
+    """
+    if not filename:
+        return None
+    normalized = _normalize_prompt_filename(filename)
+    if normalized.lower().endswith(".prompt"):
+        return _basename_from_architecture_filename(normalized)
+    # Non-prompt context paths use the example-aware bare-stem extractor.
+    return extract_module_from_include(normalized)
 
 
 def _parse_include_attrs(attrs_text: str) -> Dict[str, str]:
@@ -335,16 +375,30 @@ def _architecture_filename_for_module_include(
 ) -> Optional[str]:
     """
     Map an include path to an architecture ``dependencies`` string (another entry's
-    ``filename``), using module basename equality.
+    ``filename``).
+
+    Uses **path-preserving** module keys (``_path_preserving_module_key``)
+    so a path-qualified include like ``server/fix_python.prompt`` does not
+    collide with a same-tail entry in a different folder
+    (``commands/fix_python.prompt``). Unqualified filenames degrade
+    naturally to the bare module stem, so a flat-layout architecture
+    still matches an unqualified include — codex third-party F2 fix.
+
+    The ``extract_module_from_include`` gate is preserved up front so
+    non-module-prompt include paths (e.g. ``pdd/foo.py`` or other source
+    files) are still rejected early.
     """
-    mod = extract_module_from_include(include_path)
-    if not mod:
+    if not extract_module_from_include(include_path):
+        return None
+    include_key = _path_preserving_module_key(include_path)
+    if not include_key:
         return None
     for entry in same_file_arch_entries:
         efn = entry.get("filename") or ""
         if not efn:
             continue
-        if extract_module_from_include(efn) == mod:
+        entry_key = _path_preserving_module_key(efn)
+        if entry_key and entry_key == include_key:
             return efn
     return None
 
@@ -384,7 +438,12 @@ def merge_auto_deps_includes_into_architecture(
     arch_path, arch_data, idx = rec
     entry = arch_data[idx]
     current_fn = entry.get("filename") or ""
-    current_base = extract_module_from_include(current_fn) if current_fn else None
+    # Path-preserving self-key so a same-tail path-qualified module like
+    # ``commands/fix_python.prompt`` does NOT collide with
+    # ``server/fix_python.prompt`` (codex third-party F2). Unqualified
+    # filenames degrade to the bare module stem automatically, so flat
+    # layouts still self-skip correctly.
+    current_base = _path_preserving_module_key(current_fn) if current_fn else None
 
     old_inc = extract_include_paths_from_prompt_text(old_prompt_text)
     new_inc = extract_include_paths_from_prompt_text(new_prompt_text)
@@ -398,7 +457,7 @@ def merge_auto_deps_includes_into_architecture(
         dep_fn = _architecture_filename_for_module_include(inc, arch_data)
         if not dep_fn:
             continue
-        dep_base = extract_module_from_include(dep_fn)
+        dep_base = _path_preserving_module_key(dep_fn)
         if current_base and dep_base == current_base:
             continue
         if dep_fn == current_fn:
