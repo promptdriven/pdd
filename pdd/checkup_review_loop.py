@@ -4104,7 +4104,11 @@ def _check_architecture_registry_edit_guard(
         any HEAD pair was retired on disk without updating the
         registry, BLOCK if the change set also leaves a NEW path on
         disk that is in ``changed_files``, is not ``architecture.json``,
-        is not under ``pdd/prompts/``, is registered in NEITHER HEAD
+        does not end in ``.prompt`` (round-13 finding: the canonical
+        prompt-source suffix is the precise exclusion — the original
+        ``pdd/prompts/`` directory blanket was too broad and would let
+        an importable ``pdd/prompts/foo_v2.py`` slip past as
+        ``pdd.prompts.foo_v2``), is registered in NEITHER HEAD
         nor the worktree registry, and did NOT exist at HEAD (i.e. it
         is an addition, not a modification of an existing
         unregistered helper — round-3 finding 2). Presence here
@@ -4293,7 +4297,11 @@ def _check_architecture_registry_edit_guard(
     # passes ``removed_only`` entries where the old code and prompt
     # are gone — but it cannot see a separate new file that the fixer
     # introduced under the cover of "legitimate retirement". Restrict
-    # to paths actually in the change set, not under ``pdd/prompts/``,
+    # to paths actually in the change set, not ending in ``.prompt``
+    # (round-13 finding: the canonical prompt-source suffix is the
+    # precise exclusion — the original ``pdd/prompts/`` directory
+    # blanket was too broad and would let importable Python under
+    # ``pdd/prompts/`` slip past as ``pdd.prompts.<name>``),
     # not the registry itself, absent from BOTH registry sides (so
     # legitimate retire-old + add-new module rewrites still pass),
     # AND that did NOT exist at HEAD (round-3 finding 2 — a
@@ -4356,7 +4364,23 @@ def _check_architecture_registry_edit_guard(
             # past; lowercase the path side of the prefix
             # comparisons.
             path_lower = path.lower()
-            if path_lower.startswith("pdd/prompts/"):
+            # Round-13 finding (codex review pass #13): the original
+            # ``pdd/prompts/`` directory blanket was too broad. The
+            # intent was to skip ``.prompt`` files (canonical prompt
+            # sources, not importable Python), but anything else under
+            # ``pdd/prompts/`` — including ``.py``/``.pyc``/etc. —
+            # remains importable as ``pdd.prompts.<name>``. A fixer
+            # that wipes the registry, deletes the registered pair,
+            # and drops ``pdd/prompts/foo_v2.py`` would otherwise slip
+            # past the scan: ``pdd.prompts.foo_v2`` is now importable
+            # Python with no prompt source. Replace the dir-blanket
+            # with a ``.prompt`` suffix exclusion — ``.prompt`` files
+            # anywhere (not just under ``pdd/prompts/``) are skipped
+            # because the suffix itself marks them as canonical prompt
+            # sources and isn't importable Python; everything else
+            # under ``pdd/prompts/`` falls through to the standard
+            # importable-suffix filter below.
+            if path_lower.endswith(".prompt"):
                 continue
             # Round-6 finding 2: narrow the scan to generated
             # prompt-driven code under ``pdd/``. Anything else
@@ -4438,7 +4462,12 @@ def _check_architecture_registry_edit_guard(
             path_lower = path.lower()
             if not path_lower.startswith("pdd/"):
                 continue
-            if path_lower.startswith("pdd/prompts/"):
+            # Round-13 parity with the 10b scan above: replace the
+            # ``pdd/prompts/`` directory blanket with a ``.prompt``
+            # suffix exclusion. A submodule path is unlikely to end
+            # in ``.prompt`` in practice, but keep the two scans in
+            # lockstep so the rule is identical everywhere.
+            if path_lower.endswith(".prompt"):
                 continue
             if path in head_registered_paths:
                 continue

@@ -7845,3 +7845,157 @@ class TestRound11SubmoduleBypass:
         # in the change set.
         assert reason is not None
         assert "new git submodule" not in reason
+
+
+class TestRound13PromptsSubdirImportableBypass:
+    """Round-13 finding (codex review pass #13): the original
+    ``pdd/prompts/`` directory blanket exclusion was too broad. Its
+    intent was to skip ``.prompt`` files (canonical prompt sources,
+    not importable Python), but ``.py``/``.pyc``/other importable
+    suffixes under ``pdd/prompts/`` are still importable Python
+    (``pdd.prompts.<name>``). A fixer that wipes the registry,
+    retires the registered pair, and drops ``pdd/prompts/foo_v2.py``
+    would otherwise slip past the unregistered-new-code scan: the
+    new module is importable Python with no prompt source.
+
+    The R14 fix replaces the dir-blanket with a ``.prompt`` suffix
+    exclusion in BOTH the 10b unregistered-new-code scan and the R11
+    submodule scan. ``.prompt`` files anywhere (not just under
+    ``pdd/prompts/``) are skipped because the suffix itself marks
+    them as canonical prompt sources; everything else under
+    ``pdd/prompts/`` falls through to the standard importable-suffix
+    filter.
+    """
+
+    def test_guard_refuses_importable_python_under_prompts_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive: HEAD retirement + worktree wipes registry + adds
+        ``pdd/prompts/foo_v2.py`` (importable Python under the prompts
+        directory). The guard MUST refuse and the offender path MUST
+        appear in the refusal text.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the R13 bypass shape:
+        #   1. delete pdd/foo.py (registered code)
+        #   2. delete pdd/prompts/foo_python.prompt (registered prompt)
+        #   3. wipe architecture.json to []
+        #   4. drop importable Python at pdd/prompts/foo_v2.py
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.py" in reason
+
+    def test_guard_refuses_sourceless_bytecode_under_prompts_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive: same bypass shape with a sourceless ``.pyc``
+        bytecode file dropped at ``pdd/prompts/foo_v2.pyc``. Loadable
+        via ``importlib.machinery.SourcelessFileLoader`` as
+        ``pdd.prompts.foo_v2`` — the broad dir-blanket would silently
+        allow it. After R14, the ``.prompt``-suffix exclusion lets
+        this path fall through to the importable-suffix filter, which
+        catches ``.pyc``.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(
+            b"\x00\x00 stub"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/foo_v2.pyc",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.pyc" in reason
+
+    def test_guard_allows_prompt_file_under_prompts_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a ``pdd/prompts/foo_v2.prompt`` file in the change
+        set (even when unregistered) must still be skipped by the
+        unregistered-new-code scan because ``.prompt`` is the
+        canonical prompt-source suffix and isn't importable Python.
+        The ``.prompt``-suffix exclusion preserves the original
+        intent of the dir-blanket while closing the importable-file
+        hole.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Retirement on disk: registered pair gone, registry wiped,
+        # plus an UNREGISTERED .prompt file dropped under the prompts
+        # dir. The .prompt suffix must mean the unregistered-new-code
+        # scan ignores this path — it's not importable Python.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/foo_v2.prompt",
+            ],
+        )
+        # The new .prompt file must not appear as an offender. Other
+        # checks (added-pair / removed-pair) may legitimately fire on
+        # the registry wipe + retirement, but the unregistered-new-
+        # code scan must NOT flag the .prompt path.
+        if reason is not None:
+            assert "pdd/prompts/foo_v2.prompt" not in reason
