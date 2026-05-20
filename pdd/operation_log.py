@@ -320,6 +320,42 @@ def clear_run_report(basename: str, language: str) -> None:
             pass
 
 
+def _clear_run_report_before_fingerprint(basename: str, language: str) -> bool:
+    """Clear stale run report and verify it is gone before fingerprint update."""
+    path = get_run_report_path(basename, language)
+    console = Console()
+
+    try:
+        had_run_report = path.exists()
+    except OSError as e:
+        console.print(
+            f"[yellow]Warning: Could not inspect run report {path}: {e}. "
+            "Skipping fingerprint update.[/yellow]"
+        )
+        return False
+
+    clear_run_report(basename, language)
+    if not had_run_report:
+        return True
+
+    try:
+        if path.exists():
+            console.print(
+                f"[yellow]Warning: Run report {path} still exists after clear; "
+                "skipping fingerprint update to avoid pairing a fresh "
+                "fingerprint with stale runtime state.[/yellow]"
+            )
+            return False
+    except OSError as e:
+        console.print(
+            f"[yellow]Warning: Could not verify run report deletion for {path}: {e}. "
+            "Skipping fingerprint update.[/yellow]"
+        )
+        return False
+
+    return True
+
+
 def log_operation(
     operation: str,
     updates_fingerprint: bool = False,
@@ -349,15 +385,12 @@ def log_operation(
             if prompt_file:
                 basename, language = infer_module_identity(prompt_file)
 
-            if basename and language and clears_run_report:
-                clear_run_report(basename, language)
-
             entry = create_manual_log_entry(operation=operation)
             start_time = time.time()
             success = False
             result = None
             error_msg = None
-            
+
             try:
                 result = func(*args, **kwargs)
                 success = True
@@ -380,7 +413,19 @@ def log_operation(
                 if basename and language:
                     append_log_entry(basename, language, entry)
                     if success:
-                        if updates_fingerprint:
+                        fingerprint_allowed = True
+                        # Clear the stale run report only after the command
+                        # succeeds, so a failed run cannot erase existing
+                        # runtime verification state that still describes the
+                        # current code. The clear must happen before
+                        # save_fingerprint so a fresh fingerprint never
+                        # coexists with a stale per-module run report
+                        # (issue #1057).
+                        if clears_run_report:
+                            fingerprint_allowed = _clear_run_report_before_fingerprint(
+                                basename, language
+                            )
+                        if updates_fingerprint and fingerprint_allowed:
                             save_fingerprint(basename, language, operation=operation, cost=cost, model=model)
                         if updates_run_report and isinstance(result, dict):
                             save_run_report(basename, language, result)

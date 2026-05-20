@@ -3,6 +3,9 @@
 {
   "type": "module",
   "module": {
+    "constants": [
+      {"name": "BUNDLED_SAMPLE_TOPLEVEL_DIRS", "type": "FrozenSet[str]"}
+    ],
     "functions": [
       {"name": "extract_modules", "signature": "(data: Any)", "returns": "List[Dict[str, Any]]"},
       {"name": "extract_prd_files", "signature": "(data: Any)", "returns": "List[str]"},
@@ -10,10 +13,10 @@
       {"name": "save_registry", "signature": "(project_root: Path, registry: dict)", "returns": "None"},
       {"name": "record_generation", "signature": "(project_root: Path, issue_number: int, issue_url: str, modules_added: List[str], modules_updated: List[str], target_dir: Optional[str] = None)", "returns": "None"},
       {"name": "merge_architecture", "signature": "(existing_arch: List[dict], new_arch: List[dict], issue_number: int, issue_url: str)", "returns": "Tuple[List[dict], dict]"},
-      {"name": "find_architecture_for_project", "signature": "(project_root: Path)", "returns": "List[Path]"},
+      {"name": "find_architecture_for_project", "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)", "returns": "List[Path]"},
       {"name": "find_project_root", "signature": "(start: Optional[Path] = None)", "returns": "Path"},
       {"name": "find_git_toplevel", "signature": "(start: Optional[Path] = None)", "returns": "Optional[Path]"},
-      {"name": "load_combined_architecture_data", "signature": "(project_root: Path)", "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"},
+      {"name": "load_combined_architecture_data", "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)", "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"},
       {"name": "get_modules_for_issue", "signature": "(arch_data: List[dict], issue_number: int)", "returns": "List[dict]"}
     ]
   }
@@ -35,6 +38,21 @@
 % - Use `from __future__ import annotations`
 % - Create a module-level logger via `logging.getLogger(__name__)`
 % - Module docstring should describe the registry purpose and location of the JSON file
+
+% ============================================================================
+% SECTION: Module-level constants
+% ============================================================================
+
+% BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str]
+% - Frozenset of top-level directory names in the PDD repo that ship sample
+%   architecture (not app code): {"examples", "example_project", "example_workspace",
+%   "staging"}.
+% - Routine sync/discovery skips these via the skip_bundled_sample_arch kwarg on
+%   find_architecture_for_project (default True). Opt back in with
+%   skip_bundled_sample_arch=False for strict/sample-explicit runs.
+% - Re-exported from pdd/architecture_include_validation.py as _BUNDLED_SAMPLE_TOPLEVEL_DIRS
+%   for back-compat with external callers that previously imported the name from
+%   there.
 
 % ============================================================================
 % SECTION: Helper extractors
@@ -121,9 +139,18 @@
 % SECTION: Project discovery
 % ============================================================================
 
-% Function: find_architecture_for_project(project_root: Path) -> List[Path]
+% Function: find_architecture_for_project(project_root: Path, *, skip_bundled_sample_arch: bool = True) -> List[Path]
 % - Discover all architecture.json files under project_root (root + subdirs).
 % - Check root first: project_root / "architecture.json".
+% - When skip_bundled_sample_arch is True (default), top-level trees that ship bundled
+%   examples are excluded: BUNDLED_SAMPLE_TOPLEVEL_DIRS =
+%   frozenset({"examples", "example_project", "example_workspace", "staging"}).
+%   Pruning happens at depth 0 BEFORE descending so nothing under the sample tree is
+%   discovered, no matter how deep. Pass skip_bundled_sample_arch=False to opt back in
+%   (used by `pdd checkup --validate-arch-includes --strict` and by tooling that
+%   explicitly operates inside a bundled example project — the skip is a no-op when
+%   project_root IS the example root, because relative children no longer start with
+%   one of the sample directory names).
 % - Recursively scan subdirectories using os.walk with:
 %   - max_depth = 4
 %   - excluded dirs: {"node_modules", "__pycache__", ".git", "venv", ".venv", "env"}
@@ -169,14 +196,20 @@
 %   resolved PDD project root is a strict descendant of an enclosing, unrelated git
 %   repo so that remote-mismatch warnings can be suppressed.
 
-% Function: load_combined_architecture_data(project_root: Path) -> Tuple[Optional[List[Dict[str, Any]]], Path]
+% Function: load_combined_architecture_data(project_root: Path, *, skip_bundled_sample_arch: bool = True) -> Tuple[Optional[List[Dict[str, Any]]], Path]
 % - Load and merge all architecture.json lists under project_root.
+% - skip_bundled_sample_arch is forwarded to find_architecture_for_project (default True)
+%   so routine discovery does not pull in sample modules.
 % - Use find_architecture_for_project to discover files.
 % - If no files found, return (None, project_root / "architecture.json").
 % - Primary path is the first file found (typically root).
 % - For each file, load JSON and use extract_modules to get entries; skip files with errors.
 % - If combined list is empty after processing, return (None, primary_path).
 % - Otherwise return (combined_entries, primary_path).
+% - This loader is READ-ONLY. The combined list is for analysis (module identification,
+%   dep graph). Writes back to architecture.json must route to the owning file
+%   (see `_apply_architecture_corrections` in agentic_sync) — never write the combined
+%   list to the primary path because that flattens nested arches into root (issue #1060).
 
 % Function: get_modules_for_issue(arch_data: List[dict], issue_number: int) -> List[dict]
 % - Filter architecture entries where entry["origin"] is a dict and entry["origin"]["issue_number"] == issue_number.

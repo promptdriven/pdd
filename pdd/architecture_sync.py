@@ -117,20 +117,30 @@ def _resolve_sync_paths(
     else:
         project_root = find_project_root(cwd)
         current = cwd
-        sync_root = project_root
+        architecture_candidate: Optional[Path] = None
 
         while True:
-            if (current / "architecture.json").exists() or (current / "prompts").exists():
-                sync_root = current
+            if architecture_candidate is None and (current / "architecture.json").exists():
+                architecture_candidate = current / "architecture.json"
+            if (current / "prompts").exists():
+                resolved_prompts_dir = current / "prompts"
                 break
-            if current == project_root or current.parent == current:
+            if current == project_root:
+                resolved_prompts_dir = project_root / "prompts"
+                break
+            if current.parent == current:
+                resolved_prompts_dir = project_root / "prompts"
                 break
             current = current.parent
 
-        resolved_prompts_dir = sync_root / "prompts"
-
     if architecture_path is not None:
         return resolved_prompts_dir, resolve_explicit(architecture_path)
+
+    if prompts_dir is None:
+        resolved_architecture_path = architecture_candidate or (
+            resolved_prompts_dir.parent / "architecture.json"
+        )
+        return resolved_prompts_dir, resolved_architecture_path
 
     resolved_architecture_path = resolved_prompts_dir.parent / "architecture.json"
     return resolved_prompts_dir, resolved_architecture_path
@@ -283,7 +293,13 @@ def parse_prompt_tags(prompt_content: str) -> Dict[str, Any]:
             for elem in dep_elems
             if elem.text
             for dep in [elem.text.strip()]
-            if dep and dep.endswith('.prompt') and '\n' not in dep and len(dep) <= 100
+            if dep
+            and '\n' not in dep
+            and len(dep) <= 100
+            and (
+                dep.endswith('.prompt')
+                or re.fullmatch(r'[A-Za-z0-9_-]+', dep)
+            )
         ]
 
     except (etree.XMLSyntaxError, etree.ParserError):
@@ -326,6 +342,107 @@ def _find_renamed_prompt_file(filename: str, prompts_dir: Path) -> Optional[Path
     return candidates[0] if len(candidates) == 1 else None
 
 
+def _prompt_source_stem_and_extension(filename: str) -> Optional[tuple[str, str]]:
+    """Return source filepath stem plus extension inferred from a prompt filename."""
+    normalized = _normalize_prompt_filename(filename)
+    stem = normalized[:-len('.prompt')] if normalized.endswith('.prompt') else normalized
+
+    language_to_ext = {language: ext for ext, language in _EXT_TO_LANGUAGE.items()}
+    for language, ext in sorted(language_to_ext.items(), key=lambda item: len(item[0]), reverse=True):
+        suffix = f'_{language}'
+        if stem.endswith(suffix):
+            return stem[:-len(suffix)], ext
+
+    if stem.endswith('_python'):
+        return stem[:-len('_python')], '.py'
+    return None
+
+
+def _join_posix_path(prefix: str, relative_path: str) -> str:
+    """Join path fragments for architecture.json filepath values."""
+    normalized_prefix = prefix.replace("\\", "/").strip()
+    normalized_relative = relative_path.replace("\\", "/").lstrip("/")
+    if normalized_prefix in ("", ".", "./"):
+        return normalized_relative
+    return f'{normalized_prefix.rstrip("/")}/{normalized_relative}'
+
+
+def _infer_filepath_from_pddrc_context(
+    filename: str,
+    prompts_dir: Path,
+    architecture_path: Path,
+) -> Optional[str]:
+    """Infer filepath from a nested .pddrc prompts_dir/generate_output_path context."""
+    prompt_info = _prompt_source_stem_and_extension(filename)
+    if prompt_info is None:
+        return None
+
+    pddrc_path = architecture_path.parent / ".pddrc"
+    if not pddrc_path.is_file():
+        return None
+
+    try:
+        from .construct_paths import _load_pddrc_config
+
+        config = _load_pddrc_config(pddrc_path)
+    except Exception:
+        return None
+
+    prompt_path = prompts_dir / _normalize_prompt_filename(filename)
+    try:
+        prompt_rel = prompt_path.relative_to(pddrc_path.parent).as_posix()
+    except ValueError:
+        try:
+            prompt_rel = prompt_path.resolve().relative_to(pddrc_path.parent.resolve()).as_posix()
+        except (OSError, ValueError):
+            return None
+
+    matches: List[tuple[int, str, str, str]] = []
+    for context_config in config.get("contexts", {}).values():
+        if not isinstance(context_config, dict):
+            continue
+        defaults = context_config.get("defaults", {})
+        if not isinstance(defaults, dict):
+            continue
+
+        context_prompts_dir = defaults.get("prompts_dir")
+        generate_output_path = defaults.get("generate_output_path")
+        if not isinstance(context_prompts_dir, str) or not isinstance(generate_output_path, str):
+            continue
+
+        prompts_dir_value = context_prompts_dir.replace("\\", "/").strip()
+        if Path(prompts_dir_value).is_absolute():
+            try:
+                context_prompts_rel = (
+                    Path(prompts_dir_value)
+                    .resolve()
+                    .relative_to(pddrc_path.parent.resolve())
+                    .as_posix()
+                )
+            except (OSError, ValueError):
+                continue
+        else:
+            context_prompts_rel = prompts_dir_value.strip("/")
+
+        if context_prompts_rel in ("", ".", "prompts"):
+            continue
+        if prompt_rel != context_prompts_rel and not prompt_rel.startswith(f"{context_prompts_rel}/"):
+            continue
+
+        relative_prompt = prompt_rel[len(context_prompts_rel):].lstrip("/")
+        relative_info = _prompt_source_stem_and_extension(relative_prompt)
+        if relative_info is None:
+            continue
+        relative_stem, ext = relative_info
+        matches.append((len(context_prompts_rel), generate_output_path, relative_stem, ext))
+
+    if not matches:
+        return None
+
+    _, generate_output_path, relative_stem, ext = max(matches, key=lambda item: item[0])
+    return _join_posix_path(generate_output_path, f"{relative_stem}{ext}")
+
+
 def _infer_filepath(filename: str) -> str:
     """
     Infer output filepath from prompt filename using naming conventions.
@@ -336,10 +453,12 @@ def _infer_filepath(filename: str) -> str:
     Returns:
         Inferred filepath string
     """
-    stem = filename[:-len('.prompt')]
-    if stem.endswith('_python'):
-        module_name = stem[:-len('_python')]
-        return f'pdd/{module_name}.py'
+    prompt_info = _prompt_source_stem_and_extension(filename)
+    if prompt_info is not None:
+        filepath_stem, ext = prompt_info
+        if '/' in filepath_stem:
+            return f'{filepath_stem}{ext}'
+        return f'pdd/{filepath_stem}{ext}'
     return f'prompts/{filename}'
 
 
@@ -353,11 +472,74 @@ def _infer_module_tags(filename: str) -> List[str]:
     Returns:
         List of tag strings
     """
-    if filename.endswith('_python.prompt'):
+    normalized = _normalize_prompt_filename(filename)
+    stem = normalized[:-len('.prompt')] if normalized.endswith('.prompt') else normalized
+    if filename.endswith('_python.prompt') or stem.endswith('_Python'):
         return ['module', 'python']
-    if filename.endswith('_LLM.prompt'):
+    if normalized.endswith('_LLM.prompt'):
         return ['llm']
     return ['module']
+
+
+def _normalize_dependency_filenames(
+    dependencies: List[str],
+    arch_data: List[Dict[str, Any]],
+) -> List[str]:
+    """Resolve prompt dependency tags to architecture filenames when unambiguous."""
+    all_filenames = {
+        filename
+        for module in arch_data
+        for filename in [module.get("filename")]
+        if isinstance(filename, str) and filename
+    }
+    by_exact_lower: Dict[str, List[str]] = {}
+    by_basename_lower: Dict[str, List[str]] = {}
+    by_bare_stem_lower: Dict[str, List[str]] = {}
+    language_suffixes = [
+        suffix
+        for language in _EXT_TO_LANGUAGE.values()
+        for suffix in (f"_{language}", f"_{language.lower()}")
+    ]
+    for filename in all_filenames:
+        by_exact_lower.setdefault(filename.lower(), []).append(filename)
+        basename = Path(filename).name
+        by_basename_lower.setdefault(basename.lower(), []).append(filename)
+        if basename.endswith(".prompt"):
+            stem = basename[:-len(".prompt")]
+            for suffix in language_suffixes:
+                if stem.endswith(suffix):
+                    bare_stem = stem[:-len(suffix)]
+                    by_bare_stem_lower.setdefault(bare_stem.lower(), []).append(filename)
+                    break
+
+    normalized_dependencies: List[str] = []
+    seen: set[str] = set()
+    for dependency in dependencies:
+        normalized = _normalize_prompt_filename(dependency)
+        resolved = normalized
+        if normalized not in all_filenames:
+            exact_matches = by_exact_lower.get(normalized.lower(), [])
+            suffix_matches = [
+                filename
+                for filename in all_filenames
+                if filename.lower().endswith(f"/{normalized.lower()}")
+            ]
+            if len(exact_matches) == 1:
+                resolved = exact_matches[0]
+            elif len(suffix_matches) == 1:
+                resolved = suffix_matches[0]
+            else:
+                basename_matches = by_basename_lower.get(Path(normalized).name.lower(), [])
+                if len(basename_matches) == 1:
+                    resolved = basename_matches[0]
+                elif "/" not in normalized:
+                    bare_matches = by_bare_stem_lower.get(normalized.lower(), [])
+                    if len(bare_matches) == 1:
+                        resolved = bare_matches[0]
+        if resolved not in seen:
+            normalized_dependencies.append(resolved)
+            seen.add(resolved)
+    return normalized_dependencies
 
 
 def register_untracked_prompts(
@@ -430,7 +612,10 @@ def register_untracked_prompts(
             skipped.append(filename)
             continue
 
-        filepath = _infer_filepath(filename)
+        filepath = (
+            _infer_filepath_from_pddrc_context(filename, prompts_dir, architecture_path)
+            or _infer_filepath(filename)
+        )
         module_tags = _infer_module_tags(filename)
         reason = tags['reason'] or f'Auto-registered module: {filename}'
 
@@ -461,6 +646,22 @@ def register_untracked_prompts(
         )
 
     return {'registered': registered, 'skipped': skipped, 'errors': errors}
+
+
+def _architecture_prompt_filenames(architecture_path: Path) -> set[str]:
+    """Return prompt filenames already owned by an architecture file."""
+    if not architecture_path.exists():
+        return set()
+    try:
+        arch_data = extract_modules(json.loads(architecture_path.read_text(encoding="utf-8")))
+    except (json.JSONDecodeError, OSError):
+        return set()
+    return {
+        filename
+        for module in arch_data
+        for filename in [module.get("filename")]
+        if isinstance(filename, str) and filename.endswith(".prompt")
+    }
 
 
 # --- Architecture Update ---
@@ -879,10 +1080,11 @@ def update_architecture_from_prompt(
         )
         if should_update_deps:
             old_deps = module_entry.get('dependencies', [])
+            tag_dependencies = _normalize_dependency_filenames(tags['dependencies'], arch_data)
             # Compare as sets to detect changes (order-independent)
-            if set(old_deps) != set(tags['dependencies']):
-                changes['dependencies'] = {'old': old_deps, 'new': tags['dependencies']}
-                module_entry['dependencies'] = tags['dependencies']
+            if set(old_deps) != set(tag_dependencies):
+                changes['dependencies'] = {'old': old_deps, 'new': tag_dependencies}
+                module_entry['dependencies'] = tag_dependencies
                 updated = True
 
         # 6. Write back to architecture.json (if updated and not dry run)
@@ -923,7 +1125,8 @@ def update_architecture_from_prompt(
 def sync_all_prompts_to_architecture(
     prompts_dir: Path = PROMPTS_DIR,
     architecture_path: Path = ARCHITECTURE_JSON_PATH,
-    dry_run: bool = False
+    dry_run: bool = False,
+    only_files: Optional[set] = None,
 ) -> Dict[str, Any]:
     """
     Sync ALL prompt files to architecture.json.
@@ -935,6 +1138,7 @@ def sync_all_prompts_to_architecture(
         prompts_dir: Directory containing prompt files
         architecture_path: Path to architecture.json
         dry_run: If True, perform validation without writing changes
+        only_files: Optional prompt filenames eligible for auto-registration.
 
     Returns:
         Dict with keys:
@@ -950,7 +1154,12 @@ def sync_all_prompts_to_architecture(
         Would update 15 modules
     """
     # Pre-pass: auto-register any prompt files with PDD tags not in architecture.json
-    reg_result = register_untracked_prompts(prompts_dir, architecture_path, dry_run)
+    reg_result = register_untracked_prompts(
+        prompts_dir,
+        architecture_path,
+        dry_run,
+        only_files=only_files,
+    )
 
     # Load architecture.json to get all prompt filenames
     if not architecture_path.exists():
@@ -1189,10 +1398,22 @@ def sync_prompts_to_architecture(
 
     try:
         if filenames is None:
+            register_only_files: Optional[set] = None
+            try:
+                prompts_owner = resolved_prompts_dir.parent.resolve(strict=False)
+                architecture_owner = resolved_architecture_path.parent.resolve(strict=False)
+            except OSError:
+                prompts_owner = resolved_prompts_dir.parent
+                architecture_owner = resolved_architecture_path.parent
+            if prompts_owner != architecture_owner:
+                register_only_files = _architecture_prompt_filenames(
+                    resolved_architecture_path
+                )
             sync_result = sync_all_prompts_to_architecture(
                 prompts_dir=resolved_prompts_dir,
                 architecture_path=resolved_architecture_path,
                 dry_run=dry_run,
+                only_files=register_only_files,
             )
         else:
             results = []
@@ -1244,6 +1465,7 @@ def sync_prompts_to_architecture(
             "results": sync_result["results"],
             "validation": validation,
             "errors": sync_result.get("errors", []),
+            "registered": sync_result.get("registered", []),
         }
     except Exception as exc:
         return {

@@ -5,7 +5,8 @@
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
-      "_keyring_timeout_python.prompt"
+      "_keyring_timeout_python.prompt",
+      "git_porcelain_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -1516,7 +1517,8 @@
     "reason": "Coordinates agentic prompt updates through Claude, Gemini, Codex, or OpenCode CLIs.",
     "description": "Coordinates repository-aware prompt update runs through external agentic CLIs and reports prompt/test changes.",
     "dependencies": [
-      "agentic_update_LLM.prompt"
+      "agentic_update_LLM.prompt",
+      "sync_order_python.prompt"
     ],
     "priority": 43,
     "filename": "agentic_update_python.prompt",
@@ -5423,6 +5425,12 @@
     "interface": {
       "type": "module",
       "module": {
+        "constants": [
+          {
+            "name": "BUNDLED_SAMPLE_TOPLEVEL_DIRS",
+            "type": "FrozenSet[str]"
+          }
+        ],
         "functions": [
           {
             "name": "extract_modules",
@@ -5456,7 +5464,7 @@
           },
           {
             "name": "find_architecture_for_project",
-            "signature": "(project_root: Path)",
+            "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)",
             "returns": "List[Path]"
           },
           {
@@ -5471,7 +5479,7 @@
           },
           {
             "name": "load_combined_architecture_data",
-            "signature": "(project_root: Path)",
+            "signature": "(project_root: Path, *, skip_bundled_sample_arch: bool = True)",
             "returns": "Tuple[Optional[List[Dict[str, Any]]], Path]"
           },
           {
@@ -5790,7 +5798,8 @@
     "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
-      "agentic_common_python.prompt"
+      "agentic_common_python.prompt",
+      "git_porcelain_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -6185,7 +6194,7 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder, max_cycles, resume, verbose, quiet, use_github_state, protect_tests, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)",
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)",
             "returns": "Tuple[bool, str, float, str, List[str]]"
           },
           {
@@ -6892,12 +6901,12 @@
           },
           {
             "name": "sync_all_prompts_to_architecture",
-            "signature": "(prompts_dir: Path, architecture_path: Path, dry_run: bool) -> Dict[str, Any]",
-            "returns": "Dict with keys: success, updated_count, skipped_count, results, errors"
+            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
+            "returns": "Dict with keys: success, updated_count, skipped_count, results, errors, registered"
           },
           {
             "name": "validate_dependencies",
-            "signature": "(dependencies: List[str], prompts_dir: Path) -> Dict[str, Any]",
+            "signature": "(dependencies: List[str], prompts_dir: Path = PROMPTS_DIR) -> Dict[str, Any]",
             "returns": "Dict with keys: valid, missing, duplicates"
           },
           {
@@ -6907,7 +6916,7 @@
           },
           {
             "name": "get_architecture_entry_for_prompt",
-            "signature": "(prompt_filename: str, architecture_path: Path) -> Optional[Dict[str, Any]]",
+            "signature": "(prompt_filename: str, architecture_path: Path = ARCHITECTURE_JSON_PATH) -> Optional[Dict[str, Any]]",
             "returns": "Architecture entry dict or None"
           },
           {
@@ -6919,6 +6928,16 @@
             "name": "generate_tags_from_architecture",
             "signature": "(arch_entry: Dict[str, Any]) -> str",
             "returns": "XML tags string ready to prepend to prompt"
+          },
+          {
+            "name": "normalize_architecture_filenames",
+            "signature": "(arch_data: List[Dict[str, Any]]) -> None",
+            "returns": "None (mutates arch_data in place)"
+          },
+          {
+            "name": "register_untracked_prompts",
+            "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
+            "returns": "Dict with keys: registered, skipped, errors"
           }
         ]
       }
@@ -7481,12 +7500,14 @@
   },
   {
     "reason": "Implements the PR-mode primary-reviewer/fixer review loop for pdd checkup.",
-    "description": "Runs one primary reviewer such as Codex against an existing PR, sends the reviewer's actionable findings to a separate fixer such as Claude, then has the active reviewer evaluate the fixer's changes and rationales in the same loop-owned worktree until clean or max rounds. An optional reviewer_fallback can take over once when the primary reviewer cannot complete, while preserving the original primary status as non-active diagnostic state; on a successful takeover the superseded primary's Per-Reviewer Status row is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters resolve the report to ship_degraded rather than unknown. An optional fixer_fallback is the analog for the fix step: when the primary fixer reports success=False (typical cause: Claude Code subscription-tier credential exhaustion classified as credential-limit) the loop captures the pre-fix HEAD SHA, resets the worktree (`git reset --hard <pre_fix_sha>` + `git clean -fd`) so the failed primary's partial edits do not leak, alias-normalizes the fallback role, refuses it if it equals the primary fixer, the active reviewer, or the originally configured reviewer (preserved as ReviewLoopState.original_reviewer), then invokes the fallback once. On success the fallback role becomes ReviewLoopState.active_fixer and drives every subsequent round's fix step (the one-shot fallback is consumed); both the failed primary FixResult and the fallback FixResult are appended to state.fixes for an honest audit trail. When the fallback also fails its FixResult is still appended before the loop breaks; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so [CRITICAL], issue_aligned: false, and max-*-reached: true tokens from raw subprocess output cannot downgrade an otherwise-verified fallback verdict. Review-only mode runs just the primary reviewer first pass without fixer, commit, or push. The parser filters findings that only describe external GitHub/CI readiness state with no repository-file evidence, so status-only auto-heal, Cloud Build, mergeability, and pending/action-required required-check findings do not keep the fixer loop running. The fixer may return fixed, not_valid, partially_fixed, or blocked, but only the active reviewer can close a finding. The loop persists prompt+output+normalized-findings+dedup-state artifacts per round (and a final-state.json), pushes fixes back to the PR head ref via the shared token-refresh helper from agentic_e2e_fix_orchestrator, and emits a Step-7-compatible final report whose findings table contains only remaining/unfixed findings.",
+    "description": "Runs one primary reviewer such as Codex against an existing PR, sends the reviewer's actionable findings to a separate fixer such as Claude, then has the active reviewer evaluate the fixer's changes and rationales in the same loop-owned worktree until clean or max rounds. An optional reviewer_fallback can take over once when the primary reviewer cannot complete, while preserving the original primary status as non-active diagnostic state; on a successful takeover the superseded primary's Per-Reviewer Status row is annotated `(optional, superseded by <fallback>)` so downstream verdict adapters resolve the report to ship_degraded rather than unknown. An optional fixer_fallback is the analog for the fix step: when the primary fixer reports success=False (typical cause: Claude Code subscription-tier credential exhaustion classified as credential-limit) the loop captures the pre-fix HEAD SHA, resets the worktree (`git reset --hard <pre_fix_sha>` + `git clean -fd`) so the failed primary's partial edits do not leak, alias-normalizes the fallback role, refuses it if it equals the primary fixer, the active reviewer, or the originally configured reviewer (preserved as ReviewLoopState.original_reviewer), then invokes the fallback once. On success the fallback role becomes ReviewLoopState.active_fixer and drives every subsequent round's fix step (the one-shot fallback is consumed); both the failed primary FixResult and the fallback FixResult are appended to state.fixes for an honest audit trail. When the fallback also fails its FixResult is still appended before the loop breaks; failed-fixer summaries are routed through _defang_adapter_trip_wires before rendering so [CRITICAL], issue_aligned: false, and max-*-reached: true tokens from raw subprocess output cannot downgrade an otherwise-verified fallback verdict. Review-only mode runs just the primary reviewer first pass without fixer, commit, or push. The parser filters findings that only describe external GitHub/CI readiness state with no repository-file evidence, so status-only auto-heal, Cloud Build, mergeability, and pending/action-required required-check findings do not keep the fixer loop running. The fixer may return fixed, not_valid, partially_fixed, or blocked, but only the active reviewer can close a finding. Issue #1088 trust boundary: findings only flip to status=fixed after the verifier clears the exact SHA the fixer just pushed. ReviewLoopState carries verified_head_sha (the pushed SHA the verifier most recently cleared), remote_pr_head_sha (observed at render time via a single _fetch_pr_metadata re-fetch), and verification_status_by_round (per-round outcome in {verified, unverified, stale, skipped}). When the fixer left the worktree unchanged (`No changes to push.`) or `git rev-parse HEAD` returns empty after a reported push, the loop skips the verifier, marks the round skipped, and stops; verification never runs against a SHA that did not land. When _finalize re-fetches the PR head and observes either a SHA mismatch or a missing head_sha, fresh-final downgrades to missing, any verified rounds are recorded as stale, and fixed findings revert to open in final-state.json so downstream consumers cannot treat the stale verifier verdict as ship-ready. FixResult and the per-round round-N-fix-...findings.json artifact persist fixer_result, push_status, local_fixer_commit_sha, and pushed_head_sha (rendered explicitly, even when null) so the on-disk audit trail matches the prompt contract. The loop persists prompt+output+normalized-findings+dedup-state artifacts per round (and a final-state.json), pushes fixes back to the PR head ref via the shared token-refresh helper from agentic_e2e_fix_orchestrator, and emits a Step-7-compatible final report whose findings table contains only remaining/unfixed findings.",
     "dependencies": [
       "agentic_common_python.prompt",
       "agentic_change_python.prompt",
       "agentic_checkup_orchestrator_python.prompt",
-      "agentic_e2e_fix_orchestrator_python.prompt"
+      "agentic_e2e_fix_orchestrator_python.prompt",
+      "architecture_registry_python.prompt",
+      "git_porcelain_python.prompt"
     ],
     "priority": 217.5,
     "filename": "checkup_review_loop_python.prompt",
@@ -7515,7 +7536,10 @@
               "If the PR head advances remotely during the fixer turn, fetches refs/heads/<head_ref> from the updated head repo with token auth fallback, runs a plain git rebase --onto FETCH_HEAD HEAD~1 HEAD to replay only the fixer commit, and retries the push instead of force-pushing over remote work; rebase conflicts abort before verifier",
               "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
-              "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/",
+              "Issue #1088 SHA-backed verification trust boundary: captures the post-push HEAD SHA via _git_rev_parse_head (never inferred from fixer prose), populates FixResult.push_status (pushed | push_failed | not_attempted), FixResult.local_fixer_commit_sha, and FixResult.pushed_head_sha after every fix turn, and rewrites the per-round fix findings.json artifact so the on-disk audit trail carries those fields. The verifier only runs when push_status == pushed AND a non-empty pushed_head_sha was observed; otherwise the round is marked skipped/unverified and the loop stops without claiming the findings as fixed. A clean verify pass pins state.verified_head_sha to that pushed SHA",
+              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify — state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
+              "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
+              "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes verified_head_sha, remote_pr_head_sha, reviewed_head_sha, and verification_status_by_round so downstream consumers can re-verify the trust boundary",
               "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"
             ]
           },
@@ -8395,7 +8419,9 @@
   {
     "reason": "Shared worktree setup, git-scope guards, and agentic output parsing helpers used by multiple orchestrators.",
     "description": "Provides setup_worktree, get_git_root, resolve_main_ref, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker. Used by bug, split, and change orchestrators.",
-    "dependencies": [],
+    "dependencies": [
+      "git_porcelain_python.prompt"
+    ],
     "priority": 224,
     "filename": "agentic_common_worktree_python.prompt",
     "filepath": "pdd/agentic_common_worktree.py",
@@ -8791,6 +8817,43 @@
     "position": {
       "x": 24600,
       "y": 800
+    }
+  },
+  {
+    "reason": "Shared, lossless parser for `git status --porcelain=v1 -z` that preserves renames and exotic path bytes.",
+    "description": "Centralized helper that parses the machine-readable `git status --porcelain=v1 -z` output: NUL-separated records, rename-aware old+new path pairs, and `os.fsdecode`-decoded paths so non-UTF-8 filenames round-trip. Replaces ad-hoc text-mode `line[3:]` / `split(' -> ')` parsers in scope guards, change detectors, and prompt-changed endpoints. See issue #1080.",
+    "dependencies": [],
+    "priority": 4,
+    "filename": "git_porcelain_python.prompt",
+    "filepath": "pdd/git_porcelain.py",
+    "tags": [
+      "git",
+      "module",
+      "python",
+      "shared",
+      "porcelain"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_porcelain_z",
+            "signature": "(stdout: Union[bytes, str]) -> List[PorcelainEntry]",
+            "returns": "List[PorcelainEntry]"
+          },
+          {
+            "name": "run_porcelain_z",
+            "signature": "(cwd: Union[str, Path], *, include_untracked: bool = True, timeout: Optional[float] = 30) -> Optional[List[PorcelainEntry]]",
+            "returns": "Optional[List[PorcelainEntry]]"
+          },
+          {
+            "name": "iter_changed_paths",
+            "signature": "(entries: Iterable[PorcelainEntry]) -> Iterator[str]",
+            "returns": "Iterator[str]"
+          }
+        ]
+      }
     }
   },
   {

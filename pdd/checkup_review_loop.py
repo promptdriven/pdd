@@ -37,7 +37,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 
@@ -45,6 +45,7 @@ from .agentic_change import _run_gh_command
 from .agentic_checkup_orchestrator import _get_git_root, _setup_pr_worktree
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
+from .architecture_registry import extract_modules
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -61,6 +62,17 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
 
 DEFAULT_BLOCKING_SEVERITIES: Tuple[str, ...] = ("blocker", "critical", "medium")
 DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
+# R8: cover every suffix Python can import as a module under ``pdd/``.
+# A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
+# imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
+# file (see ``importlib.machinery.all_suffixes()``). ``.cpython-*-*.so``
+# and ``.abi3.so`` variants end with ``.so`` so the simple suffix covers
+# them. ``.pyw`` is Windows-only Python source — on Windows
+# ``importlib.machinery.SOURCE_SUFFIXES`` includes ``.pyw`` so a
+# ``pdd/foo_v2.pyw`` is importable as ``pdd.foo_v2`` via
+# ``SourceFileLoader`` (the same loader as ``.py``, not the sourceless
+# bytecode loader). ``str.endswith`` accepts a tuple of suffixes.
+_IMPORTABLE_SUFFIXES: Tuple[str, ...] = (".py", ".pyw", ".pyc", ".pyo", ".so", ".pyd")
 ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
@@ -561,7 +573,17 @@ class ReviewResult:
 
 @dataclass
 class FixResult:
-    """Result from a fixer role."""
+    """Result from a fixer role.
+
+    The verification-boundary fields (``fixer_result``, ``push_status``,
+    ``local_fixer_commit_sha``, ``pushed_head_sha``, ``round_number``) are
+    populated by the loop around ``_commit_and_push_if_changed`` so the
+    final report can render fixer evidence without conflating "fixer
+    subprocess returned success" with "fix landed on the PR head". The
+    legacy ``success`` field means only "fixer subprocess completed
+    without provider/parse failure"; it MUST NOT be rendered as a bare
+    ``success``/``fixed`` token in the user-facing report (issue #1088).
+    """
 
     fixer: str
     success: bool
@@ -570,6 +592,16 @@ class FixResult:
     raw_output: str = ""
     dispositions: Dict[str, str] = field(default_factory=dict)
     rationales: Dict[str, str] = field(default_factory=dict)
+    # SHA-backed verification trust boundary (issue #1088).
+    # ``fixer_result``: ``"attempted" | "skipped" | "failed"``.
+    # ``push_status``: ``"pushed" | "push_failed" | "not_attempted"``.
+    # SHAs are the full git SHAs captured via ``git rev-parse HEAD`` in
+    # the worktree — never inferred from fixer prose.
+    fixer_result: Optional[str] = None
+    push_status: Optional[str] = None
+    local_fixer_commit_sha: Optional[str] = None
+    pushed_head_sha: Optional[str] = None
+    round_number: int = 0
 
 
 @dataclass
@@ -685,6 +717,34 @@ class ReviewLoopState:
     # codex as the fixer after gemini took over reviewing, even
     # though the docs say codex (the original reviewer) is excluded.
     original_reviewer: Optional[str] = None
+    # SHA-backed verification trust boundary (issue #1088).
+    # ``verified_head_sha``: PR head SHA the verifier most recently
+    # reviewed as clean. Updated only when the verifier returns clean
+    # on the SHA the fixer just pushed.
+    # ``remote_pr_head_sha``: PR head SHA observed at final-report
+    # render time via a single ``_fetch_pr_metadata`` re-fetch (R-V5).
+    # ``verification_status_by_round``: per-round verifier outcome,
+    # values in ``{"verified", "unverified", "stale", "skipped"}``.
+    verified_head_sha: Optional[str] = None
+    remote_pr_head_sha: Optional[str] = None
+    verification_status_by_round: Dict[int, str] = field(default_factory=dict)
+    # ``reviewed_head_sha``: PR head SHA observed in the worktree at the
+    # time a reviewer (primary, fallback, or review-only) returned a
+    # ``clean`` status without a subsequent fixer push. ``_finalize``
+    # uses this as the comparison target for the R-V5 re-fetch when no
+    # verifier ever pinned a SHA, so a clean reviewer-only path still
+    # has to prove the remote PR head matches what was actually
+    # reviewed before the report can render ``fresh-final-review:
+    # clean`` (issue #1088).
+    reviewed_head_sha: Optional[str] = None
+    # ``final_refetch_attempted``: set by ``_finalize`` when the
+    # render-time PR-head re-fetch actually fired. The render layer
+    # uses this to distinguish a missing re-fetch (``none``) from a
+    # failed re-fetch (``unknown``) in the ``remote-pr-head-sha:``
+    # line. Without this, a downgraded ``fresh_final_status`` (clean
+    # → missing on stale head) would erase the only signal that the
+    # re-fetch was attempted.
+    final_refetch_attempted: bool = False
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -752,6 +812,22 @@ def run_checkup_review_loop(
         if config.review_only
         else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
     )
+    # Capture the SHA the reviewer will actually see in the worktree.
+    # This is the comparison target for the R-V5 re-fetch when a
+    # reviewer path returns ``clean`` without ever invoking a fixer
+    # (initial reviewer clean, fallback reviewer clean, review-only
+    # clean) — the verifier never gets to pin ``state.verified_head_sha``
+    # on those paths, so without a reviewed SHA the final report cannot
+    # prove the remote head still matches what was reviewed
+    # (issue #1088). Read it directly from the worktree via
+    # ``git rev-parse HEAD`` rather than from ``pr_metadata``: the
+    # metadata fetch runs after ``_setup_pr_worktree`` and can return a
+    # newer remote SHA than what the reviewer actually inspects if the
+    # PR advances between checkout and that lookup. If the worktree
+    # rev-parse fails we fail closed (``None``) so ``_finalize`` cannot
+    # render ``fresh-final-review: clean`` against a SHA we never
+    # observed.
+    state.reviewed_head_sha = _git_rev_parse_head(worktree) or None
     if not quiet:
         mode_label = "review-only" if config.review_only else "review-loop"
         console.print(
@@ -954,7 +1030,18 @@ def run_checkup_review_loop(
             quiet=quiet,
             artifacts_dir=artifacts_dir,
         )
+        # Verification trust boundary (issue #1088). Stamp the round
+        # and the bare fixer-subprocess outcome onto the result so the
+        # final report can render evidence without conflating "fixer
+        # subprocess returned success" with "fix landed on the PR head".
+        fix.round_number = round_number
+        fix.fixer_result = "attempted" if fix.success else "failed"
+        fix.push_status = "not_attempted"
         state.fixes.append(fix)
+        # Issue #1088: rewrite the on-disk artifact so it tracks the
+        # in-memory ``FixResult`` even if a break path below exits before
+        # the canonical post-push rewrite.
+        _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
         _record_fix_attempts(state, fix_findings, fix)
 
         if not fix.success:
@@ -1004,7 +1091,16 @@ def run_checkup_review_loop(
                 # files, model — must remain visible in the final
                 # report and ``final-state.json``.
                 if fallback_fix is not None:
+                    fallback_fix.round_number = round_number
+                    fallback_fix.fixer_result = "failed"
+                    fallback_fix.push_status = "not_attempted"
                     state.fixes.append(fallback_fix)
+                    # Issue #1088: rewrite the failed-fallback artifact
+                    # so its trust-boundary fields are not left null
+                    # when this break exits before the post-push rewrite.
+                    _rewrite_fix_artifact_from_state(
+                        artifacts_dir, fallback_fix, reviewer
+                    )
                 # Preserve the existing stop_reason if the fallback path
                 # already wrote one (e.g. budget exhausted before fallback
                 # could run) — the operator-facing detail wins.
@@ -1026,7 +1122,14 @@ def run_checkup_review_loop(
             # Both fixes stay in ``state.fixes`` so the audit trail records
             # the primary attempt as well as the fallback's takeover.
             fix = fallback_fix
+            fix.round_number = round_number
+            fix.fixer_result = "attempted"
+            fix.push_status = "not_attempted"
             state.fixes.append(fix)
+            # Issue #1088: rewrite the fallback-takeover artifact so its
+            # trust-boundary fields track the in-memory ``FixResult`` if
+            # the prompt-source guard refuses the push below.
+            _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
             # NOTE: we deliberately do NOT call ``_record_fix_attempts``
             # again here. The primary attempt already incremented every
             # finding's ``fix_attempts_by_key`` counter; a second bump
@@ -1034,19 +1137,177 @@ def run_checkup_review_loop(
             # and would prematurely trip the oscillation/no-progress
             # guards downstream.
 
+        # Issue #1063: deterministic prompt-source guard. The fixer can
+        # produce a code-only patch on a prompt-owned module (e.g.
+        # editing ``pdd/agentic_update.py`` while leaving
+        # ``pdd/prompts/agentic_update_python.prompt`` untouched). That
+        # silently violates PDD's source-of-truth contract and the next
+        # ``pdd sync`` overwrites the bot's edits. Refuse the push here
+        # rather than at the helper layer so the policy lives at the
+        # policy boundary, and DO NOT reset the worktree so the artifacts
+        # remain available for debugging.
+        #
+        # Scope: this guard catches drift introduced by the FIXER in the
+        # current loop iteration. Pre-existing PR-head drift (drift that
+        # landed before the review loop started) is structurally #1062's
+        # territory ("verify final PR head"); widening this guard to
+        # inspect the full PR diff would muddle the boundary #1063
+        # explicitly drew.
+        #
+        # Ship-gate contract: this break leaves ``state.reviewer_status``
+        # at ``findings`` (set at line ~925 before the fixer ran),
+        # ``state.fresh_final_status`` at ``missing``, and the affected
+        # findings at ``status="open"`` because ``_mark_reviewer_findings
+        # _fixed`` is only reached after a clean verify pass. Those three
+        # markers are what the downstream ``checkup_verdict_adapter``
+        # parses out of the rendered report to decide ship/non-ship —
+        # NOT the loop's ``success`` return flag, which per the
+        # ``run_checkup_review_loop`` docstring (lines ~706-708) signals
+        # "loop completed with a trustworthy report" and is True on all
+        # three return paths. The analogous failed-push refusal path
+        # (line ~1068) follows the same contract and is exercised by
+        # ``test_failed_push_aborts_loop_without_running_verifier``.
+        guard_changed_files = _git_changed_files(worktree)
+        # Issue #1081: architecture-registry edit guard runs BEFORE the
+        # 10a prompt-source guard. 10a is per-entry against the
+        # pre-fixer HEAD registry, which a coordinated rename + prompt
+        # delete + ``architecture.json`` rewrite can step around. 10b
+        # closes that hole by detecting registry mutations themselves
+        # (added pair with no prompt on disk, removed pair with code
+        # still present, or any repoint). Cheaper on the common no-
+        # registry-edit path (short-circuits on the trigger check) and
+        # produces the more precise diagnostic for the #1081 attack
+        # shape; running it first surfaces the registry-mutation
+        # refusal rather than a downstream 10a refusal that fires on a
+        # partial symptom.
+        registry_guard_refusal = _check_architecture_registry_edit_guard(
+            worktree, guard_changed_files
+        )
+        if registry_guard_refusal:
+            _write_artifact(
+                artifacts_dir
+                / f"round-{round_number}-architecture-registry-guard-refusal.txt",
+                registry_guard_refusal + "\n",
+            )
+            state.stop_reason = registry_guard_refusal
+            break
+        guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
+        if guard_refusal:
+            _write_artifact(
+                artifacts_dir
+                / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                guard_refusal + "\n",
+            )
+            state.stop_reason = guard_refusal
+            break
+
         pushed, push_message = _commit_and_push_if_changed(
             worktree,
             pr_metadata,
             f"fix: address {reviewer} review-loop findings",
         )
+        # Verification trust boundary (issue #1088, R-V1/R-V2/R-V3):
+        # Capture local/remote SHAs and push status from observable
+        # git state — never from fixer prose.
+        post_push_head_sha = _git_rev_parse_head(worktree) if pushed else ""
+        push_msg_lower = (push_message or "").lower()
+        # ``_commit_and_push_if_changed`` returns ``(True, "No changes
+        # to push.")`` or ``(True, "No eligible changes to push.")``
+        # when the fixer left the worktree unchanged. In that shape no
+        # commit was created so the trust fields stay null and
+        # ``fixer_result`` downgrades to ``skipped``.
+        no_commit_pushed = pushed and (
+            "no changes to push" in push_msg_lower
+            or "no eligible changes" in push_msg_lower
+        )
+        if pushed and not no_commit_pushed:
+            fix.push_status = "pushed"
+            fix.local_fixer_commit_sha = post_push_head_sha or None
+            fix.pushed_head_sha = post_push_head_sha or None
+        elif no_commit_pushed:
+            fix.push_status = "not_attempted"
+            fix.fixer_result = "skipped"
+            fix.local_fixer_commit_sha = None
+            fix.pushed_head_sha = None
+        else:
+            fix.push_status = "push_failed"
+            fix.pushed_head_sha = None
+            # Capture local SHA when the commit was created locally but
+            # the push failed — useful for operator diagnostics.
+            local_after_failed_push = _git_rev_parse_head(worktree)
+            fix.local_fixer_commit_sha = (
+                local_after_failed_push
+                if local_after_failed_push and local_after_failed_push != pre_fix_sha
+                else None
+            )
+        # Issue #1088: rewrite the per-round fix ``findings.json``
+        # artifact now that the trust-boundary fields have been
+        # classified. The initial write in ``_run_fix`` rendered these
+        # as ``null``; this rewrite ensures the on-disk audit trail
+        # matches the prompt contract regardless of which break path
+        # the loop takes next.
+        _write_fix_artifact(
+            artifacts_dir,
+            f"round-{round_number}-fix-{fix.fixer}-for-{reviewer}",
+            summary=fix.summary,
+            changed_files=fix.changed_files,
+            success=fix.success,
+            dispositions=fix.dispositions,
+            rationales=fix.rationales,
+            round_number=fix.round_number,
+            fixer_result=fix.fixer_result,
+            push_status=fix.push_status,
+            local_fixer_commit_sha=fix.local_fixer_commit_sha,
+            pushed_head_sha=fix.pushed_head_sha,
+        )
         if not pushed:
             # Failed push aborts the loop. We deliberately do NOT run the
             # verifier here — the local worktree contains a commit that the
             # PR does not, so a verify pass would falsely report "fixed".
+            state.verification_status_by_round[round_number] = "skipped"
             state.stop_reason = push_message
             break
 
+        # Issue #1088 R-V1/R-V2: the verifier may only run when the fixer
+        # produced a commit that actually landed on the PR head. Two
+        # fail-open paths exist if we don't check the trust-boundary
+        # fields explicitly:
+        #   * ``no_commit_pushed`` — ``_commit_and_push_if_changed``
+        #     returned ``(True, "No changes to push.")`` because the
+        #     fixer left the worktree unchanged, so no SHA was pushed.
+        #   * pushed-but-no-SHA — ``_git_rev_parse_head`` returned ``""``
+        #     so we cannot prove which SHA the PR head points at.
+        # In both cases ``pushed`` is True, so the ``if not pushed`` guard
+        # above does not fire. Without this check the loop would invoke
+        # ``_run_review(... mode="verify")`` and a clean verify on the
+        # pre-fix head would then promote the findings to ``fixed``.
+        if fix.push_status != "pushed" or not fix.pushed_head_sha:
+            state.verification_status_by_round[round_number] = "skipped"
+            if fix.push_status == "not_attempted":
+                state.stop_reason = (
+                    f"Fixer {active_fixer} produced no commit to push "
+                    f"({push_message or 'no changes detected'}); "
+                    "verification skipped."
+                )
+            else:
+                state.stop_reason = (
+                    f"Push reported success but pushed head SHA could "
+                    f"not be captured ({push_message or 'unknown'}); "
+                    "verification skipped."
+                )
+            break
+
         if _budget_exhausted(config, state, deadline):
+            # R-V6: budget cap crossed after the fixer pushed but
+            # before the verifier ran. The fix has landed on the PR
+            # head but verification did not clear the SHA; the round
+            # entry stays ``"unverified"`` so the rendered report can
+            # mark the affected ``### Fixes Attempted`` bullet
+            # ``verification=unverified``.
+            if fix.push_status == "pushed":
+                state.verification_status_by_round.setdefault(
+                    round_number, "unverified"
+                )
             _mark_budget_exhausted(config, state, deadline)
             break
 
@@ -1084,6 +1345,10 @@ def run_checkup_review_loop(
             # point, the right answer is a third independent role, not
             # self-verification.
             state.reviewer_status[reviewer] = verify.status
+            # R-V4: hard-not-clean verifier statuses leave
+            # ``state.verified_head_sha`` unchanged and the round entry
+            # is ``"unverified"``.
+            state.verification_status_by_round[round_number] = "unverified"
             state.stop_reason = (
                 f"Primary reviewer {reviewer} could not verify fixes: "
                 f"{verify.status}."
@@ -1099,6 +1364,28 @@ def run_checkup_review_loop(
         _mark_findings_fixed(state, fixed_findings)
         _record_reviewer_feedback(state, verify_open_findings, fix)
         pending_findings = verify_open_findings
+
+        # Pin per-round verification status BEFORE any break path so
+        # findings marked ``fixed`` by ``_mark_findings_fixed`` above
+        # always have a matching ``verification_status_by_round`` entry
+        # and (on clean rounds) a pinned ``verified_head_sha``. Without
+        # this, budget exhaustion between ``_mark_findings_fixed`` and
+        # the clean/pending branches below leaves ``status='fixed'``
+        # findings with no corresponding round status — breaking the
+        # ``final-state.json`` trust-boundary audit trail.
+        if pending_findings:
+            # R-V4: a ``findings`` verifier result leaves
+            # ``state.verified_head_sha`` unchanged (verification did
+            # not clear the head).
+            state.verification_status_by_round[round_number] = "unverified"
+        else:
+            # R-V4: only ``clean`` advances ``verified_head_sha``. The
+            # SHA the verifier reviewed is, by construction, the SHA
+            # that was just pushed.
+            if fix.pushed_head_sha:
+                state.verified_head_sha = fix.pushed_head_sha
+            state.verification_status_by_round[round_number] = "verified"
+
         if _budget_exhausted(config, state, deadline):
             _mark_budget_exhausted(config, state, deadline)
             break
@@ -2129,18 +2416,25 @@ def _run_fix(
     _write_artifact(artifacts_dir / f"{base}.output.txt", output)
     changed_files = _git_changed_files(worktree)
     summary, dispositions, rationales = _parse_fix_output(output, findings)
-    _write_artifact(
-        artifacts_dir / f"{base}.findings.json",
-        json.dumps(
-            {
-                "summary": summary,
-                "changed_files": changed_files,
-                "success": success,
-                "dispositions": dispositions,
-                "rationales": rationales,
-            },
-            indent=2,
-        ),
+    # Issue #1088: the per-round fix artifact's contract (see
+    # ``pdd/prompts/checkup_review_loop_python.prompt`` §"Per-round
+    # findings.json") requires the trust-boundary fields even when they
+    # are not yet known. Render them as null here; the round loop
+    # rewrites this artifact with concrete values after push/SHA
+    # classification via ``_write_fix_artifact``.
+    _write_fix_artifact(
+        artifacts_dir,
+        base,
+        summary=summary,
+        changed_files=changed_files,
+        success=success,
+        dispositions=dispositions,
+        rationales=rationales,
+        round_number=round_number,
+        fixer_result=None,
+        push_status=None,
+        local_fixer_commit_sha=None,
+        pushed_head_sha=None,
     )
     return FixResult(
         fixer=fixer,
@@ -2153,6 +2447,78 @@ def _run_fix(
     )
 
 
+def _write_fix_artifact(
+    artifacts_dir: Path,
+    base: str,
+    *,
+    summary: str,
+    changed_files: Sequence[str],
+    success: bool,
+    dispositions: Dict[str, str],
+    rationales: Dict[str, str],
+    round_number: int,
+    fixer_result: Optional[str],
+    push_status: Optional[str],
+    local_fixer_commit_sha: Optional[str],
+    pushed_head_sha: Optional[str],
+) -> None:
+    """Write a per-round fix ``findings.json`` artifact (issue #1088).
+
+    The trust-boundary fields are rendered explicitly — even as ``null``
+    — so the audit trail on disk matches the prompt contract.
+    """
+    _write_artifact(
+        artifacts_dir / f"{base}.findings.json",
+        json.dumps(
+            {
+                "summary": summary,
+                "changed_files": list(changed_files),
+                "success": success,
+                "dispositions": dict(dispositions),
+                "rationales": dict(rationales),
+                "round_number": round_number,
+                "fixer_result": fixer_result,
+                "push_status": push_status,
+                "local_fixer_commit_sha": local_fixer_commit_sha,
+                "pushed_head_sha": pushed_head_sha,
+            },
+            indent=2,
+        ),
+    )
+
+
+def _rewrite_fix_artifact_from_state(
+    artifacts_dir: Path,
+    fix: FixResult,
+    reviewer: str,
+) -> None:
+    """Rewrite the per-round fix ``findings.json`` artifact to match
+    the current in-memory ``FixResult`` trust-boundary fields.
+
+    Issue #1088: ``_run_fix`` writes the initial artifact with null
+    trust-boundary fields and relies on the round loop to rewrite
+    after push/SHA classification. Some break paths (failed primary +
+    failed fallback, prompt-source-guard refusal) exit before that
+    rewrite. Calling this helper after every in-memory stamp ensures
+    the on-disk audit trail tracks the FixResult regardless of which
+    break path the loop takes next.
+    """
+    _write_fix_artifact(
+        artifacts_dir,
+        f"round-{fix.round_number}-fix-{fix.fixer}-for-{reviewer}",
+        summary=fix.summary,
+        changed_files=fix.changed_files,
+        success=fix.success,
+        dispositions=fix.dispositions,
+        rationales=fix.rationales,
+        round_number=fix.round_number,
+        fixer_result=fix.fixer_result,
+        push_status=fix.push_status,
+        local_fixer_commit_sha=fix.local_fixer_commit_sha,
+        pushed_head_sha=fix.pushed_head_sha,
+    )
+
+
 def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
     return {
         "fixer": fix.fixer,
@@ -2161,6 +2527,14 @@ def _fix_result_payload(fix: FixResult) -> Dict[str, Any]:
         "changed_files": list(fix.changed_files),
         "dispositions": dict(fix.dispositions),
         "rationales": dict(fix.rationales),
+        # Verification trust boundary fields (issue #1088). Always
+        # present even when null so the on-disk audit shows the trust
+        # boundary that produced this fix.
+        "round_number": fix.round_number,
+        "fixer_result": fix.fixer_result,
+        "push_status": fix.push_status,
+        "local_fixer_commit_sha": fix.local_fixer_commit_sha,
+        "pushed_head_sha": fix.pushed_head_sha,
     }
 
 
@@ -3268,15 +3642,26 @@ def _record_reviewer_feedback(
 
 
 def _fix_dispute_note(fix: FixResult, finding: ReviewFinding) -> str:
+    # Issue #1088 trust boundary: the fixer's self-reported
+    # disposition/rationale is an unverified claim. Qualify every
+    # rendering so a bare ``claude: fixed - <text>`` line can never
+    # appear in the report — downstream readers must see that this is
+    # the fixer's claim, not the verifier's verdict.
     disposition = fix.dispositions.get(finding.key, "").strip()
     rationale = fix.rationales.get(finding.key, "").strip()
     if disposition and rationale:
-        return f"{fix.fixer}: {disposition} - {rationale}"
+        return (
+            f"fixer={fix.fixer} fixer_disposition={disposition} "
+            f"fixer_rationale={rationale!r}"
+        )
     if disposition:
-        return f"{fix.fixer}: {disposition}"
+        return f"fixer={fix.fixer} fixer_disposition={disposition}"
     if rationale:
-        return f"{fix.fixer}: {rationale}"
-    return fix.summary.strip()
+        return f"fixer={fix.fixer} fixer_rationale={rationale!r}"
+    summary = fix.summary.strip()
+    if summary:
+        return f"fixer={fix.fixer} fixer_summary={summary!r}"
+    return ""
 
 
 def _budget_exhausted(
@@ -3446,7 +3831,31 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
         # The base ref is what the static-analysis scanner uses to
         # compute the PR's merge-base diff (``base...HEAD``).
         "base_ref": str(base.get("ref") or ""),
+        # The current remote PR head SHA. Used at final-report render
+        # time (R-V5) to detect the stale-head case where the PR
+        # advanced after the verifier cleared an earlier SHA.
+        "head_sha": str(head.get("sha") or ""),
     }
+
+
+def _git_rev_parse_head(worktree: Path) -> str:
+    """Return ``HEAD`` SHA in the worktree, or ``""`` on failure.
+
+    Returned via ``git rev-parse HEAD`` — never inferred from fixer
+    prose (R-V1/R-V2 contract).
+    """
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
 
 
 def _commit_and_push_if_changed(
@@ -3497,6 +3906,28 @@ def _commit_and_push_if_changed(
     if result.returncode != 0:
         return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
 
+    # Capture the fixer commit's SHA right after committing so every rebase
+    # retry below can reset to the same starting point. Without this, a first
+    # rebase that fast-forwards or drops the fixer commit as empty (because the
+    # fetched PR head already contains the patch) leaves HEAD on a remote
+    # commit; a second remote-advance retry's HEAD~1..HEAD range would then
+    # describe that remote commit instead of our fix, which can resurrect work
+    # a maintainer just force-pushed away.
+    fixer_sha_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if fixer_sha_result.returncode != 0:
+        return False, (
+            "Failed to capture fixer commit SHA before push: "
+            f"{fixer_sha_result.stderr.strip() or fixer_sha_result.stdout.strip()}"
+        )
+    fixer_sha = fixer_sha_result.stdout.strip()
+    if not fixer_sha:
+        return False, "Failed to capture fixer commit SHA before push: empty rev-parse output"
+
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
     head_owner = pr_metadata.get("head_owner", "")
@@ -3504,27 +3935,12 @@ def _commit_and_push_if_changed(
     if not clone_url or not head_ref or not head_owner or not head_repo:
         return False, "Cannot push fixes: PR head repo/ref metadata is unavailable."
 
-    success, error = push_with_retry(
-        worktree,
-        repo_owner=head_owner,
-        repo_name=head_repo,
-        remote=clone_url,
-        refspec=f"HEAD:{head_ref}",
-        set_upstream=False,
-        force_with_lease_on_non_fast_forward=False,
-    )
-    if success:
-        return True, "Pushed fixes to PR branch."
-    if _is_remote_advanced_push_error(error):
-        rebased, rebase_message = _rebase_onto_updated_pr_head(
-            worktree,
-            clone_url=clone_url,
-            head_ref=head_ref,
-            repo_owner=head_owner,
-            repo_name=head_repo,
-        )
-        if not rebased:
-            return False, rebase_message
+    error = ""
+    rebased_for_remote_advance = False
+    # Another checkup attempt, maintainer, or bot can push to the PR branch
+    # between our fetch/rebase and retry. Give that narrow race up to three
+    # attempts without ever falling back to force-push.
+    for rebase_attempt in range(3):
         success, error = push_with_retry(
             worktree,
             repo_owner=head_owner,
@@ -3535,8 +3951,32 @@ def _commit_and_push_if_changed(
             force_with_lease_on_non_fast_forward=False,
         )
         if success:
-            return True, "Pushed fixes to PR branch after rebasing onto updated PR head."
-    return False, f"Failed to push fixes to PR branch: {error.strip()}"
+            if rebased_for_remote_advance:
+                return (
+                    True,
+                    "Pushed fixes to PR branch after rebasing onto updated PR head.",
+                )
+            return True, "Pushed fixes to PR branch."
+        if not _is_remote_advanced_push_error(error):
+            break
+        if rebase_attempt == 2:
+            break
+        rebased, rebase_message = _rebase_onto_updated_pr_head(
+            worktree,
+            clone_url=clone_url,
+            head_ref=head_ref,
+            repo_owner=head_owner,
+            repo_name=head_repo,
+            fixer_sha=fixer_sha,
+        )
+        if not rebased:
+            return False, rebase_message
+        rebased_for_remote_advance = True
+    # git may echo the tokenized remote URL back from the push helper when the
+    # retry path used `https://x-access-token:...@github.com/...`. Scrub before
+    # surfacing so secrets cannot leak into operator-visible logs or reports.
+    token = _github_token_from_env()
+    return False, f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}"
 
 
 def _is_remote_advanced_push_error(error: str) -> bool:
@@ -3561,18 +4001,25 @@ def _rebase_onto_updated_pr_head(
     head_ref: str,
     repo_owner: str,
     repo_name: str,
+    fixer_sha: str,
 ) -> Tuple[bool, str]:
     """Fetch the updated PR head and replay the local fix commit on top.
 
     Review-loop fixes can race with auto-heal or a maintainer push to the same
     PR branch. Force-pushing over those commits would discard remote work, so
     recover by rebasing before retrying the push. Fetch the exact branch ref so
-    tags with the same name cannot populate FETCH_HEAD. Rebase only the fixer
-    commit range (HEAD~1..HEAD) onto FETCH_HEAD so a force-pushed PR head cannot
-    resurrect commits the remote branch intentionally dropped. Use a plain
-    rebase: if the fixer commit conflicts with remote changes, abort and let
-    the next run review/fix from the updated PR head instead of choosing a side
-    silently.
+    tags with the same name cannot populate FETCH_HEAD. Before each rebase,
+    hard-reset the worktree to ``fixer_sha`` (captured immediately after the
+    commit step) so every retry starts from the same local state: that way the
+    ``HEAD~1..HEAD`` range always describes the original fixer commit, even if
+    a previous rebase fast-forwarded HEAD past the fix because the fetched PR
+    head already contained the patch. Without this reset, a later retry could
+    replay a remote commit instead of our fix and resurrect work a maintainer
+    force-pushed away. Rebase only the fixer commit range (HEAD~1..HEAD) onto
+    FETCH_HEAD so a force-pushed PR head cannot resurrect commits the remote
+    branch intentionally dropped. Use a plain rebase: if the fixer commit
+    conflicts with remote changes, abort and let the next run review/fix from
+    the updated PR head instead of choosing a side silently.
     """
     fetched, fetch_message = _fetch_pr_head_for_rebase(
         worktree,
@@ -3587,8 +4034,37 @@ def _rebase_onto_updated_pr_head(
             f"{fetch_message}"
         )
 
+    # Pin the local state to the original fixer commit before every rebase so
+    # the rebase range below is stable across retries. On the first retry this
+    # is effectively a no-op (HEAD already equals ``fixer_sha``); on later
+    # retries it undoes any moves a prior rebase made (fast-forward when the
+    # patch was empty, or replay onto a prior FETCH_HEAD) and reasserts the
+    # contract that we only ever replay our own commit.
+    reset = subprocess.run(
+        ["git", "reset", "--hard", fixer_sha],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if reset.returncode != 0:
+        return False, (
+            "Failed to reset to original fixer commit before rebase: "
+            f"{reset.stderr.strip() or reset.stdout.strip()}"
+        )
+
     rebase = subprocess.run(
-        ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"],
+        [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ],
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -3596,15 +4072,25 @@ def _rebase_onto_updated_pr_head(
     if rebase.returncode == 0:
         return True, "Rebased fixes onto updated PR head."
 
-    subprocess.run(
+    abort = subprocess.run(
         ["git", "rebase", "--abort"],
         cwd=worktree,
         capture_output=True,
         text=True,
     )
+    token = _github_token_from_env()
+    rebase_tail = _redact_secret(
+        rebase.stderr.strip() or rebase.stdout.strip(), token
+    )
+    abort_note = ""
+    if abort.returncode != 0:
+        abort_tail = _redact_secret(
+            abort.stderr.strip() or abort.stdout.strip(), token
+        )
+        abort_note = f" (rebase --abort also failed: {abort_tail})"
     return False, (
         "Failed to rebase fixes onto updated PR branch before retrying push: "
-        f"{rebase.stderr.strip() or rebase.stdout.strip()}"
+        f"{rebase_tail}{abort_note}"
     )
 
 
@@ -3695,19 +4181,803 @@ def _redact_secret(text: str, secret: str) -> str:
 
 
 def _git_changed_files(worktree: Path) -> List[str]:
+    """Return the list of changed paths in ``worktree``.
+
+    Delegates parsing to :func:`pdd.git_porcelain.parse_porcelain_z` and
+    :func:`pdd.git_porcelain.iter_changed_paths` so the shared helper
+    handles every edge case identically across the codebase. The helper:
+
+      - Surfaces BOTH the new AND old paths for ``R`` (rename) records
+        so callers see the rename as a single drift signal.
+      - Surfaces ONLY the new (destination) path for ``C`` (copy)
+        records. A copy's source is referenced by git but is NOT
+        modified, so emitting it as a "changed" path would falsely
+        flag the source as touched. (Earlier hand-rolled parsers
+        emitted the copy source too — that was a latent bug because
+        ``_check_prompt_source_guard`` would refuse a fix on a copy
+        source's prompt-owned module even though the source was never
+        modified.)
+      - Uses ``os.fsdecode`` so non-UTF-8 paths round-trip via the
+        surrogate-escape mechanism. The subprocess captures raw bytes
+        (``text=False``) to preserve every byte verbatim.
+
+    Untracked files ARE surfaced (``?? path`` records); this matches
+    the original ``--porcelain`` default and lets the guard catch a
+    fixer that adds a NEW registered code module without its prompt.
+    ``_git_untracked_files`` exists separately for the staging path,
+    which needs the explicit untracked list to feed into ``git add --``.
+
+    Round-6 finding 1: pass ``--untracked-files=all`` so files INSIDE a
+    new untracked directory are reported as individual ``?? dir/file``
+    records rather than collapsed to a single ``?? dir/`` trailing-slash
+    entry. Without this, the 10b unregistered-new-code scan's
+    ``Path.is_file()`` check fails on the directory path and the
+    untracked-directory bypass of #1081 succeeds (an attacker can drop
+    a new package at ``pdd/foo_v2/__init__.py`` and slip past the
+    guard).
+    """
+    from .git_porcelain import iter_changed_paths, parse_porcelain_z
+
     result = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
         cwd=worktree,
         capture_output=True,
-        text=True,
     )
     if result.returncode != 0:
         return []
-    files: List[str] = []
-    for line in result.stdout.splitlines():
-        if len(line) > 3:
-            files.append(line[3:].strip())
-    return files
+    return list(iter_changed_paths(parse_porcelain_z(result.stdout)))
+
+
+def _load_prompt_source_map(worktree: Path) -> Optional[Dict[str, str]]:
+    """Build the ``code_path -> prompt_path`` mapping from ``architecture.json`` AS OF HEAD.
+
+    Reads from ``git show HEAD:architecture.json`` rather than the
+    worktree filesystem so a fixer cannot remove its own registry
+    entry in the same change set and slip past the guard (review pass
+    #3 Finding 2). The pre-fixer ``HEAD`` is the canonical registry
+    for enforcing the source-of-truth contract.
+
+    Returns ``None`` when the registry is missing/unreadable/unparseable
+    or lists no prompt-owned modules so the caller can degrade
+    gracefully. Logs a WARNING describing the skip in every such case so
+    operators can spot a temporarily-broken registry. Does NOT fall
+    back to reading from the worktree filesystem - that would re-open
+    the registry-evasion hole.
+    """
+    result = subprocess.run(
+        ["git", "show", "HEAD:architecture.json"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        # ``git show HEAD:architecture.json`` returns non-zero when
+        # the worktree is not a git repo, HEAD does not exist (no
+        # commits), or architecture.json is not in the HEAD tree.
+        # Degrade gracefully rather than block, but emit enough
+        # diagnostic for the operator to recognize a misconfigured
+        # worktree.
+        logger.warning(
+            "prompt-source guard: architecture.json missing at HEAD "
+            "in %s (git show exit=%s, stderr=%s); skipping prompt-"
+            "drift enforcement for this round.",
+            worktree,
+            result.returncode,
+            (result.stderr or "").strip(),
+        )
+        return None
+    try:
+        data = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "prompt-source guard: architecture.json at HEAD in %s is "
+            "unparseable (%s); skipping prompt-drift enforcement for "
+            "this round.",
+            worktree,
+            exc,
+        )
+        return None
+
+    mapping: Dict[str, str] = {}
+    for entry in extract_modules(data):
+        filepath = entry.get("filepath")
+        filename = entry.get("filename")
+        if not (isinstance(filepath, str) and isinstance(filename, str)):
+            continue
+        if not filepath or not filename:
+            continue
+        mapping[Path(filepath).as_posix()] = (
+            Path("pdd") / "prompts" / filename
+        ).as_posix()
+
+    if not mapping:
+        logger.warning(
+            "prompt-source guard: architecture.json at HEAD in %s "
+            "lists no prompt-owned modules; skipping prompt-drift "
+            "enforcement.",
+            worktree,
+        )
+        return None
+    return mapping
+
+
+def _check_prompt_source_guard(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Refuse commits that touch generated code without their owning prompt.
+
+    PDD's contract is that prompts are source of truth and generated code
+    is regenerated. The review-loop fixer can patch a registered code
+    file without updating its prompt, and the result silently survives
+    until the next ``pdd sync`` overwrites it (issue #1063). This guard
+    enforces the contract deterministically before the push step.
+
+    Returns ``None`` when the push should proceed, or a refusal string
+    (suitable for ``state.stop_reason``) when at least one offending
+    (code_path, prompt_path) pair is present in the change set.
+
+    Degrades gracefully (allow + warn) when:
+      - ``architecture.json`` is missing or unparseable;
+      - the registry yields no prompt-owned modules;
+      - a registered prompt file no longer exists on disk.
+
+    Failing closed on those cases would brick auto-heal on a temporarily
+    broken registry, which is the inverse of the bug we are fixing.
+    """
+    if not changed_files:
+        return None
+
+    code_to_prompt = _load_prompt_source_map(worktree)
+    if code_to_prompt is None:
+        return None
+
+    changed_norm = {Path(p).as_posix() for p in changed_files if p}
+
+    offenders: List[Tuple[str, str]] = []
+    for code_path, prompt_path in code_to_prompt.items():
+        if code_path not in changed_norm:
+            continue
+        # Disk-state checks distinguish six cases against the
+        # POST-change worktree state. Deletion and rename both leave
+        # the registered path absent on disk - the prompt's fate is
+        # the discriminator for "legitimate retirement / refactor"
+        # vs "drift via rename" (the reconciliation between Finding
+        # A's rename-blocking intent and Finding 1's retirement-
+        # allowing intent).
+        code_still_exists = (worktree / code_path).is_file()
+        prompt_still_exists = (worktree / prompt_path).is_file()
+
+        if not code_still_exists:
+            # Code is gone from disk: either retired (deletion) or
+            # moved (rename). Allow only when the prompt is also
+            # part of this change - either deleted alongside (full
+            # retirement) or co-edited / co-renamed (refactor). If
+            # the prompt is unchanged and still present, the
+            # registered file moved out from under its source of
+            # truth without telling the prompt: that is drift via
+            # rename (review pass #2 Finding A).
+            if not prompt_still_exists or prompt_path in changed_norm:
+                continue
+            offenders.append((code_path, prompt_path))
+            continue
+        if not prompt_still_exists:
+            # Code persists on disk but the prompt has been
+            # destroyed. STRICTLY WORSE drift than the original
+            # #1063 case because the source of truth is gone
+            # entirely - subsequent regeneration would have nothing
+            # to regenerate from. Block unconditionally, even when
+            # the prompt deletion is part of the same change set:
+            # that's a same-commit attack, not a legitimate
+            # retirement (review pass #3 Finding 1).
+            offenders.append((code_path, prompt_path))
+            continue
+        # Both files still exist. If the prompt is also part of
+        # this change set, the source-of-truth contract is
+        # satisfied - the user/bot is explicitly co-editing the
+        # prompt with the code. Allow.
+        if prompt_path in changed_norm:
+            continue
+        # Both files exist, code changed, prompt unchanged = DRIFT
+        # (the original #1063 failure mode).
+        offenders.append((code_path, prompt_path))
+
+    if not offenders:
+        return None
+
+    pairs_text = "; ".join(
+        f"{code} is generated from {prompt}" for code, prompt in offenders
+    )
+    return (
+        "generated-code-only fix refused: "
+        f"{pairs_text}. Update the prompt source or run the proper PDD "
+        "sync path before re-running the review loop."
+    )
+
+
+def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
+    """Build the canonical ``(code_path, prompt_path)`` pair set from an
+    ``architecture.json`` payload.
+
+    Used by ``_check_architecture_registry_edit_guard`` to compare
+    pre-change (HEAD) and post-change (worktree) registry shapes. Paths
+    are normalized to POSIX so comparisons match the changed-file form
+    returned by ``_git_changed_files``.
+    """
+    pairs: Set[Tuple[str, str]] = set()
+    for entry in extract_modules(data):
+        filepath = entry.get("filepath")
+        filename = entry.get("filename")
+        if not (isinstance(filepath, str) and isinstance(filename, str)):
+            continue
+        if not filepath or not filename:
+            continue
+        pairs.add(
+            (
+                Path(filepath).as_posix(),
+                (Path("pdd") / "prompts" / filename).as_posix(),
+            )
+        )
+    return pairs
+
+
+def _path_exists_at_head(worktree: Path, path: str) -> bool:
+    """Return True if ``path`` exists in HEAD's tree.
+
+    Used by ``_check_architecture_registry_edit_guard`` to distinguish
+    additions (path not in HEAD) from modifications (path in HEAD). The
+    unregistered-new-code scan must skip modifications: a legitimate
+    retirement that also touches an existing unregistered helper or
+    test would otherwise falsely trip the scan (round-3 finding 2).
+    """
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"HEAD:{path}"],
+        cwd=worktree,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _is_real_file_no_symlink(path: Path) -> bool:
+    """Return True only when ``path`` is a real, non-symlink file.
+
+    ``Path.is_file()`` follows symlinks, so an attacker can satisfy a
+    prompt-source presence check with ``pdd/prompts/foo.prompt`` as a
+    symlink to any existing file. The guard must reject symlinks for
+    presence checks (round-3 finding 3).
+    """
+    return path.is_file() and not path.is_symlink()
+
+
+def _check_architecture_registry_edit_guard(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Refuse ``architecture.json`` mutations that bypass the prompt
+    source-of-truth contract (issue #1081).
+
+    Sibling of ``_check_prompt_source_guard`` (10a). Where 10a iterates
+    over the HEAD registry to catch code-only edits, this guard
+    enforces against registry MUTATIONS introduced in the current
+    change set so a coordinated rename + prompt delete + registry
+    rewrite cannot slip past 10a.
+
+    Returns ``None`` when the push should proceed, or a refusal string
+    (suitable for ``state.stop_reason``) when the registry edit is a
+    bypass shape.
+
+    Trigger: runs when EITHER ``architecture.json`` is in the change
+    set OR any HEAD-registered pair has its code or prompt missing
+    from the worktree (implicit retirement: the fixer effectively
+    retired a pair on disk without updating the registry, the
+    no-arch-edit variant of the #1081 bypass shape — round-3 finding
+    1). On the common path with no registry edit AND no implicit
+    retirement this short-circuits to ``None``.
+
+    Block rules:
+      - Added pair (in worktree, not in HEAD): the new prompt MUST exist
+        on disk as a REAL file (not a symlink — round-3 finding 3) AND
+        be in the changed set. Otherwise the fixer is pointing the
+        registry at a prompt that does not exist or is forged.
+      - Removed pair (in HEAD, not in worktree): the old code path MUST
+        be gone from disk AND (the old prompt is gone OR is in the
+        changed set). This is the legitimate retirement shape; anything
+        else is drift.
+      - Repointed pair (filepath in both with different prompt, or
+        prompt in both with different filepath): BLOCK unconditionally.
+        A repoint MUST be split into a retire-old + add-new with prompt
+        sources actually present on disk.
+      - Unregistered new code on partial/full wipe OR implicit
+        retirement: when ANY HEAD pair was removed by registry edit OR
+        any HEAD pair was retired on disk without updating the
+        registry, BLOCK if the change set also leaves a NEW path on
+        disk that is in ``changed_files``, is not ``architecture.json``,
+        does not end in ``.prompt`` (round-13 finding: the canonical
+        prompt-source suffix is the precise exclusion — the original
+        ``pdd/prompts/`` directory blanket was too broad and would let
+        an importable ``pdd/prompts/foo_v2.py`` slip past as
+        ``pdd.prompts.foo_v2``), is registered in NEITHER HEAD
+        nor the worktree registry, and did NOT exist at HEAD (i.e. it
+        is an addition, not a modification of an existing
+        unregistered helper — round-3 finding 2). Presence here
+        counts EITHER a real file OR a symlink: a symlink dropped at
+        the new code path is itself a #1081 attack shape, so it must
+        not slip past the scan (opposite polarity from the added-pair
+        prompt-presence check, where a symlink would forge
+        allowance). Otherwise a rename + prompt delete + registry
+        rewrite (or stale-registry no-arch-edit) can masquerade as
+        legitimate retirement while landing new unregistered code.
+
+    Graceful degradation (allow + warn, never block) on:
+      - ``git show HEAD:architecture.json`` non-zero exit
+      - HEAD blob unparseable as JSON
+      - HEAD registry yields no prompt-owned modules
+      - Worktree blob unavailable/unparseable AND HEAD also has no pairs
+    """
+    changed_norm = {Path(p).as_posix() for p in changed_files if p}
+    arch_in_changes = "architecture.json" in changed_norm
+
+    head_result = subprocess.run(
+        ["git", "show", "HEAD:architecture.json"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if head_result.returncode != 0:
+        logger.warning(
+            "architecture-registry guard: architecture.json missing at "
+            "HEAD in %s (git show exit=%s, stderr=%s); skipping "
+            "registry-edit enforcement for this round.",
+            worktree,
+            head_result.returncode,
+            (head_result.stderr or "").strip(),
+        )
+        return None
+    try:
+        head_data = json.loads(head_result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "architecture-registry guard: architecture.json at HEAD in "
+            "%s is unparseable (%s); skipping registry-edit "
+            "enforcement.",
+            worktree,
+            exc,
+        )
+        return None
+
+    head_pairs = _extract_arch_pairs(head_data)
+    if not head_pairs:
+        logger.warning(
+            "architecture-registry guard: architecture.json at HEAD in "
+            "%s lists no prompt-owned modules; skipping registry-edit "
+            "enforcement.",
+            worktree,
+        )
+        return None
+
+    # Round-3 finding 1: broaden the trigger to ALSO fire when any
+    # HEAD-registered pair has its code or prompt missing from the
+    # worktree (implicit retirement). The fixer can retire a pair on
+    # disk without updating ``architecture.json``, leaving the
+    # registry stale and landing unregistered new code under cover of
+    # "code-only fix". Detect that here so the unregistered-new-code
+    # scan below can fire even when ``architecture.json`` was not
+    # edited.
+    implicit_retirement = any(
+        not (worktree / code).is_file() or not (worktree / prompt).is_file()
+        for code, prompt in head_pairs
+    )
+    if not arch_in_changes and not implicit_retirement:
+        return None
+
+    # Worktree-side read. Per spec: when HEAD has entries, treat any
+    # unavailable/empty/garbage worktree registry as ``worktree_pairs =
+    # ∅`` so removed-pair enforcement still fires. Only allow + warn
+    # when the post-change registry is genuinely absent on both sides
+    # (which the HEAD-empty short-circuit above already handles).
+    worktree_pairs: Set[Tuple[str, str]] = set()
+    worktree_path = worktree / "architecture.json"
+    try:
+        worktree_blob = worktree_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "architecture-registry guard: architecture.json missing or "
+            "unreadable in worktree %s (%s); enforcing as full registry "
+            "removal.",
+            worktree,
+            exc,
+        )
+    else:
+        try:
+            worktree_data = json.loads(worktree_blob)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "architecture-registry guard: architecture.json in "
+                "worktree %s is unparseable (%s); enforcing as full "
+                "registry removal.",
+                worktree,
+                exc,
+            )
+        else:
+            worktree_pairs = _extract_arch_pairs(worktree_data)
+
+    added = worktree_pairs - head_pairs
+    removed = head_pairs - worktree_pairs
+
+    # Repointed detection: surface entries where the filepath appears
+    # on both sides mapped to a different prompt, OR the prompt appears
+    # on both sides mapped to a different filepath. These MUST be
+    # reported separately (not elided as add + remove) so the operator
+    # sees the precise #1081 attack shape.
+    head_by_code: Dict[str, str] = {c: p for c, p in head_pairs}
+    head_by_prompt: Dict[str, str] = {p: c for c, p in head_pairs}
+    wt_by_code: Dict[str, str] = {c: p for c, p in worktree_pairs}
+    wt_by_prompt: Dict[str, str] = {p: c for c, p in worktree_pairs}
+
+    repointed_by_code: List[Tuple[str, str, str]] = []
+    repointed_by_prompt: List[Tuple[str, str, str]] = []
+    consumed_added: Set[Tuple[str, str]] = set()
+    consumed_removed: Set[Tuple[str, str]] = set()
+
+    for code, old_prompt in head_by_code.items():
+        new_prompt = wt_by_code.get(code)
+        if new_prompt is None or new_prompt == old_prompt:
+            continue
+        repointed_by_code.append((code, old_prompt, new_prompt))
+        consumed_removed.add((code, old_prompt))
+        consumed_added.add((code, new_prompt))
+
+    # Invariant: ``consumed_added`` only contains pairs the filepath
+    # loop matched -- i.e. ``(code, new_prompt)`` for codes shared with
+    # HEAD. A prompt repoint that moves to a NEW filepath produces
+    # ``pair_new = (new_code, prompt)`` which is never pre-consumed
+    # there, so this loop catches identity repoints orthogonally from
+    # the filepath loop (see swap-variant regression test).
+    for prompt, old_code in head_by_prompt.items():
+        new_code = wt_by_prompt.get(prompt)
+        if new_code is None or new_code == old_code:
+            continue
+        pair_old = (old_code, prompt)
+        pair_new = (new_code, prompt)
+        if pair_old in consumed_removed and pair_new in consumed_added:
+            continue
+        repointed_by_prompt.append((prompt, old_code, new_code))
+        consumed_removed.add(pair_old)
+        consumed_added.add(pair_new)
+
+    added_only = added - consumed_added
+    removed_only = removed - consumed_removed
+
+    offenders_added: List[Tuple[str, str]] = []
+    for code, prompt in sorted(added_only):
+        # Round-14 finding: a fixer can register an importable Python
+        # file as a "prompt" to exempt it from the unregistered-new-code
+        # scan (which skips paths already in ``worktree_registered_paths``).
+        # E.g. ``architecture.json`` is rewritten to register
+        # ``(pdd/foo_v2.py, pdd/prompts/foo_v2.py)`` — pointing the prompt
+        # at a .py file. The added-pair check then sees both paths on disk
+        # and in the change set, ALLOWS the add, the 10b scan skips
+        # ``pdd/prompts/foo_v2.py`` because it is now "registered", and
+        # ``pdd.prompts.foo_v2`` lands as importable unregistered Python.
+        # Defence: a registered prompt path MUST end with ``.prompt`` —
+        # the canonical PDD prompt-source suffix. Anything else (.py,
+        # .pyc, .pyw, .pyo, .so, .pyd, ...) is the codex-pass-#13/#14
+        # bypass shape. Case-insensitive to mirror the round-9 /
+        # round-12 prefix/suffix normalization for case-insensitive
+        # filesystems.
+        if not prompt.lower().endswith(".prompt"):
+            offenders_added.append((code, prompt))
+            continue
+        # Round-3 finding 3: reject symlinks for prompt-source presence
+        # checks. ``Path.is_file()`` follows symlinks, so an attacker
+        # could satisfy the check with ``pdd/prompts/<filename>`` as a
+        # symlink to any existing file. Require a real, non-symlink
+        # file at the prompt path.
+        prompt_on_disk = _is_real_file_no_symlink(worktree / prompt)
+        prompt_in_changeset = prompt in changed_norm
+        if prompt_on_disk and prompt_in_changeset:
+            continue
+        offenders_added.append((code, prompt))
+
+    offenders_removed: List[Tuple[str, str]] = []
+    for code, prompt in sorted(removed_only):
+        # ``is_file()`` follows symlinks intentionally here: if the
+        # registered code path is replaced with a symlink to an
+        # existing file, ``code_gone`` is False so the removal is
+        # blocked as "code still present" — the correct outcome.
+        code_gone = not (worktree / code).is_file()
+        prompt_gone = not (worktree / prompt).is_file()
+        prompt_in_changeset = prompt in changed_norm
+        if code_gone and (prompt_gone or prompt_in_changeset):
+            continue
+        offenders_removed.append((code, prompt))
+
+    # Unregistered-new-code scan: fires on the registry-edit
+    # partial/full wipe variant (``removed_only`` non-empty) OR on
+    # implicit retirement (a HEAD-registered pair is gone from disk
+    # without an ``architecture.json`` edit — round-3 finding 1).
+    # When ANY HEAD pair was effectively retired by either mechanism,
+    # an unregistered new code path landed in the same change set is
+    # the #1081 attack shape. The retirement-shape allowance above
+    # passes ``removed_only`` entries where the old code and prompt
+    # are gone — but it cannot see a separate new file that the fixer
+    # introduced under the cover of "legitimate retirement". Restrict
+    # to paths actually in the change set, not ending in ``.prompt``
+    # (round-13 finding: the canonical prompt-source suffix is the
+    # precise exclusion — the original ``pdd/prompts/`` directory
+    # blanket was too broad and would let importable Python under
+    # ``pdd/prompts/`` slip past as ``pdd.prompts.<name>``),
+    # not the registry itself, absent from BOTH registry sides (so
+    # legitimate retire-old + add-new module rewrites still pass),
+    # AND that did NOT exist at HEAD (round-3 finding 2 — a
+    # modification of an existing unregistered helper, test, or doc
+    # is not "new code"). Presence here is "real file OR symlink": a
+    # symlink dropped at the new code path is itself a #1081 attack
+    # shape (the attacker can point pdd/foo_v2.py at any existing
+    # file and slip in unregistered code), so symlinks must COUNT as
+    # presence here — the opposite polarity from the added-pair
+    # prompt-presence check above, where a symlink forges allowance.
+    #
+    # Round-6 finding 2: restrict the scan to paths that look like
+    # generated prompt-driven code — under ``pdd/`` and ending in
+    # ``.py``. 10b's scope boundary is registry mutations, which
+    # cover prompt-owned modules registered in ``architecture.json``.
+    # Tests (``tests/``), docs (``docs/``), scripts (``scripts/``),
+    # and other top-level paths are out of scope: a legitimate
+    # retirement that also adds a test or a doc must not trip the
+    # scan. ``__init__.py`` is INTENTIONALLY kept in scope so the
+    # round-6 finding 1 untracked-directory bypass (a new package at
+    # ``pdd/foo_v2/__init__.py``) is still caught.
+    #
+    # Round-7 finding: a symlink under ``pdd/`` (excluding
+    # ``pdd/prompts/``) can resolve to importable Python code (a
+    # package directory or a ``.py`` module) without carrying a
+    # ``.py`` suffix on the link path itself. ``git status
+    # --untracked-files=all`` lists a directory-symlink as the bare
+    # link path (e.g. ``pdd/foo_v2``, no trailing slash, no ``.py``),
+    # so the ``.py`` filter alone silently allows it. Generated
+    # prompt-driven code under ``pdd/`` is never a symlink, so the
+    # safe rule is to keep any newly-added symlink under ``pdd/``
+    # (outside ``pdd/prompts/``) in scope regardless of suffix.
+    # Hoist the registered-path sets out of the inner scan so the
+    # round-11 submodule check below can reuse them without
+    # recomputing. Both scans share the same gating precondition
+    # (``removed_only or implicit_retirement``) and the same notion
+    # of "registered on either side of the registry edit".
+    head_registered_paths = {path for pair in head_pairs for path in pair}
+    worktree_registered_paths = {
+        path for pair in worktree_pairs for path in pair
+    }
+    unregistered_new_code_paths: List[str] = []
+    if removed_only or implicit_retirement:
+        for path in sorted(changed_norm):
+            if path == "architecture.json":
+                continue
+            if path in head_registered_paths:
+                continue
+            if path in worktree_registered_paths:
+                continue
+            # Round-12 finding (codex review pass #12): the prefix
+            # check must be case-insensitive too, mirroring the R10
+            # suffix fix. On case-insensitive filesystems (Windows;
+            # macOS HFS+/APFS in default case-insensitive mode) an
+            # uppercase/mixed-case directory prefix like ``PDD/`` or
+            # ``Pdd/`` aliases to ``pdd/`` on disk, so
+            # ``PDD/foo_v2.py`` is importable as ``pdd.foo_v2``
+            # exactly like ``pdd/foo_v2.py``. A case-sensitive
+            # ``str.startswith("pdd/")`` would let the bypass slip
+            # past; lowercase the path side of the prefix
+            # comparisons.
+            path_lower = path.lower()
+            # Round-13 finding (codex review pass #13): the original
+            # ``pdd/prompts/`` directory blanket was too broad. The
+            # intent was to skip ``.prompt`` files (canonical prompt
+            # sources, not importable Python), but anything else under
+            # ``pdd/prompts/`` — including ``.py``/``.pyc``/etc. —
+            # remains importable as ``pdd.prompts.<name>``. A fixer
+            # that wipes the registry, deletes the registered pair,
+            # and drops ``pdd/prompts/foo_v2.py`` would otherwise slip
+            # past the scan: ``pdd.prompts.foo_v2`` is now importable
+            # Python with no prompt source. Replace the dir-blanket
+            # with a ``.prompt`` suffix exclusion — ``.prompt`` files
+            # anywhere (not just under ``pdd/prompts/``) are skipped
+            # because the suffix itself marks them as canonical prompt
+            # sources and isn't importable Python; everything else
+            # under ``pdd/prompts/`` falls through to the standard
+            # importable-suffix filter below.
+            if path_lower.endswith(".prompt"):
+                continue
+            # Round-6 finding 2: narrow the scan to generated
+            # prompt-driven code under ``pdd/``. Anything else
+            # (tests, docs, scripts, top-level helpers) falls
+            # outside the registry-mutation scope.
+            if not path_lower.startswith("pdd/"):
+                continue
+            candidate = worktree / path
+            # Round-7 finding: a symlink under ``pdd/`` can resolve
+            # to importable Python code (package directory or .py
+            # file) without carrying a ``.py`` suffix on the link
+            # path itself. ``Path.is_symlink()`` does NOT follow the
+            # link, so it works even if the target is broken or
+            # outside the worktree. Keep symlinks in scope regardless
+            # of suffix; otherwise apply the importable-suffix filter.
+            #
+            # Round-8 finding: the suffix filter must cover every
+            # shape Python can import as ``pdd.<name>`` (see
+            # ``_IMPORTABLE_SUFFIXES``). A sourceless ``.pyc``
+            # bypass (delete code+prompt, drop ``pdd/foo_v2.pyc``)
+            # would otherwise slip past a ``.py``-only check while
+            # remaining importable via
+            # ``importlib.machinery.SourcelessFileLoader``.
+            #
+            # Round-9 finding: the suffix match must be
+            # case-insensitive. Python's own
+            # ``importlib.machinery`` suffix matching is
+            # case-insensitive on case-insensitive filesystems
+            # (Windows; macOS HFS+/APFS in default case-insensitive
+            # mode), so ``pdd/foo_v2.PY`` is importable as
+            # ``pdd.foo_v2`` exactly like ``pdd/foo_v2.py``. A
+            # case-sensitive ``str.endswith`` against the lowercase
+            # ``_IMPORTABLE_SUFFIXES`` tuple would let an uppercase
+            # or mixed-case suffix (``.PY``, ``.PYC``, ``.So``)
+            # slip past the scan. Lowercase the path side of the
+            # comparison; ``_IMPORTABLE_SUFFIXES`` is already
+            # lowercase so the tuple does not need re-casing.
+            is_symlink = candidate.is_symlink()
+            if (
+                not is_symlink
+                and not path.lower().endswith(_IMPORTABLE_SUFFIXES)
+            ):
+                continue
+            # Treat either a real file or a symlink as "present on
+            # disk" — symlinks are themselves part of the #1081
+            # attack surface here.
+            if not (candidate.is_file() or is_symlink):
+                continue
+            # Round-3 finding 2: skip modifications of files that
+            # already existed at HEAD. Only flag genuine additions.
+            if _path_exists_at_head(worktree, path):
+                continue
+            unregistered_new_code_paths.append(path)
+
+    # Round-11 finding: a fixer that adds a git submodule under
+    # ``pdd/`` can land importable Python code without it appearing
+    # as an enumerable file in ``--untracked-files=all`` — the
+    # gitlink shows as the bare directory path, and the files
+    # inside come from the submodule's checked-out HEAD. The
+    # round-10b scan above sees the bare ``pdd/foo_v2`` path, finds
+    # no importable suffix and no symlink, and skips it. The signal
+    # we DO see is ``.gitmodules`` appearing in the change set:
+    # legitimate refactors do not add a submodule inside ``pdd/``,
+    # so an LLM fixer creating one alongside a retirement/wipe is
+    # unambiguously the bypass shape. Block any new gitlink
+    # (worktree shows as a real directory, not a symlink) under
+    # ``pdd/`` outside ``pdd/prompts/`` that did not exist at HEAD
+    # and is registered in neither the HEAD nor the worktree
+    # registry side.
+    gitmodules_changed = ".gitmodules" in changed_norm
+    submodule_offenders: List[str] = []
+    if gitmodules_changed and (removed_only or implicit_retirement):
+        for path in sorted(changed_norm):
+            # Round-12 finding (codex review pass #12): match the
+            # 10b scan above — lowercase the path side of the
+            # prefix checks so an uppercase/mixed-case ``PDD/`` or
+            # ``Pdd/`` submodule path doesn't bypass the R11 check
+            # on case-insensitive filesystems.
+            path_lower = path.lower()
+            if not path_lower.startswith("pdd/"):
+                continue
+            # Round-13 parity with the 10b scan above: replace the
+            # ``pdd/prompts/`` directory blanket with a ``.prompt``
+            # suffix exclusion. A submodule path is unlikely to end
+            # in ``.prompt`` in practice, but keep the two scans in
+            # lockstep so the rule is identical everywhere.
+            if path_lower.endswith(".prompt"):
+                continue
+            if path in head_registered_paths:
+                continue
+            if path in worktree_registered_paths:
+                continue
+            candidate = worktree / path
+            # A gitlink shows as a directory in the worktree (the
+            # submodule is checked out). Don't follow symlinks here
+            # — those are caught by the symlink branch of the 10b
+            # scan above.
+            if candidate.is_dir() and not candidate.is_symlink():
+                if not _path_exists_at_head(worktree, path):
+                    submodule_offenders.append(path)
+
+    repointed_by_code.sort()
+    repointed_by_prompt.sort()
+
+    if not (offenders_added or offenders_removed
+            or repointed_by_code or repointed_by_prompt
+            or unregistered_new_code_paths
+            or submodule_offenders):
+        return None
+
+    parts: List[str] = []
+    for path in unregistered_new_code_paths:
+        if arch_in_changes:
+            # Registry was edited; the partial/full-wipe attack shape.
+            parts.append(
+                "removed registered pair while new unregistered code path "
+                f"{path} was added"
+            )
+        else:
+            # No registry edit; a HEAD-registered pair was retired on
+            # disk while a new unregistered code path landed. Registry
+            # is now stale (round-3 finding 1).
+            parts.append(
+                "retired registered pair on disk while new unregistered "
+                f"code path {path} was added; architecture.json not "
+                "updated"
+            )
+    for code, prompt in offenders_added:
+        # Round-14 finding: distinguish the "non-.prompt suffix"
+        # bypass shape (importable code disguised as a prompt) from
+        # the original "missing prompt on disk" shape so the operator
+        # sees the precise attack the guard refused.
+        if not prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"added {code}\u2194{prompt} where the registered prompt "
+                f"path is not a .prompt file (importable code disguised "
+                f"as a prompt)"
+            )
+        else:
+            parts.append(
+                f"added {code}\u2194{prompt} without prompt source on disk"
+            )
+    for code, prompt in offenders_removed:
+        parts.append(
+            f"removed {code}\u2194{prompt} with code still present"
+        )
+    for code, old_prompt, new_prompt in repointed_by_code:
+        # Round-14 finding (symmetry with the added-pair check): a
+        # repoint whose NEW prompt path is not a ``.prompt`` file is the
+        # same "importable code disguised as a prompt" attack shape,
+        # just dressed as a repoint instead of an added pair. Surface
+        # the precise attack so the refusal is traceable.
+        if not new_prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"repointed {code} from {old_prompt} to {new_prompt} "
+                f"where the new prompt path is not a .prompt file "
+                f"(importable code disguised as a prompt)"
+            )
+        else:
+            parts.append(
+                f"repointed {code} from {old_prompt} to {new_prompt}"
+            )
+    for prompt, old_code, new_code in repointed_by_prompt:
+        # Round-14 finding (defence-in-depth symmetry): ``prompt`` here
+        # is HEAD-side (the unchanged registry key), so it should
+        # already be a ``.prompt`` file — but mirror the check so a
+        # future poisoning of HEAD that flows through the prompt-loop
+        # repoint path is still surfaced distinctly.
+        if not prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"repointed {prompt} from {old_code} to {new_code} "
+                f"where the registered prompt path is not a .prompt "
+                f"file (importable code disguised as a prompt)"
+            )
+        else:
+            parts.append(
+                f"repointed {prompt} from {old_code} to {new_code}"
+            )
+    for path in submodule_offenders:
+        parts.append(
+            f"new git submodule {path} introduced via .gitmodules edit "
+            "while a registered prompt-owned pair was retired"
+        )
+
+    return (
+        "architecture.json registry edit refused: "
+        + "; ".join(parts)
+        + ". Update the prompt source or run the proper PDD sync path "
+        "before re-running the review loop."
+    )
 
 
 def _git_untracked_files(worktree: Path) -> List[str]:
@@ -3798,6 +5068,16 @@ def _write_final_state(
         "fix_attempts_by_key": dict(state.fix_attempts_by_key),
         "dispute_notes_by_key": dict(state.dispute_notes_by_key),
         "reviewer_feedback_by_key": dict(state.reviewer_feedback_by_key),
+        # SHA-backed verification trust boundary (issue #1088). Always
+        # present so downstream consumers can rely on the schema rather
+        # than feature-detecting.
+        "verified_head_sha": state.verified_head_sha,
+        "remote_pr_head_sha": state.remote_pr_head_sha,
+        "reviewed_head_sha": state.reviewed_head_sha,
+        "verification_status_by_round": {
+            str(round_number): status
+            for round_number, status in state.verification_status_by_round.items()
+        },
         "findings": [f.to_dict() for f in state.findings],
         "fixes": [
             {
@@ -3807,6 +5087,12 @@ def _write_final_state(
                 "changed_files": list(fix.changed_files),
                 "dispositions": dict(fix.dispositions),
                 "rationales": dict(fix.rationales),
+                # Verification trust boundary fields.
+                "round_number": fix.round_number,
+                "fixer_result": fix.fixer_result,
+                "push_status": fix.push_status,
+                "local_fixer_commit_sha": fix.local_fixer_commit_sha,
+                "pushed_head_sha": fix.pushed_head_sha,
             }
             for fix in state.fixes
         ],
@@ -3845,6 +5131,130 @@ def _finalize(
     artifacts_dir: Path,
 ) -> str:
     """Render the final report, persist final-report.md and final-state.json."""
+    # R-V5: re-fetch the current remote PR head SHA exactly once at the
+    # render boundary so the rendered report observes the stale-head
+    # case described by issue #1088. The re-fetch fires whenever there
+    # is anything to verify — either a verifier pass pinned a SHA
+    # (``state.verified_head_sha``), a reviewer path returned ``clean``
+    # against a worktree SHA we recorded as ``state.reviewed_head_sha``,
+    # OR a verifier partially accepted a pushed fix (some findings
+    # marked ``fixed`` even though the round itself was not clean). The
+    # third trigger closes the gap where ``_mark_findings_fixed`` writes
+    # ``status='fixed'`` for findings the verifier omitted without
+    # advancing ``state.verified_head_sha``, leaving the canonical
+    # ``final-state.json`` to claim a fix without proof that the
+    # current remote PR head still matches the SHA the verifier
+    # examined.
+    last_pushed_fix_sha: Optional[str] = None
+    for past_fix in reversed(state.fixes):
+        if past_fix.pushed_head_sha:
+            last_pushed_fix_sha = past_fix.pushed_head_sha
+            break
+    has_fixed_finding = any(
+        finding.status == "fixed" for finding in state.findings_by_key.values()
+    )
+    needs_refetch = (
+        bool(state.verified_head_sha)
+        or state.fresh_final_status == "clean"
+        or has_fixed_finding
+        or bool(last_pushed_fix_sha)
+    )
+    if needs_refetch:
+        state.final_refetch_attempted = True
+        # Comparison target priority:
+        #  1. The verifier-pinned SHA (``verified_head_sha``) wins when
+        #     set, because the verifier examined the post-push head
+        #     directly and returned clean.
+        #  2. Otherwise the most recently pushed fix SHA — that is the
+        #     SHA the verifier saw when it partially accepted fixes,
+        #     even though the round did not end clean.
+        #  3. Otherwise the SHA the reviewer observed in the worktree
+        #     before any fixer ran.
+        compare_sha = (
+            state.verified_head_sha
+            or last_pushed_fix_sha
+            or state.reviewed_head_sha
+        )
+        metadata = _fetch_pr_metadata(
+            context.pr_owner, context.pr_repo, context.pr_number
+        )
+        remote_sha = (metadata or {}).get("head_sha") or ""
+        stale_head = False
+        if remote_sha:
+            state.remote_pr_head_sha = remote_sha
+            if not compare_sha:
+                # Clean reviewer status but we never observed the
+                # reviewed SHA (worktree rev-parse failed AND PR
+                # metadata had no head_sha). Fail-closed: we cannot
+                # prove the remote head matches the reviewed head.
+                stale_head = True
+                if state.fresh_final_status == "clean":
+                    state.fresh_final_status = "missing"
+                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                        state.stop_reason = (
+                            "Reviewed PR head SHA was not observable; "
+                            "cannot prove remote head matches review. "
+                            "Rerun the review loop."
+                        )
+            elif remote_sha != compare_sha:
+                # The PR head advanced after the review/verify pass.
+                # Downgrade any otherwise-clean fresh-final to
+                # ``missing`` so downstream verdict adapters do not
+                # treat the stale verdict as ship-ready.
+                stale_head = True
+                if state.fresh_final_status == "clean":
+                    state.fresh_final_status = "missing"
+                    short_reviewed = compare_sha[:7]
+                    short_remote = remote_sha[:7]
+                    if not state.stop_reason or "could not" not in state.stop_reason.lower():
+                        # Pick the verb that matches what actually
+                        # cleared the SHA. When the verifier was the
+                        # one that cleared it, keep the existing
+                        # "advanced after verification" message so
+                        # downstream parsers and the regression tests
+                        # that grep for it keep working. Otherwise
+                        # explain that the reviewer's SHA is stale.
+                        if state.verified_head_sha:
+                            state.stop_reason = (
+                                f"PR head advanced after verification "
+                                f"(verified={short_reviewed} remote={short_remote}); "
+                                "rerun the review loop."
+                            )
+                        else:
+                            state.stop_reason = (
+                                f"PR head advanced after review "
+                                f"(reviewed={short_reviewed} remote={short_remote}); "
+                                "rerun the review loop."
+                            )
+        else:
+            # Re-fetch failed or returned no head_sha. Per R-V5,
+            # fail-closed: downgrade a clean fresh-final to ``missing``
+            # and leave ``remote_pr_head_sha`` as ``None``.
+            stale_head = True
+            if state.fresh_final_status == "clean":
+                state.fresh_final_status = "missing"
+                state.stop_reason = (
+                    "Remote PR head could not be fetched or confirmed; "
+                    "verification is treated as unverified. "
+                    "Rerun the review loop."
+                )
+        if stale_head:
+            # Issue #1088: the rendered report alone is not enough — the
+            # canonical machine-readable ``final-state.json`` must also
+            # stop claiming the round was verified and the findings
+            # fixed once the remote head is known to be stale (or
+            # unobservable). Downgrade ``verified`` rounds to ``stale``
+            # and revert any ``fixed`` findings to ``open`` so downstream
+            # consumers cannot read the untrusted fixer attempt as
+            # completed against the current remote head.
+            for round_number, status in list(
+                state.verification_status_by_round.items()
+            ):
+                if status == "verified":
+                    state.verification_status_by_round[round_number] = "stale"
+            for finding in state.findings_by_key.values():
+                if finding.status == "fixed":
+                    finding.status = "open"
     report = _render_final_report(context, state, reviewers)
     issue_aligned = _resolve_issue_aligned(state)
     _write_artifact(artifacts_dir / "final-report.md", report)
@@ -3887,6 +5297,23 @@ def _render_final_report(
         for reviewer in reviewers
     )
     status_pairs = f"{status_pairs} fresh-final={state.fresh_final_status}".strip()
+    # Verification trust boundary header lines (issue #1088).
+    verified_sha_line = state.verified_head_sha or "none"
+    if state.remote_pr_head_sha:
+        remote_sha_line = state.remote_pr_head_sha
+    elif state.final_refetch_attempted or any(
+        fix.pushed_head_sha for fix in state.fixes
+    ):
+        # The render-time re-fetch was attempted but did not observe a
+        # remote head. Render ``unknown`` per R-V5 so the rendered
+        # report is honest about the failed observation rather than
+        # implying nothing was attempted. The legacy
+        # ``any(pushed_head_sha)`` branch is preserved so a hand-off
+        # path that records a pushed SHA without going through
+        # ``_finalize``'s flag still renders ``unknown``.
+        remote_sha_line = "unknown"
+    else:
+        remote_sha_line = "none"
     lines = [
         "## Step 7/8: Review Loop Final Report",
         "",
@@ -3896,6 +5323,8 @@ def _render_final_report(
         f"active-reviewer: {state.active_reviewer or 'unknown'}",
         f"reviewer-status: {status_pairs}",
         f"fresh-final-review: {state.fresh_final_status}",
+        f"verified-head-sha: {verified_sha_line}",
+        f"remote-pr-head-sha: {remote_sha_line}",
         f"max-rounds-reached: {str(state.max_rounds_reached).lower()}",
         f"max-cost-reached: {str(state.max_cost_reached).lower()}",
         f"max-duration-reached: {str(state.max_duration_reached).lower()}",
@@ -4030,12 +5459,19 @@ def _render_final_report(
         finding for finding in remaining_findings if finding.key in state.dispute_notes_by_key
     ]
     if findings_with_rationale:
+        # Issue #1088 trust boundary: remaining findings are, by
+        # definition, still open after the verifier's last word — so
+        # every Fixer Rationale bullet here is an unverified fixer
+        # claim. Tag each line with ``verification=unverified`` to make
+        # the trust state explicit alongside the qualified
+        # ``fixer_disposition=`` / ``fixer_rationale=`` note produced by
+        # ``_fix_dispute_note``.
         for finding in findings_with_rationale:
             note = state.dispute_notes_by_key.get(finding.key, "No fixer rationale captured.")
             location = finding.location or "-"
             lines.append(
                 f"- {_escape_table(location)}: {_escape_table(finding.finding)} "
-                f"({_escape_table(note)})"
+                f"({_escape_table(note)}; verification=unverified)"
             )
     else:
         lines.append("- none")
@@ -4046,27 +5482,75 @@ def _render_final_report(
         "",
     ])
     if state.fixes:
-        unfinished_review = (
+        # Verification trust boundary (issue #1088, R-V7). Render each
+        # ``### Fixes Attempted`` bullet in the structured triple
+        # ``fixer_result=… push_status=… verification=…`` so the bare
+        # fixer-subprocess return flag never leads as a ``success``
+        # token. The fixer's free-text summary is only rendered as the
+        # trailing ``summary=`` field so it cannot hijack downstream
+        # adapters that scan for verification evidence.
+        loop_unfinished = (
             remaining_findings
             or _has_hard_not_clean_state(state)
             or _has_limit_state(state)
         )
-        verification = (
-            "unverified" if unfinished_review else "verified"
+        remote_mismatch = bool(
+            state.verified_head_sha
+            and state.remote_pr_head_sha
+            and state.verified_head_sha != state.remote_pr_head_sha
+        )
+        remote_fetch_failed = bool(
+            state.verified_head_sha and not state.remote_pr_head_sha
         )
         for fix in state.fixes:
+            fixer_result = fix.fixer_result or (
+                "attempted" if fix.success else "failed"
+            )
+            push_status = fix.push_status or "not_attempted"
+            local_sha = (
+                fix.local_fixer_commit_sha[:7]
+                if fix.local_fixer_commit_sha
+                else "none"
+            )
+            pushed_sha = (
+                fix.pushed_head_sha[:7] if fix.pushed_head_sha else "none"
+            )
+            # R-V7 + R-V5: verification=verified requires push_status
+            # ``pushed``, the verifier cleared the pushed SHA, no
+            # loop-level unfinished state, and the render-time re-fetch
+            # confirmed the remote head still matches.
+            round_status = state.verification_status_by_round.get(
+                fix.round_number, "skipped"
+            )
+            verification = "unverified"
+            if (
+                push_status == "pushed"
+                and fix.pushed_head_sha
+                and fix.pushed_head_sha == state.verified_head_sha
+                and round_status == "verified"
+                and not loop_unfinished
+                and not remote_mismatch
+                and not remote_fetch_failed
+            ):
+                verification = "verified"
             changed = ", ".join(fix.changed_files) if fix.changed_files else "none"
             # Failed fixer summaries contain raw subprocess output (e.g.
             # ``[CRITICAL]`` log lines, ``issue_aligned: false`` JSON
             # fragments, ``max-cost-reached: true``) that the cloud
             # verdict adapter scans without fence/section awareness.
-            # Without this defang, a verified fallback fix could be
-            # downgraded by trip-wires that lived only in the failed
-            # primary's audit row.
-            safe_summary = _defang_adapter_trip_wires(fix.summary)
+            # Defang at render only so on-disk state stays truthful.
+            safe_summary = _defang_adapter_trip_wires(fix.summary or "")
+            summary_part = (
+                f" summary={_escape_table(safe_summary)}"
+                if safe_summary.strip()
+                else ""
+            )
             lines.append(
-                f"- {fix.fixer}: {'success' if fix.success else 'failed'}; "
-                f"verification={verification}; changed_files={changed}; {safe_summary}"
+                f"- round={fix.round_number} fixer={fix.fixer} "
+                f"fixer_result={fixer_result} push_status={push_status} "
+                f"local_sha={local_sha} pushed_sha={pushed_sha} "
+                f"changed_files={changed} verification={verification}"
+                f"{summary_part}"
             )
     else:
         lines.append("- none")
