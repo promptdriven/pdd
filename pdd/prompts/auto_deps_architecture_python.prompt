@@ -57,14 +57,27 @@
 %      - any non-empty ``select=``, ``query=``, or ``lines=`` attribute
 %    - Context-only source-file include selectors are LLM source context, not architecture edges.
 %    - Function: extract_include_paths_from_prompt_text(text: str) -> Set[str]
-%    - Parse both ``&lt;include ...&gt;body&lt;/include&gt;`` (body form) and ``&lt;include ... /&gt;``
-%      (self-closing form). Two-branch regex with ``re.DOTALL``:
-%        body-form:   r"&lt;include(?P<attrs&gt;\s+[^>]*?)?(?<!/)>(?P<body>.*?)&lt;/include&gt;"
-%        self-closing: r"&lt;include(?P<attrs_self&gt;\s+[^>]*?)\s*/>"
-%      The body-form branch carries a ``(?<!/)`` negative lookbehind on its closing
-%      ``>`` so a self-closing ``&lt;include path="x" /&gt;`` followed on a later line by
-%      ``&lt;include&gt;y&lt;/include&gt;`` is not swallowed as one body-form match (mirrors
-%      ``pdd/sync_order.py::extract_includes_from_file``).
+%    - Parse PDD include tags in two forms: a body form (opening tag, body, matching
+%      closing tag) and a self-closing form (single tag with a trailing slash). The
+%      canonical implementation lives in ``pdd/sync_order.py::extract_includes_from_file``;
+%      this function reuses that exact pattern shape against an in-memory string. Use
+%      ``re.DOTALL`` so the body can span newlines.
+%      Body-form pattern requirements (no literal tag spelled out here so this prompt's
+%      own extractor does not false-match this spec as a live tag):
+%        * Open tag: literal opening of the PDD include element, captured attrs group
+%          ``attrs`` matches zero or more characters up to but not including ``>``.
+%        * Closing ``>`` of the open tag carries a negative lookbehind ``(?<!/)`` so a
+%          self-closing slash does not satisfy the body form (prevents absorption of
+%          self-closing-followed-by-body-form pairs across lines).
+%        * Body group ``body`` is non-greedy ``.*?``.
+%        * Close tag: literal closing of the PDD include element.
+%      Self-closing pattern requirements:
+%        * Open tag identical to the body-form open tag, attrs group ``attrs_self``.
+%        * Optional whitespace then a literal ``/>`` closing.
+%      DO NOT use HTML-entity-escaped openers (``&lt;include&gt;``) — the runtime extractor
+%      matches against the raw tag character ``<``; matching entity-escaped text yields
+%      zero hits on real prompts. The canonical implementation in ``sync_order.py`` is
+%      the source of truth: copy its regex literally when regenerating this module.
 %    - Effective target = ``(attrs.get("path") or "").strip() or body``. When ``path=``
 %      is set the body is ignored (matches the validator/preprocessor contract).
 %      Self-closing tags have no body, so a ``path=`` attribute is required to produce
