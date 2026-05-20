@@ -58,7 +58,7 @@
       {
         "name": "build_dependency_resolver",
         "signature": "(arch_data: List[Dict[str, Any]]) -> Callable[[str], str]",
-        "returns": "Callable resolve(dep: str) -> filename. Precomputes a path-qualified dependency resolution index once per arch_data and returns an O(1)-per-dep resolver. Used by the architecture/<include> validator and the agentic sync graph builder so bare entries like 'fix_python.prompt' resolve to their unambiguous path-qualified arch filename (e.g. 'server/fix_python.prompt'); ambiguous or unresolved deps return the normalized form unchanged."
+        "returns": "Callable resolve(dep: str) -> filename. Precomputes a path-qualified dependency resolution index once per arch_data and returns an O(1)-per-dep resolver. Used by the architecture / &lt;include&gt; validator and the agentic sync graph builder so bare entries like 'fix_python.prompt' resolve to their unambiguous path-qualified arch filename (e.g. 'server/fix_python.prompt'); ambiguous or unresolved deps return the normalized form unchanged."
       }
     ]
   }

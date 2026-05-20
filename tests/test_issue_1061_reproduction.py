@@ -2087,7 +2087,14 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
     """F8 regression: extract_includes_from_file_ordered must not parse documentation
     prose <include> tags as live tags. PR #1073 touched three prompts that contain
     inline <include> examples in docs; the extractor must return ONLY the real
-    dependency includes (live tags in the % Dependencies section)."""
+    dependency includes (live tags in the % Dependencies section).
+
+    Follow-up: the PR also touched the architecture/<include> validator, the
+    architecture_sync, and the commands/checkup prompts. Both pre-existing and
+    newly-added prose <include> mentions in those three prompts must remain
+    entity-escaped so the extractor does not absorb live includes nor produce
+    garbage matches like ``path.py`` / ``ignored_body.py`` from a regex run
+    against documentation prose."""
     import re
     from pathlib import Path
     from pdd.sync_order import extract_includes_from_file_ordered
@@ -2097,6 +2104,9 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
         repo_root / "pdd" / "prompts" / "agentic_sync_python.prompt",
         repo_root / "pdd" / "prompts" / "auto_deps_architecture_python.prompt",
         repo_root / "pdd" / "prompts" / "agentic_sync_identify_modules_LLM.prompt",
+        repo_root / "pdd" / "prompts" / "architecture_include_validation_python.prompt",
+        repo_root / "pdd" / "prompts" / "architecture_sync_python.prompt",
+        repo_root / "pdd" / "prompts" / "commands" / "checkup_python.prompt",
     ]
     path_re = re.compile(r"^[\w./\-]+$")
 
@@ -2120,6 +2130,39 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
             assert path_re.match(entry), (
                 f"{prompt_path.name}: doesn't look like a path: {entry!r}"
             )
+
+    # Spot-check the three prompts the follow-up commit fixed: they must each
+    # extract their known live-include shapes — no live include should have
+    # been accidentally swallowed by the prose escaping.
+    validator_prompt = (
+        repo_root / "pdd" / "prompts" / "architecture_include_validation_python.prompt"
+    )
+    validator_includes = extract_includes_from_file_ordered(validator_prompt)
+    assert "context/architecture_sync_example.py" in validator_includes, (
+        f"validator prompt lost arch_sync example include: {validator_includes!r}"
+    )
+    assert "context/architecture_registry_example.py" in validator_includes, (
+        f"validator prompt lost arch_registry example include: {validator_includes!r}"
+    )
+
+    arch_sync_prompt = (
+        repo_root / "pdd" / "prompts" / "architecture_sync_python.prompt"
+    )
+    arch_sync_includes = extract_includes_from_file_ordered(arch_sync_prompt)
+    assert "./context/python_preamble.prompt" in arch_sync_includes, (
+        f"arch_sync prompt lost python_preamble include: {arch_sync_includes!r}"
+    )
+
+    checkup_prompt = (
+        repo_root / "pdd" / "prompts" / "commands" / "checkup_python.prompt"
+    )
+    checkup_includes = extract_includes_from_file_ordered(checkup_prompt)
+    assert "context/agentic_common_example.py" in checkup_includes, (
+        f"checkup prompt lost agentic_common example include: {checkup_includes!r}"
+    )
+    assert "context/python_preamble.prompt" in checkup_includes, (
+        f"checkup prompt lost python_preamble include: {checkup_includes!r}"
+    )
 
 
 def test_f7_validator_bare_pdd_dep_resolves_to_path_qualified_arch_entry(tmp_path):
