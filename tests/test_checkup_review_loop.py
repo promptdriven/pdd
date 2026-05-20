@@ -5915,3 +5915,2880 @@ class TestPromptSourceGuardIntegration:
         # Reviewer-status reflects the refusal, not "clean".
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081: architecture-registry edit guard
+#
+# Coordinated rename + prompt delete + ``architecture.json`` rewrite was
+# slipping past the per-entry prompt-source guard (10a). The new guard 10b
+# detects registry MUTATIONS themselves: added pair without prompt source on
+# disk, removed pair with code still present, or any repoint.
+# ---------------------------------------------------------------------------
+
+
+def _arch_pair(filename: str, filepath: str) -> Dict[str, Any]:
+    return {"filename": filename, "filepath": filepath}
+
+
+def _seed_repo_with_arch(
+    worktree: Path,
+    modules: List[Dict[str, Any]],
+    *,
+    extra_files: Dict[str, str] | None = None,
+) -> None:
+    """Initialize a git repo, commit the architecture registry and the
+    code/prompt files for each registered module, plus optional extras.
+    """
+    subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "test@example.com"],
+        cwd=worktree,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Test"], cwd=worktree, check=True
+    )
+    (worktree / "architecture.json").write_text(
+        json.dumps(modules, indent=2), encoding="utf-8"
+    )
+    for entry in modules:
+        code = worktree / entry["filepath"]
+        code.parent.mkdir(parents=True, exist_ok=True)
+        code.write_text("# generated\n", encoding="utf-8")
+        prompt = worktree / "pdd" / "prompts" / entry["filename"]
+        prompt.parent.mkdir(parents=True, exist_ok=True)
+        prompt.write_text("prompt body\n", encoding="utf-8")
+    for rel, body in (extra_files or {}).items():
+        path = worktree / rel
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(body, encoding="utf-8")
+    subprocess.run(["git", "add", "-A"], cwd=worktree, check=True)
+    subprocess.run(
+        ["git", "commit", "-q", "-m", "seed"], cwd=worktree, check=True
+    )
+
+
+class TestArchitectureRegistryEditGuardHelper:
+    """Unit tests for ``_check_architecture_registry_edit_guard`` (#1081)."""
+
+    def test_no_architecture_change_is_no_op(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Only a code-only change; architecture.json untouched.
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path, ["pdd/foo.py"]
+        )
+        assert reason is None
+
+    def test_coordinated_bypass_with_registry_repoint_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Reproduces issue #1081: rename code, delete prompt, rewrite
+        registry. Without 10b, both guards return None and the fix
+        lands on the PR.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Coordinated mutation:
+        #   1. rename pdd/foo.py -> pdd/foo_v2.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. rewrite architecture.json to point at the new path
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("foo_v2_python.prompt", "pdd/foo_v2.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        changed_files = [
+            "architecture.json",
+            "pdd/foo_v2.py",
+            "pdd/foo.py",
+            "pdd/prompts/foo_python.prompt",
+        ]
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path, changed_files
+        )
+        assert reason is not None
+        # The refusal MUST name the added pair so the operator can act.
+        assert "pdd/foo_v2.py" in reason
+        assert "pdd/prompts/foo_v2_python.prompt" in reason
+        assert "without prompt source on disk" in reason
+        assert "architecture.json registry edit refused" in reason
+
+    def test_repoint_with_same_prompt_name_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Rename code, keep the prompt name (prompt still on disk).
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("foo_python.prompt", "pdd/foo_v2.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            ["architecture.json", "pdd/foo.py", "pdd/foo_v2.py"],
+        )
+        assert reason is not None
+        assert "repointed" in reason
+        assert "pdd/foo.py" in reason
+        assert "pdd/foo_v2.py" in reason
+
+    def test_legitimate_retirement_is_allowed(self, tmp_path: Path) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        # Retire foo: delete code, delete prompt, drop from registry.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is None
+
+    def test_registry_wiped_with_code_present_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """If the fixer wipes ``architecture.json`` to ``[]`` while the
+        registered code/prompt still exist on disk, that is the #1081
+        attack shape under the worktree-empty/HEAD-non-empty branch.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path, ["architecture.json"]
+        )
+        assert reason is not None
+        assert "code still present" in reason
+        assert "pdd/foo.py" in reason
+
+    def test_registry_wiped_with_renamed_new_code_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # This is the registry-wipe variant of #1081: 10a sees the old
+        # code and prompt as legitimately retired, but a new generated
+        # code path still lands with no prompt source.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "removed registered pair while new unregistered code path" in reason
+        assert "pdd/foo_v2.py" in reason
+
+    def test_registry_wiped_for_full_retirement_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is None
+
+    def test_added_pair_with_prompt_on_disk_and_in_changeset_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Operator adds a NEW registered module with both code and
+        # prompt actually written to disk.
+        (tmp_path / "pdd" / "baz.py").write_text("# new\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "baz_python.prompt").write_text(
+            "p\n", encoding="utf-8"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            _arch_pair("baz_python.prompt", "pdd/baz.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/baz.py",
+                "pdd/prompts/baz_python.prompt",
+            ],
+        )
+        assert reason is None
+
+    def test_added_pair_without_prompt_on_disk_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Add a registry entry pointing at a prompt name that was
+        # never written.
+        (tmp_path / "pdd" / "baz.py").write_text("# new\n", encoding="utf-8")
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            _arch_pair("baz_python.prompt", "pdd/baz.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            ["architecture.json", "pdd/baz.py"],
+        )
+        assert reason is not None
+        assert "pdd/baz.py" in reason
+        assert "without prompt source on disk" in reason
+
+    def test_missing_head_registry_degrades_gracefully(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        # No git repo at all → ``git show HEAD:architecture.json`` fails.
+        with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
+            reason = _check_architecture_registry_edit_guard(
+                tmp_path, ["architecture.json"]
+            )
+        assert reason is None
+        assert any(
+            "architecture-registry guard" in rec.getMessage()
+            for rec in caplog.records
+        )
+
+    def test_empty_head_registry_degrades_gracefully(
+        self, tmp_path: Path, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        # HEAD has an empty registry; guard has nothing to defend.
+        _seed_repo_with_arch(tmp_path, [])
+
+        with caplog.at_level("WARNING", logger="pdd.checkup_review_loop"):
+            reason = _check_architecture_registry_edit_guard(
+                tmp_path, ["architecture.json"]
+            )
+        assert reason is None
+
+    def test_no_arch_edit_implicit_retirement_with_new_code_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-3 finding 1: even when ``architecture.json`` is not in
+        the change set, an implicit retirement (HEAD-registered pair
+        gone from disk) combined with a new unregistered code path
+        must be refused. Otherwise the fixer can rename foo.py to
+        foo_v2.py and delete the prompt without touching the registry,
+        leaving the registry stale and landing unregistered code.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # No-arch-edit bypass:
+        #   1. delete pdd/foo.py (registered code path)
+        #   2. delete pdd/prompts/foo_python.prompt (registered prompt)
+        #   3. add pdd/foo_v2.py (unregistered new code)
+        #   4. leave architecture.json UNTOUCHED
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "architecture.json registry edit refused" in reason
+        assert "pdd/foo_v2.py" in reason
+        # No-arch-edit variant uses distinct wording so the operator
+        # can tell the two #1081 variants apart.
+        assert (
+            "retired registered pair on disk while new unregistered "
+            "code path"
+        ) in reason
+        assert "architecture.json not updated" in reason
+
+    def test_legitimate_retirement_with_helper_modification_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-3 finding 2: a legitimate retirement that also
+        modifies an existing unregistered helper must NOT trip the
+        unregistered-new-code scan. The helper existed at HEAD, so it
+        is a modification, not an addition.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+            extra_files={"pdd/utils.py": "# helper\n"},
+        )
+        # Legitimate retirement of foo + modify the unregistered
+        # helper pdd/utils.py (which existed at HEAD).
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "utils.py").write_text(
+            "# helper (modified)\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/utils.py",
+            ],
+        )
+        assert reason is None
+
+    def test_symlink_as_new_code_path_under_no_arch_edit_bypass_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-3 finding 3 (scan side, opposite polarity): when an
+        attacker drops a symlink as the unregistered new code path
+        (e.g. ``pdd/foo_v2.py`` -> ``pdd/bar.py``), the scan must
+        still count the symlink as presence and refuse. Otherwise
+        rejecting only "real files" silently lets the symlink land.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        # No-arch-edit bypass with symlink:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. add pdd/foo_v2.py as a SYMLINK to pdd/bar.py
+        #   4. leave architecture.json UNTOUCHED
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").symlink_to(tmp_path / "pdd" / "bar.py")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "architecture.json registry edit refused" in reason
+        assert "pdd/foo_v2.py" in reason
+
+    def test_added_pair_with_symlink_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-3 finding 3: an added pair whose prompt is a symlink
+        (rather than a real file) must be refused. ``Path.is_file()``
+        follows symlinks, so a symlink to any existing file would
+        otherwise satisfy the prompt-source presence check.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Add a new registered pair with the prompt as a symlink to
+        # an existing file (here the foo prompt). The forged "prompt
+        # source" must NOT pass the guard.
+        (tmp_path / "pdd" / "baz.py").write_text("# new\n", encoding="utf-8")
+        sym_target = tmp_path / "pdd" / "prompts" / "foo_python.prompt"
+        sym = tmp_path / "pdd" / "prompts" / "baz_python.prompt"
+        sym.symlink_to(sym_target)
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            _arch_pair("baz_python.prompt", "pdd/baz.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/baz.py",
+                "pdd/prompts/baz_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/baz.py" in reason
+        assert "without prompt source on disk" in reason
+
+    def test_added_pair_with_py_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 finding (codex review pass #14): a fixer rewrites
+        ``architecture.json`` to register ``(pdd/foo_v2.py,
+        pdd/prompts/foo_v2.py)`` — pointing the "prompt" at a ``.py``
+        file. Both files are added in the change set so the existing
+        prompt-on-disk + in-changeset check would allow it, and the
+        unregistered-new-code scan would skip ``pdd/prompts/foo_v2.py``
+        because it is now in ``worktree_registered_paths`` — letting
+        ``pdd.prompts.foo_v2`` land as importable unregistered Python.
+        The guard MUST reject the added pair because the registered
+        prompt path is not a ``.prompt`` file.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Retire the original pair and add the disguised pair.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        # The "prompt" is actually a .py file (the bypass shape).
+        (tmp_path / "pdd" / "prompts" / "foo_v2.py").write_text(
+            "# disguised\n", encoding="utf-8"
+        )
+        new_arch = [
+            {"filename": "foo_v2.py", "filepath": "pdd/foo_v2.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        # The refusal MUST name the disguised pair distinctively so
+        # the operator sees the precise attack shape.
+        assert "pdd/foo_v2.py" in reason
+        assert "pdd/prompts/foo_v2.py" in reason
+        assert "not a .prompt file" in reason
+        assert "importable code disguised as a prompt" in reason
+
+    def test_added_pair_with_pyc_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 follow-up: same shape but with a ``.pyc`` suffix
+        instead of ``.py``. Sourceless bytecode is importable via
+        ``importlib.machinery.SourcelessFileLoader``, so ``.pyc`` is
+        equally lethal disguised as a prompt.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(
+            b"\x42\x0d\x0d\x0a"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            {"filename": "foo_v2.pyc", "filepath": "pdd/foo_v2.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_v2.pyc",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.pyc" in reason
+        assert "not a .prompt file" in reason
+
+    def test_added_pair_with_so_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 follow-up: native extension ``.so`` disguised as a
+        prompt. A C extension imports as ``pdd.prompts.<name>`` via
+        ``importlib.machinery.ExtensionFileLoader`` with no Python
+        source on disk.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.so").write_bytes(
+            b"\x7fELF"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            {"filename": "foo_v2.so", "filepath": "pdd/foo_v2.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_v2.so",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.so" in reason
+        assert "not a .prompt file" in reason
+
+    def test_repoint_to_py_prompt_is_refused_with_disguise_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 finding (repoint variant): a repoint whose new
+        prompt path is a ``.py`` file is the same disguised-prompt
+        attack shape, dressed as a repoint instead of an added pair.
+        The existing repoint check refuses unconditionally, but the
+        refusal message MUST distinguish the disguised-prompt shape
+        so the operator sees the precise attack.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Repoint the existing code at a .py "prompt".
+        (tmp_path / "pdd" / "prompts" / "foo_python.py").write_text(
+            "# disguised\n", encoding="utf-8"
+        )
+        new_arch = [
+            {"filename": "foo_python.py", "filepath": "pdd/foo.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/prompts/foo_python.py",
+            ],
+        )
+        assert reason is not None
+        assert "repointed pdd/foo.py" in reason
+        assert "pdd/prompts/foo_python.py" in reason
+        assert "not a .prompt file" in reason
+        assert "importable code disguised as a prompt" in reason
+
+    def test_added_pair_with_prompt_suffix_still_allowed_post_r14(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 regression: the legitimate add-new-module flow
+        (a real ``.prompt`` file alongside new code, both in the
+        change set) must STILL be allowed after the new
+        ``.prompt``-suffix check is in place. This is the same shape
+        as ``test_added_pair_with_prompt_on_disk_and_in_changeset_is_allowed``
+        above, but specifically guards against the R14 check
+        accidentally tightening the happy path.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Add a new registered module with a real .prompt source.
+        (tmp_path / "pdd" / "baz.py").write_text("# new\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "baz_python.prompt").write_text(
+            "p\n", encoding="utf-8"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            _arch_pair("baz_python.prompt", "pdd/baz.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/baz.py",
+                "pdd/prompts/baz_python.prompt",
+            ],
+        )
+        assert reason is None
+
+    def test_swap_repoint_two_pairs_is_refused_with_both_entries(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-4 claimed the filepath repoint loop consumes both
+        pairs and the prompt loop skips the second repoint. Empirically
+        the loop catches both because ``consumed_added`` only contains
+        ``(code, new_prompt)`` from the filepath loop -- not
+        ``(new_code, prompt)`` -- so the prompt loop's skip check fails
+        and the second repoint is recorded. Regression: both repoints
+        must appear in the refusal.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Worktree: swap variant. Same filepath repoints to a different
+        # prompt; same prompt repoints to a different filepath.
+        (tmp_path / "pdd" / "bar.py").write_text(
+            "# bar\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "bar_python.prompt").write_text(
+            "p\n", encoding="utf-8"
+        )
+        new_arch = [
+            _arch_pair("bar_python.prompt", "pdd/foo.py"),
+            _arch_pair("foo_python.prompt", "pdd/bar.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/bar.py",
+                "pdd/prompts/bar_python.prompt",
+            ],
+        )
+        assert reason is not None
+        # Both repoints MUST appear in the refusal:
+        assert "repointed pdd/foo.py" in reason
+        assert "repointed pdd/prompts/foo_python.prompt" in reason
+        # And the underlying details:
+        assert (
+            "pdd/prompts/foo_python.prompt to pdd/prompts/bar_python.prompt"
+            in reason
+        )
+        assert "pdd/foo.py to pdd/bar.py" in reason
+
+
+class TestArchitectureRegistryEditGuardIntegration:
+    """Wires the registry-edit guard into ``run_checkup_review_loop``."""
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_post_review_loop_report", lambda *a, **k: None
+        )
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:1",
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_loop_refuses_push_on_1081_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 regression: a fixer that rewrites the
+        registry to a new code path + new prompt name must NOT reach
+        ``_commit_and_push_if_changed``.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass: simulate the fixer's mutations on the
+        # worktree filesystem before the guard reads it.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("foo_v2_python.prompt", "pdd/foo_v2.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2.py","pdd/foo.py",'
+                    '"pdd/prompts/foo_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Loop completed with a trustworthy report (success=True per
+        # docstring contract); ship gate lives in the report markers.
+        assert success is True
+        # Push helper was NEVER invoked: the policy layer refused.
+        assert push_calls == []
+        # Report carries the registry-edit refusal.
+        assert "architecture.json registry edit refused" in report
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        # The original finding stays OPEN.
+        assert "### Findings" in report
+        findings_section = report.split("### Findings", 1)[1].split("### ", 1)[0]
+        assert "| blocker | open |" in findings_section
+        assert "| blocker | fixed |" not in findings_section
+
+    def test_loop_refuses_push_on_1081_partial_wipe_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 partial-wipe regression: the fixer drops ONE
+        HEAD pair under the cover of legitimate retirement while landing
+        a renamed `_v2.py` not registered in the post-change
+        ``architecture.json``. 10b must refuse the push.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # HEAD has TWO registered pairs; the partial-wipe attack drops
+        # one and leaves the other intact.
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+
+        # Apply the partial-wipe bypass:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. create pdd/foo_v2.py (unregistered)
+        #   4. rewrite architecture.json to keep ONLY the bar pair
+        # 10a's removed-pair check sees foo as legitimately retired
+        # (code gone + prompt gone), so the partial-wipe scan must
+        # still catch foo_v2.py.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2.py","pdd/foo.py",'
+                    '"pdd/prompts/foo_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Trustworthy report contract: success=True; ship gate is in
+        # the report markers.
+        assert success is True
+        # Push helper was NEVER invoked.
+        assert push_calls == []
+        # Report carries the registry-edit refusal with the partial-wipe
+        # diagnostic text.
+        assert "architecture.json registry edit refused" in report
+        assert (
+            "removed registered pair while new unregistered code path"
+            in report
+        )
+        assert "pdd/foo_v2.py" in report
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        # The original finding stays OPEN.
+        assert "### Findings" in report
+        findings_section = report.split("### Findings", 1)[1].split("### ", 1)[0]
+        assert "| blocker | open |" in findings_section
+        assert "| blocker | fixed |" not in findings_section
+
+    def test_loop_runs_existing_six_case_discriminator_unchanged(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The new 10b guard must not regress the existing 10a six-case
+        discriminator. A code-only change (no architecture.json edit)
+        must still be refused by 10a, not 10b.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Pure code-only edit; architecture.json is NOT in the change
+        # set, so the 10b registry-edit guard short-circuits to None.
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/foo.py"]
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Refused — but by the 10a prompt-source guard, not 10b.
+        assert push_calls == []
+        assert "generated-code-only fix refused" in report
+        # Registry-edit refusal MUST NOT appear (no registry edit).
+        assert "architecture.json registry edit refused" not in report
+
+    def test_loop_refuses_push_on_1081_no_arch_edit_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 no-arch-edit regression (round-3 finding
+        1): the fixer deletes the registered code and prompt, adds a
+        renamed `_v2.py`, and leaves ``architecture.json`` UNTOUCHED.
+        10a's check (3) sees code+prompt both gone and allows the
+        retirement; without the implicit-retirement trigger, 10b
+        short-circuits on the missing arch edit and the unregistered
+        new code lands on the PR.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # No-arch-edit bypass: delete code, delete prompt, add new
+        # code, do NOT edit architecture.json.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+
+        # architecture.json is deliberately NOT in changed_files.
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: [
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["pdd/foo_v2.py","pdd/foo.py",'
+                    '"pdd/prompts/foo_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # Trustworthy report contract: success=True; ship gate is in
+        # the report markers.
+        assert success is True
+        # Push helper was NEVER invoked: the policy layer refused.
+        assert push_calls == []
+        # Report carries the registry-edit refusal with the
+        # no-arch-edit diagnostic text.
+        assert "architecture.json registry edit refused" in report
+        assert (
+            "retired registered pair on disk while new unregistered "
+            "code path"
+        ) in report
+        assert "pdd/foo_v2.py" in report
+        assert "architecture.json not updated" in report
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+        # The original finding stays OPEN.
+        assert "### Findings" in report
+        findings_section = report.split("### Findings", 1)[1].split("### ", 1)[0]
+        assert "| blocker | open |" in findings_section
+        assert "| blocker | fixed |" not in findings_section
+
+    def test_loop_allows_legitimate_retirement_with_helper_modification(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """End-to-end positive control for round-3 finding 2: a
+        legitimate retirement (foo.py + foo prompt gone, registry
+        updated to remove the pair) that ALSO modifies an existing
+        unregistered helper must NOT be refused by 10b. The
+        unregistered-new-code scan must skip the helper because it
+        existed at HEAD.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # HEAD has TWO registered pairs plus an unregistered helper.
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+            extra_files={"pdd/utils.py": "# helper\n"},
+        )
+
+        # Legitimate retirement of foo + helper modification.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "utils.py").write_text(
+            "# helper (modified)\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        monkeypatch.setattr(
+            mod,
+            "_git_changed_files",
+            lambda _wt: [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/utils.py",
+            ],
+        )
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo.py",'
+                    '"pdd/prompts/foo_python.prompt","pdd/utils.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        # The registry-edit guard MUST NOT refuse this push.
+        assert success is True
+        assert "architecture.json registry edit refused" not in report
+        # 10a should also not fire: foo.py and foo prompt are both
+        # gone (legitimate retirement), helper modification is
+        # outside the registry.
+        assert "generated-code-only fix refused" not in report
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081 codex review pass #6: untracked-directory bypass + scan scoping.
+#
+# Finding 1: ``git status --porcelain=v1 -z`` without ``--untracked-files=all``
+# collapses an untracked DIRECTORY to a single ``?? dir/`` entry. The 10b
+# unregistered-new-code scan's ``Path.is_file()`` check then sees the
+# directory path (returns False) and skips it — bypassing the guard with a
+# new package at ``pdd/foo_v2/__init__.py``.
+#
+# Finding 2: the unregistered-new-code scan was overbroad, flagging any
+# non-prompt non-arch file. A legitimate retirement that also adds e.g.
+# ``tests/test_bar.py`` or ``docs/new.md`` would be falsely refused.
+# Restrict the scan to ``pdd/`` paths ending in ``.py``.
+# ---------------------------------------------------------------------------
+
+
+class TestRound6UntrackedDirectoryBypass:
+    """Round-6 finding 1: untracked-directory bypass via ``__init__.py``.
+
+    Uses a real git repo so the ``--untracked-files=all`` flag actually
+    exercises the parsing path. Monkeypatching ``_git_changed_files``
+    would hide the very thing being tested.
+    """
+
+    @staticmethod
+    def _init_repo(worktree: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree,
+            check=True,
+        )
+
+    def test_changed_files_enumerates_files_inside_untracked_directory(
+        self, tmp_path: Path
+    ) -> None:
+        """``_git_changed_files`` must list every file inside a new
+        untracked directory as a discrete entry, not collapse the
+        directory to a single ``dir/`` trailing-slash record.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        self._init_repo(tmp_path)
+        (tmp_path / "pdd").mkdir()
+        (tmp_path / "pdd" / "foo.py").write_text("x\n", encoding="utf-8")
+        subprocess.run(["git", "add", "-A"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "commit", "-q", "-m", "init"], cwd=tmp_path, check=True
+        )
+
+        # Create a NEW untracked directory with two files inside it.
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text("\n", encoding="utf-8")
+        (new_pkg / "core.py").write_text("# core\n", encoding="utf-8")
+
+        changed = _git_changed_files(tmp_path)
+
+        # Individual files MUST appear, not the bare directory.
+        assert "pdd/foo_v2/__init__.py" in changed
+        assert "pdd/foo_v2/core.py" in changed
+        # The directory itself MUST NOT appear (no trailing-slash
+        # entries; that was the bypass).
+        assert "pdd/foo_v2/" not in changed
+        assert not any(entry.endswith("/") for entry in changed)
+
+    def test_guard_refuses_untracked_directory_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 round-6 finding 1: the fixer deletes the
+        registered code+prompt, creates a new package directory at
+        ``pdd/foo_v2/__init__.py``, and wipes ``architecture.json``.
+        Combined: ``_git_changed_files(worktree)`` must list the new
+        ``__init__.py`` individually so the 10b scan can refuse it.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+            _git_changed_files,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. create pdd/foo_v2/__init__.py (UNTRACKED DIRECTORY)
+        #   4. wipe architecture.json to []
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text(
+            "# package init\n", encoding="utf-8"
+        )
+        (tmp_path / "architecture.json").write_text(
+            "[]", encoding="utf-8"
+        )
+
+        changed = _git_changed_files(tmp_path)
+        # Sanity: the new file inside the untracked directory MUST
+        # surface as a discrete entry.
+        assert "pdd/foo_v2/__init__.py" in changed
+        assert "pdd/foo_v2/" not in changed
+
+        reason = _check_architecture_registry_edit_guard(tmp_path, changed)
+        assert reason is not None
+        # The refusal must NAME the bypass file so the operator can act.
+        assert "pdd/foo_v2/__init__.py" in reason
+        assert "architecture.json registry edit refused" in reason
+        assert (
+            "removed registered pair while new unregistered code path"
+            in reason
+        )
+
+
+class TestRound6UntrackedDirectoryBypassIntegration:
+    """Mirror of the unit test above through ``run_checkup_review_loop``.
+
+    Confirms no push happens and the report renders the 10b refusal with
+    the bypass file named.
+    """
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_post_review_loop_report", lambda *a, **k: None
+        )
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:1",
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_loop_refuses_push_on_untracked_directory_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass on the worktree filesystem before the loop
+        # reads ``_git_changed_files``.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text(
+            "# package init\n", encoding="utf-8"
+        )
+        (tmp_path / "architecture.json").write_text(
+            "[]", encoding="utf-8"
+        )
+
+        # Use the REAL ``_git_changed_files`` so the
+        # ``--untracked-files=all`` flag is exercised end-to-end.
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2/__init__.py",'
+                    '"pdd/foo.py","pdd/prompts/foo_python.prompt"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The policy layer refused before the push helper.
+        assert push_calls == []
+        # Refusal carries the bypass file (NOT the bare directory).
+        assert "architecture.json registry edit refused" in report
+        assert "pdd/foo_v2/__init__.py" in report
+        assert "pdd/foo_v2/" not in report.replace(
+            "pdd/foo_v2/__init__.py", ""
+        )
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+
+
+class TestRound6ScanScopeBoundary:
+    """Round-6 finding 2: unregistered-new-code scan must be scoped to
+    generated prompt-driven code (``pdd/**/*.py``) so it does NOT flag
+    legitimate test/doc/script additions during a retirement.
+    """
+
+    def test_retirement_with_new_test_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A legitimate retirement of ``pdd/foo.py`` that also adds a
+        new test at ``tests/test_bar.py`` must NOT be refused.
+        ``tests/`` is outside the registry-mutation scope.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        # Retire foo and add a new test for bar.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        (tmp_path / "tests" / "test_bar.py").write_text(
+            "def test_bar():\n    pass\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "tests/test_bar.py",
+            ],
+        )
+        assert reason is None
+
+    def test_retirement_with_new_doc_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A legitimate retirement that also adds ``docs/new.md`` must
+        NOT be refused. ``docs/`` is outside the registry-mutation
+        scope.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "docs").mkdir(exist_ok=True)
+        (tmp_path / "docs" / "new.md").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "docs/new.md",
+            ],
+        )
+        assert reason is None
+
+    def test_retirement_with_new_script_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A legitimate retirement that also adds ``scripts/release.sh``
+        must NOT be refused. Scripts live outside the registry-mutation
+        scope.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "scripts").mkdir(exist_ok=True)
+        (tmp_path / "scripts" / "release.sh").write_text(
+            "#!/bin/sh\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "scripts/release.sh",
+            ],
+        )
+        assert reason is None
+
+    def test_retirement_with_new_pdd_module_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive control: a retirement that adds ``pdd/foo_v2.py``
+        (in scope: under ``pdd/`` and ending in ``.py``) MUST still be
+        refused. This is the existing ``foo_v2.py`` shape, retained.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# renamed\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.py" in reason
+
+    def test_retirement_with_new_pdd_init_under_subpackage_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive control covering round-6 finding 1: a new
+        ``pdd/foo_v2/__init__.py`` MUST still be refused even though
+        ``__init__.py`` could look "framework-y". Keeping
+        ``__init__.py`` in scope is what keeps the untracked-directory
+        bypass closed.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        new_pkg = tmp_path / "pdd" / "foo_v2"
+        new_pkg.mkdir()
+        (new_pkg / "__init__.py").write_text(
+            "# init\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2/__init__.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2/__init__.py" in reason
+
+    def test_retirement_with_new_pdd_non_py_file_is_allowed(
+        self, tmp_path: Path
+    ) -> None:
+        """A non-``.py`` file under ``pdd/`` (e.g. a data fixture) is
+        out of scope for the generated-code scan, even when it lives
+        inside the ``pdd/`` tree.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "fixture.txt").write_text(
+            "data\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/fixture.txt",
+            ],
+        )
+        assert reason is None
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081 codex review pass #7: symlinked-package bypass.
+#
+# Round-6 finding 2 narrowed the unregistered-new-code scan to paths under
+# ``pdd/`` ending in ``.py``. That filter silently allows a NEW SYMLINK
+# under ``pdd/`` whose link path has no ``.py`` suffix — e.g.
+# ``pdd/foo_v2 -> ../tests/evil_pkg``. ``git status --untracked-files=all``
+# lists the directory-symlink as the bare link path (``pdd/foo_v2``, no
+# trailing slash, no ``.py``), the ``.py`` filter skips it, the scan
+# returns no offenders, and the bypass succeeds — ``pdd.foo_v2`` is now an
+# importable Python package backed by ``tests/evil_pkg`` with no
+# registered prompt source.
+#
+# Fix: under ``pdd/`` (excluding ``pdd/prompts/``), keep any symlink in
+# scope regardless of suffix. Generated prompt-driven code is never a
+# symlink, so this rule has no legitimate-use false positives.
+# ---------------------------------------------------------------------------
+
+
+class TestRound7SymlinkedPackageBypass:
+    """Round-7 finding: a NEW symlink under ``pdd/`` (excluding
+    ``pdd/prompts/``) can resolve to importable Python code (a package
+    directory or a ``.py`` module) without carrying a ``.py`` suffix on
+    the link path itself. The unregistered-new-code scan must keep
+    symlinks in scope regardless of suffix.
+    """
+
+    @staticmethod
+    def _init_repo(worktree: Path) -> None:
+        subprocess.run(["git", "init", "-q"], cwd=worktree, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=worktree,
+            check=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test"],
+            cwd=worktree,
+            check=True,
+        )
+
+    def test_guard_refuses_directory_symlink_package_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """End-to-end #1081 round-7 bypass: the fixer deletes the
+        registered code+prompt, wipes ``architecture.json``, and adds a
+        directory-symlink ``pdd/foo_v2 -> ../tests/evil_pkg`` backed by
+        a real ``tests/evil_pkg/__init__.py``. ``git status
+        --untracked-files=all`` lists the symlink as the bare path
+        ``pdd/foo_v2`` (no trailing slash, no ``.py``). The 10b scan
+        MUST still refuse it because the symlink is under ``pdd/`` and
+        a symlink there can resolve to importable Python code.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+            _git_changed_files,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. wipe architecture.json to []
+        #   4. create tests/evil_pkg/__init__.py
+        #   5. create pdd/foo_v2 as a SYMLINK to ../tests/evil_pkg
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+        evil_pkg = tmp_path / "tests" / "evil_pkg"
+        evil_pkg.mkdir(parents=True)
+        (evil_pkg / "__init__.py").write_text(
+            "# unregistered code\n", encoding="utf-8"
+        )
+        # Relative symlink target so the link works regardless of where
+        # the tmp_path lives.
+        (tmp_path / "pdd" / "foo_v2").symlink_to(Path("..") / "tests" / "evil_pkg")
+
+        # Use the REAL ``_git_changed_files`` so the
+        # ``--untracked-files=all`` listing of the directory-symlink
+        # (bare ``pdd/foo_v2``, no trailing slash, no ``.py``) is what
+        # the guard actually sees.
+        changed = _git_changed_files(tmp_path)
+        # Sanity: git reports the symlink as the bare link path.
+        assert "pdd/foo_v2" in changed
+        assert "pdd/foo_v2/" not in changed
+
+        reason = _check_architecture_registry_edit_guard(tmp_path, changed)
+        assert reason is not None
+        assert "architecture.json registry edit refused" in reason
+        # The refusal must NAME the symlinked-package bypass file.
+        assert "pdd/foo_v2" in reason
+
+    def test_guard_refuses_py_symlink_to_external_module(
+        self, tmp_path: Path
+    ) -> None:
+        """A ``.py``-suffixed symlink to a file outside ``pdd/`` (a
+        single-file Python module via symlink) is also a bypass shape.
+        The existing ``.py`` filter already catches this, plus the
+        presence check counts symlinks as presence — confirming the
+        end-to-end refusal here keeps the contract regression-tested.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+        # Real file outside pdd/ that the symlink will resolve to.
+        (tmp_path / "tests").mkdir(exist_ok=True)
+        (tmp_path / "tests" / "evil.py").write_text(
+            "# unregistered\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.py").symlink_to(
+            Path("..") / "tests" / "evil.py"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_python.prompt",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.py" in reason
+
+    def test_symlink_under_pdd_prompts_is_not_flagged_by_scan(
+        self, tmp_path: Path
+    ) -> None:
+        """The ``pdd/prompts/`` skip wins: a symlink at
+        ``pdd/prompts/...`` MUST NOT be flagged by the
+        unregistered-new-code scan. (Prompts can legitimately be
+        symlinks if a project chooses to layer shared prompt sources.)
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        # Retire foo and drop an unrelated symlink inside pdd/prompts/.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "prompts" / "shared_extra.prompt").symlink_to(
+            tmp_path / "pdd" / "prompts" / "bar_python.prompt"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/shared_extra.prompt",
+            ],
+        )
+        # The retirement is legitimate AND the symlink inside
+        # pdd/prompts/ is skipped before the symlink branch runs.
+        assert reason is None
+
+
+class TestRound7SymlinkedPackageBypassIntegration:
+    """Mirror of the round-7 bypass through ``run_checkup_review_loop``.
+
+    Confirms no push happens and the report renders the 10b refusal with
+    the symlinked-package path named.
+    """
+
+    def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_post_review_loop_report", lambda *a, **k: None
+        )
+
+    def _finding(self) -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:1",
+            "evidence": "broke",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    def test_loop_refuses_push_on_symlinked_package_bypass(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the round-7 bypass on the worktree filesystem before
+        # the loop reads ``_git_changed_files``.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text("[]", encoding="utf-8")
+        evil_pkg = tmp_path / "tests" / "evil_pkg"
+        evil_pkg.mkdir(parents=True)
+        (evil_pkg / "__init__.py").write_text(
+            "# unregistered\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2").symlink_to(
+            Path("..") / "tests" / "evil_pkg"
+        )
+
+        # Use the REAL ``_git_changed_files`` so the symlink listing is
+        # exercised end-to-end.
+        push_calls: List[Any] = []
+
+        def fake_push(*args: Any, **kwargs: Any) -> Tuple[bool, str]:
+            push_calls.append((args, kwargs))
+            return True, "pushed"
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":'
+                    '["architecture.json","pdd/foo_v2",'
+                    '"pdd/foo.py","pdd/prompts/foo_python.prompt",'
+                    '"tests/evil_pkg/__init__.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The policy layer refused before the push helper.
+        assert push_calls == []
+        # Refusal carries the symlinked-package path (no .py suffix).
+        assert "architecture.json registry edit refused" in report
+        assert "pdd/foo_v2" in report
+        # Ship-gate markers signal non-clean.
+        assert "reviewer-status: codex=findings" in report
+        assert "fresh-final-review: missing" in report
+
+
+# ---------------------------------------------------------------------------
+# Issue #1081 codex review pass #8: sourceless-bytecode bypass.
+#
+# Round-6 finding 2 narrowed the unregistered-new-code scan to paths under
+# ``pdd/`` ending in ``.py``. Round-7 broadened the symlink case. Both still
+# leave a hole: Python imports modules under several non-``.py`` suffixes
+# (``importlib.machinery.all_suffixes()`` returns ``.py``, ``.pyc``, plus
+# platform-specific extension suffixes). A sourceless ``.pyc`` dropped at
+# ``pdd/foo_v2.pyc`` is importable as ``pdd.foo_v2`` via
+# ``importlib.machinery.SourcelessFileLoader`` with no source on disk;
+# native extension modules (``.so`` on POSIX, ``.pyd`` on Windows) are the
+# same shape. The scan MUST cover every importable suffix or the
+# ``delete-code+prompt + wipe-architecture.json + add bytecode/extension``
+# attack succeeds.
+#
+# Fix: extend the suffix filter in
+# ``_check_architecture_registry_edit_guard`` from ``".py"`` to the tuple
+# ``_IMPORTABLE_SUFFIXES = (".py", ".pyc", ".pyo", ".so", ".pyd")`` so
+# ``str.endswith`` catches every shape Python will load as a module.
+# ---------------------------------------------------------------------------
+
+
+class TestRound8SourcelessBytecodeBypass:
+    """Round-8 finding: the unregistered-new-code scan in 10b must reject
+    every suffix Python can import as ``pdd.<name>`` — not just ``.py``.
+    """
+
+    def test_guard_refuses_sourceless_pyc_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact round-8 reproduction: delete the registered code+
+        prompt, wipe ``architecture.json`` to ``[]``, and drop a valid
+        ``pdd/foo_v2.pyc`` compiled from a temporary source (source
+        then removed). The bytecode is importable as ``pdd.foo_v2`` via
+        ``SourcelessFileLoader`` with no ``.py`` on disk, so a
+        ``.py``-only filter would skip it and the bypass would succeed.
+        """
+        import py_compile
+
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. wipe architecture.json to []
+        #   4. compile a sourceless .pyc into pdd/foo_v2.pyc
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        src = tmp_path / "_foo_v2_src.py"
+        src.write_text("VALUE = 42\n", encoding="utf-8")
+        py_compile.compile(
+            str(src),
+            cfile=str(tmp_path / "pdd" / "foo_v2.pyc"),
+            doraise=True,
+        )
+        src.unlink()
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.pyc",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.pyc" in reason
+
+    def test_guard_refuses_native_extension_so_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """A bare ``pdd/foo_v2.so`` dropped at the new code path is a
+        native extension module — importable as ``pdd.foo_v2`` via the
+        extension loader. The guard isn't validating the binary format
+        here, only blocking the importable suffix; arbitrary bytes are
+        sufficient to reproduce the scan-evasion shape.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.so").write_bytes(b"\x7fELF stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.so",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.so" in reason
+
+    def test_guard_refuses_windows_extension_pyd_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """The Windows counterpart to ``.so``: a ``pdd/foo_v2.pyd``
+        native extension. The suffix filter must cover both POSIX and
+        Windows extension shapes or attackers targeting Windows
+        deployments slip past the scan.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.pyd").write_bytes(b"MZ stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.pyd",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.pyd" in reason
+
+    def test_guard_refuses_windows_pyw_source_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-8 follow-up: a ``pdd/foo_v2.pyw`` is Windows-only Python
+        source — on Windows ``importlib.machinery.SOURCE_SUFFIXES``
+        includes ``.pyw`` so ``SourceFileLoader`` imports it as
+        ``pdd.foo_v2`` exactly like a ``.py`` file. The R8 suffix tuple
+        missed it; the follow-up adds ``.pyw`` so the same retirement +
+        wipe + add bypass shape is blocked.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.pyw").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.pyw",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.pyw" in reason
+
+    def test_guard_refuses_uppercase_py_suffix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-9 follow-up: an uppercase ``pdd/foo_v2.PY`` is
+        importable as ``pdd.foo_v2`` on case-insensitive filesystems
+        (Windows; macOS HFS+/APFS in default case-insensitive mode)
+        because Python's ``importlib.machinery`` suffix matching is
+        case-insensitive. A case-sensitive ``str.endswith`` against
+        the lowercase ``_IMPORTABLE_SUFFIXES`` tuple would let the
+        bypass slip past the scan; lowercasing the path side of the
+        comparison closes the hole.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.PY").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.PY",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.PY" in reason
+
+    def test_guard_refuses_uppercase_pyc_suffix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-9 follow-up companion: an uppercase ``pdd/foo_v2.PYC``
+        slips past a case-sensitive ``.pyc`` check the same way ``.PY``
+        slips past ``.py``. The byte contents don't matter for the
+        scan — the filter only inspects the path string — so a stub
+        payload reproduces the importable-suffix shape.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.PYC").write_bytes(b"\x00\x00 stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.PYC",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.PYC" in reason
+
+    def test_guard_refuses_mixed_case_so_suffix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-9 follow-up belt-and-suspenders: a mixed-case
+        ``pdd/foo_v2.So`` native-extension suffix must also trip the
+        scan. Confirms the case-insensitive comparison handles every
+        mixed-case permutation, not just fully uppercase suffixes.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "foo_v2.So").write_bytes(b"\x7fELF stub")
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.So",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2.So" in reason
+
+    def test_guard_refuses_uppercase_pdd_prefix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-12 finding (codex review pass #12), sibling of R9: an
+        uppercase ``PDD/foo_v2.py`` directory prefix aliases to
+        ``pdd/foo_v2.py`` on case-insensitive filesystems (Windows;
+        macOS HFS+/APFS in default case-insensitive mode) and is
+        importable as ``pdd.foo_v2``. A case-sensitive
+        ``str.startswith("pdd/")`` would skip the path as out-of-scope
+        and the bypass would land; lowercasing the path side of the
+        prefix comparison closes the hole. Linux is case-sensitive, so
+        the test FS itself distinguishes ``PDD`` from ``pdd`` and the
+        file actually lives at ``PDD/foo_v2.py`` — the guard logic
+        must still flag it because production filesystems can fold the
+        two.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        # ``exist_ok=True`` because the runner FS may be
+        # case-insensitive (macOS APFS in default mode), in which
+        # case ``PDD`` already exists as ``pdd``. On Linux this
+        # creates a sibling ``PDD`` directory; either way the
+        # candidate file lives at the uppercase path and the guard
+        # is fed the uppercase string.
+        (tmp_path / "PDD").mkdir(exist_ok=True)
+        (tmp_path / "PDD" / "foo_v2.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "PDD/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        assert "PDD/foo_v2.py" in reason
+
+    def test_guard_refuses_mixed_case_pdd_prefix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-12 follow-up: a mixed-case ``Pdd/foo_v2.py`` prefix
+        must also trip the scan. Confirms the case-insensitive prefix
+        comparison handles every mixed-case permutation, not just
+        fully uppercase prefixes.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "Pdd").mkdir(exist_ok=True)
+        (tmp_path / "Pdd" / "foo_v2.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "Pdd/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        assert "Pdd/foo_v2.py" in reason
+
+    def test_guard_skips_uppercase_pdd_prompts_subdirectory(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-12 negative: the ``pdd/prompts/`` exclusion must also
+        be case-insensitive. An uppercase ``PDD/PROMPTS/foo.prompt``
+        path aliases to ``pdd/prompts/foo.prompt`` on a
+        case-insensitive filesystem; it should be SKIPPED as a prompts
+        subdir, not flagged. Confirms the prompt-exclusion side of
+        the case-insensitive prefix comparison.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "PDD" / "PROMPTS").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "PDD" / "PROMPTS" / "foo.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "PDD/PROMPTS/foo.prompt",
+            ],
+        )
+        # The PDD/PROMPTS path must be excluded by the case-insensitive
+        # prompts subdir filter, so it does NOT appear as an offender.
+        # The retirement itself is legitimate (no unregistered new
+        # code), so the guard should report no reason.
+        assert reason is None or "PDD/PROMPTS/foo.prompt" not in reason
+
+    def test_guard_allows_pdd_fixture_txt_under_broadened_filter(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a non-importable ``pdd/fixture.txt`` under ``pdd/``
+        remains out of scope after the R8 widening. Confirms the R6
+        scope-boundary contract — only importable shapes trip the scan,
+        and data fixtures still pass.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "fixture.txt").write_text(
+            "data\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/fixture.txt",
+            ],
+        )
+        assert reason is None
+
+    def test_guard_allows_pdd_data_json_under_broadened_filter(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a ``pdd/data.json`` is also non-importable and must
+        not trip the broadened scan. Belt-and-suspenders companion to
+        the fixture.txt case, covering a common data-asset extension.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [
+                _arch_pair("foo_python.prompt", "pdd/foo.py"),
+                _arch_pair("bar_python.prompt", "pdd/bar.py"),
+            ],
+        )
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "data.json").write_text(
+            "{}\n", encoding="utf-8"
+        )
+        new_arch = [_arch_pair("bar_python.prompt", "pdd/bar.py")]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/data.json",
+            ],
+        )
+        assert reason is None
+
+
+class TestRound11SubmoduleBypass:
+    """Round-11 finding: a fixer that runs ``git submodule add <repo>
+    pdd/foo_v2`` lands importable Python code (the submodule's HEAD
+    includes ``__init__.py``) without it appearing as enumerable files
+    in ``git status --untracked-files=all``. The gitlink shows as the
+    bare directory path ``pdd/foo_v2``; the 10b scan finds no
+    importable suffix and no symlink and silently allows it. The
+    signal we DO see is ``.gitmodules`` appearing in the change set —
+    legitimate refactors do not add a submodule inside ``pdd/``.
+    """
+
+    def test_guard_refuses_submodule_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact round-11 reproduction: delete the registered
+        code+prompt, wipe ``architecture.json`` to ``[]``, and stage
+        a gitlink at ``pdd/foo_v2`` alongside a new ``.gitmodules``.
+        We avoid the actual ``git submodule add`` setup (which would
+        require a separate repo) by emulating the on-disk shape:
+        ``.gitmodules`` is in the change set and ``pdd/foo_v2/`` is
+        a real directory holding ``__init__.py``. The guard sees
+        ``.gitmodules`` plus the retirement context and blocks the
+        new gitlink directory.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. wipe architecture.json to []
+        #   4. add .gitmodules to the worktree
+        #   5. drop a real directory at pdd/foo_v2/ holding
+        #      __init__.py (emulates the gitlink's checked-out
+        #      submodule HEAD)
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / ".gitmodules").write_text(
+            "[submodule \"pdd/foo_v2\"]\n"
+            "\tpath = pdd/foo_v2\n"
+            "\turl = ../foo_v2.git\n",
+            encoding="utf-8",
+        )
+        submodule_dir = tmp_path / "pdd" / "foo_v2"
+        submodule_dir.mkdir(parents=True, exist_ok=True)
+        (submodule_dir / "__init__.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                ".gitmodules",
+                "pdd/foo_v2",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2" in reason
+        assert "new git submodule" in reason
+
+    def test_guard_allows_gitmodules_change_without_retirement_context(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: ``.gitmodules`` in the change set with no HEAD
+        pair removed or implicitly retired must NOT trip the R11
+        submodule check. The retirement-context trigger
+        (``removed_only or implicit_retirement``) is False, so the
+        check short-circuits even though ``.gitmodules`` is present.
+        Build a worktree where the registered pair is untouched, the
+        architecture.json edit is metadata-only (re-write of the
+        same canonical pair), and a benign ``pdd/foo_v2`` directory
+        sits alongside ``.gitmodules`` in the change set.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # No retirement: keep pdd/foo.py and pdd/prompts/foo_python.prompt
+        # on disk, leave architecture.json's canonical pairs unchanged.
+        # The .gitmodules edit and the new pdd/foo_v2 directory are
+        # the ONLY changes that matter to R11; the retirement-context
+        # trigger does not fire because head_pairs == worktree_pairs
+        # and every HEAD-registered file is still present.
+        (tmp_path / ".gitmodules").write_text(
+            "[submodule \"pdd/foo_v2\"]\n"
+            "\tpath = pdd/foo_v2\n"
+            "\turl = ../foo_v2.git\n",
+            encoding="utf-8",
+        )
+        submodule_dir = tmp_path / "pdd" / "foo_v2"
+        submodule_dir.mkdir(parents=True, exist_ok=True)
+        (submodule_dir / "__init__.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                ".gitmodules",
+                "pdd/foo_v2",
+            ],
+        )
+        # No retirement context → R11 must not fire. The trigger
+        # condition of the guard itself (architecture.json edit OR
+        # implicit retirement) also does not fire here, so the guard
+        # short-circuits to None.
+        assert reason is None
+
+    def test_guard_does_not_false_positive_r11_on_new_subpackage(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a legitimate new directory ``pdd/utils/`` with
+        ``__init__.py`` (no ``.gitmodules`` change) is caught by the
+        EXISTING round-6 unregistered-new-code scan (``__init__.py``
+        matches the importable-suffix filter), not by the R11
+        submodule check. Confirm the R11 wording is absent so we know
+        the R11 check itself does not false-positive on a plain new
+        subpackage.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        utils_dir = tmp_path / "pdd" / "utils"
+        utils_dir.mkdir(parents=True, exist_ok=True)
+        (utils_dir / "__init__.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/utils/__init__.py",
+            ],
+        )
+        # The round-6 scan catches __init__.py and refuses; the R11
+        # wording must NOT appear because no .gitmodules change is
+        # in the change set.
+        assert reason is not None
+        assert "new git submodule" not in reason
+
+
+class TestRound13PromptsSubdirImportableBypass:
+    """Round-13 finding (codex review pass #13): the original
+    ``pdd/prompts/`` directory blanket exclusion was too broad. Its
+    intent was to skip ``.prompt`` files (canonical prompt sources,
+    not importable Python), but ``.py``/``.pyc``/other importable
+    suffixes under ``pdd/prompts/`` are still importable Python
+    (``pdd.prompts.<name>``). A fixer that wipes the registry,
+    retires the registered pair, and drops ``pdd/prompts/foo_v2.py``
+    would otherwise slip past the unregistered-new-code scan: the
+    new module is importable Python with no prompt source.
+
+    The R14 fix replaces the dir-blanket with a ``.prompt`` suffix
+    exclusion in BOTH the 10b unregistered-new-code scan and the R11
+    submodule scan. ``.prompt`` files anywhere (not just under
+    ``pdd/prompts/``) are skipped because the suffix itself marks
+    them as canonical prompt sources; everything else under
+    ``pdd/prompts/`` falls through to the standard importable-suffix
+    filter.
+    """
+
+    def test_guard_refuses_importable_python_under_prompts_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive: HEAD retirement + worktree wipes registry + adds
+        ``pdd/prompts/foo_v2.py`` (importable Python under the prompts
+        directory). The guard MUST refuse and the offender path MUST
+        appear in the refusal text.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the R13 bypass shape:
+        #   1. delete pdd/foo.py (registered code)
+        #   2. delete pdd/prompts/foo_python.prompt (registered prompt)
+        #   3. wipe architecture.json to []
+        #   4. drop importable Python at pdd/prompts/foo_v2.py
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.py" in reason
+
+    def test_guard_refuses_sourceless_bytecode_under_prompts_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Positive: same bypass shape with a sourceless ``.pyc``
+        bytecode file dropped at ``pdd/prompts/foo_v2.pyc``. Loadable
+        via ``importlib.machinery.SourcelessFileLoader`` as
+        ``pdd.prompts.foo_v2`` — the broad dir-blanket would silently
+        allow it. After R14, the ``.prompt``-suffix exclusion lets
+        this path fall through to the importable-suffix filter, which
+        catches ``.pyc``.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(
+            b"\x00\x00 stub"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/foo_v2.pyc",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.pyc" in reason
+
+    def test_guard_allows_prompt_file_under_prompts_dir(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a ``pdd/prompts/foo_v2.prompt`` file in the change
+        set (even when unregistered) must still be skipped by the
+        unregistered-new-code scan because ``.prompt`` is the
+        canonical prompt-source suffix and isn't importable Python.
+        The ``.prompt``-suffix exclusion preserves the original
+        intent of the dir-blanket while closing the importable-file
+        hole.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Retirement on disk: registered pair gone, registry wiped,
+        # plus an UNREGISTERED .prompt file dropped under the prompts
+        # dir. The .prompt suffix must mean the unregistered-new-code
+        # scan ignores this path — it's not importable Python.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/prompts/foo_v2.prompt",
+            ],
+        )
+        # The new .prompt file must not appear as an offender. Other
+        # checks (added-pair / removed-pair) may legitimately fire on
+        # the registry wipe + retirement, but the unregistered-new-
+        # code scan must NOT flag the .prompt path.
+        if reason is not None:
+            assert "pdd/prompts/foo_v2.prompt" not in reason

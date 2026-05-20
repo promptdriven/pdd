@@ -230,6 +230,12 @@ def run_checkup_review_loop(
 # Cumulative dedup snapshot (overwritten at each step within a round):
 #   dedup-state-round-{N}.json -- list of normalized findings, one per dedup key
 #
+# Pre-push policy-guard refusal artifacts (written when the corresponding
+# guard refuses; persisted alongside the round files so an operator can
+# audit which discriminator fired):
+#   round-{N}-prompt-source-guard-refusal.txt          -- clause 10a refusal text
+#   round-{N}-architecture-registry-guard-refusal.txt  -- clause 10b refusal text
+#
 # Final outputs at end of loop:
 #   final-report.md  -- exact bytes returned by run_checkup_review_loop;
 #                       includes the optional ``### Reviewer Diagnostics``
@@ -351,3 +357,47 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "max-cost-reached: false\n"
     "max-duration-reached: false\n"
 )
+
+
+def _demo() -> None:
+    """Print the public contract this example documents."""
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+    # Verify the runtime module exposes the documented public surface.
+    from pdd.checkup_review_loop import (  # noqa: F401
+        ReviewLoopContext,
+        ReviewLoopConfig,
+        ReviewLoopState,
+        ReviewFinding,
+        ReviewResult,
+        FixResult,
+        parse_reviewers,
+        run_checkup_review_loop,
+    )
+
+    print("pdd.checkup_review_loop — public contract demo")
+    print()
+    print("Dataclasses exported:")
+    for name in (
+        "ReviewLoopContext",
+        "ReviewLoopConfig",
+        "ReviewLoopState",
+        "ReviewFinding",
+        "ReviewResult",
+        "FixResult",
+    ):
+        print(f"  - {name}")
+    print()
+    print("Role aliases via parse_reviewers():")
+    print(f"  parse_reviewers('chatgpt,anthropic') -> {parse_reviewers('chatgpt,anthropic')}")
+    print(f"  parse_reviewers('openai,google')     -> {parse_reviewers('openai,google')}")
+    print(f"  parse_reviewers(['codex', 'claude']) -> {parse_reviewers(['codex', 'claude'])}")
+    print()
+    print("Example final-report header:")
+    print(EXAMPLE_FINAL_REPORT_HEADER)
+
+
+if __name__ == "__main__":
+    _demo()

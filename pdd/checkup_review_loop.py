@@ -37,7 +37,7 @@ import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from rich.console import Console
 
@@ -62,6 +62,17 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
 
 DEFAULT_BLOCKING_SEVERITIES: Tuple[str, ...] = ("blocker", "critical", "medium")
 DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
+# R8: cover every suffix Python can import as a module under ``pdd/``.
+# A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
+# imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
+# file (see ``importlib.machinery.all_suffixes()``). ``.cpython-*-*.so``
+# and ``.abi3.so`` variants end with ``.so`` so the simple suffix covers
+# them. ``.pyw`` is Windows-only Python source — on Windows
+# ``importlib.machinery.SOURCE_SUFFIXES`` includes ``.pyw`` so a
+# ``pdd/foo_v2.pyw`` is importable as ``pdd.foo_v2`` via
+# ``SourceFileLoader`` (the same loader as ``.py``, not the sourceless
+# bytecode loader). ``str.endswith`` accepts a tuple of suffixes.
+_IMPORTABLE_SUFFIXES: Tuple[str, ...] = (".py", ".pyw", ".pyc", ".pyo", ".so", ".pyd")
 ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
@@ -1066,6 +1077,29 @@ def run_checkup_review_loop(
         # (line ~1068) follows the same contract and is exercised by
         # ``test_failed_push_aborts_loop_without_running_verifier``.
         guard_changed_files = _git_changed_files(worktree)
+        # Issue #1081: architecture-registry edit guard runs BEFORE the
+        # 10a prompt-source guard. 10a is per-entry against the
+        # pre-fixer HEAD registry, which a coordinated rename + prompt
+        # delete + ``architecture.json`` rewrite can step around. 10b
+        # closes that hole by detecting registry mutations themselves
+        # (added pair with no prompt on disk, removed pair with code
+        # still present, or any repoint). Cheaper on the common no-
+        # registry-edit path (short-circuits on the trigger check) and
+        # produces the more precise diagnostic for the #1081 attack
+        # shape; running it first surfaces the registry-mutation
+        # refusal rather than a downstream 10a refusal that fires on a
+        # partial symptom.
+        registry_guard_refusal = _check_architecture_registry_edit_guard(
+            worktree, guard_changed_files
+        )
+        if registry_guard_refusal:
+            _write_artifact(
+                artifacts_dir
+                / f"round-{round_number}-architecture-registry-guard-refusal.txt",
+                registry_guard_refusal + "\n",
+            )
+            state.stop_reason = registry_guard_refusal
+            break
         guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
         if guard_refusal:
             _write_artifact(
@@ -3839,11 +3873,20 @@ def _git_changed_files(worktree: Path) -> List[str]:
     fixer that adds a NEW registered code module without its prompt.
     ``_git_untracked_files`` exists separately for the staging path,
     which needs the explicit untracked list to feed into ``git add --``.
+
+    Round-6 finding 1: pass ``--untracked-files=all`` so files INSIDE a
+    new untracked directory are reported as individual ``?? dir/file``
+    records rather than collapsed to a single ``?? dir/`` trailing-slash
+    entry. Without this, the 10b unregistered-new-code scan's
+    ``Path.is_file()`` check fails on the directory path and the
+    untracked-directory bypass of #1081 succeeds (an attacker can drop
+    a new package at ``pdd/foo_v2/__init__.py`` and slip past the
+    guard).
     """
     from .git_porcelain import iter_changed_paths, parse_porcelain_z
 
     result = subprocess.run(
-        ["git", "status", "--porcelain=v1", "-z"],
+        ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
         cwd=worktree,
         capture_output=True,
     )
@@ -4016,6 +4059,591 @@ def _check_prompt_source_guard(
         "generated-code-only fix refused: "
         f"{pairs_text}. Update the prompt source or run the proper PDD "
         "sync path before re-running the review loop."
+    )
+
+
+def _extract_arch_pairs(data: Any) -> Set[Tuple[str, str]]:
+    """Build the canonical ``(code_path, prompt_path)`` pair set from an
+    ``architecture.json`` payload.
+
+    Used by ``_check_architecture_registry_edit_guard`` to compare
+    pre-change (HEAD) and post-change (worktree) registry shapes. Paths
+    are normalized to POSIX so comparisons match the changed-file form
+    returned by ``_git_changed_files``.
+    """
+    pairs: Set[Tuple[str, str]] = set()
+    for entry in extract_modules(data):
+        filepath = entry.get("filepath")
+        filename = entry.get("filename")
+        if not (isinstance(filepath, str) and isinstance(filename, str)):
+            continue
+        if not filepath or not filename:
+            continue
+        pairs.add(
+            (
+                Path(filepath).as_posix(),
+                (Path("pdd") / "prompts" / filename).as_posix(),
+            )
+        )
+    return pairs
+
+
+def _path_exists_at_head(worktree: Path, path: str) -> bool:
+    """Return True if ``path`` exists in HEAD's tree.
+
+    Used by ``_check_architecture_registry_edit_guard`` to distinguish
+    additions (path not in HEAD) from modifications (path in HEAD). The
+    unregistered-new-code scan must skip modifications: a legitimate
+    retirement that also touches an existing unregistered helper or
+    test would otherwise falsely trip the scan (round-3 finding 2).
+    """
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"HEAD:{path}"],
+        cwd=worktree,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _is_real_file_no_symlink(path: Path) -> bool:
+    """Return True only when ``path`` is a real, non-symlink file.
+
+    ``Path.is_file()`` follows symlinks, so an attacker can satisfy a
+    prompt-source presence check with ``pdd/prompts/foo.prompt`` as a
+    symlink to any existing file. The guard must reject symlinks for
+    presence checks (round-3 finding 3).
+    """
+    return path.is_file() and not path.is_symlink()
+
+
+def _check_architecture_registry_edit_guard(
+    worktree: Path, changed_files: Sequence[str]
+) -> Optional[str]:
+    """Refuse ``architecture.json`` mutations that bypass the prompt
+    source-of-truth contract (issue #1081).
+
+    Sibling of ``_check_prompt_source_guard`` (10a). Where 10a iterates
+    over the HEAD registry to catch code-only edits, this guard
+    enforces against registry MUTATIONS introduced in the current
+    change set so a coordinated rename + prompt delete + registry
+    rewrite cannot slip past 10a.
+
+    Returns ``None`` when the push should proceed, or a refusal string
+    (suitable for ``state.stop_reason``) when the registry edit is a
+    bypass shape.
+
+    Trigger: runs when EITHER ``architecture.json`` is in the change
+    set OR any HEAD-registered pair has its code or prompt missing
+    from the worktree (implicit retirement: the fixer effectively
+    retired a pair on disk without updating the registry, the
+    no-arch-edit variant of the #1081 bypass shape — round-3 finding
+    1). On the common path with no registry edit AND no implicit
+    retirement this short-circuits to ``None``.
+
+    Block rules:
+      - Added pair (in worktree, not in HEAD): the new prompt MUST exist
+        on disk as a REAL file (not a symlink — round-3 finding 3) AND
+        be in the changed set. Otherwise the fixer is pointing the
+        registry at a prompt that does not exist or is forged.
+      - Removed pair (in HEAD, not in worktree): the old code path MUST
+        be gone from disk AND (the old prompt is gone OR is in the
+        changed set). This is the legitimate retirement shape; anything
+        else is drift.
+      - Repointed pair (filepath in both with different prompt, or
+        prompt in both with different filepath): BLOCK unconditionally.
+        A repoint MUST be split into a retire-old + add-new with prompt
+        sources actually present on disk.
+      - Unregistered new code on partial/full wipe OR implicit
+        retirement: when ANY HEAD pair was removed by registry edit OR
+        any HEAD pair was retired on disk without updating the
+        registry, BLOCK if the change set also leaves a NEW path on
+        disk that is in ``changed_files``, is not ``architecture.json``,
+        does not end in ``.prompt`` (round-13 finding: the canonical
+        prompt-source suffix is the precise exclusion — the original
+        ``pdd/prompts/`` directory blanket was too broad and would let
+        an importable ``pdd/prompts/foo_v2.py`` slip past as
+        ``pdd.prompts.foo_v2``), is registered in NEITHER HEAD
+        nor the worktree registry, and did NOT exist at HEAD (i.e. it
+        is an addition, not a modification of an existing
+        unregistered helper — round-3 finding 2). Presence here
+        counts EITHER a real file OR a symlink: a symlink dropped at
+        the new code path is itself a #1081 attack shape, so it must
+        not slip past the scan (opposite polarity from the added-pair
+        prompt-presence check, where a symlink would forge
+        allowance). Otherwise a rename + prompt delete + registry
+        rewrite (or stale-registry no-arch-edit) can masquerade as
+        legitimate retirement while landing new unregistered code.
+
+    Graceful degradation (allow + warn, never block) on:
+      - ``git show HEAD:architecture.json`` non-zero exit
+      - HEAD blob unparseable as JSON
+      - HEAD registry yields no prompt-owned modules
+      - Worktree blob unavailable/unparseable AND HEAD also has no pairs
+    """
+    changed_norm = {Path(p).as_posix() for p in changed_files if p}
+    arch_in_changes = "architecture.json" in changed_norm
+
+    head_result = subprocess.run(
+        ["git", "show", "HEAD:architecture.json"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if head_result.returncode != 0:
+        logger.warning(
+            "architecture-registry guard: architecture.json missing at "
+            "HEAD in %s (git show exit=%s, stderr=%s); skipping "
+            "registry-edit enforcement for this round.",
+            worktree,
+            head_result.returncode,
+            (head_result.stderr or "").strip(),
+        )
+        return None
+    try:
+        head_data = json.loads(head_result.stdout)
+    except json.JSONDecodeError as exc:
+        logger.warning(
+            "architecture-registry guard: architecture.json at HEAD in "
+            "%s is unparseable (%s); skipping registry-edit "
+            "enforcement.",
+            worktree,
+            exc,
+        )
+        return None
+
+    head_pairs = _extract_arch_pairs(head_data)
+    if not head_pairs:
+        logger.warning(
+            "architecture-registry guard: architecture.json at HEAD in "
+            "%s lists no prompt-owned modules; skipping registry-edit "
+            "enforcement.",
+            worktree,
+        )
+        return None
+
+    # Round-3 finding 1: broaden the trigger to ALSO fire when any
+    # HEAD-registered pair has its code or prompt missing from the
+    # worktree (implicit retirement). The fixer can retire a pair on
+    # disk without updating ``architecture.json``, leaving the
+    # registry stale and landing unregistered new code under cover of
+    # "code-only fix". Detect that here so the unregistered-new-code
+    # scan below can fire even when ``architecture.json`` was not
+    # edited.
+    implicit_retirement = any(
+        not (worktree / code).is_file() or not (worktree / prompt).is_file()
+        for code, prompt in head_pairs
+    )
+    if not arch_in_changes and not implicit_retirement:
+        return None
+
+    # Worktree-side read. Per spec: when HEAD has entries, treat any
+    # unavailable/empty/garbage worktree registry as ``worktree_pairs =
+    # ∅`` so removed-pair enforcement still fires. Only allow + warn
+    # when the post-change registry is genuinely absent on both sides
+    # (which the HEAD-empty short-circuit above already handles).
+    worktree_pairs: Set[Tuple[str, str]] = set()
+    worktree_path = worktree / "architecture.json"
+    try:
+        worktree_blob = worktree_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        logger.warning(
+            "architecture-registry guard: architecture.json missing or "
+            "unreadable in worktree %s (%s); enforcing as full registry "
+            "removal.",
+            worktree,
+            exc,
+        )
+    else:
+        try:
+            worktree_data = json.loads(worktree_blob)
+        except json.JSONDecodeError as exc:
+            logger.warning(
+                "architecture-registry guard: architecture.json in "
+                "worktree %s is unparseable (%s); enforcing as full "
+                "registry removal.",
+                worktree,
+                exc,
+            )
+        else:
+            worktree_pairs = _extract_arch_pairs(worktree_data)
+
+    added = worktree_pairs - head_pairs
+    removed = head_pairs - worktree_pairs
+
+    # Repointed detection: surface entries where the filepath appears
+    # on both sides mapped to a different prompt, OR the prompt appears
+    # on both sides mapped to a different filepath. These MUST be
+    # reported separately (not elided as add + remove) so the operator
+    # sees the precise #1081 attack shape.
+    head_by_code: Dict[str, str] = {c: p for c, p in head_pairs}
+    head_by_prompt: Dict[str, str] = {p: c for c, p in head_pairs}
+    wt_by_code: Dict[str, str] = {c: p for c, p in worktree_pairs}
+    wt_by_prompt: Dict[str, str] = {p: c for c, p in worktree_pairs}
+
+    repointed_by_code: List[Tuple[str, str, str]] = []
+    repointed_by_prompt: List[Tuple[str, str, str]] = []
+    consumed_added: Set[Tuple[str, str]] = set()
+    consumed_removed: Set[Tuple[str, str]] = set()
+
+    for code, old_prompt in head_by_code.items():
+        new_prompt = wt_by_code.get(code)
+        if new_prompt is None or new_prompt == old_prompt:
+            continue
+        repointed_by_code.append((code, old_prompt, new_prompt))
+        consumed_removed.add((code, old_prompt))
+        consumed_added.add((code, new_prompt))
+
+    # Invariant: ``consumed_added`` only contains pairs the filepath
+    # loop matched -- i.e. ``(code, new_prompt)`` for codes shared with
+    # HEAD. A prompt repoint that moves to a NEW filepath produces
+    # ``pair_new = (new_code, prompt)`` which is never pre-consumed
+    # there, so this loop catches identity repoints orthogonally from
+    # the filepath loop (see swap-variant regression test).
+    for prompt, old_code in head_by_prompt.items():
+        new_code = wt_by_prompt.get(prompt)
+        if new_code is None or new_code == old_code:
+            continue
+        pair_old = (old_code, prompt)
+        pair_new = (new_code, prompt)
+        if pair_old in consumed_removed and pair_new in consumed_added:
+            continue
+        repointed_by_prompt.append((prompt, old_code, new_code))
+        consumed_removed.add(pair_old)
+        consumed_added.add(pair_new)
+
+    added_only = added - consumed_added
+    removed_only = removed - consumed_removed
+
+    offenders_added: List[Tuple[str, str]] = []
+    for code, prompt in sorted(added_only):
+        # Round-14 finding: a fixer can register an importable Python
+        # file as a "prompt" to exempt it from the unregistered-new-code
+        # scan (which skips paths already in ``worktree_registered_paths``).
+        # E.g. ``architecture.json`` is rewritten to register
+        # ``(pdd/foo_v2.py, pdd/prompts/foo_v2.py)`` — pointing the prompt
+        # at a .py file. The added-pair check then sees both paths on disk
+        # and in the change set, ALLOWS the add, the 10b scan skips
+        # ``pdd/prompts/foo_v2.py`` because it is now "registered", and
+        # ``pdd.prompts.foo_v2`` lands as importable unregistered Python.
+        # Defence: a registered prompt path MUST end with ``.prompt`` —
+        # the canonical PDD prompt-source suffix. Anything else (.py,
+        # .pyc, .pyw, .pyo, .so, .pyd, ...) is the codex-pass-#13/#14
+        # bypass shape. Case-insensitive to mirror the round-9 /
+        # round-12 prefix/suffix normalization for case-insensitive
+        # filesystems.
+        if not prompt.lower().endswith(".prompt"):
+            offenders_added.append((code, prompt))
+            continue
+        # Round-3 finding 3: reject symlinks for prompt-source presence
+        # checks. ``Path.is_file()`` follows symlinks, so an attacker
+        # could satisfy the check with ``pdd/prompts/<filename>`` as a
+        # symlink to any existing file. Require a real, non-symlink
+        # file at the prompt path.
+        prompt_on_disk = _is_real_file_no_symlink(worktree / prompt)
+        prompt_in_changeset = prompt in changed_norm
+        if prompt_on_disk and prompt_in_changeset:
+            continue
+        offenders_added.append((code, prompt))
+
+    offenders_removed: List[Tuple[str, str]] = []
+    for code, prompt in sorted(removed_only):
+        # ``is_file()`` follows symlinks intentionally here: if the
+        # registered code path is replaced with a symlink to an
+        # existing file, ``code_gone`` is False so the removal is
+        # blocked as "code still present" — the correct outcome.
+        code_gone = not (worktree / code).is_file()
+        prompt_gone = not (worktree / prompt).is_file()
+        prompt_in_changeset = prompt in changed_norm
+        if code_gone and (prompt_gone or prompt_in_changeset):
+            continue
+        offenders_removed.append((code, prompt))
+
+    # Unregistered-new-code scan: fires on the registry-edit
+    # partial/full wipe variant (``removed_only`` non-empty) OR on
+    # implicit retirement (a HEAD-registered pair is gone from disk
+    # without an ``architecture.json`` edit — round-3 finding 1).
+    # When ANY HEAD pair was effectively retired by either mechanism,
+    # an unregistered new code path landed in the same change set is
+    # the #1081 attack shape. The retirement-shape allowance above
+    # passes ``removed_only`` entries where the old code and prompt
+    # are gone — but it cannot see a separate new file that the fixer
+    # introduced under the cover of "legitimate retirement". Restrict
+    # to paths actually in the change set, not ending in ``.prompt``
+    # (round-13 finding: the canonical prompt-source suffix is the
+    # precise exclusion — the original ``pdd/prompts/`` directory
+    # blanket was too broad and would let importable Python under
+    # ``pdd/prompts/`` slip past as ``pdd.prompts.<name>``),
+    # not the registry itself, absent from BOTH registry sides (so
+    # legitimate retire-old + add-new module rewrites still pass),
+    # AND that did NOT exist at HEAD (round-3 finding 2 — a
+    # modification of an existing unregistered helper, test, or doc
+    # is not "new code"). Presence here is "real file OR symlink": a
+    # symlink dropped at the new code path is itself a #1081 attack
+    # shape (the attacker can point pdd/foo_v2.py at any existing
+    # file and slip in unregistered code), so symlinks must COUNT as
+    # presence here — the opposite polarity from the added-pair
+    # prompt-presence check above, where a symlink forges allowance.
+    #
+    # Round-6 finding 2: restrict the scan to paths that look like
+    # generated prompt-driven code — under ``pdd/`` and ending in
+    # ``.py``. 10b's scope boundary is registry mutations, which
+    # cover prompt-owned modules registered in ``architecture.json``.
+    # Tests (``tests/``), docs (``docs/``), scripts (``scripts/``),
+    # and other top-level paths are out of scope: a legitimate
+    # retirement that also adds a test or a doc must not trip the
+    # scan. ``__init__.py`` is INTENTIONALLY kept in scope so the
+    # round-6 finding 1 untracked-directory bypass (a new package at
+    # ``pdd/foo_v2/__init__.py``) is still caught.
+    #
+    # Round-7 finding: a symlink under ``pdd/`` (excluding
+    # ``pdd/prompts/``) can resolve to importable Python code (a
+    # package directory or a ``.py`` module) without carrying a
+    # ``.py`` suffix on the link path itself. ``git status
+    # --untracked-files=all`` lists a directory-symlink as the bare
+    # link path (e.g. ``pdd/foo_v2``, no trailing slash, no ``.py``),
+    # so the ``.py`` filter alone silently allows it. Generated
+    # prompt-driven code under ``pdd/`` is never a symlink, so the
+    # safe rule is to keep any newly-added symlink under ``pdd/``
+    # (outside ``pdd/prompts/``) in scope regardless of suffix.
+    # Hoist the registered-path sets out of the inner scan so the
+    # round-11 submodule check below can reuse them without
+    # recomputing. Both scans share the same gating precondition
+    # (``removed_only or implicit_retirement``) and the same notion
+    # of "registered on either side of the registry edit".
+    head_registered_paths = {path for pair in head_pairs for path in pair}
+    worktree_registered_paths = {
+        path for pair in worktree_pairs for path in pair
+    }
+    unregistered_new_code_paths: List[str] = []
+    if removed_only or implicit_retirement:
+        for path in sorted(changed_norm):
+            if path == "architecture.json":
+                continue
+            if path in head_registered_paths:
+                continue
+            if path in worktree_registered_paths:
+                continue
+            # Round-12 finding (codex review pass #12): the prefix
+            # check must be case-insensitive too, mirroring the R10
+            # suffix fix. On case-insensitive filesystems (Windows;
+            # macOS HFS+/APFS in default case-insensitive mode) an
+            # uppercase/mixed-case directory prefix like ``PDD/`` or
+            # ``Pdd/`` aliases to ``pdd/`` on disk, so
+            # ``PDD/foo_v2.py`` is importable as ``pdd.foo_v2``
+            # exactly like ``pdd/foo_v2.py``. A case-sensitive
+            # ``str.startswith("pdd/")`` would let the bypass slip
+            # past; lowercase the path side of the prefix
+            # comparisons.
+            path_lower = path.lower()
+            # Round-13 finding (codex review pass #13): the original
+            # ``pdd/prompts/`` directory blanket was too broad. The
+            # intent was to skip ``.prompt`` files (canonical prompt
+            # sources, not importable Python), but anything else under
+            # ``pdd/prompts/`` — including ``.py``/``.pyc``/etc. —
+            # remains importable as ``pdd.prompts.<name>``. A fixer
+            # that wipes the registry, deletes the registered pair,
+            # and drops ``pdd/prompts/foo_v2.py`` would otherwise slip
+            # past the scan: ``pdd.prompts.foo_v2`` is now importable
+            # Python with no prompt source. Replace the dir-blanket
+            # with a ``.prompt`` suffix exclusion — ``.prompt`` files
+            # anywhere (not just under ``pdd/prompts/``) are skipped
+            # because the suffix itself marks them as canonical prompt
+            # sources and isn't importable Python; everything else
+            # under ``pdd/prompts/`` falls through to the standard
+            # importable-suffix filter below.
+            if path_lower.endswith(".prompt"):
+                continue
+            # Round-6 finding 2: narrow the scan to generated
+            # prompt-driven code under ``pdd/``. Anything else
+            # (tests, docs, scripts, top-level helpers) falls
+            # outside the registry-mutation scope.
+            if not path_lower.startswith("pdd/"):
+                continue
+            candidate = worktree / path
+            # Round-7 finding: a symlink under ``pdd/`` can resolve
+            # to importable Python code (package directory or .py
+            # file) without carrying a ``.py`` suffix on the link
+            # path itself. ``Path.is_symlink()`` does NOT follow the
+            # link, so it works even if the target is broken or
+            # outside the worktree. Keep symlinks in scope regardless
+            # of suffix; otherwise apply the importable-suffix filter.
+            #
+            # Round-8 finding: the suffix filter must cover every
+            # shape Python can import as ``pdd.<name>`` (see
+            # ``_IMPORTABLE_SUFFIXES``). A sourceless ``.pyc``
+            # bypass (delete code+prompt, drop ``pdd/foo_v2.pyc``)
+            # would otherwise slip past a ``.py``-only check while
+            # remaining importable via
+            # ``importlib.machinery.SourcelessFileLoader``.
+            #
+            # Round-9 finding: the suffix match must be
+            # case-insensitive. Python's own
+            # ``importlib.machinery`` suffix matching is
+            # case-insensitive on case-insensitive filesystems
+            # (Windows; macOS HFS+/APFS in default case-insensitive
+            # mode), so ``pdd/foo_v2.PY`` is importable as
+            # ``pdd.foo_v2`` exactly like ``pdd/foo_v2.py``. A
+            # case-sensitive ``str.endswith`` against the lowercase
+            # ``_IMPORTABLE_SUFFIXES`` tuple would let an uppercase
+            # or mixed-case suffix (``.PY``, ``.PYC``, ``.So``)
+            # slip past the scan. Lowercase the path side of the
+            # comparison; ``_IMPORTABLE_SUFFIXES`` is already
+            # lowercase so the tuple does not need re-casing.
+            is_symlink = candidate.is_symlink()
+            if (
+                not is_symlink
+                and not path.lower().endswith(_IMPORTABLE_SUFFIXES)
+            ):
+                continue
+            # Treat either a real file or a symlink as "present on
+            # disk" — symlinks are themselves part of the #1081
+            # attack surface here.
+            if not (candidate.is_file() or is_symlink):
+                continue
+            # Round-3 finding 2: skip modifications of files that
+            # already existed at HEAD. Only flag genuine additions.
+            if _path_exists_at_head(worktree, path):
+                continue
+            unregistered_new_code_paths.append(path)
+
+    # Round-11 finding: a fixer that adds a git submodule under
+    # ``pdd/`` can land importable Python code without it appearing
+    # as an enumerable file in ``--untracked-files=all`` — the
+    # gitlink shows as the bare directory path, and the files
+    # inside come from the submodule's checked-out HEAD. The
+    # round-10b scan above sees the bare ``pdd/foo_v2`` path, finds
+    # no importable suffix and no symlink, and skips it. The signal
+    # we DO see is ``.gitmodules`` appearing in the change set:
+    # legitimate refactors do not add a submodule inside ``pdd/``,
+    # so an LLM fixer creating one alongside a retirement/wipe is
+    # unambiguously the bypass shape. Block any new gitlink
+    # (worktree shows as a real directory, not a symlink) under
+    # ``pdd/`` outside ``pdd/prompts/`` that did not exist at HEAD
+    # and is registered in neither the HEAD nor the worktree
+    # registry side.
+    gitmodules_changed = ".gitmodules" in changed_norm
+    submodule_offenders: List[str] = []
+    if gitmodules_changed and (removed_only or implicit_retirement):
+        for path in sorted(changed_norm):
+            # Round-12 finding (codex review pass #12): match the
+            # 10b scan above — lowercase the path side of the
+            # prefix checks so an uppercase/mixed-case ``PDD/`` or
+            # ``Pdd/`` submodule path doesn't bypass the R11 check
+            # on case-insensitive filesystems.
+            path_lower = path.lower()
+            if not path_lower.startswith("pdd/"):
+                continue
+            # Round-13 parity with the 10b scan above: replace the
+            # ``pdd/prompts/`` directory blanket with a ``.prompt``
+            # suffix exclusion. A submodule path is unlikely to end
+            # in ``.prompt`` in practice, but keep the two scans in
+            # lockstep so the rule is identical everywhere.
+            if path_lower.endswith(".prompt"):
+                continue
+            if path in head_registered_paths:
+                continue
+            if path in worktree_registered_paths:
+                continue
+            candidate = worktree / path
+            # A gitlink shows as a directory in the worktree (the
+            # submodule is checked out). Don't follow symlinks here
+            # — those are caught by the symlink branch of the 10b
+            # scan above.
+            if candidate.is_dir() and not candidate.is_symlink():
+                if not _path_exists_at_head(worktree, path):
+                    submodule_offenders.append(path)
+
+    repointed_by_code.sort()
+    repointed_by_prompt.sort()
+
+    if not (offenders_added or offenders_removed
+            or repointed_by_code or repointed_by_prompt
+            or unregistered_new_code_paths
+            or submodule_offenders):
+        return None
+
+    parts: List[str] = []
+    for path in unregistered_new_code_paths:
+        if arch_in_changes:
+            # Registry was edited; the partial/full-wipe attack shape.
+            parts.append(
+                "removed registered pair while new unregistered code path "
+                f"{path} was added"
+            )
+        else:
+            # No registry edit; a HEAD-registered pair was retired on
+            # disk while a new unregistered code path landed. Registry
+            # is now stale (round-3 finding 1).
+            parts.append(
+                "retired registered pair on disk while new unregistered "
+                f"code path {path} was added; architecture.json not "
+                "updated"
+            )
+    for code, prompt in offenders_added:
+        # Round-14 finding: distinguish the "non-.prompt suffix"
+        # bypass shape (importable code disguised as a prompt) from
+        # the original "missing prompt on disk" shape so the operator
+        # sees the precise attack the guard refused.
+        if not prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"added {code}\u2194{prompt} where the registered prompt "
+                f"path is not a .prompt file (importable code disguised "
+                f"as a prompt)"
+            )
+        else:
+            parts.append(
+                f"added {code}\u2194{prompt} without prompt source on disk"
+            )
+    for code, prompt in offenders_removed:
+        parts.append(
+            f"removed {code}\u2194{prompt} with code still present"
+        )
+    for code, old_prompt, new_prompt in repointed_by_code:
+        # Round-14 finding (symmetry with the added-pair check): a
+        # repoint whose NEW prompt path is not a ``.prompt`` file is the
+        # same "importable code disguised as a prompt" attack shape,
+        # just dressed as a repoint instead of an added pair. Surface
+        # the precise attack so the refusal is traceable.
+        if not new_prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"repointed {code} from {old_prompt} to {new_prompt} "
+                f"where the new prompt path is not a .prompt file "
+                f"(importable code disguised as a prompt)"
+            )
+        else:
+            parts.append(
+                f"repointed {code} from {old_prompt} to {new_prompt}"
+            )
+    for prompt, old_code, new_code in repointed_by_prompt:
+        # Round-14 finding (defence-in-depth symmetry): ``prompt`` here
+        # is HEAD-side (the unchanged registry key), so it should
+        # already be a ``.prompt`` file — but mirror the check so a
+        # future poisoning of HEAD that flows through the prompt-loop
+        # repoint path is still surfaced distinctly.
+        if not prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"repointed {prompt} from {old_code} to {new_code} "
+                f"where the registered prompt path is not a .prompt "
+                f"file (importable code disguised as a prompt)"
+            )
+        else:
+            parts.append(
+                f"repointed {prompt} from {old_code} to {new_code}"
+            )
+    for path in submodule_offenders:
+        parts.append(
+            f"new git submodule {path} introduced via .gitmodules edit "
+            "while a registered prompt-owned pair was retired"
+        )
+
+    return (
+        "architecture.json registry edit refused: "
+        + "; ".join(parts)
+        + ". Update the prompt source or run the proper PDD sync path "
+        "before re-running the review loop."
     )
 
 
