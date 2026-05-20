@@ -7537,3 +7537,175 @@ class TestRound8SourcelessBytecodeBypass:
             ],
         )
         assert reason is None
+
+
+class TestRound11SubmoduleBypass:
+    """Round-11 finding: a fixer that runs ``git submodule add <repo>
+    pdd/foo_v2`` lands importable Python code (the submodule's HEAD
+    includes ``__init__.py``) without it appearing as enumerable files
+    in ``git status --untracked-files=all``. The gitlink shows as the
+    bare directory path ``pdd/foo_v2``; the 10b scan finds no
+    importable suffix and no symlink and silently allows it. The
+    signal we DO see is ``.gitmodules`` appearing in the change set —
+    legitimate refactors do not add a submodule inside ``pdd/``.
+    """
+
+    def test_guard_refuses_submodule_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """The exact round-11 reproduction: delete the registered
+        code+prompt, wipe ``architecture.json`` to ``[]``, and stage
+        a gitlink at ``pdd/foo_v2`` alongside a new ``.gitmodules``.
+        We avoid the actual ``git submodule add`` setup (which would
+        require a separate repo) by emulating the on-disk shape:
+        ``.gitmodules`` is in the change set and ``pdd/foo_v2/`` is
+        a real directory holding ``__init__.py``. The guard sees
+        ``.gitmodules`` plus the retirement context and blocks the
+        new gitlink directory.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # Apply the bypass shape:
+        #   1. delete pdd/foo.py
+        #   2. delete pdd/prompts/foo_python.prompt
+        #   3. wipe architecture.json to []
+        #   4. add .gitmodules to the worktree
+        #   5. drop a real directory at pdd/foo_v2/ holding
+        #      __init__.py (emulates the gitlink's checked-out
+        #      submodule HEAD)
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / ".gitmodules").write_text(
+            "[submodule \"pdd/foo_v2\"]\n"
+            "\tpath = pdd/foo_v2\n"
+            "\turl = ../foo_v2.git\n",
+            encoding="utf-8",
+        )
+        submodule_dir = tmp_path / "pdd" / "foo_v2"
+        submodule_dir.mkdir(parents=True, exist_ok=True)
+        (submodule_dir / "__init__.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                ".gitmodules",
+                "pdd/foo_v2",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/foo_v2" in reason
+        assert "new git submodule" in reason
+
+    def test_guard_allows_gitmodules_change_without_retirement_context(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: ``.gitmodules`` in the change set with no HEAD
+        pair removed or implicitly retired must NOT trip the R11
+        submodule check. The retirement-context trigger
+        (``removed_only or implicit_retirement``) is False, so the
+        check short-circuits even though ``.gitmodules`` is present.
+        Build a worktree where the registered pair is untouched, the
+        architecture.json edit is metadata-only (re-write of the
+        same canonical pair), and a benign ``pdd/foo_v2`` directory
+        sits alongside ``.gitmodules`` in the change set.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        # No retirement: keep pdd/foo.py and pdd/prompts/foo_python.prompt
+        # on disk, leave architecture.json's canonical pairs unchanged.
+        # The .gitmodules edit and the new pdd/foo_v2 directory are
+        # the ONLY changes that matter to R11; the retirement-context
+        # trigger does not fire because head_pairs == worktree_pairs
+        # and every HEAD-registered file is still present.
+        (tmp_path / ".gitmodules").write_text(
+            "[submodule \"pdd/foo_v2\"]\n"
+            "\tpath = pdd/foo_v2\n"
+            "\turl = ../foo_v2.git\n",
+            encoding="utf-8",
+        )
+        submodule_dir = tmp_path / "pdd" / "foo_v2"
+        submodule_dir.mkdir(parents=True, exist_ok=True)
+        (submodule_dir / "__init__.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                ".gitmodules",
+                "pdd/foo_v2",
+            ],
+        )
+        # No retirement context → R11 must not fire. The trigger
+        # condition of the guard itself (architecture.json edit OR
+        # implicit retirement) also does not fire here, so the guard
+        # short-circuits to None.
+        assert reason is None
+
+    def test_guard_does_not_false_positive_r11_on_new_subpackage(
+        self, tmp_path: Path
+    ) -> None:
+        """Negative: a legitimate new directory ``pdd/utils/`` with
+        ``__init__.py`` (no ``.gitmodules`` change) is caught by the
+        EXISTING round-6 unregistered-new-code scan (``__init__.py``
+        matches the importable-suffix filter), not by the R11
+        submodule check. Confirm the R11 wording is absent so we know
+        the R11 check itself does not false-positive on a plain new
+        subpackage.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        utils_dir = tmp_path / "pdd" / "utils"
+        utils_dir.mkdir(parents=True, exist_ok=True)
+        (utils_dir / "__init__.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/utils/__init__.py",
+            ],
+        )
+        # The round-6 scan catches __init__.py and refuses; the R11
+        # wording must NOT appear because no .gitmodules change is
+        # in the change set.
+        assert reason is not None
+        assert "new git submodule" not in reason

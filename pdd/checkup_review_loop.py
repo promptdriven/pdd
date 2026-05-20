@@ -4326,12 +4326,17 @@ def _check_architecture_registry_edit_guard(
     # prompt-driven code under ``pdd/`` is never a symlink, so the
     # safe rule is to keep any newly-added symlink under ``pdd/``
     # (outside ``pdd/prompts/``) in scope regardless of suffix.
+    # Hoist the registered-path sets out of the inner scan so the
+    # round-11 submodule check below can reuse them without
+    # recomputing. Both scans share the same gating precondition
+    # (``removed_only or implicit_retirement``) and the same notion
+    # of "registered on either side of the registry edit".
+    head_registered_paths = {path for pair in head_pairs for path in pair}
+    worktree_registered_paths = {
+        path for pair in worktree_pairs for path in pair
+    }
     unregistered_new_code_paths: List[str] = []
     if removed_only or implicit_retirement:
-        head_registered_paths = {path for pair in head_pairs for path in pair}
-        worktree_registered_paths = {
-            path for pair in worktree_pairs for path in pair
-        }
         for path in sorted(changed_norm):
             if path == "architecture.json":
                 continue
@@ -4394,12 +4399,49 @@ def _check_architecture_registry_edit_guard(
                 continue
             unregistered_new_code_paths.append(path)
 
+    # Round-11 finding: a fixer that adds a git submodule under
+    # ``pdd/`` can land importable Python code without it appearing
+    # as an enumerable file in ``--untracked-files=all`` — the
+    # gitlink shows as the bare directory path, and the files
+    # inside come from the submodule's checked-out HEAD. The
+    # round-10b scan above sees the bare ``pdd/foo_v2`` path, finds
+    # no importable suffix and no symlink, and skips it. The signal
+    # we DO see is ``.gitmodules`` appearing in the change set:
+    # legitimate refactors do not add a submodule inside ``pdd/``,
+    # so an LLM fixer creating one alongside a retirement/wipe is
+    # unambiguously the bypass shape. Block any new gitlink
+    # (worktree shows as a real directory, not a symlink) under
+    # ``pdd/`` outside ``pdd/prompts/`` that did not exist at HEAD
+    # and is registered in neither the HEAD nor the worktree
+    # registry side.
+    gitmodules_changed = ".gitmodules" in changed_norm
+    submodule_offenders: List[str] = []
+    if gitmodules_changed and (removed_only or implicit_retirement):
+        for path in sorted(changed_norm):
+            if not path.startswith("pdd/"):
+                continue
+            if path.startswith("pdd/prompts/"):
+                continue
+            if path in head_registered_paths:
+                continue
+            if path in worktree_registered_paths:
+                continue
+            candidate = worktree / path
+            # A gitlink shows as a directory in the worktree (the
+            # submodule is checked out). Don't follow symlinks here
+            # — those are caught by the symlink branch of the 10b
+            # scan above.
+            if candidate.is_dir() and not candidate.is_symlink():
+                if not _path_exists_at_head(worktree, path):
+                    submodule_offenders.append(path)
+
     repointed_by_code.sort()
     repointed_by_prompt.sort()
 
     if not (offenders_added or offenders_removed
             or repointed_by_code or repointed_by_prompt
-            or unregistered_new_code_paths):
+            or unregistered_new_code_paths
+            or submodule_offenders):
         return None
 
     parts: List[str] = []
@@ -4434,6 +4476,11 @@ def _check_architecture_registry_edit_guard(
     for prompt, old_code, new_code in repointed_by_prompt:
         parts.append(
             f"repointed {prompt} from {old_code} to {new_code}"
+        )
+    for path in submodule_offenders:
+        parts.append(
+            f"new git submodule {path} introduced via .gitmodules edit "
+            "while a registered prompt-owned pair was retired"
         )
 
     return (
