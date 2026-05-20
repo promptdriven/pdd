@@ -5,7 +5,8 @@
     "dependencies": [
       "llm_invoke_python.prompt",
       "auth_service_python.prompt",
-      "_keyring_timeout_python.prompt"
+      "_keyring_timeout_python.prompt",
+      "git_porcelain_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -5795,7 +5796,8 @@
     "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
-      "agentic_common_python.prompt"
+      "agentic_common_python.prompt",
+      "git_porcelain_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -7502,7 +7504,8 @@
       "agentic_change_python.prompt",
       "agentic_checkup_orchestrator_python.prompt",
       "agentic_e2e_fix_orchestrator_python.prompt",
-      "architecture_registry_python.prompt"
+      "architecture_registry_python.prompt",
+      "git_porcelain_python.prompt"
     ],
     "priority": 217.5,
     "filename": "checkup_review_loop_python.prompt",
@@ -8411,7 +8414,9 @@
   {
     "reason": "Shared worktree setup, git-scope guards, and agentic output parsing helpers used by multiple orchestrators.",
     "description": "Provides setup_worktree, get_git_root, resolve_main_ref, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker. Used by bug, split, and change orchestrators.",
-    "dependencies": [],
+    "dependencies": [
+      "git_porcelain_python.prompt"
+    ],
     "priority": 224,
     "filename": "agentic_common_worktree_python.prompt",
     "filepath": "pdd/agentic_common_worktree.py",
@@ -8807,6 +8812,43 @@
     "position": {
       "x": 24600,
       "y": 800
+    }
+  },
+  {
+    "reason": "Shared, lossless parser for `git status --porcelain=v1 -z` that preserves renames and exotic path bytes.",
+    "description": "Centralized helper that parses the machine-readable `git status --porcelain=v1 -z` output: NUL-separated records, rename-aware old+new path pairs, and `os.fsdecode`-decoded paths so non-UTF-8 filenames round-trip. Replaces ad-hoc text-mode `line[3:]` / `split(' -> ')` parsers in scope guards, change detectors, and prompt-changed endpoints. See issue #1080.",
+    "dependencies": [],
+    "priority": 4,
+    "filename": "git_porcelain_python.prompt",
+    "filepath": "pdd/git_porcelain.py",
+    "tags": [
+      "git",
+      "module",
+      "python",
+      "shared",
+      "porcelain"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_porcelain_z",
+            "signature": "(stdout: Union[bytes, str]) -> List[PorcelainEntry]",
+            "returns": "List[PorcelainEntry]"
+          },
+          {
+            "name": "run_porcelain_z",
+            "signature": "(cwd: Union[str, Path], *, include_untracked: bool = True, timeout: Optional[float] = 30) -> Optional[List[PorcelainEntry]]",
+            "returns": "Optional[List[PorcelainEntry]]"
+          },
+          {
+            "name": "iter_changed_paths",
+            "signature": "(entries: Iterable[PorcelainEntry]) -> Iterator[str]",
+            "returns": "Iterator[str]"
+          }
+        ]
+      }
     }
   }
 ]

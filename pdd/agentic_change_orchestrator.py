@@ -752,20 +752,23 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
     Only returns prompt and documentation files (matching step 9 scope),
     plus any files in the direct_edit_candidates list.
     """
+    # Use the structured ``--porcelain=v1 -z`` parser so paths with
+    # spaces, embedded quotes, or a literal " -> " substring round-trip
+    # verbatim (the old text-mode parser was lossy in all three cases).
+    # See issue #1080.
+    from pdd.git_porcelain import parse_porcelain_z
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             cwd=worktree_path,
-            capture_output=True, text=True, check=True
+            capture_output=True, check=True
         )
         files = []
         allowed_extensions = {".prompt", ".md"}
         direct_edit_set = set(direct_edit_candidates or [])
-        for line in result.stdout.splitlines():
-            if not line.strip():
-                continue
-            # git status --porcelain format: "XY filename" (2 status chars + space + path)
-            filepath = line[3:].strip().split(" -> ")[-1]
+        for entry in parse_porcelain_z(result.stdout):
+            # Use the new-side path verbatim — callers want current path.
+            filepath = entry.path
             # Skip temp files from run_agentic_task
             if filepath.startswith(".agentic_prompt_"):
                 continue

@@ -5216,3 +5216,93 @@ def test_preflight_drift_heal_metadata_failure_is_hard_failure(tmp_path):
          patch("pdd.agentic_change_orchestrator.subprocess.run", return_value=result), \
          pytest.raises(RuntimeError, match="preflight metadata finalization failed"):
         _preflight_drift_heal(tmp_path, quiet=True)
+
+
+# =========================================================================
+# Issue #1080: _detect_worktree_changes must use structured -z parser
+# =========================================================================
+
+
+def _git_env_1080() -> dict:
+    return {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
+
+
+def _init_repo_1080(repo, files):
+    repo.mkdir(parents=True, exist_ok=True)
+    env = _git_env_1080()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                   check=True, capture_output=True, env=env)
+    for rel, content in files.items():
+        tgt = repo / rel
+        tgt.parent.mkdir(parents=True, exist_ok=True)
+        tgt.write_text(content)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                   check=True, capture_output=True, env=env)
+
+
+def _git_1080(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True,
+                   capture_output=True, text=True, env=_git_env_1080())
+
+
+class TestDetectWorktreeChangesRename1080:
+    """``_detect_worktree_changes`` must return the CURRENT (new) path
+    of a rename verbatim via the structured ``-z`` parser — never a
+    truncated path produced by ad-hoc ``split(' -> ')``.
+    """
+
+    def test_returns_new_path_only_for_renamed_prompt(self, tmp_path):
+        """For a staged rename the new path appears, the old path does
+        not, and no ``" -> "`` literal leaks into the result."""
+        from pdd.agentic_change_orchestrator import _detect_worktree_changes
+
+        _init_repo_1080(tmp_path, {
+            "prompts/old.prompt": "alpha\n",
+            "code.py": "x\n",
+        })
+        _git_1080(tmp_path, "mv", "prompts/old.prompt", "prompts/new.prompt")
+
+        files = _detect_worktree_changes(tmp_path)
+
+        assert "prompts/new.prompt" in files, (
+            f"Renamed prompt's NEW path missing from {files!r}"
+        )
+        assert "prompts/old.prompt" not in files, (
+            f"Renamed prompt's OLD path leaked into {files!r}"
+        )
+        for entry in files:
+            assert " -> " not in entry, (
+                f"Combined ' -> ' literal leaked into {entry!r}"
+            )
+
+    def test_handles_filename_with_arrow_substring(self, tmp_path):
+        """A filename containing the literal ``" -> "`` must be
+        returned verbatim, not truncated by ``split(' -> ')``."""
+        from pdd.agentic_change_orchestrator import _detect_worktree_changes
+
+        _init_repo_1080(tmp_path, {"anchor.txt": "x\n"})
+        _git_1080(tmp_path, "config", "core.quotePath", "false")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        weird_name = "weird -> name.prompt"
+        (prompts_dir / weird_name).write_text("body\n")
+
+        files = _detect_worktree_changes(tmp_path)
+
+        expected = f"prompts/{weird_name}"
+        assert expected in files, (
+            f"Filename containing ' -> ' was mis-parsed; got {files!r}"
+        )

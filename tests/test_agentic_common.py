@@ -7120,3 +7120,75 @@ class TestIssue814BillingErrorsPermanent:
         )
         # 3. No backoff sleep — permanent errors must NOT delay the fallback
         sleep_mock.assert_not_called()
+
+
+# =========================================================================
+# Issue #1080: porcelain-rename handling in _revert_out_of_scope_changes
+# =========================================================================
+
+
+class TestRevertOutOfScopeChangesRename1080:
+    """Issue #1080: ``_revert_out_of_scope_changes`` must handle staged
+    renames via the structured ``--porcelain=v1 -z`` parser, never
+    constructing a fake ``"old -> new"`` literal path.
+    """
+
+    @staticmethod
+    def _git_env() -> dict:
+        return {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "t@t",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+        }
+
+    def _init_repo(self, repo: Path, files: dict) -> None:
+        repo.mkdir(parents=True, exist_ok=True)
+        env = self._git_env()
+        _subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"],
+                       check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                       check=True, capture_output=True, env=env)
+        for rel, content in files.items():
+            tgt = repo / rel
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            tgt.write_text(content)
+        _subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                       check=True, capture_output=True, env=env)
+
+    def _git(self, repo: Path, *args: str) -> None:
+        _subprocess.run(["git", "-C", str(repo), *args], check=True,
+                       capture_output=True, text=True, env=self._git_env())
+
+    def test_reverts_out_of_scope_staged_rename(self, tmp_path):
+        """An out-of-scope staged rename must be reverted on disk and
+        the returned list must not contain a ``Path("old -> new")``
+        literal produced by the buggy ``line[3:]`` parser."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        self._init_repo(proj, {
+            "code.py": "def main(): pass\n",
+            "unrelated.py": "def other(): pass\n",
+        })
+        self._git(proj, "mv", "unrelated.py", "renamed_unrelated.py")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "unrelated.py").exists(), (
+            "Out-of-scope rename survived: old-side file not restored"
+        )
+        assert not (proj / "renamed_unrelated.py").exists(), (
+            "Out-of-scope rename survived: new-side file still exists"
+        )
+        for p in reverted:
+            assert " -> " not in str(p), (
+                f"Fake combined path leaked into return value: {p!r}"
+            )

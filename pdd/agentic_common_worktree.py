@@ -388,19 +388,25 @@ def revert_out_of_scope_changes_with_dirs(
     """
     reverted: List[Path] = []
 
+    # Use the structured ``--porcelain=v1 -z`` parser so staged renames
+    # surface BOTH the new and old paths as discrete fields. The earlier
+    # text-mode parser kept only the new side, which let an out-of-scope
+    # old path (e.g. ``scripts/external.py`` renamed into ``pdd/``)
+    # silently escape the scope guard. See issue #1080.
+    from pdd.git_porcelain import parse_porcelain_z  # local import: avoid cycles
+
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain", "-u"],
+            ["git", "status", "--porcelain=v1", "-z", "-u"],
             cwd=str(cwd),
             capture_output=True,
-            text=True,
             timeout=30,
         )
         if result.returncode != 0:
             logger.warning(
                 "git status failed (rc=%d): %s",
                 result.returncode,
-                result.stderr.strip(),
+                result.stderr.decode("utf-8", errors="replace").strip(),
             )
             return reverted
     except subprocess.TimeoutExpired:
@@ -410,75 +416,132 @@ def revert_out_of_scope_changes_with_dirs(
         logger.warning("OS error running git status: %s", exc)
         return reverted
 
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
-            continue
-
-        status = line[:2]
-        filepath_raw = line[3:]
-
-        # Handle renames: "R  old_name -> new_name"
-        if " -> " in filepath_raw:
-            filepath_raw = filepath_raw.split(" -> ")[-1]
-
-        filepath_str = filepath_raw.strip().strip('"')
-
-        # ------------------------------------------------------------------
-        # Scope check
-        # ------------------------------------------------------------------
-        in_scope = False
-
+    def _path_in_scope(rel: str) -> bool:
         for prefix in allowed_dirs:
-            if filepath_str.startswith(prefix):
-                in_scope = True
-                break
+            if rel.startswith(prefix):
+                return True
+        abs_path = (cwd / rel).resolve()
+        return abs_path in allowed_files
 
-        if not in_scope:
-            abs_path = (cwd / filepath_str).resolve()
-            if abs_path in allowed_files:
-                in_scope = True
+    for entry in parse_porcelain_z(result.stdout):
+        status = entry.status
+        new_rel = entry.path
+        old_rel = entry.old_path
 
-        if in_scope:
-            continue
+        is_rename = old_rel is not None and "R" in status
+        is_copy = old_rel is not None and "C" in status
 
-        # ------------------------------------------------------------------
-        # Out of scope — revert or remove
-        # ------------------------------------------------------------------
+        # Renames are out-of-scope if EITHER side is out of scope: the
+        # new path currently exists on disk, and the old path is removed
+        # by the staged rename. Copies are different: the old path is a
+        # source reference only, not a modified path, so scope and revert
+        # decisions are based on the copied destination.
+        if is_rename:
+            new_in = _path_in_scope(new_rel)
+            old_in = _path_in_scope(old_rel)
+            if new_in and old_in:
+                continue
+        elif is_copy:
+            if _path_in_scope(new_rel):
+                continue
+        else:
+            if _path_in_scope(new_rel):
+                continue
+
         is_untracked = status == "??"
-        rel_path = Path(filepath_str)
 
         if is_untracked:
             try:
-                os.remove(str(cwd / filepath_str))
-                logger.info("Removed untracked out-of-scope file: %s", filepath_str)
-                reverted.append(rel_path)
+                os.remove(str(cwd / new_rel))
+                logger.info("Removed untracked out-of-scope file: %s", new_rel)
+                reverted.append(Path(new_rel))
             except OSError as exc:
-                logger.warning("Failed to remove %s: %s", filepath_str, exc)
+                logger.warning("Failed to remove %s: %s", new_rel, exc)
+        elif is_rename:
+            # Rename: unstage both sides, restore the old path from HEAD,
+            # and delete the new path so the rename is fully undone.
+            paths_to_reset = [new_rel, old_rel]
+            try:
+                subprocess.run(
+                    ["git", "reset", "HEAD", "--"] + paths_to_reset,
+                    cwd=str(cwd),
+                    capture_output=True,
+                    timeout=30,
+                )
+                checkout = subprocess.run(
+                    ["git", "checkout", "HEAD", "--", old_rel],
+                    cwd=str(cwd),
+                    capture_output=True,
+                    timeout=30,
+                )
+                try:
+                    (cwd / new_rel).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    logger.warning("Failed to remove rename new-side %s: %s", new_rel, exc)
+                if checkout.returncode == 0:
+                    logger.info(
+                        "Reverted out-of-scope rename: %s -> %s", old_rel, new_rel,
+                    )
+                    reverted.append(Path(old_rel))
+                    reverted.append(Path(new_rel))
+                else:
+                    logger.warning(
+                        "Failed to revert rename %s -> %s: %s",
+                        old_rel, new_rel,
+                        checkout.stderr.decode("utf-8", errors="replace").strip(),
+                    )
+            except subprocess.TimeoutExpired:
+                logger.warning("Timed out reverting rename %s -> %s", old_rel, new_rel)
+            except OSError as exc:
+                logger.warning("OS error reverting rename %s -> %s: %s", old_rel, new_rel, exc)
+        elif is_copy:
+            # Copy: only the destination is changed. The source path is
+            # informational and must not be reset/restored/removed.
+            try:
+                subprocess.run(
+                    ["git", "reset", "HEAD", "--", new_rel],
+                    cwd=str(cwd),
+                    capture_output=True,
+                    timeout=30,
+                )
+                try:
+                    (cwd / new_rel).unlink()
+                except FileNotFoundError:
+                    pass
+                except OSError as exc:
+                    logger.warning("Failed to remove copy destination %s: %s", new_rel, exc)
+                logger.info("Reverted out-of-scope copy destination: %s", new_rel)
+                reverted.append(Path(new_rel))
+            except subprocess.TimeoutExpired:
+                logger.warning("Timed out reverting copy destination %s", new_rel)
+            except OSError as exc:
+                logger.warning("OS error reverting copy destination %s: %s", new_rel, exc)
         else:
             try:
                 checkout = subprocess.run(
-                    ["git", "checkout", "HEAD", "--", filepath_str],
+                    ["git", "checkout", "HEAD", "--", new_rel],
                     cwd=str(cwd),
                     capture_output=True,
-                    text=True,
                     timeout=30,
                 )
                 if checkout.returncode == 0:
                     logger.info(
                         "Reverted out-of-scope tracked change: %s",
-                        filepath_str,
+                        new_rel,
                     )
-                    reverted.append(rel_path)
+                    reverted.append(Path(new_rel))
                 else:
                     logger.warning(
                         "Failed to revert %s: %s",
-                        filepath_str,
-                        checkout.stderr.strip(),
+                        new_rel,
+                        checkout.stderr.decode("utf-8", errors="replace").strip(),
                     )
             except subprocess.TimeoutExpired:
-                logger.warning("Timed out reverting %s", filepath_str)
+                logger.warning("Timed out reverting %s", new_rel)
             except OSError as exc:
-                logger.warning("OS error reverting %s: %s", filepath_str, exc)
+                logger.warning("OS error reverting %s: %s", new_rel, exc)
 
     return reverted
 

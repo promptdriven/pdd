@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, List, Literal, Optional
@@ -779,46 +780,82 @@ async def list_changed_prompt_files(
         else:
             merge_base = merge_base_result.stdout.strip()
 
-        # Get list of changed files (including added, modified)
+        # Get list of changed files (including added, modified, renamed,
+        # copied, typechange). Use ``--name-status -z`` so paths with
+        # spaces, embedded quotes, backslashes, or non-ASCII bytes
+        # round-trip verbatim. ``--name-only`` would emit C-style quoted
+        # paths (e.g. ``"prompts/quote\"name.prompt"``) for shell-special
+        # characters, and an ``.endswith('.prompt')`` filter would then
+        # miss the trailing quote (issue #1080).
         diff_result = subprocess.run(
-            ["git", "diff", "--name-only", "--diff-filter=ACMR", merge_base, "HEAD"],
+            ["git", "diff", "--name-status", "-z",
+             "--diff-filter=ACMR", merge_base, "HEAD"],
             cwd=project_root,
             capture_output=True,
-            text=True,
         )
 
         if diff_result.returncode != 0:
+            stderr_text = diff_result.stderr.decode("utf-8", errors="replace")
             raise HTTPException(
                 status_code=500,
-                detail=f"Failed to get git diff: {diff_result.stderr}"
+                detail=f"Failed to get git diff: {stderr_text}"
             )
 
-        # Also get staged and unstaged changes (for uncommitted work)
+        # Also get staged and unstaged changes (for uncommitted work).
+        # Use ``--porcelain=v1 -z`` so renamed/space-containing prompt
+        # paths round-trip verbatim (see issue #1080). The structured
+        # parser exposes the new-side path with no quoting artifacts.
+        from pdd.git_porcelain import parse_porcelain_z
         status_result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain=v1", "-z"],
             cwd=project_root,
             capture_output=True,
-            text=True,
         )
 
         changed_files = set()
 
-        # Parse committed changes
-        for line in diff_result.stdout.strip().split("\n"):
-            if line and line.endswith(".prompt"):
-                changed_files.add(line)
+        # Parse committed changes from ``git diff --name-status -z``.
+        # Record layout per file (NUL-separated, no C-quoting):
+        #   ACMT records: ``<status>\0<path>``
+        #   R/C records:  ``<status><similarity>\0<old_path>\0<new_path>``
+        # We only ever report the NEW path:
+        #   - A/M/T/C: the path on the current side is the only/new path.
+        #   - R: the new path is the rename destination; the old path
+        #     is no longer present in HEAD and is intentionally omitted
+        #     (the endpoint reports the current set of prompt files
+        #     touched by the diff).
+        #   - D is excluded by ``--diff-filter`` because a deleted file
+        #     cannot be a current prompt source.
+        diff_records = [r for r in diff_result.stdout.split(b"\x00") if r]
+        i = 0
+        while i < len(diff_records):
+            raw_status = diff_records[i]
+            if not raw_status:
+                i += 1
+                continue
+            status_char = chr(raw_status[0]) if raw_status else ""
+            if status_char in ("R", "C") and i + 2 < len(diff_records):
+                # R/C consume two path records: old then new.
+                new_path = os.fsdecode(diff_records[i + 2])
+                if new_path.endswith(".prompt"):
+                    changed_files.add(new_path)
+                i += 3
+            elif status_char in ("A", "M", "T") and i + 1 < len(diff_records):
+                path = os.fsdecode(diff_records[i + 1])
+                if path.endswith(".prompt"):
+                    changed_files.add(path)
+                i += 2
+            else:
+                # Unknown shape — advance one record so we don't loop.
+                i += 1
 
         # Parse uncommitted changes (staged and unstaged)
         if status_result.returncode == 0:
-            for line in status_result.stdout.strip().split("\n"):
-                if line and len(line) > 3:
-                    # Format: XY filename (X=staged, Y=unstaged)
-                    file_path = line[3:].strip()
-                    # Handle renamed files (format: "old -> new")
-                    if " -> " in file_path:
-                        file_path = file_path.split(" -> ")[1]
-                    if file_path.endswith(".prompt"):
-                        changed_files.add(file_path)
+            for entry in parse_porcelain_z(status_result.stdout):
+                # Endpoint reports the current (new) prompt path only.
+                file_path = entry.path
+                if file_path.endswith(".prompt"):
+                    changed_files.add(file_path)
 
         return {"changed_prompts": sorted(changed_files), "base_branch": base_branch}
 
