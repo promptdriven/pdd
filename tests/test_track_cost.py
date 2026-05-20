@@ -1258,19 +1258,19 @@ def test_attempted_models_scoped_to_single_command_invocation(
 import sys
 
 
-@pytest.mark.skipif(sys.platform == 'win32', reason='POSIX-only fcntl lock')
 def test_migration_serialized_by_lock(
     mock_click_context, mock_rprint, tmp_path
 ):
-    """Regression (codex round-7 finding 3): concurrent @track_cost
-    invocations against a legacy 6-column cost.csv must not lose rows
-    to the migrate+append race. The fcntl flock serializes both the
-    migration and the subsequent append on POSIX.
+    """Regression (codex round-7 finding 3, 3rd-pass review): concurrent
+    @track_cost invocations against a legacy 6-column cost.csv must not
+    lose rows to the migrate+append race. The portable atomic lock
+    (O_CREAT|O_EXCL) serializes both the migration and the subsequent
+    append on POSIX and Windows alike — no fcntl fallback.
 
     This is a structural smoke test using threads (which serialize via
     the GIL during the critical section) — full multi-process race
     coverage would require subprocess fixture machinery. The
-    flock acquire/release code path is exercised end-to-end, proving
+    lock acquire/release code path is exercised end-to-end, proving
     the lock is opened/closed correctly and the migration completes
     under the lock.
     """
@@ -1332,3 +1332,38 @@ def test_migration_serialized_by_lock(
     )
 
     mock_rprint.assert_not_called()
+
+
+def test_acquire_atomic_lock_steals_stale_lock(tmp_path):
+    """Regression (3rd-pass review): a stale lock file (older than
+    ``_LOCK_STALE_SECONDS``) MUST be stolen — otherwise a crashed PDD
+    process that died without releasing its lock would block every
+    subsequent CLI invocation for the full retry window.
+    """
+    import os
+    import time
+    from pdd.track_cost import _acquire_atomic_lock, _release_atomic_lock, _LOCK_STALE_SECONDS
+
+    lock_path = str(tmp_path / "cost.csv.lock")
+
+    # Plant a stale lock — create the file and backdate its mtime.
+    with open(lock_path, 'w') as f:
+        f.write("99999")
+    stale_time = time.time() - (_LOCK_STALE_SECONDS + 5)
+    os.utime(lock_path, (stale_time, stale_time))
+
+    # The acquire must steal the stale file and return a valid fd.
+    fd = _acquire_atomic_lock(lock_path)
+    try:
+        assert fd is not None, (
+            "stale lock must be stolen; _acquire_atomic_lock returned None"
+        )
+        assert os.path.exists(lock_path), (
+            "after steal, the lock file must exist (held by us)"
+        )
+    finally:
+        _release_atomic_lock(fd, lock_path)
+
+    assert not os.path.exists(lock_path), (
+        "after release, the lock file must be unlinked"
+    )

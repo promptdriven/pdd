@@ -1,21 +1,77 @@
 import functools
+import time
 from datetime import datetime
 import csv
 import os
 import tempfile
 import click
 from rich import print as rprint
-from typing import Any, Tuple, List
+from typing import Any, Optional, Tuple, List
 
-# POSIX file-lock for serializing CSV migration + append between concurrent
-# PDD processes. Windows lacks fcntl; on those platforms the lock is a no-op
-# and the write path degrades to atomic-rename-only (still safer than
-# in-place rewrite, just not safe against the lost-update race the lock
-# prevents on POSIX).
-try:
-    import fcntl  # type: ignore[import]
-except ImportError:
-    fcntl = None  # type: ignore[assignment]
+# Cross-platform exclusive lock for serializing CSV migration + append between
+# concurrent PDD processes. Uses O_CREAT | O_EXCL semantics which works on
+# POSIX and Windows alike, so Windows no longer falls through to unlocked
+# writes (the previous fcntl-only implementation lost rows during concurrent
+# legacy-CSV migration on Windows).
+_LOCK_RETRY_MAX = 50          # 50 * 0.1s = 5s max wait
+_LOCK_RETRY_INTERVAL = 0.1
+_LOCK_STALE_SECONDS = 60      # forcibly steal a lock older than this
+
+
+def _acquire_atomic_lock(lock_path: str) -> Optional[int]:
+    """Cross-platform best-effort exclusive lock via O_CREAT|O_EXCL.
+
+    Returns the lock file descriptor on success, None on failure (caller
+    falls through to unlocked atomic-rename behavior — still safer than
+    in-place rewrite, just not safe against the inter-process race).
+
+    Stale lock files older than ``_LOCK_STALE_SECONDS`` are stolen to
+    recover from crashed processes that didn't release on exit.
+    """
+    for _ in range(_LOCK_RETRY_MAX):
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+            try:
+                os.write(fd, str(os.getpid()).encode())
+            except OSError:
+                # Failure to write the pid is non-fatal; we still hold the lock.
+                pass
+            return fd
+        except FileExistsError:
+            try:
+                age = time.time() - os.path.getmtime(lock_path)
+                if age > _LOCK_STALE_SECONDS:
+                    try:
+                        os.unlink(lock_path)
+                    except OSError:
+                        pass
+                    continue
+            except OSError:
+                pass
+            time.sleep(_LOCK_RETRY_INTERVAL)
+        except OSError:
+            # Filesystem doesn't support O_EXCL semantics; degrade.
+            return None
+    return None
+
+
+def _release_atomic_lock(fd: Optional[int], lock_path: str) -> None:
+    """Release the lock acquired by :func:`_acquire_atomic_lock`.
+
+    Best-effort: errors during close/unlink are swallowed so cost
+    tracking never breaks the wrapped command.
+    """
+    if fd is None:
+        return
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.unlink(lock_path)
+    except OSError:
+        pass
+
 
 __all__ = ['track_cost', 'extract_cost_and_model', 'collect_files', 'wrapper', 'looks_like_file']
 
@@ -200,32 +256,20 @@ def track_cost(func):
                         file_has_content = os.path.isfile(output_cost_path) and os.path.getsize(output_cost_path) > 0
 
                         # Serialize the migration+append critical section
-                        # across concurrent PDD processes via an exclusive
-                        # POSIX flock on a sibling lock file. Without the
-                        # lock, two processes hitting a legacy 6-column
-                        # cost.csv would each peek-then-migrate-then-append
-                        # independently and the second os.replace would
-                        # overwrite the first's appended row (lost-update
-                        # race). Lock acquisition is best-effort: on
-                        # Windows (no fcntl) or any flock failure, fall
-                        # through to the unlocked atomic-rename path, which
-                        # is still safer than in-place rewrite — just not
-                        # safe against the inter-process race.
-                        lock_file = None
-                        lock_acquired = False
-                        if fcntl is not None:
-                            try:
-                                lock_path = output_cost_path + ".lock"
-                                lock_file = open(lock_path, 'a+')
-                                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-                                lock_acquired = True
-                            except Exception:
-                                if lock_file is not None:
-                                    try:
-                                        lock_file.close()
-                                    except Exception:
-                                        pass
-                                    lock_file = None
+                        # across concurrent PDD processes via a cross-
+                        # platform exclusive lock file (O_CREAT|O_EXCL).
+                        # Without the lock, two processes hitting a legacy
+                        # 6-column cost.csv would each peek-then-migrate-
+                        # then-append independently and the second
+                        # os.replace would overwrite the first's appended
+                        # row (lost-update race). Lock acquisition is
+                        # best-effort: on filesystems that don't support
+                        # O_EXCL semantics or after a 5s timeout, fall
+                        # through to the unlocked atomic-rename path,
+                        # which is still safer than in-place rewrite —
+                        # just not safe against the inter-process race.
+                        lock_path = output_cost_path + ".lock"
+                        lock_fd = _acquire_atomic_lock(lock_path)
 
                         try:
                             # If file exists with an older header that
@@ -289,16 +333,7 @@ def track_cost(func):
                                     writer.writeheader()
                                 writer.writerow(row)
                         finally:
-                            if lock_file is not None:
-                                try:
-                                    if lock_acquired and fcntl is not None:
-                                        fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-                                except Exception:
-                                    pass
-                                try:
-                                    lock_file.close()
-                                except Exception:
-                                    pass
+                            _release_atomic_lock(lock_fd, lock_path)
 
             except Exception as e:
                 rprint(f"[red]Error tracking cost: {e}[/red]")

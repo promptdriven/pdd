@@ -176,6 +176,10 @@ def cloud_fix_errors(
                 "modelName.[/yellow]"
             )
             raw_chain = [model_name] if model_name else []
+        elif not isinstance(raw_chain, list):
+            # Non-conforming server may return a scalar string; wrap so the
+            # comprehension below doesn't iterate over characters.
+            raw_chain = [raw_chain]
         attempted_models = [
             str(m) if str(m).startswith("cloud:") else f"cloud:{m}"
             for m in raw_chain

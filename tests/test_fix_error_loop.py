@@ -1384,6 +1384,41 @@ def test_fix_error_loop_propagates_failed_cloud_attempt_to_ctx(
     )
 
 
+def test_cloud_fix_errors_scalar_attempted_models_is_wrapped(
+    mock_cloud_config, mock_requests
+):
+    """Regression (3rd human review pass): a non-conforming cloud server
+    that returns ``attemptedModels`` as a scalar string (e.g. ``"gpt-4"``)
+    instead of a list must not be iterated character-by-character. The
+    chain must be wrapped to a single-element list before the
+    ``cloud:`` prefix comprehension, so the cost CSV records
+    ``['cloud:gpt-4']`` not ``['cloud:g','cloud:p','cloud:t','cloud:-','cloud:4']``.
+    """
+    mock_cloud_config.get_jwt_token.return_value = "fake_token"
+    mock_cloud_config.get_endpoint_url.return_value = "http://api/fix"
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+    mock_response.json.return_value = {
+        "updateUnitTest": False,
+        "updateCode": True,
+        "fixedUnitTest": "",
+        "fixedCode": "fixed",
+        "analysis": "ok",
+        "totalCost": 0.01,
+        "modelName": "gpt-4",
+        "attemptedModels": "gpt-4",  # scalar string — non-conforming server
+    }
+    mock_requests.post.return_value = mock_response
+
+    result = cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+
+    assert result[7] == ["cloud:gpt-4"], (
+        f"Scalar attemptedModels must be wrapped to a single-element list; "
+        f"got {result[7]!r}"
+    )
+
+
 def test_cloud_fix_errors_no_token(mock_cloud_config):
     """Test error when no JWT token is available."""
     mock_cloud_config.get_jwt_token.return_value = None
