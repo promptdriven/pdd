@@ -17,18 +17,75 @@ from .architecture_registry import BUNDLED_SAMPLE_TOPLEVEL_DIRS, extract_modules
 from .sync_order import extract_includes_from_file, extract_module_from_include
 
 
+def _path_preserving_module_key(filename: str) -> Optional[str]:
+    """Return a path-preserving module key for an include or arch filename.
+
+    Mirrors ``auto_deps_architecture._path_preserving_module_key``. We
+    duplicate the helper here (rather than importing it) because
+    ``auto_deps_architecture`` already imports
+    ``resolve_architecture_prompt_path`` from this module — sharing the
+    helper would create a circular import. Both copies must stay in
+    sync; F4 third-party codex review.
+
+    Strategy:
+      * Reject inputs ``extract_module_from_include`` does not recognize
+        as module references — this preserves the long-standing filter
+        that drops non-language-suffix prompts (e.g.
+        ``context/python_preamble.prompt`` is a context preamble, not a
+        module prompt).
+      * For accepted ``.prompt`` paths, canonicalize via
+        ``architecture_sync._normalize_prompt_filename`` (strip ``./`` /
+        leading ``prompts/``) and derive the basename via
+        ``agentic_sync_runner._basename_from_architecture_filename`` so
+        directory segments are preserved
+        (``"commands/fix_python.prompt"`` → ``"commands/fix"``,
+        ``"fix_python.prompt"`` → ``"fix"``).
+      * For accepted non-prompt context paths (example ``.py`` files,
+        kept as a known case), degrade to the bare-stem
+        ``extract_module_from_include`` result so the long-standing
+        example-path → module mapping is preserved.
+
+    Returns ``None`` when no module key can be derived (no recognized
+    language suffix, LLM-only prompt, empty string, etc.).
+    """
+    if not filename:
+        return None
+    # Gate: keep the original module-recognition filter so non-module
+    # paths (preambles, doc fragments) continue to be ignored.
+    if not extract_module_from_include(filename):
+        return None
+    from .agentic_sync_runner import _basename_from_architecture_filename
+    from .architecture_sync import _normalize_prompt_filename
+
+    normalized = _normalize_prompt_filename(filename)
+    if normalized.lower().endswith(".prompt"):
+        return _basename_from_architecture_filename(normalized)
+    # Non-prompt module reference (e.g. ``context/foo_example.py``).
+    # Preserve the bare-stem mapping used by callers that rely on
+    # example-path → module aliasing.
+    return extract_module_from_include(normalized)
+
+
 def _module_prompt_include_target(include_path: str) -> Optional[str]:
     """
-    Map an <include> path to a module basename only when it names another module prompt.
+    Map an <include> path to a path-preserving module key only when it names another module prompt.
 
-    Context/example files (e.g. ``context/foo_example.py``) are ignored so validation
-    matches architecture.json, which lists dependencies between module prompts, not
-    every referenced artifact.
+    Context/example ``.py`` files and non-language-suffix ``.prompt`` files
+    (e.g. ``context/python_preamble.prompt``) are ignored so validation
+    matches architecture.json, which lists dependencies between module prompts,
+    not every referenced artifact.
+
+    Returns a directory-qualified key (``"commands/fix"``) when the include path is
+    path-qualified, so the validator can distinguish same-tail module prompts that
+    live in different folders (F4 third-party codex review). A bare include path
+    (``"fix_python.prompt"``) returns the bare stem (``"fix"``) — flat-layout
+    behavior is preserved by the natural degradation of
+    ``_basename_from_architecture_filename``.
     """
     p = (include_path or "").strip()
     if not p.lower().endswith(".prompt"):
         return None
-    return extract_module_from_include(p)
+    return _path_preserving_module_key(p)
 
 
 # Re-export for backwards compatibility with external imports that still
@@ -651,13 +708,20 @@ def validate_prompt_contract_context(
 
 def _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]:
     """
-    Return module basenames declared via ``<pdd-dependency>`` tags in the prompt header.
+    Return path-preserving module keys declared via ``<pdd-dependency>`` tags in
+    the prompt header.
 
     Per ``docs/prompting_guide.md``, ``<pdd-dependency>`` is the authoritative
-    architectural declaration and ``<include>`` is purely for LLM context.
-    The forward check treats a ``<pdd-dependency>`` tag as proof that the prompt
-    has declared the dependency, so arch-listed deps backed only by a tag (no
-    ``<include>`` of the module's prompt) are not flagged as drift.
+    architectural declaration and ``<include>`` of a module prompt is also an
+    architecture edge. The forward check treats a ``<pdd-dependency>`` tag as
+    proof that the prompt has declared the dependency, so arch-listed deps
+    backed only by a tag (no ``<include>`` of the module's prompt) are not
+    flagged as drift.
+
+    F4 third-party codex review: keys are path-preserving so a tag like
+    ``<pdd-dependency>server/fix_python.prompt</pdd-dependency>`` matches an
+    arch dep entry ``"server/fix_python.prompt"`` without colliding with a
+    same-tail ``"commands/fix_python.prompt"`` entry.
     """
     try:
         content = prompt_path.read_text(encoding="utf-8")
@@ -671,7 +735,7 @@ def _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]:
     modules: set[str] = set()
     tags = parse_prompt_tags(content)
     for dep in tags.get("dependencies", []) or []:
-        m = extract_module_from_include(dep)
+        m = _path_preserving_module_key(dep)
         if m and m != self_mod:
             modules.add(m)
     return modules
@@ -682,8 +746,8 @@ def cross_validate_architecture_with_prompt_includes(
     project_root: Path,
 ) -> List[str]:
     """
-    Compare each architecture entry's ``dependencies`` (as module basenames) with
-    module targets of ``<include>`` tags in the corresponding prompt file.
+    Compare each architecture entry's ``dependencies`` (as path-preserving module
+    keys) with module targets of ``<include>`` tags in the corresponding prompt file.
 
     A declared dependency is satisfied if the prompt either ``<include>``s the
     dependency's prompt OR declares it via ``<pdd-dependency>`` (the metadata
@@ -694,19 +758,30 @@ def cross_validate_architecture_with_prompt_includes(
     ``architecture.json`` is handled by ``architecture_sync``, not this check.
 
     Non-module includes (docs, preambles, etc.) are ignored via
-    ``extract_module_from_include``.
+    ``_module_prompt_include_target`` which only accepts ``.prompt`` paths.
+
+    F4 third-party codex review: comparisons use ``_path_preserving_module_key``
+    so directory-qualified entries like ``"commands/fix_python.prompt"`` and
+    ``"server/fix_python.prompt"`` are distinguishable. Unqualified inputs
+    degrade to the bare module stem so flat-layout architectures still work.
 
     Returns:
         Human-readable warning strings (empty if no mismatches / nothing to check).
     """
     warnings: List[str] = []
 
+    # F4 third-party codex review: path-preserving keys throughout so a
+    # path-qualified arch entry like ``"commands/fix_python.prompt"`` is
+    # not collapsed to the bare stem ``"fix"`` and silently aliased with
+    # ``"server/fix_python.prompt"``. Unqualified arch filenames degrade
+    # to their bare stem via ``_basename_from_architecture_filename`` so
+    # flat-layout architectures continue to work as before.
     filename_to_basename: Dict[str, str] = {}
     for entry in arch_data:
         fn = entry.get("filename") or ""
         if not fn:
             continue
-        b = extract_module_from_include(fn)
+        b = _path_preserving_module_key(fn)
         if b:
             filename_to_basename[fn] = b
 

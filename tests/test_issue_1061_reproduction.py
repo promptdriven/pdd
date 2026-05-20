@@ -1837,6 +1837,199 @@ def test_f2_path_qualified_same_tail_include_kept_as_dep(tmp_path: Path) -> None
     )
 
 
+def test_f4_validator_reverse_missing_dep_path_qualified_same_tail(
+    tmp_path: Path,
+) -> None:
+    """[F4 / third-party codex review] Validator must flag a missing arch
+    dep when a path-qualified prompt ``<include>``s a same-tail prompt from
+    a different folder that is NOT listed in its arch dependencies.
+
+    Pre-fix, ``cross_validate_architecture_with_prompt_includes`` used
+    ``extract_module_from_include`` for every comparison key —
+    ``commands/fix_python.prompt`` and ``server/fix_python.prompt`` both
+    collapsed to ``"fix"``, so the include and the self-entry's arch
+    basename matched. The drift was silently masked. With path-preserving
+    keys (``"commands/fix"`` vs ``"server/fix"``), the validator can see
+    that ``server/fix`` is an arch module the prompt includes without
+    the entry listing it as a dep.
+
+    Asserts:
+      * The single returned warning names ``server/fix`` (path-preserved),
+        not collapsed to ``fix``.
+      * The warning text references ``server/fix_python.prompt`` (the
+        original include target) so a reader can locate the offending tag.
+    """
+    from pdd.architecture_include_validation import (
+        cross_validate_architecture_with_prompt_includes,
+    )
+
+    project_root = tmp_path / "proj"
+    prompts = project_root / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    (prompts / "server").mkdir(parents=True)
+
+    (prompts / "commands" / "fix_python.prompt").write_text(
+        "%\n<include>server/fix_python.prompt</include>\n",
+        encoding="utf-8",
+    )
+    (prompts / "server" / "fix_python.prompt").write_text(
+        "%\n", encoding="utf-8"
+    )
+
+    arch = [
+        {"filename": "commands/fix_python.prompt", "dependencies": []},
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(arch, project_root)
+    # Filter for warnings about the commands/fix entry (only one expected).
+    cmd_warnings = [
+        w for w in warnings if "commands/fix_python.prompt" in w
+    ]
+    assert cmd_warnings, (
+        "Validator must emit at least one warning for the "
+        f"commands/fix_python.prompt entry; got all={warnings!r}"
+    )
+    # Path-preserving key must appear in at least one warning.
+    assert any("server/fix" in w for w in cmd_warnings), (
+        "Path-preserving warning must reference 'server/fix' "
+        f"(not collapsed to 'fix'); got {cmd_warnings!r}"
+    )
+
+
+def test_f4_validator_forward_missing_prompt_decl_path_qualified_same_tail(
+    tmp_path: Path,
+) -> None:
+    """[F4 / third-party codex review] Validator must flag a missing prompt
+    declaration when arch lists a same-tail cross-folder module as a dep but
+    the prompt has neither ``<include>`` nor ``<pdd-dependency>`` of it.
+
+    Pre-fix, the forward check used bare-stem keys throughout, so an arch
+    dep on ``server/fix_python.prompt`` collapsed to ``"fix"`` and matched
+    the self entry's basename ``"fix"`` — the dep was treated as the
+    self-edge and silently dropped from ``arch_modules``. With
+    path-preserving keys, ``server/fix`` differs from ``commands/fix`` and
+    the missing declaration is correctly surfaced.
+
+    Asserts:
+      * The single returned warning names ``server/fix`` (path-preserved).
+      * The warning text references ``server/fix_python.prompt`` so the
+        offending arch dep is locatable.
+    """
+    from pdd.architecture_include_validation import (
+        cross_validate_architecture_with_prompt_includes,
+    )
+
+    project_root = tmp_path / "proj"
+    prompts = project_root / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    (prompts / "server").mkdir(parents=True)
+
+    # Prompt has no <pdd-dependency> and no <include> for server/fix.
+    (prompts / "commands" / "fix_python.prompt").write_text(
+        "%\n", encoding="utf-8"
+    )
+    (prompts / "server" / "fix_python.prompt").write_text(
+        "%\n", encoding="utf-8"
+    )
+
+    arch = [
+        {
+            "filename": "commands/fix_python.prompt",
+            "dependencies": ["server/fix_python.prompt"],
+        },
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(arch, project_root)
+    cmd_warnings = [
+        w for w in warnings if "commands/fix_python.prompt" in w
+    ]
+    assert cmd_warnings, (
+        "Validator must emit at least one warning for the "
+        f"commands/fix_python.prompt entry; got all={warnings!r}"
+    )
+    # Path-preserving key must appear in the warning.
+    assert any("server/fix" in w for w in cmd_warnings), (
+        "Path-preserving warning must reference 'server/fix' "
+        f"(not collapsed to 'fix'); got {cmd_warnings!r}"
+    )
+    # Sanity: the warning must reference the original arch dep target so
+    # the reader can locate the missing declaration.
+    assert any("server/fix_python.prompt" in w for w in cmd_warnings), (
+        "Warning must reference the arch dep target "
+        f"'server/fix_python.prompt'; got {cmd_warnings!r}"
+    )
+
+
+def test_f4_validator_flat_layout_still_works(tmp_path: Path) -> None:
+    """[F4 regression guard] Flat-layout validator behavior is preserved.
+
+    A flat ``fix_python.prompt`` including ``helper_python.prompt`` with a
+    matching arch dep must produce no warnings — path-preserving keys must
+    degrade to bare stems when no directory segment is present, otherwise
+    flat-layout architectures would regress.
+
+    A second arch dep on ``other_python.prompt`` without a matching
+    include/dep tag must still warn (forward direction works as before).
+
+    Asserts the union: aligned deps produce no warnings, missing deps
+    still emit warnings with the expected (bare) module key.
+    """
+    from pdd.architecture_include_validation import (
+        cross_validate_architecture_with_prompt_includes,
+    )
+
+    project_root = tmp_path / "proj"
+    prompts = project_root / "prompts"
+    prompts.mkdir(parents=True)
+
+    # Aligned: fix includes helper, arch lists helper as dep.
+    (prompts / "fix_python.prompt").write_text(
+        "%\n<include>helper_python.prompt</include>\n",
+        encoding="utf-8",
+    )
+    (prompts / "helper_python.prompt").write_text("%\n", encoding="utf-8")
+
+    arch_aligned = [
+        {
+            "filename": "fix_python.prompt",
+            "dependencies": ["helper_python.prompt"],
+        },
+        {"filename": "helper_python.prompt", "dependencies": []},
+    ]
+    warnings_aligned = cross_validate_architecture_with_prompt_includes(
+        arch_aligned, project_root
+    )
+    assert warnings_aligned == [], (
+        "Flat-layout aligned arch+include must produce no warnings; "
+        f"got {warnings_aligned!r}"
+    )
+
+    # Forward drift still detected: arch lists other as dep but prompt
+    # has no include/tag for it.
+    (prompts / "other_python.prompt").write_text("%\n", encoding="utf-8")
+    arch_forward_drift = [
+        {
+            "filename": "fix_python.prompt",
+            "dependencies": ["helper_python.prompt", "other_python.prompt"],
+        },
+        {"filename": "helper_python.prompt", "dependencies": []},
+        {"filename": "other_python.prompt", "dependencies": []},
+    ]
+    warnings_forward_drift = cross_validate_architecture_with_prompt_includes(
+        arch_forward_drift, project_root
+    )
+    assert warnings_forward_drift, (
+        "Flat-layout forward drift must still emit a warning; "
+        f"got {warnings_forward_drift!r}"
+    )
+    assert any("'other'" in w or " other " in w for w in warnings_forward_drift), (
+        "Flat-layout warning must use the bare module key 'other'; "
+        f"got {warnings_forward_drift!r}"
+    )
+
+
 def test_f2_flat_layout_self_include_still_self_skipped(tmp_path: Path) -> None:
     """[F2 regression guard] A true self-include in a flat layout must
     still be self-skipped by ``merge_auto_deps_includes_into_architecture``.
