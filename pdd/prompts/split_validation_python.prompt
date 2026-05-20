@@ -92,7 +92,7 @@
   </get_test_command>
 
   <get_lint_commands>
-    <include>pdd/prompts/get_lint_commands_python.prompt</include>
+    <include>get_lint_commands_python.prompt</include>
   </get_lint_commands>
 
 % Deliverables
