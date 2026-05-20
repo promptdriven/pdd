@@ -35,6 +35,7 @@
 <pdd-dependency>llm_invoke_python.prompt</pdd-dependency>
 <pdd-dependency>auth_service_python.prompt</pdd-dependency>
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
+<pdd-dependency>git_porcelain_python.prompt</pdd-dependency>
 <include>context/python_preamble.prompt</include>
 
 % Goal
