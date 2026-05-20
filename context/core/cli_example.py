@@ -182,9 +182,12 @@ def example_cost_tracking_setup():
         - input_files: List of input files involved
         - output_files: List of output files generated/modified
         - attempted_models: Semicolon-delimited chronological list of every
-          model PDD attempted for the command, ending with the successful
-          model. Shows the full fallback history when a default model fails
-          and PDD switches providers (e.g. Vertex AI -> DeepSeek).
+          model PDD attempted across all LLM calls the command made
+          (multi-substep commands like generate run code-gen + postprocess
+          and both substeps contribute). The final entry is the model that
+          produced the command's final output. Shows fallback history when
+          a default model fails and PDD switches providers (e.g. Vertex AI
+          -> DeepSeek).
     
     Args:
         None
