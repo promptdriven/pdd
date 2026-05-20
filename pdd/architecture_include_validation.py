@@ -706,7 +706,11 @@ def validate_prompt_contract_context(
     ]
 
 
-def _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]:
+def _pdd_dependency_modules(
+    prompt_path: Path,
+    self_mod: str,
+    arch_data: Optional[List[Dict[str, Any]]] = None,
+) -> set[str]:
     """
     Return path-preserving module keys declared via ``<pdd-dependency>`` tags in
     the prompt header.
@@ -722,6 +726,14 @@ def _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]:
     ``<pdd-dependency>server/fix_python.prompt</pdd-dependency>`` matches an
     arch dep entry ``"server/fix_python.prompt"`` without colliding with a
     same-tail ``"commands/fix_python.prompt"`` entry.
+
+    F7 third-party codex review: when ``arch_data`` is supplied, raw declarations
+    are first run through ``_normalize_dependency_filenames`` so a bare
+    ``<pdd-dependency>fix_python.prompt</pdd-dependency>`` resolves to its
+    unambiguous path-qualified arch entry (e.g. ``server/fix_python.prompt``)
+    before path-preserving keying. Without this step a bare declaration would
+    key to ``"fix"`` while the arch dep keys to ``"server/fix"`` and the
+    validator would falsely warn that the prompt is missing a declaration.
     """
     try:
         content = prompt_path.read_text(encoding="utf-8")
@@ -730,11 +742,16 @@ def _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]:
     if not content:
         return set()
 
-    from .architecture_sync import parse_prompt_tags
+    from .architecture_sync import parse_prompt_tags, _normalize_dependency_filenames
 
     modules: set[str] = set()
     tags = parse_prompt_tags(content)
-    for dep in tags.get("dependencies", []) or []:
+    raw_deps = list(tags.get("dependencies", []) or [])
+    if arch_data:
+        resolved = _normalize_dependency_filenames(raw_deps, arch_data)
+    else:
+        resolved = raw_deps
+    for dep in resolved:
         m = _path_preserving_module_key(dep)
         if m and m != self_mod:
             modules.add(m)
@@ -810,7 +827,7 @@ def cross_validate_architecture_with_prompt_includes(
                 include_modules.add(m)
                 include_proof.setdefault(m, inc)
 
-        tag_modules = _pdd_dependency_modules(prompt_path, mod_base)
+        tag_modules = _pdd_dependency_modules(prompt_path, mod_base, arch_data)
         forward_declared = include_modules | tag_modules
 
         arch_modules: set[str] = set()

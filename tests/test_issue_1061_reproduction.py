@@ -334,8 +334,12 @@ def test_identify_modules_prompt_declares_pdd_dependency_authoritative() -> None
     )
 
     # Context-only rule: <include> (incl. mode="interface" / select=) is NOT
-    # an architectural edge.
-    assert "<include>" in rendered, "Prompt must mention <include> directives"
+    # an architectural edge. Accept either literal `<include>` or the
+    # entity-escaped `&lt;include&gt;` form (F8: inline doc examples are escaped
+    # to keep extract_includes_from_file_ordered from parsing prose as live tags).
+    assert "<include>" in rendered or "&lt;include&gt;" in rendered, (
+        "Prompt must mention <include> directives (literal or entity-escaped)"
+    )
     assert "context only" in rendered or "context-only" in rendered or "LLM context" in rendered, (
         "Prompt must label <include> directives as context-only"
     )
@@ -2116,3 +2120,94 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
             assert path_re.match(entry), (
                 f"{prompt_path.name}: doesn't look like a path: {entry!r}"
             )
+
+
+def test_f7_validator_bare_pdd_dep_resolves_to_path_qualified_arch_entry(tmp_path):
+    """F7 regression: a bare <pdd-dependency>fix_python.prompt</pdd-dependency>
+    declaration must resolve to the unambiguous path-qualified arch entry
+    (e.g. server/fix_python.prompt) — the validator must NOT warn that the
+    declaration is missing."""
+    from pdd.architecture_include_validation import (
+        cross_validate_architecture_with_prompt_includes,
+    )
+
+    prompts = tmp_path / "prompts"
+    (prompts / "server").mkdir(parents=True)
+
+    # commands/cli_python.prompt declares a bare <pdd-dependency>fix_python.prompt</pdd-dependency>
+    (prompts / "commands").mkdir(parents=True)
+    cli_path = prompts / "commands" / "cli_python.prompt"
+    cli_path.write_text(
+        "<pdd-dependency>fix_python.prompt</pdd-dependency>\nsome prompt body\n"
+    )
+
+    # server/fix_python.prompt exists as the only fix entry in arch (no flat fix)
+    fix_path = prompts / "server" / "fix_python.prompt"
+    fix_path.write_text("server fix prompt\n")
+
+    arch_data = [
+        {
+            "filename": "commands/cli_python.prompt",
+            "dependencies": ["server/fix_python.prompt"],
+        },
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(
+        arch_data, tmp_path
+    )
+    # Filter to only warnings about commands/cli — others are unrelated noise
+    cli_warnings = [w for w in warnings if "commands/cli" in w or "cli_python.prompt" in w]
+    assert cli_warnings == [], (
+        f"F7: bare <pdd-dependency>fix_python.prompt</pdd-dependency> should resolve "
+        f"to the unambiguous server/fix_python.prompt arch entry, but validator "
+        f"warned: {cli_warnings!r}"
+    )
+
+
+def test_f7_validator_warns_on_truly_ambiguous_bare_pdd_dep(tmp_path):
+    """F7 mirror: when bare <pdd-dependency>fix_python.prompt</pdd-dependency> could
+    match multiple arch entries (commands/fix AND server/fix), validator must NOT
+    silently treat them as matched — it should warn about the missing declaration
+    (the arch dep can't be unambiguously resolved against the bare name)."""
+    from pdd.architecture_include_validation import (
+        cross_validate_architecture_with_prompt_includes,
+    )
+
+    prompts = tmp_path / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    (prompts / "server").mkdir(parents=True)
+    (prompts / "other").mkdir(parents=True)
+
+    # other/cli_python.prompt has a bare <pdd-dependency>fix_python.prompt</pdd-dependency>
+    cli_path = prompts / "other" / "cli_python.prompt"
+    cli_path.write_text(
+        "<pdd-dependency>fix_python.prompt</pdd-dependency>\nbody\n"
+    )
+
+    (prompts / "commands" / "fix_python.prompt").write_text("c fix\n")
+    (prompts / "server" / "fix_python.prompt").write_text("s fix\n")
+
+    arch_data = [
+        {
+            "filename": "other/cli_python.prompt",
+            "dependencies": ["server/fix_python.prompt"],
+        },
+        {"filename": "commands/fix_python.prompt", "dependencies": []},
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+
+    warnings = cross_validate_architecture_with_prompt_includes(
+        arch_data, tmp_path
+    )
+    # The bare dep is ambiguous (could be commands/fix OR server/fix), so it should
+    # NOT resolve to either; validator should warn that other/cli arch lists
+    # server/fix as a dep but the prompt does not declare it.
+    cli_warnings = [
+        w for w in warnings
+        if "other/cli" in w or w.startswith("other/cli_python.prompt")
+    ]
+    assert any("server/fix" in w or "server" in w for w in cli_warnings), (
+        f"F7: ambiguous bare <pdd-dependency> should NOT silently match a "
+        f"specific path-qualified arch entry; validator should warn. Got: {cli_warnings!r}"
+    )
