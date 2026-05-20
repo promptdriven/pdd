@@ -4,6 +4,9 @@ This directory demonstrates every acceptance criterion of the `pdd prompt lint` 
 
 This is the canonical example for the built-in PDD prompt-lint workflow.
 
+For a **before/after** walkthrough (lint warnings, coverage linkage, prompt diff),
+see [`../prompt_lint_e2e_demo/`](../prompt_lint_e2e_demo/).
+
 ## Quick start
 
 ```bash

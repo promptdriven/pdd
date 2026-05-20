@@ -23,11 +23,16 @@ from datetime import date
 from pathlib import Path
 from typing import Optional
 
-from .prompt_lint import (
-    VAGUE_TERMS,
-    _extract_sections,
-    _extract_vocabulary_terms,
+from .contract_ir import (
+    PromptContractIR,
+    Rule,
+    Waiver,
+    extract_rules as _extract_rules,
+    extract_sections as _extract_sections,
+    extract_waivers as _extract_waivers,
+    parse_prompt_contracts,
 )
+from .prompt_lint import VAGUE_TERMS
 
 logger = logging.getLogger(__name__)
 
@@ -79,34 +84,8 @@ _WAIVER_ID_RE = re.compile(r"^(W-?\d+):", re.IGNORECASE)
 _WAIVER_REF_RE = re.compile(r"\bWAIVED\s+(W-?\d+)\b", re.IGNORECASE)
 
 # ---------------------------------------------------------------------------
-# Data classes
+# Data classes (Rule/Waiver live in contract_ir)
 # ---------------------------------------------------------------------------
-
-
-@dataclass
-class Rule:
-    """One parsed rule from <contract_rules>."""
-
-    raw_id: str          # e.g. "R1", "R-001", "S-001", "(unnumbered)"
-    num: Optional[int]   # numeric part for sequential checks; None if unnumbered
-    modal: str           # strongest modal verb found in the rule block
-    line: str            # first (header) line of the rule block
-    block: str           # full multi-line block text
-    is_must_not: bool = False
-
-
-@dataclass
-class Waiver:  # pylint: disable=too-many-instance-attributes
-    """One parsed waiver block from <waivers>."""
-
-    raw_id: str                        # e.g. "W1"
-    rule_id: str = ""                  # from "Rule: R<N>"
-    status: str = ""
-    reason: str = ""
-    approved_by: str = ""
-    expires: Optional[date] = None
-    follow_up: str = ""
-    raw_block: str = ""
 
 
 @dataclass
@@ -163,175 +142,6 @@ class ContractResult:
             "error_count": self.error_count,
             "issues": [i.as_dict() for i in self.issues],
         }
-
-
-# ---------------------------------------------------------------------------
-# Rule extraction (multi-line block parser)
-# ---------------------------------------------------------------------------
-
-def _extract_rules(rules_text: str) -> list[Rule]:  # pylint: disable=too-many-locals
-    """
-    Parse <contract_rules> text into a list of Rule objects.
-
-    Supports the canonical multi-line block format from the prompting guide:
-
-        R1 - Short name
-
-        For every <entity/action>,
-        the system MUST <observable behavior>
-        when <condition>.
-
-        This rule is violated if <specific forbidden outcome>.
-
-    Also supports:
-      - Compact single-line: ``R1: The system MUST …``
-      - Sequential: ``1. The system MUST …``
-      - Unnumbered bullet: ``- The system MUST …``
-
-    Modal verbs and is_must_not are derived from the entire block, so the
-    MUST/MUST NOT can appear on any line of the block.
-    """
-    rules: list[Rule] = []
-    lines = rules_text.splitlines()
-    line_count = len(lines)
-    i = 0
-
-    while i < line_count:
-        stripped = lines[i].strip()
-        i += 1
-
-        if not stripped:
-            continue
-
-        # Check if this line starts a rule
-        explicit = _EXPLICIT_ID_RE.match(stripped)
-        seq = _SEQ_ID_RE.match(stripped)
-        is_bullet = stripped.startswith(("-", "*", "•"))
-
-        if not (explicit or seq or is_bullet):
-            continue
-
-        # Determine ID
-        if explicit:
-            raw_id = explicit.group(1).upper()
-            num_str = re.search(r"\d+", raw_id)
-            num = int(num_str.group()) if num_str else None
-        elif seq:
-            num = int(seq.group(1))
-            raw_id = f"S-{num:03d}"
-        else:
-            raw_id = "(unnumbered)"
-            num = None
-
-        # Collect the full block: accumulate continuation lines until we hit
-        # the next rule header or two consecutive blank lines.
-        header_line = stripped
-        block_lines = [stripped]
-        blank_run = 0
-
-        while i < line_count:
-            next_raw = lines[i]
-            next_stripped = next_raw.strip()
-
-            # Two blank lines end the block
-            if not next_stripped:
-                blank_run += 1
-                if blank_run >= 2:
-                    i += 1
-                    break
-                i += 1
-                continue
-            blank_run = 0
-
-            # A new rule header ends the current block (do NOT consume)
-            if (_EXPLICIT_ID_RE.match(next_stripped) or
-                    _SEQ_ID_RE.match(next_stripped) or
-                    next_stripped.startswith(("-", "*", "•"))):
-                break
-
-            block_lines.append(next_stripped)
-            i += 1
-
-        block = "\n".join(block_lines)
-
-        # Detect modal and is_must_not anywhere in the block
-        modal_match = _MODAL_PATTERN.search(block)
-        modal = modal_match.group(1) if modal_match else ""
-        is_must_not = bool(
-            re.search(r"\bMUST NOT\b|\bSHALL NOT\b|\bMAY NOT\b", block)
-        )
-
-        rules.append(Rule(
-            raw_id=raw_id,
-            num=num,
-            modal=modal,
-            line=header_line,
-            block=block,
-            is_must_not=is_must_not,
-        ))
-
-    return rules
-
-
-# ---------------------------------------------------------------------------
-# Waiver extraction
-# ---------------------------------------------------------------------------
-
-def _extract_waivers(waivers_text: str) -> list[Waiver]:
-    """
-    Parse <waivers> text into a list of Waiver objects.
-
-    Expected format:
-        W1:
-          Rule: R6
-          Status: temporary
-          Reason: Provider error fixture is not available yet.
-          Approved by: security-review
-          Expires: 2026-06-01
-          Follow-up: Add story__provider_secret_not_leaked.md and executable test.
-    """
-    waivers: list[Waiver] = []
-    current_id: Optional[str] = None
-    current_fields: dict[str, str] = {}
-    current_block_lines: list[str] = []
-
-    def _flush() -> None:
-        if current_id is None:
-            return
-        waiver = Waiver(
-            raw_id=current_id,
-            rule_id=current_fields.get("rule", ""),
-            status=current_fields.get("status", ""),
-            reason=current_fields.get("reason", ""),
-            approved_by=current_fields.get("approved by", ""),
-            follow_up=current_fields.get("follow-up", ""),
-            raw_block="\n".join(current_block_lines),
-        )
-        expires_str = current_fields.get("expires", "")
-        if expires_str:
-            try:
-                waiver.expires = date.fromisoformat(expires_str.strip())
-            except ValueError:
-                pass
-        waivers.append(waiver)
-
-    for line in waivers_text.splitlines():
-        stripped = line.strip()
-        waiver_hdr = _WAIVER_ID_RE.match(stripped)
-        if waiver_hdr:
-            _flush()
-            current_id = waiver_hdr.group(1).upper()
-            current_fields = {}
-            current_block_lines = [stripped]
-            continue
-        if current_id is not None:
-            current_block_lines.append(stripped)
-            kv_match = re.match(r"^([A-Za-z][A-Za-z\s\-]*?):\s*(.+)$", stripped)
-            if kv_match:
-                current_fields[kv_match.group(1).strip().lower()] = kv_match.group(2).strip()
-
-    _flush()
-    return waivers
 
 
 # ---------------------------------------------------------------------------
@@ -816,69 +626,107 @@ def _check_story_covers(
 # Top-level check functions
 # ---------------------------------------------------------------------------
 
-def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:  # pylint: disable=too-many-locals
+def _check_unknown_test_refs(
+    coverage_text: str,
+    known_ids: set[str],
+    prompt_path: Path,
+) -> list[ContractIssue]:
     """
-    Run all deterministic checks on a single prompt file.
-
-    Returns a ContractResult with zero issues for prompts that have no
-    contract sections (legacy prompts without structure are never hard-failed).
+    Warn when <coverage> cites a test file path that does not exist.
     """
-    result = ContractResult(path=path)
+    issues: list[ContractIssue] = []
+    for line in coverage_text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        id_match = _COVERAGE_REF_RE.match(stripped.lstrip("-* "))
+        if not id_match:
+            continue
+        ref_id = id_match.group(1).upper()
+        if ref_id not in known_ids:
+            continue
+        colon_pos = stripped.find(":")
+        evidence = stripped[colon_pos + 1:].strip() if colon_pos != -1 else ""
+        if not evidence or evidence.upper().startswith("TODO"):
+            continue
+        if _WAIVER_REF_RE.search(evidence):
+            continue
+        for part in [p.strip() for p in evidence.split(",")]:
+            if not part.lower().endswith(".py"):
+                continue
+            candidate = Path(part)
+            if candidate.is_absolute():
+                if not candidate.exists():
+                    issues.append(ContractIssue(
+                        level="warn",
+                        code="UNKNOWN_TEST_REF",
+                        rule_id=ref_id,
+                        section="coverage",
+                        line=stripped,
+                        message=f'<coverage> test path "{part}" was not found.',
+                        suggestion="Fix the path or add the test file.",
+                    ))
+                continue
+            found = False
+            for base in (prompt_path.parent, Path.cwd(), Path("tests")):
+                if (base / candidate).exists() or (base / part).exists():
+                    found = True
+                    break
+            if not found and not (Path("tests") / candidate.name).exists():
+                issues.append(ContractIssue(
+                    level="warn",
+                    code="UNKNOWN_TEST_REF",
+                    rule_id=ref_id,
+                    section="coverage",
+                    line=stripped,
+                    message=f'<coverage> test path "{part}" was not found.',
+                    suggestion="Fix the path or add the test file.",
+                ))
+    return issues
 
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
+
+def check_prompt_from_ir(ir: PromptContractIR, *, strict: bool = False) -> ContractResult:  # pylint: disable=too-many-locals
+    """Run deterministic checks on a parsed PromptContractIR."""
+    result = ContractResult(path=ir.path)
+
+    if ir.parse_error:
         result.issues.append(ContractIssue(
             level="error",
-            code="FILE_NOT_FOUND",
+            code="FILE_NOT_FOUND" if "not found" in ir.parse_error.lower() else "PARSE_ERROR",
             rule_id="",
             section="",
             line="",
-            message=f'File not found: "{path}".',
+            message=ir.parse_error,
         ))
         return result
 
-    sections = _extract_sections(text)
-
-    # If no contract sections are present at all, return clean (legacy safety)
-    contract_sections = {
-        "contract_rules", "vocabulary", "capabilities",
-        "coverage", "non_responsibilities", "waivers",
-    }
-    if not any(k in sections for k in contract_sections):
+    if not ir.has_contract_sections:
         return result
 
-    rules_text = sections.get("contract_rules", "")
-    coverage_text = sections.get("coverage", "")
-    waivers_text = sections.get("waivers", "")
-    capabilities_text = sections.get("capabilities", "")
-    non_resp_text = sections.get("non_responsibilities", "")
-
-    # Build vocabulary terms from all vocabulary sections
-    vocab_terms: set[str] = set()
-    for key in ("vocabulary", "glossary", "definitions", "covers"):
-        if key in sections:
-            vocab_terms |= _extract_vocabulary_terms(sections[key])
-
-    # Parse rules and waivers
-    rules = _extract_rules(rules_text) if rules_text else []
-    known_ids: set[str] = {r.raw_id.upper() for r in rules
-                           if r.raw_id not in ("(unnumbered)",)}
-    waivers = _extract_waivers(waivers_text) if waivers_text else []
-    known_waiver_ids: set[str] = {w.raw_id.upper() for w in waivers}
+    rules = ir.rules
+    rules_text = ir.sections.get("contract_rules", "")
+    coverage_text = ir.sections.get("coverage", "")
+    waivers_text = ir.sections.get("waivers", "")
+    capabilities_text = ir.sections.get("capabilities", "")
+    non_resp_text = ir.sections.get("non_responsibilities", "")
+    known_ids = ir.known_rule_ids
+    known_waiver_ids = ir.known_waiver_ids
 
     if rules_text:
         result.issues.extend(_check_duplicate_ids(rules))
         result.issues.extend(_check_malformed_ids(rules_text))
         result.issues.extend(_check_sequential_ids(rules))
         result.issues.extend(_check_missing_modal(rules, strict=strict))
-        result.issues.extend(_check_vague_terms(rules_text, vocab_terms))
+        result.issues.extend(_check_vague_terms(rules_text, ir.vocabulary_terms))
 
     if coverage_text:
         result.issues.extend(
             _check_coverage_entries(coverage_text, known_ids, known_waiver_ids)
         )
         result.issues.extend(_check_must_not_coverage(rules, coverage_text))
+        result.issues.extend(
+            _check_unknown_test_refs(coverage_text, known_ids, ir.path)
+        )
 
     if waivers_text:
         result.issues.extend(_check_waivers(waivers_text))
@@ -889,12 +737,22 @@ def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:  # pyli
     if non_resp_text:
         result.issues.extend(_check_non_responsibilities_modals(non_resp_text))
 
-    # Escalate warns to errors in strict mode
     if strict:
         for issue in result.issues:
             issue.level = "error"
 
     return result
+
+
+def check_prompt(path: Path, *, strict: bool = False) -> ContractResult:
+    """
+    Run all deterministic checks on a single prompt file.
+
+    Returns a ContractResult with zero issues for prompts that have no
+    contract sections (legacy prompts without structure are never hard-failed).
+    """
+    ir = parse_prompt_contracts(path)
+    return check_prompt_from_ir(ir, strict=strict)
 
 
 def check_directory(directory: Path, *, strict: bool = False) -> list[ContractResult]:
@@ -926,15 +784,9 @@ def check_stories(  # pylint: disable=too-many-locals
     if prompts_dir and prompts_dir.exists():
         for prompt_path in prompts_dir.rglob("*.prompt"):
             try:
-                text = prompt_path.read_text(encoding="utf-8")
-                secs = _extract_sections(text)
-                rules_text = secs.get("contract_rules", "")
-                if rules_text:
-                    rules = _extract_rules(rules_text)
-                    prompt_id_map[prompt_path.name] = {
-                        r.raw_id.upper() for r in rules
-                        if r.raw_id not in ("(unnumbered)",)
-                    }
+                ir = parse_prompt_contracts(prompt_path)
+                if ir.has_contract_rules:
+                    prompt_id_map[prompt_path.name] = ir.known_rule_ids
             except Exception:  # noqa: BLE001  # pylint: disable=broad-exception-caught
                 pass
 

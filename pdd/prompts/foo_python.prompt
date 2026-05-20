@@ -1,11 +1,12 @@
 % Bundled prompt-lint fixture with intentional vague terms.
 
 <contract_rules>
-R1 - Valid request handling
-The function MUST return a valid response for active users.
-
-R2 - Duplicate handling
-Duplicate requests MUST be rejected gracefully.
+R1 - Active user request returns HTTP 200
+When the request is from an active user,
+the function MUST return HTTP 200 OK.
+R2 - Duplicate request rejection
+When a request is a duplicate request,
+the function MUST return HTTP 409 Conflict, MUST return a JSON body containing fields reason and original_request_id, and MUST NOT create a new processed-request record.
 </contract_rules>
 
 <vocabulary>
@@ -13,4 +14,41 @@ Duplicate requests MUST be rejected gracefully.
 - active: user logged in within last 5 days
 - Duplicate: a request that contains an X-Idempotency-Key value that has already been processed within the last 24 hours
 - gracefully: returning an HTTP 409 status code and a JSON body containing a 'reason' field and the 'original_request_id'
+- rejected: the function returns the specified error response without executing the duplicate request's business operation, while audit logging and metrics are allowed
+- within last 5 days: a timestamp greater than or equal to request_received_at minus 120 hours and less than or equal to request_received_at, using UTC
+- already been processed: a prior request with the same X-Idempotency-Key completed business processing and produced a final HTTP response
+- within the last 24 hours: a timestamp greater than or equal to request_received_at minus 24 hours and less than or equal to request_received_at, using UTC
 </vocabulary>
+
+<acceptance_tests>
+- Given request_received_at is 2026-01-10T12:00:00Z and the user's last_login_at is 2026-01-05T12:00:00Z, when the function handles the request, then it returns HTTP 200 OK.
+- Given a previously processed request with X-Idempotency-Key="abc" and original_request_id="req-1" processed at 2026-01-10T10:00:00Z, and request_received_at is 2026-01-10T12:00:00Z, when a new request has X-Idempotency-Key="abc", then the function returns HTTP 409 Conflict with a JSON body containing original_request_id="req-1" and a reason field.
+- Given request_received_at is 2026-01-10T12:00:00Z and a prior request with the same X-Idempotency-Key was processed at 2026-01-09T12:00:00Z, when the function handles the new request, then the expected duplicate or non-duplicate outcome MUST follow the author's chosen inclusive or exclusive 24-hour boundary rule.
+- Add criteria only for intended behavior, for example: Given the user is not active, when the function handles the request, then it MUST return the chosen status code; or Given no prior processed request has the same X-Idempotency-Key within the chosen window, then it MUST NOT be rejected as a duplicate.
+</acceptance_tests>
+
+<formalization>
+R1:
+  target: contract_ir
+  variables:
+    last_login_at: Timestamp
+    request_received_at: Timestamp
+    status_code: Int
+  assume: last_login_at >= request_received_at - duration(days=5)
+  predicate: status_code == 200
+  violation: last_login_at >= request_received_at - duration(days=5) && status_code != 200
+
+R2:
+  target: contract_ir
+  variables:
+    request_idempotency_key: String
+    prior_idempotency_key: String
+    prior_processed_at: Timestamp
+    request_received_at: Timestamp
+    status_code: Int
+    body_has_reason: Bool
+    body_has_original_request_id: Bool
+  assume: request_idempotency_key == prior_idempotency_key && prior_processed_at >= request_received_at - duration(hours=24)
+  predicate: status_code == 409 && body_has_reason == true && body_has_original_request_id == true
+  violation: request_idempotency_key == prior_idempotency_key && prior_processed_at >= request_received_at - duration(hours=24) && (status_code != 409 || body_has_reason == false || body_has_original_request_id == false)
+</formalization>

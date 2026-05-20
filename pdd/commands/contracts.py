@@ -21,6 +21,9 @@ from ..contract_check import (
     run_llm_ambiguity_pass,
 )
 from ..contract_compile import ContractIR, compile_directory, compile_prompt
+from ..contract_ir import parse_prompt_contracts
+from ..contract_review import ReviewFinding, ReviewResult, run_llm_review_pass
+from ..contract_review_pipeline import run_interactive_review
 
 _console = Console(highlight=False)
 
@@ -264,11 +267,19 @@ def contracts_check(  # pylint: disable=too-many-arguments,too-many-locals,too-m
     default=False,
     help="Output compiled contract IR as JSON.",
 )
+@click.option(
+    "--authoring",
+    "authoring_json",
+    is_flag=True,
+    default=False,
+    help="Emit full prompt_contract_ir.v1 authoring IR instead of obligations IR.",
+)
 @click.pass_context
 def contracts_compile(
     ctx: click.Context,
     target: str,
     as_json: bool,
+    authoring_json: bool,
 ) -> None:
     """Compile <contract_rules> into deterministic JSON contract IR.
 
@@ -295,16 +306,172 @@ def contracts_compile(
     quiet: bool = obj.get("quiet", False)
     target_path = Path(target)
 
+    if authoring_json:
+        if target_path.is_file():
+            ir_list = [parse_prompt_contracts(target_path)]
+        else:
+            ir_list = [
+                parse_prompt_contracts(p)
+                for p in sorted(target_path.rglob("*.prompt"))
+            ]
+        if as_json:
+            click.echo(_json.dumps([ir.as_dict() for ir in ir_list], indent=2))
+        else:
+            for ir in ir_list:
+                if not quiet:
+                    _console.print(
+                        f"[bold]{ir.path}[/bold]  "
+                        f"[cyan]{ir.version}[/cyan]  "
+                        f"rules={len(ir.rules)}"
+                    )
+        raise click.exceptions.Exit(0)
+
     if target_path.is_file():
         results = [compile_prompt(target_path)]
     else:
         results = compile_directory(target_path)
 
     if as_json:
-        click.echo(_json.dumps([r.as_dict() for r in results], indent=2))
+        payload = [r.as_dict() for r in results]
+        if not authoring_json:
+            for item in payload:
+                item.setdefault("ir_kind", "pdd.contract_ir.v1")
+        click.echo(_json.dumps(payload, indent=2))
     else:
         for result in results:
             _render_ir(result, quiet=quiet)
 
     if any(result.error_count > 0 for result in results):
+        raise click.exceptions.Exit(2)
+
+
+def _render_review_finding(finding: ReviewFinding) -> None:
+    """Print one advisory review finding."""
+    _console.print(
+        f"  [cyan]{escape(finding.finding_id)}[/cyan]  "
+        f"[dim]{escape(finding.type)}[/dim]  "
+        f"rule={escape(finding.rule_id or '-')}"
+    )
+    if finding.term:
+        _console.print(f"       term: {escape(finding.term)}")
+    if finding.interpretations:
+        for idx, interp in enumerate(finding.interpretations, 1):
+            _console.print(f"         {idx}. {escape(interp)}")
+    if finding.suggested_definition:
+        _console.print(f"       [green]Suggestion:[/green] {escape(finding.suggested_definition)}")
+
+
+def _render_review_result(result: ReviewResult, *, quiet: bool = False) -> None:
+    """Print review results (advisory — does not affect exit code by itself)."""
+    if result.error and not result.findings:
+        _console.print(f"[bold]{result.path}[/bold]  [red]{escape(result.error)}[/red]")
+        return
+    if not result.findings:
+        if not quiet:
+            _console.print(f"[bold]{result.path}[/bold]  [green]no findings[/green]")
+        return
+    _console.print(
+        f"[bold]{result.path}[/bold]  "
+        f"[yellow]{len(result.findings)} finding(s)[/yellow]  "
+        f"[dim](advisory)[/dim]"
+    )
+    for finding in result.findings:
+        _render_review_finding(finding)
+
+
+@contracts_group.command("review")
+@click.argument("target", type=click.Path(exists=True))
+@click.option("--llm", "use_llm", is_flag=True, required=True, help="Run LLM review (required).")
+@click.option("--coverage", "include_coverage", is_flag=True, default=False, help="Include coverage matrix in context.")
+@click.option("--json", "as_json", is_flag=True, default=False, help="Output findings as JSON.")
+@click.option(
+    "--interactive",
+    is_flag=True,
+    default=False,
+    help="Record human decisions in <contract_review>.",
+)
+@click.option(
+    "--stories-dir",
+    "stories_dir",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Stories directory for coverage context.",
+)
+@click.option(
+    "--tests-dir",
+    "tests_dir",
+    type=click.Path(exists=True, file_okay=False),
+    default=None,
+    help="Tests directory for coverage context.",
+)
+@click.pass_context
+def contracts_review(  # pylint: disable=too-many-arguments,too-many-locals
+    ctx: click.Context,
+    target: str,
+    use_llm: bool,  # pylint: disable=unused-argument
+    include_coverage: bool,
+    as_json: bool,
+    interactive: bool,
+    stories_dir: Optional[str],
+    tests_dir: Optional[str],
+) -> None:
+    """Advisory LLM review of contract IR (not a CI gate).
+
+    \b
+    Examples:
+      pdd contracts review --llm prompts/foo_python.prompt
+      pdd contracts review --llm --coverage prompts/foo_python.prompt
+      pdd contracts review --llm --json prompts/foo_python.prompt
+      pdd contracts review --llm --interactive prompts/foo_python.prompt
+
+    Human rejection is recorded in <contract_review> and does not fail CI.
+    Prefer ``pdd contracts check`` for deterministic gates.
+    """
+    obj = ctx.obj or {}
+    quiet: bool = obj.get("quiet", False)
+    verbose: bool = obj.get("verbose", False)
+    strength: float = obj.get("strength", 0.5)
+    temperature: float = obj.get("temperature", 0.0)
+    time_val: Optional[float] = obj.get("time")
+
+    target_path = Path(target)
+    paths = [target_path] if target_path.is_file() else sorted(target_path.rglob("*.prompt"))
+    stories_path = Path(stories_dir) if stories_dir else None
+    tests_path = Path(tests_dir) if tests_dir else None
+
+    all_reviews: list[ReviewResult] = []
+    for prompt_path in paths:
+        if prompt_path.name.lower().endswith("_llm.prompt"):
+            continue
+        review = run_llm_review_pass(
+            prompt_path,
+            strength=strength,
+            temperature=temperature,
+            time=time_val,
+            verbose=verbose,
+            include_coverage=include_coverage,
+            stories_dir=stories_path,
+            tests_dir=tests_path,
+        )
+        all_reviews.append(review)
+
+        if interactive and review.findings:
+            try:
+                from rich.prompt import Prompt  # pylint: disable=import-outside-toplevel
+                run_interactive_review(
+                    prompt_path,
+                    review,
+                    (Prompt.ask, Prompt.ask),
+                )
+            except ImportError:
+                _console.print("[yellow]rich.prompt required for --interactive[/yellow]")
+
+    if as_json:
+        click.echo(_json.dumps([r.as_dict() for r in all_reviews], indent=2))
+    else:
+        for review in all_reviews:
+            _render_review_result(review, quiet=quiet)
+
+    # Advisory command always exits 0 unless parse/file errors
+    if any(r.error and not r.findings for r in all_reviews):
         raise click.exceptions.Exit(2)

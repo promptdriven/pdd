@@ -72,6 +72,17 @@
 %       "why": "Replaces success language with an observable HTTP response and state change."
 %     }
 %   ],
+%   "formalization_candidates": [
+%     {
+%       "rule_id": "R1",
+%       "target": "smt",
+%       "variables": {"amount_cents": "Int", "rejected": "Bool"},
+%       "assume": "amount_cents >= 0",
+%       "predicate": "amount_cents <= 0 => rejected == true",
+%       "violation": "amount_cents <= 0 && rejected == false",
+%       "linked_test": "R1: bounded Z3 proof for non-positive amount"
+%     }
+%   ],
 %   "formalization_notes": [
 %     {
 %       "finding": "Recent is undefined.",

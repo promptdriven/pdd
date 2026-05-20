@@ -135,11 +135,13 @@ class LintIssue:
     message: str                                        # human-readable description
     suggestion: str = ""                                # proposed <vocabulary> entry
     interpretations: list[str] = field(default_factory=list)  # LLM-sourced readings
+    code: str = ""                                      # machine-readable issue code
 
     def as_dict(self) -> dict:
         """Serialise this issue to a JSON-safe dictionary."""
         return {
             "level": self.level,
+            "code": self.code,
             "term": self.term,
             "section": self.section,
             "line": self.line,
@@ -182,19 +184,8 @@ class LintResult:
 
 def _extract_xml_sections(text: str) -> dict[str, str]:
     """Return tag-name → inner text for all XML-style sections found."""
-    # PDD % comments may mention tag names (e.g. "without a <vocabulary> block").
-    # Ignore those lines so comment text cannot pair with real closing tags.
-    scan_text = "\n".join(
-        line for line in text.splitlines()
-        if not line.lstrip().startswith("%")
-    )
-    sections: dict[str, str] = {}
-    for section_match in _XML_SECTION_RE.finditer(scan_text):
-        tag = section_match.group("tag").lower()
-        body = section_match.group("body")
-        # Last occurrence wins for duplicate tags
-        sections[tag] = body
-    return sections
+    from .contract_ir import _extract_xml_sections as _canonical_xml  # pylint: disable=import-outside-toplevel
+    return _canonical_xml(text)
 
 
 def _extract_markdown_sections(text: str) -> dict[str, str]:
@@ -346,6 +337,7 @@ def _scan_section(
             level = "error" if strict else "warn"
             issues.append(LintIssue(
                 level=level,
+                code="VAGUE_TERM_UNDEFINED",
                 term=term,
                 section=section_name,
                 line=stripped,
@@ -362,6 +354,7 @@ def _scan_section(
             level = "error" if strict else "warn"
             issues.append(LintIssue(
                 level=level,
+                code="VAGUE_NO_OBSERVABLE_OUTCOME",
                 term="(no observable outcome)",
                 section=section_name,
                 line=stripped,
@@ -374,7 +367,55 @@ def _scan_section(
     return issues
 
 
-def scan_prompt(path: Path, *, strict: bool = False) -> LintResult:
+_LLM_TEMPLATE_SECTIONS = frozenset({
+    "contract_rules", "requirements", "acceptance_tests", "acceptance criteria",
+})
+
+
+def _check_llm_template(
+    path: Path,
+    sections: dict[str, str],
+    *,
+    strict: bool,
+    llm_template: Optional[bool],
+) -> list[LintIssue]:
+    """Warn when an LLM template has no scannable contract sections."""
+    auto = path.name.lower().endswith("_llm.prompt")
+    if llm_template is False:
+        return []
+    if llm_template is not True and not auto:
+        return []
+    has_section = any(
+        sections.get(k, "").strip() for k in _LLM_TEMPLATE_SECTIONS
+    )
+    if has_section:
+        return []
+    level = "error" if strict else "warn"
+    return [LintIssue(
+        level=level,
+        code="LLM_TEMPLATE_NO_CONTRACT_SECTIONS",
+        term="",
+        section="file",
+        line="",
+        message=(
+            "LLM template has no scannable contract sections "
+            "(<contract_rules>, <requirements>, or <acceptance_tests>)."
+        ),
+        suggestion=(
+            "Add <requirements>, <contract_rules>, <acceptance_tests>, "
+            "and <vocabulary> blocks for lint and formal verification."
+        ),
+    )]
+
+
+def scan_prompt(
+    path: Path,
+    *,
+    strict: bool = False,
+    llm_template: Optional[bool] = None,
+    stories_dir: Optional[Path] = None,
+    tests_dir: Optional[Path] = None,
+) -> LintResult:
     """
     Deterministic lint scan of a single prompt file.
 
@@ -387,6 +428,7 @@ def scan_prompt(path: Path, *, strict: bool = False) -> LintResult:
     except OSError as exc:
         result.issues.append(LintIssue(
             level="error",
+            code="FILE_READ_ERROR",
             term="",
             section="file",
             line="",
@@ -395,6 +437,9 @@ def scan_prompt(path: Path, *, strict: bool = False) -> LintResult:
         return result
 
     sections = _extract_sections(text)
+    result.issues.extend(
+        _check_llm_template(path, sections, strict=strict, llm_template=llm_template)
+    )
 
     # Collect vocabulary terms from all vocabulary-source sections
     vocab_terms: set[str] = set()
@@ -432,6 +477,17 @@ def scan_prompt(path: Path, *, strict: bool = False) -> LintResult:
 
     if not found_any_section:
         logger.debug("prompt_lint: no recognised sections in %s — skipping", path)
+
+    from .contract_ir import parse_prompt_contracts  # pylint: disable=import-outside-toplevel
+    from .formalization_lint import check_formalization  # pylint: disable=import-outside-toplevel
+
+    ir = parse_prompt_contracts(
+        path,
+        stories_dir=stories_dir,
+        tests_dir=tests_dir,
+    )
+    if not ir.parse_error:
+        result.issues.extend(check_formalization(ir, strict=strict))
 
     return result
 
@@ -576,6 +632,7 @@ def run_llm_ambiguity_pass(  # pylint: disable=too-many-locals
                 continue
             issues.append(LintIssue(
                 level="warn",
+                code="LLM_AMBIGUITY",
                 term=str(item.get("term", "")),
                 section=str(item.get("section", "llm")),
                 line="",
@@ -652,22 +709,119 @@ def _empty_guidance(path: Path, error: str = "") -> dict:
         "rule_rewrites": [],
         "acceptance_criteria_improvements": [],
         "formalization_notes": [],
+        "formalization_candidates": [],
         "error": error,
     }
 
 
 def _normalize_guidance(path: Path, payload: dict) -> dict:
     """Normalize an LLM guidance response into the public schema."""
+    from .prompt_lint_schemas import GuidancePayload  # pylint: disable=import-outside-toplevel
+
+    guidance = GuidancePayload.from_dict(str(path), payload)
     result = _empty_guidance(path)
-    result["summary"] = str(payload.get("summary", ""))
-    for key in (
-        "vocabulary_suggestions",
-        "rule_rewrites",
-        "acceptance_criteria_improvements",
-        "formalization_notes",
-    ):
-        value = payload.get(key, [])
-        result[key] = value if isinstance(value, list) else []
+    result["summary"] = guidance.summary
+    result["vocabulary_suggestions"] = guidance.vocabulary_suggestions
+    result["rule_rewrites"] = guidance.rule_rewrites
+    result["acceptance_criteria_improvements"] = guidance.acceptance_criteria_improvements
+    result["formalization_notes"] = guidance.formalization_notes
+    result["formalization_candidates"] = [
+        c.model_dump() for c in guidance.formalization_candidates
+    ]
+    if guidance.error:
+        result["error"] = guidance.error
     if payload.get("error"):
         result["error"] = str(payload["error"])
     return result
+
+
+def run_llm_formalize_pass(  # pylint: disable=too-many-locals
+    path: Path,
+    guidance: dict,
+    *,
+    strength: float = 0.5,
+    temperature: float = 0.0,
+    time: Optional[float] = None,
+    verbose: bool = False,
+) -> dict:
+    """
+    Run the formalize-stage LLM pass to produce a mergeable contract bundle.
+
+    Returns dict with ``bundle``, ``error``, and ``formalization_rejected``.
+    """
+    empty: dict = {"bundle": None, "error": "", "formalization_rejected": []}
+    try:
+        from .llm_invoke import llm_invoke  # pylint: disable=import-outside-toplevel
+        from .preprocess import preprocess  # pylint: disable=import-outside-toplevel
+        from .prompt_lint_schemas import parse_formalize_bundle  # pylint: disable=import-outside-toplevel
+
+        template_path = Path(__file__).parent / "prompts" / "prompt_formalize_LLM.prompt"
+        if not template_path.exists():
+            empty["error"] = "prompt_formalize_LLM.prompt not found"
+            return empty
+
+        prompt_content = path.read_text(encoding="utf-8", errors="replace")
+        guidance_json = json.dumps(guidance, indent=2)
+        template = template_path.read_text(encoding="utf-8")
+        filled = (
+            template.replace("{prompt_content}", prompt_content)
+            .replace("{guidance_json}", guidance_json)
+        )
+        filled = preprocess(filled, recursive=False, double_curly_brackets=False)
+
+        result = llm_invoke(
+            messages=[{"role": "user", "content": filled}],
+            strength=strength,
+            temperature=temperature,
+            time=time,
+            verbose=verbose,
+            use_cloud=False,
+        )
+        response_text = result["result"]
+        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", response_text, re.DOTALL)
+        raw_json = json_match.group(1) if json_match else response_text.strip()
+        parsed = json.loads(raw_json)
+        if not isinstance(parsed, dict):
+            empty["error"] = "formalize response was not a JSON object"
+            return empty
+        bundle = parse_formalize_bundle(parsed)
+        if bundle is None:
+            empty["error"] = "formalize response failed schema validation"
+            return empty
+        empty["bundle"] = bundle
+        return empty
+    except Exception as exc:  # noqa: BLE001  # pylint: disable=broad-exception-caught
+        logger.warning("prompt formalize LLM pass failed: %s", exc)
+        empty["error"] = str(exc)
+        return empty
+
+
+def validate_formalize_bundle(path: Path, bundle: object) -> list[LintIssue]:
+    """Run deterministic gates on a formalize bundle before write-back."""
+    from .contract_ir import parse_prompt_contracts  # pylint: disable=import-outside-toplevel
+    from .formalization_lint import check_formalization  # pylint: disable=import-outside-toplevel
+    from .prompt_block_writeback import (  # pylint: disable=import-outside-toplevel
+        append_acceptance_tests,
+        append_contract_rules,
+        append_formalization,
+    )
+    from .prompt_lint_schemas import FormalizeBundle  # pylint: disable=import-outside-toplevel
+
+    if not isinstance(bundle, FormalizeBundle):
+        return []
+    import tempfile  # pylint: disable=import-outside-toplevel
+
+    text = path.read_text(encoding="utf-8")
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".prompt", delete=False, encoding="utf-8"
+    ) as tmp:
+        tmp.write(text)
+        tmp_path = Path(tmp.name)
+    try:
+        append_contract_rules(tmp_path, bundle.contract_rules)
+        append_acceptance_tests(tmp_path, bundle.acceptance_tests)
+        append_formalization(tmp_path, bundle.formalization)
+        ir = parse_prompt_contracts(tmp_path)
+        return check_formalization(ir, strict=True)
+    finally:
+        tmp_path.unlink(missing_ok=True)

@@ -1,0 +1,27 @@
+<contract_rules>
+R1 MUST reject refunds where amount_cents <= 0.
+</contract_rules>
+
+<requirements>
+- amount_cents: integer refund amount in cents
+- rejected: boolean whether the refund was rejected
+</requirements>
+
+<acceptance_tests>
+- R1: bounded Z3 proof for non-positive amount_cents
+</acceptance_tests>
+
+<vocabulary>
+- rejected: refund status field equals "rejected"
+</vocabulary>
+
+<formalization>
+R1:
+  target: smt
+  variables:
+    amount_cents: Int
+    rejected: Bool
+  assume: amount_cents >= -1000000
+  predicate: amount_cents <= 0 => rejected == true
+  violation: amount_cents <= 0 && rejected == false
+</formalization>

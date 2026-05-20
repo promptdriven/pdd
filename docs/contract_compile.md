@@ -22,7 +22,9 @@ Use this command after authoring checks:
 pdd prompt lint --strict prompts/refund_payment_python.prompt
 pdd contracts check prompts/refund_payment_python.prompt
 pdd coverage --contracts prompts/refund_payment_python.prompt
+pdd contracts compile --authoring --json prompts/refund_payment_python.prompt
 pdd contracts compile --json prompts/refund_payment_python.prompt
+pdd contracts review --llm prompts/refund_payment_python.prompt
 ```
 
 Use `pdd prompt lint --ambiguity prompts/refund_payment_python.prompt`

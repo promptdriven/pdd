@@ -25,6 +25,7 @@ from ..prompt_lint import (
 from ..prompt_lint_pipeline import (
     PromptLintPipelineOptions,
     concrete_suggestion,
+    iter_prompt_paths,
     run_prompt_lint_pipeline,
 )
 
@@ -130,25 +131,65 @@ def _pipeline_options_from_ctx(
     *,
     target: Optional[str],
     stories_dir: Optional[str],
+    tests_dir: Optional[str],
     strict: bool,
     llm: bool,
     apply_fixes: bool,
     non_interactive: bool,
+    formalize: bool,
+    llm_template: Optional[bool],
+    contracts: bool,
+    report_formalization: bool,
 ) -> PromptLintPipelineOptions:
     """Build pipeline options from Click context and flags."""
     obj = ctx.obj or {}
     return PromptLintPipelineOptions(
         target=Path(target) if target is not None else None,
         stories_dir=Path(stories_dir) if stories_dir is not None else None,
+        tests_dir=Path(tests_dir) if tests_dir is not None else None,
         strict=strict,
         llm=llm,
         apply_fixes=apply_fixes,
         non_interactive=non_interactive,
+        formalize=formalize,
+        llm_template=llm_template,
+        contracts=contracts,
+        report_formalization=report_formalization,
         strength=obj.get("strength", 0.5),
         temperature=obj.get("temperature", 0.0),
         time=obj.get("time"),
         verbose=obj.get("verbose", False),
     )
+
+
+def _render_formalization_report(rows: list[dict]) -> None:
+    """Print formalization readiness table."""
+    from rich.table import Table  # pylint: disable=import-outside-toplevel
+    from rich import box  # pylint: disable=import-outside-toplevel
+
+    table = Table(box=box.SIMPLE_HEAD, show_header=True, header_style="bold")
+    for col in ("Rule", "Target", "Predicate", "Variables", "Violation", "Test Link"):
+        table.add_column(col, no_wrap=(col != "Rule"))
+    for row in rows:
+        table.add_row(
+            str(row.get("rule_id", "")),
+            str(row.get("target", "")),
+            "yes" if row.get("predicate") else "no",
+            "yes" if row.get("variables") else "no",
+            "yes" if row.get("violation") else "no",
+            "yes" if row.get("test_link") else "missing",
+        )
+    _console.print("\n[bold]Formalization readiness[/bold]")
+    _console.print(table)
+
+
+def _render_hints(hints: list[str]) -> None:
+    """Print post-lint next-step commands."""
+    if not hints:
+        return
+    _console.print("[cyan]Next recommended checks:[/cyan]")
+    for hint in dict.fromkeys(hints):
+        _console.print(f"  {hint}")
 
 
 def _clarify_prompts() -> tuple:
@@ -258,6 +299,44 @@ def prompt_group() -> None:
     default=False,
     help="Write suggested <vocabulary> entries back into the scanned file(s).",
 )
+@click.option(
+    "--llm-template",
+    "llm_template",
+    is_flag=True,
+    default=None,
+    help="Warn when LLM templates lack scannable contract sections.",
+)
+@click.option(
+    "--no-llm-template",
+    is_flag=True,
+    default=False,
+    help="Disable automatic LLM-template checks for *_LLM.prompt files.",
+)
+@click.option(
+    "--no-formalize",
+    is_flag=True,
+    default=False,
+    help="With --ambiguity, skip the formalize LLM stage.",
+)
+@click.option(
+    "--contracts",
+    is_flag=True,
+    default=False,
+    help="Run contracts check and coverage after lint.",
+)
+@click.option(
+    "--tests-dir",
+    default=None,
+    type=click.Path(file_okay=False),
+    help="Tests directory for coverage evidence (default: tests/).",
+)
+@click.option(
+    "--report",
+    "report",
+    type=click.Choice(["formalization"], case_sensitive=False),
+    default=None,
+    help="Emit a focused report (e.g. formalization readiness).",
+)
 @click.pass_context
 def prompt_lint(  # pylint: disable=too-many-arguments,too-many-locals,too-many-branches
     ctx: click.Context,
@@ -269,6 +348,12 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
     non_interactive: bool,
     strict: bool,
     apply_fixes: bool,
+    llm_template: Optional[bool],
+    no_llm_template: bool,
+    no_formalize: bool,
+    contracts: bool,
+    tests_dir: Optional[str],
+    report: Optional[str],
 ) -> None:
     """Lint a prompt file or user-story directory for ambiguous terms.
 
@@ -314,16 +399,28 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
                 f"got '{stories_dir}'.{hint}"
             )
 
+    if no_llm_template:
+        llm_template_flag: Optional[bool] = False
+    elif llm_template:
+        llm_template_flag = True
+    else:
+        llm_template_flag = None
+
     obj = ctx.obj or {}
     quiet: bool = obj.get("quiet", False)
     options = _pipeline_options_from_ctx(
         ctx,
         target=target,
         stories_dir=stories_dir,
+        tests_dir=tests_dir,
         strict=strict,
         llm=llm_mode,
         apply_fixes=apply_fixes,
         non_interactive=non_interactive or as_json,
+        formalize=not no_formalize,
+        llm_template=llm_template_flag,
+        contracts=contracts,
+        report_formalization=(report == "formalization"),
     )
     interactive_clarify = llm_mode and not non_interactive and not as_json
     pipeline = run_prompt_lint_pipeline(
@@ -345,17 +442,32 @@ def prompt_lint(  # pylint: disable=too-many-arguments,too-many-locals,too-many-
             _render_clarify_summary(path, written)
 
     if as_json:
-        if llm_mode and pipeline.guidances:
-            payload = {
+        if llm_mode or contracts or pipeline.coverage_results:
+            payload: dict = {
                 "results": [r.as_dict() for r in pipeline.results],
-                "guidance": pipeline.guidances,
             }
+            if pipeline.guidances:
+                payload["guidance"] = pipeline.guidances
+            if pipeline.coverage_results:
+                payload["coverage"] = pipeline.coverage_results
+            if pipeline.coverage_gaps:
+                payload["coverage_gaps"] = pipeline.coverage_gaps
+            if pipeline.contract_issues:
+                payload["contract_issues"] = pipeline.contract_issues
+            if pipeline.formalization_reports:
+                payload["formalization_report"] = pipeline.formalization_reports
+            if pipeline.hints:
+                payload["hints"] = list(dict.fromkeys(pipeline.hints))
             click.echo(_json.dumps(payload, indent=2))
         else:
             click.echo(_json.dumps([r.as_dict() for r in pipeline.results], indent=2))
     else:
         for result in pipeline.results:
             _render_result(result, quiet=quiet)
+        if pipeline.formalization_reports:
+            for rep in pipeline.formalization_reports:
+                _render_formalization_report(rep.get("rows", []))
+        _render_hints(pipeline.hints)
         if llm_mode and pipeline.guidances:
             for guidance in pipeline.guidances:
                 ambiguities = guidance.get("ambiguities", [])

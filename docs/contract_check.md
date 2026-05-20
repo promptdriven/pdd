@@ -2,7 +2,9 @@
 
 `pdd contracts check` parses the structured contract sections of a prompt file
 and reports structural authoring defects deterministically — no LLM required,
-safe for CI.
+safe for CI. Parsing uses the shared authoring IR in
+[`pdd/contract_ir.py`](../pdd/contract_ir.py) (same parser as
+`pdd coverage --contracts` and `pdd contracts compile --authoring`).
 
 ## Quick start
 
@@ -22,10 +24,11 @@ pdd contracts check --strict prompts/foo_python.prompt
 # Also validate story ## Covers rule-ID references.
 pdd contracts check --stories user_stories/ prompts/foo_python.prompt
 
-# Run optional LLM ambiguity review on <contract_rules> terms.
-pdd contracts check --llm-ambiguity prompts/foo_python.prompt
+# Advisory LLM review (not for CI — use contracts review instead).
+pdd contracts review --llm prompts/foo_python.prompt
 
-# Compile checked rules into deterministic contract IR.
+# Export full authoring IR or compiled obligations IR.
+pdd contracts compile --authoring --json prompts/foo_python.prompt
 pdd contracts compile --json prompts/foo_python.prompt
 ```
 

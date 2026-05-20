@@ -33,30 +33,25 @@ STATUS_TEST_ONLY = "test-only"
 STATUS_UNCHECKED = "unchecked"
 STATUS_WAIVED = "waived"
 STATUS_FAILED = "failed"
+STATUS_FORMAL_ONLY = "formal-only"
+STATUS_NEEDS_HUMAN = "needs-human"
 
 # ---------------------------------------------------------------------------
-# Section extraction
+# Section extraction (canonical parser in contract_ir)
 # ---------------------------------------------------------------------------
 
-_XML_SECTION_RE = re.compile(
-    r"<(?P<tag>[a-zA-Z_][a-zA-Z0-9_]*)>\s*(?P<body>.*?)\s*</(?P=tag)>",
-    re.DOTALL,
+from .contract_ir import (  # noqa: E402
+    extract_sections as _extract_sections,
+    parse_coverage_block as _parse_coverage_block,
+    parse_prompt_contracts,
+    parse_rule_ids as _parse_rule_ids,
+    parse_waiver_rule_map as _parse_waiver_rule_map,
 )
 
 _MARKDOWN_HEADING_RE = re.compile(
     r"^#{1,3}\s+(?P<heading>.+?)\s*$",
     re.MULTILINE,
 )
-
-
-def _extract_sections(text: str) -> dict[str, str]:
-    """Return tag-name → inner text for all XML-style sections found."""
-    sections: dict[str, str] = {}
-    for section_match in _XML_SECTION_RE.finditer(text):
-        tag = section_match.group("tag").lower()
-        body = section_match.group("body")
-        sections[tag] = body
-    return sections
 
 
 def _extract_markdown_section(text: str, heading: str) -> str:
@@ -102,6 +97,17 @@ _TEST_COMMENT_RE = re.compile(
 
 
 @dataclass
+class StoryEvidence:
+    """Story-level coverage evidence with validation status."""
+
+    path: str
+    validation: str = "passed"  # passed | failed | unknown
+
+    def as_dict(self) -> dict:
+        return {"path": self.path, "validation": self.validation}
+
+
+@dataclass
 class RuleCoverage:
     """Coverage evidence for one contract rule."""
 
@@ -109,8 +115,11 @@ class RuleCoverage:
     status: str          # STATUS_* constant
     stories: list[str] = field(default_factory=list)   # story filenames
     tests: list[str] = field(default_factory=list)     # test function names
+    formal: list[str] = field(default_factory=list)    # formalization evidence
     waiver: Optional[str] = None                       # waiver ID, e.g. "W1"
     failures: list[str] = field(default_factory=list)  # validation failures
+    notes: list[str] = field(default_factory=list)
+    story_details: list[StoryEvidence] = field(default_factory=list)
 
     def as_dict(self) -> dict:
         """Serialise to a JSON-safe dictionary."""
@@ -119,8 +128,11 @@ class RuleCoverage:
             "status": self.status,
             "stories": self.stories,
             "tests": self.tests,
+            "formal": self.formal,
             "waiver": self.waiver,
             "failures": self.failures,
+            "notes": self.notes,
+            "story_details": [s.as_dict() for s in self.story_details],
         }
 
 
@@ -144,6 +156,8 @@ class CoverageResult:
             "unchecked": 0,
             "waived": 0,
             "failed": 0,
+            "formal_only": 0,
+            "needs_human": 0,
         }
         for rule in self.rules:
             key = rule.status.replace("-", "_")
@@ -165,91 +179,6 @@ class CoverageResult:
 # Section parsers
 # ---------------------------------------------------------------------------
 
-
-def _parse_rule_ids(rules_text: str) -> list[str]:
-    """
-    Extract rule IDs from a <contract_rules> block in declaration order.
-
-    Supports R1, R-001, RULE1, and sequential 1./2. numbering.
-    Returns IDs normalised to upper-case, e.g. "R1", "R-001".
-    Unnumbered bullet rules are skipped (no ID to track).
-    """
-    rule_ids: list[str] = []
-    seen: set[str] = set()
-
-    for line in rules_text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        explicit = _EXPLICIT_ID_RE.match(stripped)
-        seq = _SEQ_ID_RE.match(stripped)
-
-        if explicit:
-            rid = explicit.group(1).upper()
-        elif seq:
-            rid = f"S-{int(seq.group(1)):03d}"
-        else:
-            continue
-
-        if rid not in seen:
-            seen.add(rid)
-            rule_ids.append(rid)
-
-    return rule_ids
-
-
-def _parse_waiver_rule_map(waivers_text: str) -> dict[str, str]:
-    """
-    Return mapping rule_id → waiver_id from a <waivers> block.
-
-    Parses:
-        W1:
-          Rule: R4
-          ...
-    """
-    rule_to_waiver: dict[str, str] = {}
-    current_waiver_id: Optional[str] = None
-
-    for line in waivers_text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        waiver_header = _WAIVER_ID_RE.match(stripped)
-        if waiver_header:
-            current_waiver_id = waiver_header.group(1).upper()
-            continue
-        if current_waiver_id and stripped.lower().startswith("rule:"):
-            rule_val = stripped[5:].strip().upper()
-            # Normalise to bare R<N> form
-            ref_match = _COVERAGE_REF_RE.search(rule_val)
-            if ref_match:
-                rule_to_waiver[ref_match.group(1).upper()] = current_waiver_id
-
-    return rule_to_waiver
-
-
-def _parse_coverage_block(coverage_text: str) -> dict[str, str]:
-    """
-    Parse a <coverage> block into a mapping rule_id → evidence_text.
-
-    Handles formats:
-        R1: story__foo.md
-        R2: test_bar (tests/test_baz.py)
-        R3: TODO add idempotency story
-        R4: WAIVED W1
-    """
-    entries: dict[str, str] = {}
-    for line in coverage_text.splitlines():
-        stripped = line.strip().lstrip("-* ")
-        if not stripped:
-            continue
-        ref_match = _COVERAGE_REF_RE.match(stripped)
-        if ref_match:
-            rid = ref_match.group(1).upper()
-            rest = stripped[ref_match.end():].lstrip(":").strip()
-            entries[rid] = rest
-    return entries
 
 # ---------------------------------------------------------------------------
 # Story evidence scanner
@@ -574,6 +503,8 @@ def _classify_rule(  # pylint: disable=too-many-arguments
     story_evidence: dict[str, list[str]],
     test_evidence: dict[str, list[str]],
     validation_failures: Optional[dict[str, list[str]]] = None,
+    formal_evidence: Optional[dict[str, list[str]]] = None,
+    story_validation: Optional[dict[str, list[StoryEvidence]]] = None,
 ) -> RuleCoverage:
     """
     Classify one rule ID and return a RuleCoverage.
@@ -635,15 +566,30 @@ def _classify_rule(  # pylint: disable=too-many-arguments
             elif "test" in evidence_item.lower() and evidence_item not in tests:
                 tests.append(evidence_item)
 
+    formal = list((formal_evidence or {}).get(rid, []))
+    story_details = list((story_validation or {}).get(rid, []))
     has_story = bool(stories)
     has_test = bool(tests)
+    has_formal = bool(formal)
+    valid_story = bool(story_details) and all(
+        s.validation == "passed" for s in story_details
+    ) if story_details else has_story
 
-    if has_story and has_test:
+    notes: list[str] = []
+    if has_story and not has_test:
+        notes.append(
+            "Story validates prompt intent, but no executable test references "
+            f"{rid}."
+        )
+
+    if valid_story and has_test:
         status = STATUS_CHECKED
-    elif has_story:
+    elif valid_story:
         status = STATUS_STORY_ONLY
     elif has_test:
         status = STATUS_TEST_ONLY
+    elif has_formal:
+        status = STATUS_FORMAL_ONLY
     else:
         status = STATUS_UNCHECKED
 
@@ -652,7 +598,10 @@ def _classify_rule(  # pylint: disable=too-many-arguments
         status=status,
         stories=stories,
         tests=tests,
+        formal=formal,
         waiver=None,
+        notes=notes,
+        story_details=story_details,
     )
 
 # ---------------------------------------------------------------------------
@@ -664,6 +613,8 @@ def build_coverage(
     path: Path,
     stories_dir: Optional[Path] = None,
     tests_dir: Optional[Path] = None,
+    *,
+    strict: bool = False,
 ) -> CoverageResult:
     """
     Build a coverage matrix for a single prompt file.
@@ -691,36 +642,26 @@ def build_coverage(
 
     result = CoverageResult(path=path)
 
-    try:
-        text = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        result.error = f'File not found: "{path}"'
-        return result
-    except OSError as exc:
-        result.error = str(exc)
+    ir = parse_prompt_contracts(path, stories_dir=stories_dir, tests_dir=tests_dir)
+    if ir.parse_error:
+        result.error = ir.parse_error
         return result
 
-    sections = _extract_sections(text)
-
-    if "contract_rules" not in sections:
-        # Legacy prompt — no <contract_rules> tag at all
+    if "contract_rules" not in ir.sections:
         return result
 
     result.has_contract_rules = True
-    rules_text = sections["contract_rules"]
+    rules_text = ir.sections.get("contract_rules", "")
     if not rules_text.strip():
-        # Section tag present but empty — has contracts, zero rules
         return result
     rule_ids = _parse_rule_ids(rules_text)
 
-    coverage_text = sections.get("coverage", "")
-    coverage_entries = _parse_coverage_block(coverage_text) if coverage_text else {}
-
-    waivers_text = sections.get("waivers", "")
+    coverage_entries = dict(ir.coverage_entries)
+    waivers_text = ir.sections.get("waivers", "")
     waiver_map = _parse_waiver_rule_map(waivers_text) if waivers_text else {}
 
-    story_evidence = scan_story_evidence(stories_dir, path)
-    test_evidence = scan_test_evidence(tests_dir)
+    story_evidence = ir.story_covers or scan_story_evidence(stories_dir, path)
+    test_evidence = ir.test_refs or scan_test_evidence(tests_dir)
     validation_failures: dict[str, list[str]] = {}
     for source in (
         scan_story_validation_failures(stories_dir, path),
@@ -728,6 +669,23 @@ def build_coverage(
     ):
         for rid, messages in source.items():
             validation_failures.setdefault(rid, []).extend(messages)
+
+    formal_evidence: dict[str, list[str]] = {}
+    for formal in ir.formalizations:
+        rid = formal.rule_id.upper()
+        label = f"smt:{rid}" if (formal.target or "").lower() == "smt" else f"formal:{rid}"
+        if formal.predicate:
+            label = f"{label}:predicate"
+        formal_evidence.setdefault(rid, []).append(label)
+
+    story_validation: dict[str, list[StoryEvidence]] = {}
+    for rid, story_names in story_evidence.items():
+        fails = validation_failures.get(rid, [])
+        for name in story_names:
+            failed = any(name in msg for msg in fails)
+            story_validation.setdefault(rid, []).append(
+                StoryEvidence(path=name, validation="failed" if failed else "passed")
+            )
 
     for rid in rule_ids:
         rule_cov = _classify_rule(
@@ -737,8 +695,21 @@ def build_coverage(
             story_evidence,
             test_evidence,
             validation_failures,
+            formal_evidence=formal_evidence,
+            story_validation=story_validation,
         )
         result.rules.append(rule_cov)
+
+    if strict:
+        for rule_cov in result.rules:
+            rule = ir.rule_by_id(rule_cov.rule_id)
+            modal = (rule.modal if rule else "").upper()
+            if rule_cov.status == STATUS_FAILED:
+                result.error = result.error or "strict coverage: failed evidence"
+            elif rule_cov.status == STATUS_UNCHECKED and modal in ("MUST", "MUST NOT"):
+                result.error = result.error or "strict coverage: uncovered MUST/MUST NOT"
+            elif rule_cov.status == STATUS_STORY_ONLY and modal == "MUST NOT":
+                result.error = result.error or "strict coverage: MUST NOT requires executable test"
 
     return result
 
@@ -747,6 +718,8 @@ def build_coverage_directory(
     directory: Path,
     stories_dir: Optional[Path] = None,
     tests_dir: Optional[Path] = None,
+    *,
+    strict: bool = False,
 ) -> list[CoverageResult]:
     """
     Build coverage matrices for every `*.prompt` file under a directory.
@@ -757,5 +730,7 @@ def build_coverage_directory(
     for prompt_path in sorted(directory.rglob("*.prompt")):
         if prompt_path.name.lower().endswith("_llm.prompt"):
             continue
-        results.append(build_coverage(prompt_path, stories_dir, tests_dir))
+        results.append(
+            build_coverage(prompt_path, stories_dir, tests_dir, strict=strict)
+        )
     return results

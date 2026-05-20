@@ -615,8 +615,9 @@ graph TB
 
 ### Prompt Management
 - **`prompt lint`**: Checks prompts and stories for vague terms, missing vocabulary, and weak outcomes; `--ambiguity` runs LLM review with automatic coaching and clarification when ambiguities are found
-- **`contracts check`**: Deterministically checks contract structure, rule IDs, modal verbs, coverage references, and waivers
-- **`contracts compile`**: Compiles parseable `<contract_rules>` into JSON contract IR for future verification adapters
+- **`contracts check`**: Deterministically checks contract structure, rule IDs, modal verbs, coverage references, and waivers (shared `contract_ir` parser)
+- **`contracts compile`**: Compiles parseable `<contract_rules>` into JSON obligations IR; `--authoring` exports full `prompt_contract_ir.v1`
+- **`contracts review --llm`**: Advisory LLM review of contract IR with optional interactive `<contract_review>` decisions (not a CI gate)
 - **[`preprocess`](#5-preprocess)**: Preprocesses prompt files, handling includes, comments, and other directives
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries

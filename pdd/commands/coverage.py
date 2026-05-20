@@ -28,11 +28,13 @@ from ..coverage_contracts import (
     STATUS_UNCHECKED,
     STATUS_WAIVED,
     STATUS_FAILED,
+    STATUS_FORMAL_ONLY,
     CoverageResult,
     RuleCoverage,
     build_coverage,
     build_coverage_directory,
 )
+from ..contract_review import run_llm_review_pass
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -45,6 +47,7 @@ _STATUS_STYLE: dict[str, str] = {
     STATUS_UNCHECKED: "red",
     STATUS_WAIVED: "dim",
     STATUS_FAILED: "bold red",
+    STATUS_FORMAL_ONLY: "magenta",
 }
 
 _STATUS_LABEL: dict[str, str] = {
@@ -54,6 +57,7 @@ _STATUS_LABEL: dict[str, str] = {
     STATUS_UNCHECKED: "unchecked",
     STATUS_WAIVED: "waived",
     STATUS_FAILED: "failed",
+    STATUS_FORMAL_ONLY: "formal-only",
 }
 
 
@@ -150,6 +154,19 @@ def _render_result_table(result: CoverageResult) -> None:
     type=click.Path(file_okay=False),
     help="Directory containing test_*.py files (default: tests/).",
 )
+@click.option(
+    "--strict",
+    is_flag=True,
+    default=False,
+    help="Exit 2 when MUST/MUST NOT rules are unchecked or evidence failed.",
+)
+@click.option(
+    "--review-llm",
+    "review_llm",
+    is_flag=True,
+    default=False,
+    help="Advisory LLM review of coverage gaps (never changes status).",
+)
 @click.argument(
     "target",
     default="prompts/",
@@ -162,6 +179,8 @@ def coverage_cmd(
     as_json: bool,
     stories_dir: Optional[str],
     tests_dir: Optional[str],
+    strict: bool,
+    review_llm: bool,
     target: str,
 ) -> None:
     """Build a contract coverage matrix mapping rules to stories and tests.
@@ -189,12 +208,18 @@ def coverage_cmd(
         sys.exit(2)
 
     if target_path.is_file():
-        results.append(build_coverage(target_path, stories_path, tests_path))
+        results.append(
+            build_coverage(target_path, stories_path, tests_path, strict=strict)
+        )
     else:
-        results = build_coverage_directory(target_path, stories_path, tests_path)
+        results = build_coverage_directory(
+            target_path, stories_path, tests_path, strict=strict
+        )
 
     # Determine exit code
     has_error = any(r.error for r in results)
+    if strict and has_error:
+        has_gap = True
     has_gap = any(
         rc.status in (STATUS_UNCHECKED, STATUS_STORY_ONLY, STATUS_TEST_ONLY)
         or rc.status == STATUS_FAILED
@@ -202,12 +227,32 @@ def coverage_cmd(
         for rc in r.rules
     )
 
+    review_findings: list[dict] = []
+    if review_llm:
+        obj = ctx.obj or {}
+        for result in results:
+            if not result.has_contract_rules:
+                continue
+            review = run_llm_review_pass(
+                result.path,
+                stories_dir=stories_path,
+                tests_dir=tests_path,
+                include_coverage=True,
+                strength=obj.get("strength", 0.5),
+                temperature=obj.get("temperature", 0.0),
+                time=obj.get("time"),
+                verbose=obj.get("verbose", False),
+            )
+            review_findings.extend(f.as_dict() for f in review.findings)
+
     if as_json:
         output = {
             "results": [r.as_dict() for r in results],
             "total_prompts": len(results),
             "prompts_with_contracts": sum(1 for r in results if r.has_contract_rules),
         }
+        if review_findings:
+            output["review_findings"] = review_findings
         print(json.dumps(output, indent=2))
     else:
         if not results:
@@ -215,6 +260,13 @@ def coverage_cmd(
         else:
             for result in results:
                 _render_result_table(result)
+            if review_findings:
+                stdout_console.print("\n[bold]Advisory LLM review[/bold] (does not change status):")
+                for finding in review_findings:
+                    stdout_console.print(
+                        f"  [{finding.get('finding_id', '')}] "
+                        f"{finding.get('type', '')}: {finding.get('message', '')}"
+                    )
 
     if has_error:
         sys.exit(2)

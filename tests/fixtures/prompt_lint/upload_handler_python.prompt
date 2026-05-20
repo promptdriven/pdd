@@ -15,9 +15,3 @@
 - Reject duplicate uploads with HTTP 409.
 - Log all upload attempts for audit purposes.
 </requirements>
-
-<vocabulary>
-- duplicate upload: same tenant and SHA-256 hash
-- duplicate upload: same hash and tenant
-- duplicate upload: an upload with the same tenant ID and normalized file hash
-</vocabulary>

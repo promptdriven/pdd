@@ -1,7 +1,8 @@
 # `pdd coverage --contracts`
 
 Build an inspectable rule-to-evidence matrix for `.prompt` files that define `<contract_rules>`.  
-No LLM required — pure static analysis.
+No LLM required — pure static analysis. Uses the shared IR from
+[`pdd/contract_ir.py`](../pdd/contract_ir.py).
 
 ---
 
@@ -16,6 +17,9 @@ pdd coverage --contracts prompts/
 
 # JSON output for CI
 pdd coverage --contracts --json prompts/
+
+# Fail when MUST/MUST NOT rules are unchecked or evidence failed
+pdd coverage --contracts --strict prompts/
 
 # Custom story and test directories
 pdd coverage --contracts \

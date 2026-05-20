@@ -13,8 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .contract_check import Rule, _extract_rules
-from .prompt_lint import _extract_sections
+from .contract_ir import Rule, parse_prompt_contracts
 
 _WHEN_RE = re.compile(
     r"\bwhen\s+(.*?)(?:,\s+the\s+|\s+the\s+|\.\s+|$)",
@@ -155,17 +154,15 @@ class ContractIR:
         }
 
 
-def compile_prompt(path: Path) -> ContractIR:
+def compile_prompt(path: Path, *, obligations_only: bool = False) -> ContractIR:  # pylint: disable=unused-argument
     """Compile one prompt file into the v1 contract IR."""
+    authoring = parse_prompt_contracts(path)
     result = ContractIR(path=path)
-    text = path.read_text(encoding="utf-8")
-    sections = _extract_sections(text)
-    rules_text = sections.get("contract_rules", "")
-    if not rules_text.strip():
+    if authoring.parse_error or not authoring.has_contract_rules:
         return result
 
     result.has_contract_rules = True
-    rules = _extract_rules(rules_text)
+    rules = authoring.rules
     for rule in rules:
         compiled, errors = _compile_rule(rule)
         if compiled is not None:

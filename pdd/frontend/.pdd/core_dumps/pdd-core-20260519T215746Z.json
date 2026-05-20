@@ -1,0 +1,39 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.244",
+  "timestamp_utc": "20260519T215746Z",
+  "argv": [
+    "connect"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/pdd/frontend",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]"
+  },
+  "global_options": {
+    "force": false,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": false,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [],
+  "total_cost": 0.0,
+  "steps": [],
+  "errors": [],
+  "environment": {
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/pdd",
+    "PDD_ENV": "prod"
+  },
+  "file_contents": {},
+  "terminal_output": "=== STDOUT ===\nChecking for updates...\nRegistering session with PDD Cloud...\nSession registered with PDD Cloud!\nCORS configured for origins: ['http://localhost:3000', \n'http://127.0.0.1:3000', 'http://localhost:5173', \n'http://127.0.0.1:5173', 'http://localhost:9876', \n'http://127.0.0.1:9876', 'https://pdd.dev', \n'https://www.pdd.dev']\nFrontend not found at \n/Users/yifeitao/Desktop/pdd/.venv/lib/python3.13/site-packages/pd\nd/frontend/dist\nRun 'npm run build' in pdd/frontend to build the frontend\nStarting PDD server on http://127.0.0.1:9876\nProject Root: /Users/yifeitao/Desktop/pdd/pdd/frontend\nAPI Documentation: http://127.0.0.1:9876/docs\nLocal Frontend: http://127.0.0.1:9876\nPress Ctrl+C to stop the server\nNote: No DISPLAY environment variable (headless)\nOpening browser may not work in remote sessions. Use the URL above to connect manually.\nOpening browser...\nPDD Server starting...\nProject Root: /Users/yifeitao/Desktop/pdd/pdd/frontend\nRemote session heartbeat and command polling started\nCommand polling started\nResponse: 404 took 2.81ms\nShutting down PDD Server...\nWarning: Network error getting commands: \nCommand polling stopped\nRemote session heartbeat and command polling stopped\nShutdown complete.\nDeregistering from PDD Cloud...\nWarning: Error deregistering session: \nSession deregistered.\nGoodbye!\n\n--- Command Execution Summary ---\n-------------------------------------\n"
+}

@@ -301,9 +301,13 @@ class TestPromptLintPipeline:
         (sub / "b.prompt").write_text("<contract_rules>y</contract_rules>\n")
         assert [p.name for p in iter_prompt_paths(tmp_path)] == ["a.prompt", "b.prompt"]
 
+    @patch("pdd.prompt_lint_pipeline.run_llm_formalize_pass")
     @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
-    def test_llm_mode_invokes_ambiguity_pass_per_prompt(self, mock_llm, tmp_path: Path):
+    def test_llm_mode_invokes_ambiguity_pass_per_prompt(
+        self, mock_llm, mock_formalize, tmp_path: Path,
+    ):
         mock_llm.return_value = []
+        mock_formalize.return_value = {"bundle": None, "error": "", "formalization_rejected": []}
         (tmp_path / "one.prompt").write_text(
             "<contract_rules>Only authorized users may call this.</contract_rules>\n"
         )
@@ -312,12 +316,16 @@ class TestPromptLintPipeline:
         assert len(result.results) == 1
         assert mock_llm.call_count == 1
 
+    @patch("pdd.prompt_lint_pipeline.run_llm_formalize_pass")
     @patch("pdd.prompt_lint_pipeline.run_llm_guidance_pass")
     @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
-    def test_llm_ambiguities_trigger_guidance(self, mock_ambiguity, mock_guidance, tmp_path: Path):
+    def test_llm_ambiguities_trigger_guidance(
+        self, mock_ambiguity, mock_guidance, mock_formalize, tmp_path: Path,
+    ):
         mock_ambiguity.return_value = [
             LintIssue(
                 level="warn",
+                code="LLM_AMBIGUITY",
                 term="duplicate",
                 section="contract_rules",
                 line="reject duplicate uploads",
@@ -326,6 +334,7 @@ class TestPromptLintPipeline:
                 interpretations=["same filename", "same hash"],
             )
         ]
+        mock_formalize.return_value = {"bundle": None, "error": "", "formalization_rejected": []}
         mock_guidance.return_value = {
             "path": "x",
             "summary": "ok",
@@ -333,6 +342,7 @@ class TestPromptLintPipeline:
             "rule_rewrites": [],
             "acceptance_criteria_improvements": [],
             "formalization_notes": [],
+            "formalization_candidates": [],
             "error": "",
         }
         path = tmp_path / "one.prompt"

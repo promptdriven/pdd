@@ -1,0 +1,17 @@
+% Minimal subject module spec used as {prompt} input when smoke-testing the verifier.
+
+<contract_rules>
+R1 - Reject non-positive refund amount: when amount_cents <= 0, return status=rejected.
+R2 - Reject over-refund: when amount_cents > original_cents, return status=rejected.
+</contract_rules>
+
+<requirements>
+- Function validate_refund(amount_cents, original_cents) returns dict with status and reason.
+</requirements>
+
+<formalization>
+R1:
+  level: property
+  target: smt
+  predicate: amount_cents <= 0 => result.status == "rejected"
+</formalization>
