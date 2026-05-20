@@ -2349,3 +2349,210 @@ def test_f11_dependency_resolver_built_once_for_validation_run(mocker):
         f"F11: expected exactly 1 call to build_dependency_resolver per validation "
         f"run; got {call_count['build_dependency_resolver']}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1061 follow-up: writer-side union semantics
+# ---------------------------------------------------------------------------
+#
+# The validator accepts a forward dep when EITHER the prompt declares
+# <pdd-dependency> OR <include>s the module prompt directly. The writer side
+# of metadata sync (architecture_sync.update_architecture_from_prompt and
+# register_untracked_prompts) MUST re-converge to the same union — otherwise
+# a prompt with mixed declarations is re-written to the <pdd-dependency>-only
+# subset and the next validation pass reports reverse drift on the dropped
+# include-backed edge.
+
+
+def _write_min_arch_entry(filename: str, deps=None, priority: int = 1, filepath: str = "") -> dict:
+    """Build a minimal architecture entry shaped like the writer expects."""
+    return {
+        "reason": filename,
+        "description": filename,
+        "dependencies": list(deps or []),
+        "priority": priority,
+        "filename": filename,
+        "filepath": filepath or f"pdd/{filename.replace('_python.prompt', '.py')}",
+        "tags": ["module"],
+        "interface": {"type": "module"},
+    }
+
+
+def test_followup_writer_union_pdd_dep_plus_module_include(tmp_path: Path) -> None:
+    """Follow-up F1: a prompt with both <pdd-dependency>a</pdd-dependency> and
+    <include>b_python.prompt</include> must produce arch.dependencies = [a, b].
+
+    Reviewer trigger: pdd sync-architecture / metadata sync on a prompt with
+    `<pdd-dependency>a_python.prompt</pdd-dependency>` plus
+    `<include>b_python.prompt</include>` was stripping b from architecture.json
+    because update_architecture_from_prompt only used tags['dependencies'].
+    """
+    from pdd.architecture_sync import update_architecture_from_prompt
+
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps([
+        _write_min_arch_entry("a_python.prompt", priority=1),
+        _write_min_arch_entry("b_python.prompt", priority=2),
+        _write_min_arch_entry("c_python.prompt", priority=3),
+    ]))
+    (prompts / "a_python.prompt").write_text("<pdd-reason>A</pdd-reason>\n")
+    (prompts / "b_python.prompt").write_text("<pdd-reason>B</pdd-reason>\n")
+    (prompts / "c_python.prompt").write_text(
+        "<pdd-reason>C</pdd-reason>\n"
+        "<pdd-dependency>a_python.prompt</pdd-dependency>\n"
+        "% Body section\n"
+        "<include>b_python.prompt</include>\n"
+    )
+
+    result = update_architecture_from_prompt(
+        "c_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+    assert result["success"], f"writer failed: {result}"
+    assert result["updated"], f"writer should have updated deps: {result}"
+
+    written = json.loads(arch_path.read_text())
+    c_entry = next(m for m in written if m["filename"] == "c_python.prompt")
+    assert c_entry["dependencies"] == [
+        "a_python.prompt",
+        "b_python.prompt",
+    ], (
+        "writer-side union must preserve <pdd-dependency> first then add "
+        f"module-prompt includes; got {c_entry['dependencies']!r}"
+    )
+
+
+def test_followup_writer_register_includes_only_prompt(tmp_path: Path) -> None:
+    """Follow-up F2: a brand-new prompt with module-prompt <include> but NO
+    <pdd-dependency> must register with the include target as a dep.
+
+    Reviewer trigger: register_untracked_prompts was inserting the new entry
+    with `dependencies: tags['dependencies']` = [] when only a module-prompt
+    include declared the edge. The validator would then immediately report
+    reverse drift on the next run.
+    """
+    from pdd.architecture_sync import register_untracked_prompts
+
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps([
+        _write_min_arch_entry("a_python.prompt", priority=1),
+    ]))
+    (prompts / "a_python.prompt").write_text("<pdd-reason>A</pdd-reason>\n")
+    # new module: reason tag + module-prompt include, no <pdd-dependency>
+    (prompts / "newmod_python.prompt").write_text(
+        "<pdd-reason>NewMod</pdd-reason>\n"
+        "% Body\n"
+        "<include>a_python.prompt</include>\n"
+    )
+
+    result = register_untracked_prompts(
+        prompts_dir=prompts, architecture_path=arch_path, dry_run=False
+    )
+    assert "newmod_python.prompt" in result["registered"], (
+        f"new prompt not registered: {result!r}"
+    )
+
+    written = json.loads(arch_path.read_text())
+    entry = next(m for m in written if m["filename"] == "newmod_python.prompt")
+    assert entry["dependencies"] == ["a_python.prompt"], (
+        "register_untracked_prompts must seed the new entry with include-derived "
+        f"deps under the union semantics; got {entry['dependencies']!r}"
+    )
+
+
+def test_followup_writer_preserves_arch_deps_when_no_dependency_intent(
+    tmp_path: Path,
+) -> None:
+    """Follow-up regression guard: a reason/interface-only prompt change with
+    NO <pdd-dependency> tags and NO module-prompt <include>s must NOT touch
+    architecture.json's existing dependencies list.
+
+    The pre-PR behavior preserved manually-curated arch deps when a prompt
+    edit was reason/interface-only; the new union semantics must retain that
+    safety so existing repos don't lose curated edges on a no-op metadata sync.
+    """
+    from pdd.architecture_sync import update_architecture_from_prompt
+
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    # b's arch.deps was manually curated; the prompt has neither <pdd-dependency>
+    # nor module-prompt includes, so the writer must leave deps untouched.
+    arch_path.write_text(json.dumps([
+        _write_min_arch_entry(
+            "b_python.prompt",
+            deps=["manually_curated.prompt"],
+            priority=1,
+        ),
+    ]))
+    (prompts / "b_python.prompt").write_text(
+        "<pdd-reason>B updated</pdd-reason>\n"
+        "% Body — no <pdd-dependency> and no module-prompt include\n"
+    )
+
+    result = update_architecture_from_prompt(
+        "b_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+    assert result["success"], f"writer failed: {result}"
+
+    written = json.loads(arch_path.read_text())
+    b_entry = next(m for m in written if m["filename"] == "b_python.prompt")
+    assert b_entry["dependencies"] == ["manually_curated.prompt"], (
+        "reason-only update must not wipe pre-existing arch.dependencies; "
+        f"got {b_entry['dependencies']!r}"
+    )
+
+
+def test_followup_writer_self_include_filtered_from_union(tmp_path: Path) -> None:
+    """Follow-up regression guard: a prompt that <include>s itself (for self-
+    context inside the prompt body) must NOT add itself to the writer's union.
+
+    Path-preserving key equality drops self-edges before they reach the arch
+    list. Mirrors merge_auto_deps_includes_into_architecture (auto_deps_arch.py
+    line ~461) so both writers agree.
+    """
+    from pdd.architecture_sync import update_architecture_from_prompt
+
+    prompts = tmp_path / "prompts"
+    prompts.mkdir()
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps([
+        _write_min_arch_entry("a_python.prompt", priority=1),
+        _write_min_arch_entry("self_python.prompt", priority=2),
+    ]))
+    (prompts / "a_python.prompt").write_text("<pdd-reason>A</pdd-reason>\n")
+    # self_python.prompt declares an edge to a, AND <include>s itself for context.
+    (prompts / "self_python.prompt").write_text(
+        "<pdd-reason>Self</pdd-reason>\n"
+        "<pdd-dependency>a_python.prompt</pdd-dependency>\n"
+        "% Body — self-include for source context\n"
+        "<include>self_python.prompt</include>\n"
+    )
+
+    result = update_architecture_from_prompt(
+        "self_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+    assert result["success"], f"writer failed: {result}"
+
+    written = json.loads(arch_path.read_text())
+    entry = next(m for m in written if m["filename"] == "self_python.prompt")
+    assert "self_python.prompt" not in entry["dependencies"], (
+        "self-include must be filtered out of the writer-side union; got "
+        f"{entry['dependencies']!r}"
+    )
+    assert entry["dependencies"] == ["a_python.prompt"], (
+        "only the genuine arch edge (a) should remain after self-filter; got "
+        f"{entry['dependencies']!r}"
+    )
