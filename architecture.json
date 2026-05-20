@@ -81,6 +81,21 @@
             "returns": "Optional[str]"
           },
           {
+            "name": "extract_step_report",
+            "signature": "(text: Optional[str]) -> Optional[str]",
+            "returns": "Optional[str]"
+          },
+          {
+            "name": "normalize_step_comments_state",
+            "signature": "(raw: Any) -> Set[int]",
+            "returns": "Set[int]"
+          },
+          {
+            "name": "post_step_comment_once",
+            "signature": "(*, repo_owner: str, repo_name: str, issue_number: int, step_num: int, body: str, posted_steps: Set[int], cwd: Path) -> bool",
+            "returns": "bool"
+          },
+          {
             "name": "_sanitize_comment_body",
             "signature": "(body: Optional[str], max_chars: int = 25_000) -> str",
             "returns": "str"
