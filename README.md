@@ -338,6 +338,10 @@ For a concrete, up-to-date reference of supported models and example rows, see t
 
 For proper model identifiers to use in your custom configuration, refer to the [LiteLLM Model List](https://docs.litellm.ai/docs/providers) documentation. LiteLLM typically uses model identifiers in the format `provider/model_name` (e.g., "openai/gpt-4", "anthropic/claude-3-opus-20240229").
 
+### Pinning the default model
+
+Set `PDD_MODEL_DEFAULT` to choose the base model (e.g. `PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash`). When the value carries a known LiteLLM routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, or `azure_ai/`), PDD locks the fallback to that provider — base lookup, surrogate selection, and strength interpolation all stay inside that provider, so a single-provider deployment (e.g. Cloud Run with only Vertex credentials) will not silently jump to a higher-ELO row whose credentials are missing. A bare CSV `provider=google` column is not enough on its own to enable a Vertex or Gemini lock; the routing prefix on `PDD_MODEL_DEFAULT` is what authorises the cross-row match.
+
 ## Troubleshooting Common Installation Issues
 
 1. **Command not found**

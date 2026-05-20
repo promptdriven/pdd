@@ -3,23 +3,20 @@ import sys
 from typing import Optional
 from pydantic import BaseModel
 
-# Ensure non-interactive mode for the example
+# Pin the runtime model BEFORE importing pdd.llm_invoke, because
+# DEFAULT_BASE_MODEL is captured from PDD_MODEL_DEFAULT at import time.
 os.environ["PDD_FORCE"] = "1"
+os.environ["PDD_MODEL_DEFAULT"] = "openai/gpt-4o-mini"
 
 # Import the llm_invoke function from the pdd module
 from pdd.llm_invoke import llm_invoke, set_verbose_logging
 
 def main():
-    # Check for an API key to ensure the example can run.
-    # Since the default model might be OpenAI or Anthropic depending on your CSV,
-    # we check for OPENAI_API_KEY as a common fallback for this example.
+    # We pinned PDD_MODEL_DEFAULT to an OpenAI model above, so OPENAI_API_KEY is required.
     api_key = os.environ.get("OPENAI_API_KEY")
     if not api_key:
         print("OPENAI_API_KEY not set. Set it to run this example.")
         sys.exit(0)
-        
-    # Optionally force a specific model to ensure the key matches
-    os.environ["PDD_MODEL_DEFAULT"] = "openai/gpt-4o-mini"
 
     print("--- Example 1: Basic Text Generation ---")
     # Example 1: Basic text generation using prompt and input_json
@@ -31,7 +28,7 @@ def main():
         temperature=0.7,
         verbose=True
     )
-    
+
     print(f"\nModel Used: {response['model_name']}")
     print(f"Cost: ${response['cost']:.6f}")
     print(f"Result: {response['result']}\n")
@@ -59,20 +56,20 @@ def main():
         print(f"Fact: {result_obj.fact}")
         print(f"Surprising: {result_obj.is_surprising}")
         print(f"Planet: {result_obj.related_planet}\n")
-        
+
     print("--- Example 3: Using direct messages format ---")
     # Example 3: Using LiteLLM/OpenAI raw message format instead of prompt/input_json
     messages = [
         {"role": "system", "content": "You are a helpful assistant."},
         {"role": "user", "content": "What is 2 + 2?"}
     ]
-    
+
     msg_response = llm_invoke(
         messages=messages,
         strength=0.5,
         temperature=0.0
     )
-    
+
     print(f"Result: {msg_response['result']}\n")
 
 if __name__ == "__main__":

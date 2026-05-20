@@ -106,13 +106,14 @@
     - 'finish_reason': Provider completion reason when available. For litellm.completion/batch_completion, use the LiteLLM callback's `completion_response.choices[0].finish_reason`; for OpenAI Responses API, use the response status (for example "completed"). Return None when unavailable.
 
 % Model Selection:
-    - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate).
+    - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate). See "Provider lock" below for the prefixed case.
+    - Provider lock: when `$PDD_MODEL_DEFAULT` carries a known LiteLLM routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, `azure_ai/`), the implied provider is a hard boundary — base lookup, alias resolution, surrogate fallback, and strength interpolation are all scoped to rows that route through that provider. This prevents single-provider environments (e.g., Cloud Run with only Vertex credentials) from silently falling through to a higher-ELO row whose credentials are unavailable. Raise `ValueError` if the CSV has no rows that match the lock.
     - CSV columns: model, provider, input/output costs ($/M tokens), coding_arena_elo, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override, optional 'base_url' for custom API endpoints.
     - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
     - strength < 0.5: Interpolate by cost from base down to cheapest.
     - strength > 0.5: Interpolate by ELO from base up to highest.
     - strength = 0.5: Use base model, fallback to next highest ELO on failure.
-    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning).
+    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning). When a provider lock is active, the surrogate is the first available row inside the locked provider, not the first available row overall.
 
 % API Key Management:
     - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").
