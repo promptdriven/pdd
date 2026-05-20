@@ -582,6 +582,8 @@ def _prompt_dependency_union(
     tags: Dict[str, Any],
     arch_data: List[Dict[str, Any]],
     self_filename: Optional[str] = None,
+    *,
+    prompt_content: Optional[str] = None,
 ) -> Tuple[List[str], bool]:
     """Re-converge a prompt's architecture dependencies from the union of
     ``<pdd-dependency>`` tags AND module-prompt ``<include>`` targets.
@@ -618,13 +620,20 @@ def _prompt_dependency_union(
     Lazy import: ``_module_prompt_include_dependencies`` lives in
     ``agentic_sync`` which already imports from this module — lazy import here
     avoids a load-time cycle. Same pattern the validator uses.
+
+    PR #1073 finding 3: when ``prompt_content`` is supplied, it is forwarded
+    to ``_module_prompt_include_dependencies`` so the include-side scan reads
+    the same in-memory text the caller used to derive ``tags``. Without this,
+    the union mixed in-memory tags with on-disk includes; for any caller
+    passing a refreshed but not-yet-written prompt, the includes would
+    silently lag and an include-backed edge would vanish from the union.
     """
     from .agentic_sync import _module_prompt_include_dependencies  # noqa: WPS433
 
     declared = list(tags.get("dependencies", []) or [])
     has_dep_tags = tags.get("has_dependency_tags", False) or bool(declared)
     include_deps = _module_prompt_include_dependencies(
-        prompt_path, self_filename=self_filename
+        prompt_path, self_filename=self_filename, prompt_content=prompt_content
     )
     if not has_dep_tags and not include_deps:
         return [], False
@@ -1188,7 +1197,11 @@ def update_architecture_from_prompt(
         # ``<pdd-dependency></pdd-dependency>`` is still an explicit-clear and
         # is counted via ``has_dependency_tags``.
         union_dependencies, has_dep_intent = _prompt_dependency_union(
-            prompt_path, tags, arch_data, self_filename=prompt_filename
+            prompt_path,
+            tags,
+            arch_data,
+            self_filename=prompt_filename,
+            prompt_content=prompt_content_override,
         )
         if has_dep_intent:
             old_deps = module_entry.get('dependencies', [])

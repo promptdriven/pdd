@@ -115,32 +115,18 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
         return set()
 
 
-def extract_includes_from_file_ordered(file_path: Path) -> List[str]:
+def extract_includes_from_text_ordered(content: str) -> List[str]:
     """
-    Same tag tolerance as :func:`extract_includes_from_file`, but returns
-    includes in **source declaration order** with first-occurrence dedup.
+    Parse ``<include*>`` paths from raw prompt text in source declaration order.
 
-    The set-returning variant above is used by callers that only care
-    about *which* paths a prompt includes. Callers that need to preserve
-    or expose declaration order — e.g. when re-converging an
-    architecture entry's ``dependencies`` (#1061 iter-2 N1) — must use
-    this helper so the on-disk diff is hash-independent and stable.
-
-    Returns:
-        List of unique include path strings in the order they first
-        appear in ``file_path``. Returns ``[]`` when the file cannot be
-        read.
+    Same tag tolerance and dedup semantics as
+    :func:`extract_includes_from_file_ordered`, but operates on a string the
+    caller has already loaded (or constructed in memory). Lets callers pass an
+    in-memory ``prompt_content_override`` through the dependency-extraction
+    pipeline without round-tripping it via the filesystem — see
+    ``architecture_sync.update_architecture_from_prompt`` and
+    ``agentic_sync._module_prompt_include_dependencies`` (PR #1073 finding 3).
     """
-    if not file_path.exists() or not file_path.is_file():
-        logger.warning(f"File not found or not a file: {file_path}")
-        return []
-
-    try:
-        content = file_path.read_text(encoding="utf-8")
-    except Exception as e:
-        logger.error(f"Error reading file {file_path}: {e}")
-        return []
-
     ordered: List[str] = []
     seen: Set[str] = set()
 
@@ -202,6 +188,35 @@ def extract_includes_from_file_ordered(file_path: Path) -> List[str]:
                     _emit(item)
 
     return ordered
+
+
+def extract_includes_from_file_ordered(file_path: Path) -> List[str]:
+    """
+    Same tag tolerance as :func:`extract_includes_from_file`, but returns
+    includes in **source declaration order** with first-occurrence dedup.
+
+    The set-returning variant above is used by callers that only care
+    about *which* paths a prompt includes. Callers that need to preserve
+    or expose declaration order — e.g. when re-converging an
+    architecture entry's ``dependencies`` (#1061 iter-2 N1) — must use
+    this helper so the on-disk diff is hash-independent and stable.
+
+    Returns:
+        List of unique include path strings in the order they first
+        appear in ``file_path``. Returns ``[]`` when the file cannot be
+        read.
+    """
+    if not file_path.exists() or not file_path.is_file():
+        logger.warning(f"File not found or not a file: {file_path}")
+        return []
+
+    try:
+        content = file_path.read_text(encoding="utf-8")
+    except Exception as e:
+        logger.error(f"Error reading file {file_path}: {e}")
+        return []
+
+    return extract_includes_from_text_ordered(content)
 
 
 def extract_module_from_include(include_path: str) -> Optional[str]:

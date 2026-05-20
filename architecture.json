@@ -1381,7 +1381,11 @@
   {
     "reason": "Recursively discovers and summarizes files in a directory using LLM with caching.",
     "description": "Generates overview of files in a directory. Used for context in LLM prompts.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 39,
     "filename": "summarize_directory_python.prompt",
     "filepath": "pdd/summarize_directory.py",
@@ -1577,7 +1581,13 @@
   {
     "reason": "Automatically selects relevant code and doc includes for prompts using two-stage retrieval.",
     "description": "Analyzes prompt content to determine which context files should be included. Reduces manual dependency management.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "summarize_directory_python.prompt",
+      "embed_retrieve_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 45,
     "filename": "auto_include_python.prompt",
     "filepath": "pdd/auto_include.py",
@@ -2151,7 +2161,13 @@
   {
     "reason": "Determines needed dependencies and inserts them into a prompt with optional deduplication.",
     "description": "Adds <include> tags for dependencies. Supports auto-dependency detection.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "load_prompt_template_python.prompt",
+      "auto_include_python.prompt",
+      "preprocess_python.prompt",
+      "path_resolution_python.prompt"
+    ],
     "priority": 60,
     "filename": "insert_includes_python.prompt",
     "filepath": "pdd/insert_includes.py",
@@ -2458,6 +2474,7 @@
     "reason": "CLI entry point for the fix command; auto-submit short-circuits in cloud executors and bounds the Device Flow JWT call so a stuck headless auth cannot eat the fix budget.",
     "description": "Command-line interface for fix. Parses arguments, orchestrates the workflow, and formats output. The post-success auto-submit branch skips when CloudConfig.is_running_in_cloud() is true, calls CloudConfig.ensure_default_env() before lower-level cached JWT lookup, and wraps the asyncio JWT request in asyncio.wait_for (PDD_AUTO_SUBMIT_AUTH_TIMEOUT_S, default 300s / 5 min, sized for interactive Device Flow auth; defensive parse falls back to 300s on malformed values).",
     "dependencies": [
+      "fix_error_loop_python.prompt",
       "agentic_langtest_python.prompt",
       "auth_service_python.prompt",
       "core/cloud_python.prompt"
@@ -5291,7 +5308,11 @@
   {
     "reason": "Applies targeted patches to existing code based on prompt changes.",
     "description": "Detects changes between prompt versions and generates minimal code patches. More efficient than full regeneration for small modifications.",
-    "dependencies": [],
+    "dependencies": [
+      "llm_invoke_python.prompt",
+      "preprocess_python.prompt",
+      "postprocess_python.prompt"
+    ],
     "priority": 149,
     "filename": "incremental_code_generator_python.prompt",
     "filepath": "pdd/incremental_code_generator.py",
@@ -6213,7 +6234,9 @@
   {
     "reason": "CLI entry point for the 11-step agentic E2E fix workflow; orchestrates GitHub issue data fetching and worktree discovery.",
     "description": "Entry point for the agentic E2E fix command. Parses issue URL, finds associated worktree, and delegates to the E2E fix orchestrator.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_e2e_fix_orchestrator_python.prompt"
+    ],
     "priority": 184,
     "filename": "agentic_e2e_fix_python.prompt",
     "filepath": "pdd/agentic_e2e_fix.py",
@@ -6558,8 +6581,7 @@
     "reason": "Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.",
     "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, plan enhancement, coverage assessment, manual testing, regression tests, test generation, plan validation, and PR submission.",
     "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
+      "agentic_common_python.prompt"
     ],
     "priority": 196,
     "filename": "agentic_test_orchestrator_python.prompt",
@@ -7703,7 +7725,9 @@
   {
     "reason": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
     "description": "Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 221,
     "filename": "ci_validation_python.prompt",
     "filepath": "pdd/ci_validation.py",
@@ -8411,7 +8435,9 @@
   {
     "reason": "Shared worktree setup, git-scope guards, and agentic output parsing helpers used by multiple orchestrators.",
     "description": "Provides setup_worktree, get_git_root, resolve_main_ref, get_modified_and_untracked, check_target_file_unchanged, revert_out_of_scope_changes_with_dirs, extract_block_marker. Used by bug, split, and change orchestrators.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 224,
     "filename": "agentic_common_worktree_python.prompt",
     "filepath": "pdd/agentic_common_worktree.py",
@@ -8452,7 +8478,9 @@
   {
     "reason": "Resolves language-specific lint commands (ruff, eslint, etc.) used by split validation and repair.",
     "description": "Returns a list of LintCommand objects for a given file; empty list signals agentic fallback.",
-    "dependencies": [],
+    "dependencies": [
+      "get_test_command_python.prompt"
+    ],
     "priority": 223,
     "filename": "get_lint_commands_python.prompt",
     "filepath": "pdd/get_lint_commands.py",

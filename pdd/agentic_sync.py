@@ -1827,7 +1827,10 @@ def _resolve_prompt_for_architecture_correction(
 
 
 def _module_prompt_include_dependencies(
-    prompt_path: Path, self_filename: Optional[str] = None
+    prompt_path: Path,
+    self_filename: Optional[str] = None,
+    *,
+    prompt_content: Optional[str] = None,
 ) -> List[str]:
     """Return ``<include>`` targets that name *another* module prompt.
 
@@ -1851,6 +1854,12 @@ def _module_prompt_include_dependencies(
     order via ``extract_includes_from_file_ordered``; the iter-1
     implementation iterated a ``set`` and produced hash-dependent ordering
     (codex iter-2 finding N1.iter2).
+
+    PR #1073 finding 3: when ``prompt_content`` is supplied, scan it directly
+    instead of re-reading ``prompt_path``. Lets ``update_architecture_from_prompt``
+    honor a ``prompt_content_override`` for include-backed edges the same way it
+    honors it for metadata tags — without this, the union silently mixed on-disk
+    includes with in-memory tags.
     """
     self_key = (
         _basename_from_architecture_filename(
@@ -1859,9 +1868,14 @@ def _module_prompt_include_dependencies(
         if self_filename
         else None
     )
+    if prompt_content is not None:
+        from .sync_order import extract_includes_from_text_ordered
+        include_iter: List[str] = extract_includes_from_text_ordered(prompt_content)
+    else:
+        include_iter = extract_includes_from_file_ordered(prompt_path)
     deps: List[str] = []
     seen: set[str] = set()
-    for inc in extract_includes_from_file_ordered(prompt_path):
+    for inc in include_iter:
         # First gate: is this include even a module-prompt target?
         if _module_prompt_include_target(inc) is None:
             continue
