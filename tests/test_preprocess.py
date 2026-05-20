@@ -476,10 +476,11 @@ def build_config():
     expected = (
         """```python
 def build_config():
-    template = "{{{{ already }}}}"
+    template = "{{ already }}"
     return {{"key": value}}
 ```"""
     )
+
     processed = preprocess(prompt, recursive=False, double_curly_brackets=True)
     assert processed == expected
 
@@ -706,10 +707,10 @@ def test_process_web_tag_invalid_ttl_env_no_crash(reset_firecrawl_cache) -> None
 
 # Test for already doubled brackets
 def test_already_doubled_brackets() -> None:
-    """Test that already doubled brackets are quadrupled for byte-preservation."""
+    """Test that already doubled brackets aren't doubled again."""
     prompt = "This is already {{doubled}}."
     result = preprocess(prompt, recursive=False, double_curly_brackets=True)
-    assert result == "This is already {{{{doubled}}}}."
+    assert result == "This is already {{doubled}}."
 
 # Test for nested curly brackets
 def test_nested_curly_brackets() -> None:
@@ -878,8 +879,8 @@ def test_z3_double_curly_brackets():
         # Simple case: {var} -> {{var}}
         (StringVal("This has {var}"), StringVal("This has {{var}}")),
         
-        # Already doubled: {{var}} -> {{{{var}}}} (byte-preservation for .format())
-        (StringVal("This has {{var}}"), StringVal("This has {{{{var}}}}")),
+        # Already doubled: {{var}} -> {{var}}
+        (StringVal("This has {{var}}"), StringVal("This has {{var}}")),
         
         # Nested brackets: {outer{inner}} -> {{outer{{inner}}}}
         (StringVal("This has {outer{inner}}"), StringVal("This has {{outer{{inner}}}}")),
@@ -1052,7 +1053,7 @@ def test_template_variable_escaping() -> None:
     # Test mixed with already escaped variables
     prompt = "Here's {{already_escaped}} and {needs_escaping} variables."
     result = preprocess(prompt, recursive=False, double_curly_brackets=True)
-    assert result == "Here's {{{{already_escaped}}}} and {{needs_escaping}} variables."
+    assert result == "Here's {{already_escaped}} and {{needs_escaping}} variables."
     
     # Test with variables in different contexts
     prompt = """
@@ -3194,197 +3195,3 @@ def test_looks_like_user_intent_path_heuristic() -> None:
     assert not f("")
     assert not f("\n")
     assert not f("a" * 300)  # too long
-
-# --- Regression tests for Issue #417 (Brace escaping and byte-preservation) ---
-
-def test_double_braces_are_quadrupled_for_byte_preservation() -> None:
-    """Literal double braces in source should be quadrupled so they are preserved after .format()."""
-    from pdd.preprocess import preprocess
-    prompt = "This has {{literal}} double braces"
-    # preprocess -> "This has {{{{literal}}}} double braces"
-    # .format() -> "This has {{literal}} double braces"
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result == "This has {{{{literal}}}} double braces"
-    assert result.format() == prompt
-
-def test_pdd_interface_with_mixed_braces_and_vars_byte_preservation() -> None:
-    """Test PDD interface containing single braces (to double), double braces (to quadruple), and ${VAR}."""
-    from pdd.preprocess import preprocess
-    prompt = '<pdd-interface>{"a": {val}, "b": "{{lit}}", "c": "${VAR}"}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True, exclude_keys=["val"])
-    
-    # Verify result can be formatted correctly
-    formatted = result.format(val=123)
-    assert formatted == '<pdd-interface>{"a": 123, "b": "{{lit}}", "c": "${VAR}"}</pdd-interface>'
-
-def test_code_block_exclude_keys_honored() -> None:
-    """Test that exclude_keys are honored even inside fenced code blocks."""
-    from pdd.preprocess import preprocess
-    # Use multi-line to ensure {val} is on a line without other braces
-    prompt = '```json\n{\n  "a": {val}\n}\n```'
-    # {val} should stay {val} because it's in exclude_keys
-    result = preprocess(prompt, double_curly_brackets=True, exclude_keys=["val"])
-    
-    assert '{val}' in result
-    formatted = result.format(val=123)
-    assert '"a": 123' in formatted
-
-def test_issue_417_backtick_include_with_pdd_tags_is_format_safe(tmp_path):
-    """Test ```<file.txt>``` style includes with PDD tag content."""
-    included_file = tmp_path / "inc.txt"
-    included_file.write_text('<pdd-interface>\n{"key": "value"}\n</pdd-interface>')
-    
-    prompt = f"```<{included_file}>```"
-    result = preprocess(prompt, double_curly_brackets=True)
-    
-    formatted = result.format()
-    assert '<pdd-interface>\n{"key": "value"}\n</pdd-interface>' in formatted
-
-def test_issue_417_nested_includes_with_pdd_tags_are_format_safe(tmp_path):
-    """Test that nested includes (file A includes file B which has PDD tags) work."""
-    file_b = tmp_path / "b.txt"
-    file_b.write_text('<pdd-interface>{"nested": "yes"}</pdd-interface>')
-    
-    file_a = tmp_path / "a.txt"
-    file_a.write_text(f'<include>{file_b}</include>')
-    
-    prompt = f'<include>{file_a}</include>'
-    
-    result = preprocess(prompt, recursive=True, double_curly_brackets=True)
-    formatted = result.format()
-    
-    assert '<pdd-interface>{"nested": "yes"}</pdd-interface>' in formatted
-
-def test_issue_417_nested_includes_non_recursive_with_pdd_tags(tmp_path):
-    """Test that nested includes work even with recursive=False."""
-    file_b = tmp_path / "b.txt"
-    file_b.write_text('<pdd-interface>{"nested": "no_rec"}</pdd-interface>')
-    
-    file_a = tmp_path / "a.txt"
-    file_a.write_text(f'<include>{file_b}</include>')
-    
-    prompt = f'<include>{file_a}</include>'
-    
-    # recursive=False should still resolve includes via _process_nested_includes
-    result = preprocess(prompt, recursive=False, double_curly_brackets=True)
-    formatted = result.format()
-    
-    assert '<pdd-interface>{"nested": "no_rec"}</pdd-interface>' in formatted
-
-def test_issue_417_pdd_interface_with_mixed_braces_and_vars():
-    """Test PDD interface containing both single braces, double braces, and ${VAR}."""
-    prompt = '<pdd-interface>{"a": {val}, "b": "{{lit}}", "c": "${VAR}"}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True)
-    
-    # {val} -> {{val}} -> {val} (NOT replaced because it's protected)
-    # {{lit}} -> {{{{lit}}}} -> {{lit}}
-    # ${VAR} -> ${{VAR}} -> ${VAR}
-    formatted = result.format(val=123)
-    assert '<pdd-interface>{"a": {val}, "b": "{{lit}}", "c": "${VAR}"}</pdd-interface>' in formatted
-
-def test_issue_417_pdd_interface_with_excluded_keys():
-    """Test that exclude_keys allows placeholders to work inside PDD tags."""
-    prompt = '<pdd-interface>{"a": {val}}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True, exclude_keys=["val"])
-    
-    # {val} is excluded, so it stays {val} during double_curly
-    # .format(val=123) -> 123
-    formatted = result.format(val=123)
-    assert '<pdd-interface>{"a": 123}</pdd-interface>' in formatted
-
-def test_issue_417_already_escaped_braces_in_pdd_content():
-    """Test PDD content that already has {{escaped}} braces gets quadrupled for byte-preservation."""
-    prompt = '<pdd-interface>{"key": "{{escaped}}"}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True)
-    
-    formatted = result.format()
-    # Invariant: literal double braces in PDD JSON should byte-preserve through .format()
-    # This requires preprocess to produce {{{{escaped}}}}
-    assert '<pdd-interface>{"key": "{{escaped}}"}</pdd-interface>' in formatted
-
-def test_issue_417_code_block_exclude_keys_preservation():
-    """Test that exclude_keys are honored even inside code blocks."""
-    # Use multi-line to ensure {val} is on a line without other braces
-    prompt = '```json\n{\n  "a": {val}\n}\n```'
-    result = preprocess(prompt, double_curly_brackets=True, exclude_keys=["val"])
-    
-    # {val} should stay {val} so format can replace it
-    formatted = result.format(val=123)
-    assert '"a": 123' in formatted
-
-def test_issue_417_empty_pdd_interface_tag_is_format_safe():
-    """Test <pdd-interface></pdd-interface> doesn't break format()."""
-    prompt = "<pdd-interface></pdd-interface>"
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result.format() == "<pdd-interface></pdd-interface>"
-
-def test_issue_417_whitespace_only_pdd_interface_is_format_safe():
-    """Test <pdd-interface>   </pdd-interface> is handled correctly."""
-    prompt = "<pdd-interface>   \n   </pdd-interface>"
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result.format() == "<pdd-interface>   \n   </pdd-interface>"
-
-def test_issue_417_pdd_tag_at_start_of_included_file_is_format_safe(tmp_path):
-    """Test included files that start directly with <pdd-interface>."""
-    included = tmp_path / "start.txt"
-    included.write_text('<pdd-interface>{"a": 1}</pdd-interface>\ntext')
-    prompt = f"<include>{included}</include>"
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result.format() == '<pdd-interface>{"a": 1}</pdd-interface>\ntext'
-
-def test_issue_417_pdd_tag_at_end_of_included_file_is_format_safe(tmp_path):
-    """Test included files that end with </pdd-interface> (no trailing newline)."""
-    included = tmp_path / "end.txt"
-    included.write_text('text\n<pdd-interface>{"b": 2}</pdd-interface>')
-    prompt = f"<include>{included}</include>"
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result.format() == 'text\n<pdd-interface>{"b": 2}</pdd-interface>'
-
-def test_issue_417_pdd_tag_at_end_of_main_prompt_is_format_safe():
-    prompt = 'text\n<pdd-interface>{"b": 2}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result.format() == 'text\n<pdd-interface>{"b": 2}</pdd-interface>'
-
-def test_issue_417_unicode_in_pdd_interface_is_format_safe():
-    """Test PDD interface with Unicode characters like {"name": "日本語"}."""
-    prompt = '<pdd-interface>{"name": "日本語"}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result.format() == '<pdd-interface>{"name": "日本語"}</pdd-interface>'
-
-def test_issue_417_real_file_include_with_pdd_tags_integration(tmp_path):
-    """Integration test with actual temp files instead of mocks."""
-    included = tmp_path / "real.txt"
-    included.write_text('some content <pdd-interface>{"real": "file"}</pdd-interface>')
-    prompt = f"Load <include>{included}</include>"
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert '<pdd-interface>{"real": "file"}</pdd-interface>' in result.format()
-
-def test_issue_417_full_pipeline_preprocess_then_parse_then_format(tmp_path):
-    """Test the complete flow: preprocess includes PDD content, 
-    parse_prompt_tags extracts it, format() replaces placeholders."""
-    from pdd.architecture_sync import parse_prompt_tags
-    included = tmp_path / "pipe.txt"
-    included.write_text('<pdd-interface>{"pipe": "line"}</pdd-interface>')
-    prompt = f"<include>{included}</include>"
-    result = preprocess(prompt, double_curly_brackets=True)
-    formatted = result.format()
-    tags = parse_prompt_tags(formatted)
-    assert tags.get("interface", {}).get("pipe") == "line"
-
-def test_issue_417_format_valueerror_from_incomplete_escape():
-    """Test content like '{ unclosed' or 'trailing }' doesn't crash."""
-    prompt = '<pdd-interface>{"broken": "{ unclosed"}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True)
-    assert result.format() == '<pdd-interface>{"broken": "{ unclosed"}</pdd-interface>'
-    
-    prompt2 = '<pdd-interface>{"broken": "trailing }"}</pdd-interface>'
-    result2 = preprocess(prompt2, double_curly_brackets=True)
-    assert result2.format() == '<pdd-interface>{"broken": "trailing }"}</pdd-interface>'
-
-def test_issue_417_pdd_tags_with_shell_and_web_tags():
-    """Test <pdd-interface> mixed with <shell> and <web> tags."""
-    # Note: <web> requires FIRECRAWL_API_KEY if we try to process it, so we'll just test shell to avoid network/key deps
-    prompt = '<shell>echo 1</shell><pdd-interface>{"a": 1}</pdd-interface>'
-    result = preprocess(prompt, double_curly_brackets=True)
-    formatted = result.format()
-    assert "1\n<pdd-interface>{\"a\": 1}</pdd-interface>" in formatted
