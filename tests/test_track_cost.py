@@ -1334,36 +1334,132 @@ def test_migration_serialized_by_lock(
     mock_rprint.assert_not_called()
 
 
-def test_acquire_atomic_lock_steals_stale_lock(tmp_path):
-    """Regression (3rd-pass review): a stale lock file (older than
-    ``_LOCK_STALE_SECONDS``) MUST be stolen — otherwise a crashed PDD
-    process that died without releasing its lock would block every
-    subsequent CLI invocation for the full retry window.
+def test_acquire_atomic_lock_steals_lock_with_dead_pid(tmp_path):
+    """Regression (4th-pass review, finding 2): staleness is determined by
+    PID liveness, not by mtime. A lock whose holder PID is no longer alive
+    must be reclaimed immediately — the previous mtime-only logic would
+    either steal too eagerly (deleting a legitimately slow holder's lock)
+    or wait the full mtime threshold even for dead processes.
     """
     import os
-    import time
-    from pdd.track_cost import _acquire_atomic_lock, _release_atomic_lock, _LOCK_STALE_SECONDS
+    from pdd.track_cost import (
+        _acquire_atomic_lock,
+        _release_atomic_lock,
+    )
 
     lock_path = str(tmp_path / "cost.csv.lock")
 
-    # Plant a stale lock — create the file and backdate its mtime.
-    with open(lock_path, 'w') as f:
-        f.write("99999")
-    stale_time = time.time() - (_LOCK_STALE_SECONDS + 5)
-    os.utime(lock_path, (stale_time, stale_time))
+    # Plant a lock whose recorded PID is definitely dead — pick a value
+    # above MAX_PID on Linux/macOS so os.kill(pid, 0) raises immediately.
+    dead_pid = 999_999_999
+    with open(lock_path, 'w', encoding='utf-8') as f:
+        f.write(f"{dead_pid}-stalefakenoncehex")
 
-    # The acquire must steal the stale file and return a valid fd.
-    fd = _acquire_atomic_lock(lock_path)
+    handle, contended = _acquire_atomic_lock(lock_path)
     try:
-        assert fd is not None, (
-            "stale lock must be stolen; _acquire_atomic_lock returned None"
+        assert handle is not None, (
+            "lock with dead PID must be reclaimed immediately; "
+            "_acquire_atomic_lock returned None"
         )
-        assert os.path.exists(lock_path), (
-            "after steal, the lock file must exist (held by us)"
+        fd, nonce = handle
+        # The nonce we wrote must NOT be the planted dead-PID nonce.
+        assert "stalefakenoncehex" not in nonce, (
+            "fresh nonce must replace the dead holder's identifier"
         )
     finally:
-        _release_atomic_lock(fd, lock_path)
+        _release_atomic_lock(handle, lock_path)
 
     assert not os.path.exists(lock_path), (
         "after release, the lock file must be unlinked"
     )
+
+
+def test_acquire_atomic_lock_does_not_steal_live_pid(tmp_path):
+    """Regression (4th-pass review, finding 2): a lock held by a LIVE
+    PID must NOT be stolen even after the mtime ``_LOCK_STALE_SECONDS``
+    threshold. The previous design treated any lock older than 60s as
+    stale, which would clobber a legitimate slow migration.
+    """
+    import os
+    import time
+    from pdd.track_cost import _acquire_atomic_lock, _LOCK_STALE_SECONDS
+
+    lock_path = str(tmp_path / "cost.csv.lock")
+
+    # Plant a lock whose recorded PID IS us — definitely alive — and
+    # backdate the mtime well past the safety-net threshold.
+    with open(lock_path, 'w', encoding='utf-8') as f:
+        f.write(f"{os.getpid()}-livepidnoncehex")
+    very_old = time.time() - (_LOCK_STALE_SECONDS * 5)
+    os.utime(lock_path, (very_old, very_old))
+
+    # The acquire MUST exhaust retries (because the holder is alive) and
+    # report contention. We use a short manual retry by patching the
+    # constant via monkeypatching the module — but simplest: just call
+    # and check it returned None + contended=True quickly. The 30s
+    # default budget would make this slow, so monkey-patch the retry
+    # cap down to keep CI fast.
+    import pdd.track_cost as _tc
+    saved_max = _tc._LOCK_RETRY_MAX
+    _tc._LOCK_RETRY_MAX = 5  # 0.5s total — fast for a "must not steal" assert
+    try:
+        handle, contended = _acquire_atomic_lock(lock_path)
+    finally:
+        _tc._LOCK_RETRY_MAX = saved_max
+
+    try:
+        assert handle is None, (
+            "lock held by a LIVE PID must NOT be stolen regardless of "
+            "mtime; _acquire_atomic_lock returned a handle anyway"
+        )
+        assert contended is True, (
+            "contention must be reported when the live holder kept us out"
+        )
+        assert os.path.exists(lock_path), (
+            "the live holder's lock file must remain untouched"
+        )
+    finally:
+        # Clean up our planted file so tmp_path teardown succeeds.
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
+
+
+def test_release_atomic_lock_does_not_unlink_after_steal(tmp_path):
+    """Regression (4th-pass review, finding 3): if our lock was stolen by
+    another process while we held it, our release must NOT delete the
+    new owner's lock file. The nonce check on release prevents this race.
+    """
+    import os
+    from pdd.track_cost import _acquire_atomic_lock, _release_atomic_lock
+
+    lock_path = str(tmp_path / "cost.csv.lock")
+
+    # Acquire normally; capture the handle (fd, nonce).
+    handle, _ = _acquire_atomic_lock(lock_path)
+    assert handle is not None, "initial acquire must succeed"
+
+    # Simulate a stale-steal: another owner overwrites the lock file with
+    # their own nonce.
+    other_owner_content = "12345-otheownernoncehex"
+    with open(lock_path, 'w', encoding='utf-8') as f:
+        f.write(other_owner_content)
+
+    # Now release — we hold an fd to the OLD file, and the disk content
+    # has a different nonce. The release MUST detect this mismatch and
+    # leave the lock file alone.
+    _release_atomic_lock(handle, lock_path)
+
+    assert os.path.exists(lock_path), (
+        "release after stale-steal must not unlink the new owner's lock"
+    )
+    with open(lock_path, 'r', encoding='utf-8') as f:
+        remaining = f.read()
+    assert remaining == other_owner_content, (
+        "release after stale-steal must not modify the new owner's content; "
+        f"got {remaining!r}"
+    )
+
+    # Cleanup for tmp_path teardown.
+    os.unlink(lock_path)

@@ -1,5 +1,6 @@
 import functools
 import time
+import uuid
 from datetime import datetime
 import csv
 import os
@@ -13,64 +14,164 @@ from typing import Any, Optional, Tuple, List
 # POSIX and Windows alike, so Windows no longer falls through to unlocked
 # writes (the previous fcntl-only implementation lost rows during concurrent
 # legacy-CSV migration on Windows).
-_LOCK_RETRY_MAX = 50          # 50 * 0.1s = 5s max wait
+#
+# Safety properties beyond plain O_EXCL:
+#   - Each acquire writes a unique pid-uuid NONCE to the lock file. Release
+#     reads the file back and only unlinks if the nonce still matches ours.
+#     This prevents the release-after-stale-steal race: if process A's lock
+#     is stolen by B, A's eventual release no longer deletes B's lock file.
+#   - Staleness is determined by PID liveness (os.kill(pid, 0)), NOT by lock
+#     file mtime alone. A legitimate slow migration whose holder is still
+#     running will not be stolen even after many minutes. mtime is used only
+#     as a long-threshold safety net for malformed lock files or Windows
+#     filesystems where the PID alive-check is unreliable.
+_LOCK_RETRY_MAX = 300         # 300 * 0.1s = 30s max wait under contention
 _LOCK_RETRY_INTERVAL = 0.1
-_LOCK_STALE_SECONDS = 60      # forcibly steal a lock older than this
+_LOCK_STALE_SECONDS = 600     # mtime safety-net for unparseable nonces only;
+                              # the primary staleness signal is PID liveness.
 
 
-def _acquire_atomic_lock(lock_path: str) -> Optional[int]:
+def _is_pid_alive(pid: int) -> bool:
+    """Return True when the OS still has a process for ``pid``.
+
+    On POSIX, ``os.kill(pid, 0)`` raises ``ProcessLookupError`` when the
+    process is gone and ``PermissionError`` when it exists but we may not
+    signal it. On Windows (where ``signal 0`` semantics differ) and any
+    other OSError, return ``True`` conservatively so the lock holder gets
+    the benefit of the doubt — the mtime safety-net handles truly stuck
+    locks via ``_LOCK_STALE_SECONDS``.
+    """
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        # Process exists but we can't signal it — still alive.
+        return True
+    except OSError:
+        # Unsupported on this platform; fall back to mtime check.
+        return True
+
+
+def _read_lock_owner(lock_path: str) -> Optional[Tuple[int, str]]:
+    """Read ``(pid, nonce)`` from an existing lock file.
+
+    Returns ``None`` when the file is missing, unreadable, or malformed.
+    Used by :func:`_acquire_atomic_lock` to decide whether the holder is
+    still alive, and by :func:`_release_atomic_lock` to verify ownership.
+    """
+    try:
+        with open(lock_path, 'r', encoding='utf-8') as f:
+            content = f.read(128).strip()
+    except OSError:
+        return None
+    if not content:
+        return None
+    # Format: "<pid>-<uuid-hex>"
+    head, _, tail = content.partition('-')
+    if not head or not tail:
+        return None
+    try:
+        pid = int(head)
+    except ValueError:
+        return None
+    return pid, content
+
+
+def _is_stale_lock(lock_path: str) -> bool:
+    """Return True when the lock file should be reclaimed.
+
+    A lock is stale when (a) the PID it records is no longer alive, or
+    (b) the lock file is older than ``_LOCK_STALE_SECONDS`` AND has no
+    parseable PID (malformed). A LIVE PID is never stolen — even after
+    many minutes — so a legitimate slow migration is safe.
+    """
+    owner = _read_lock_owner(lock_path)
+    if owner is not None:
+        pid, _ = owner
+        return not _is_pid_alive(pid)
+    # Malformed or unreadable lock — fall back to mtime threshold so a
+    # truly stuck lock file can still be recovered eventually.
+    try:
+        age = time.time() - os.path.getmtime(lock_path)
+        return age > _LOCK_STALE_SECONDS
+    except OSError:
+        return False
+
+
+def _acquire_atomic_lock(
+    lock_path: str,
+) -> Tuple[Optional[Tuple[int, str]], bool]:
     """Cross-platform best-effort exclusive lock via O_CREAT|O_EXCL.
 
-    Returns the lock file descriptor on success, None on failure (caller
-    falls through to unlocked atomic-rename behavior — still safer than
-    in-place rewrite, just not safe against the inter-process race).
+    Returns ``(handle, contended)`` where:
+      - ``handle`` is ``(fd, nonce)`` on success, ``None`` on failure;
+      - ``contended`` is ``True`` only when failure was due to another
+        live holder timing out our retry budget (so the caller can warn
+        the user about real contention vs. silent filesystem fallback).
 
-    Stale lock files older than ``_LOCK_STALE_SECONDS`` are stolen to
-    recover from crashed processes that didn't release on exit.
+    Staleness is determined by PID liveness; mtime is only consulted as a
+    safety-net when the lock file is malformed.
     """
+    nonce = f"{os.getpid()}-{uuid.uuid4().hex}"
+    saw_contention = False
     for _ in range(_LOCK_RETRY_MAX):
         try:
             fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
             try:
-                os.write(fd, str(os.getpid()).encode())
+                os.write(fd, nonce.encode())
             except OSError:
-                # Failure to write the pid is non-fatal; we still hold the lock.
+                # Failure to write the nonce is non-fatal but the safety
+                # check on release won't be able to verify ownership.
                 pass
-            return fd
+            return (fd, nonce), False
         except FileExistsError:
-            try:
-                age = time.time() - os.path.getmtime(lock_path)
-                if age > _LOCK_STALE_SECONDS:
-                    try:
-                        os.unlink(lock_path)
-                    except OSError:
-                        pass
-                    continue
-            except OSError:
-                pass
+            saw_contention = True
+            if _is_stale_lock(lock_path):
+                try:
+                    os.unlink(lock_path)
+                except OSError:
+                    pass
+                continue
             time.sleep(_LOCK_RETRY_INTERVAL)
         except OSError:
-            # Filesystem doesn't support O_EXCL semantics; degrade.
-            return None
-    return None
+            # Filesystem doesn't support O_EXCL semantics; degrade
+            # silently (no contention was observed, just unsupported).
+            return None, False
+    return None, saw_contention
 
 
-def _release_atomic_lock(fd: Optional[int], lock_path: str) -> None:
+def _release_atomic_lock(handle: Optional[Tuple[int, str]], lock_path: str) -> None:
     """Release the lock acquired by :func:`_acquire_atomic_lock`.
 
-    Best-effort: errors during close/unlink are swallowed so cost
+    Only unlinks ``lock_path`` when the file's nonce still matches ours.
+    Prevents the release-after-stale-steal race: if our lock was stolen
+    by another process, that other process now owns the lock file and we
+    must NOT delete it.
+
+    Best-effort: errors during close/read/unlink are swallowed so cost
     tracking never breaks the wrapped command.
     """
-    if fd is None:
+    if handle is None:
         return
+    fd, our_nonce = handle
     try:
         os.close(fd)
     except OSError:
         pass
-    try:
-        os.unlink(lock_path)
-    except OSError:
-        pass
+    owner = _read_lock_owner(lock_path)
+    if owner is None:
+        # Lock file already gone or unreadable; nothing more to do.
+        return
+    _, recorded = owner
+    if recorded == our_nonce:
+        try:
+            os.unlink(lock_path)
+        except OSError:
+            pass
 
 
 __all__ = ['track_cost', 'extract_cost_and_model', 'collect_files', 'wrapper', 'looks_like_file']
@@ -264,12 +365,24 @@ def track_cost(func):
                         # os.replace would overwrite the first's appended
                         # row (lost-update race). Lock acquisition is
                         # best-effort: on filesystems that don't support
-                        # O_EXCL semantics or after a 5s timeout, fall
-                        # through to the unlocked atomic-rename path,
-                        # which is still safer than in-place rewrite —
-                        # just not safe against the inter-process race.
+                        # O_EXCL semantics or after the 30s retry budget,
+                        # fall through to the unlocked atomic-rename path
+                        # (still safer than in-place rewrite, just not
+                        # safe against the inter-process race) — and emit
+                        # a warning so the user is informed when the
+                        # lock was unavailable.
                         lock_path = output_cost_path + ".lock"
-                        lock_fd = _acquire_atomic_lock(lock_path)
+                        lock_handle, lock_contended = _acquire_atomic_lock(lock_path)
+                        if lock_handle is None and lock_contended:
+                            # Only warn on real contention (FileExistsError
+                            # observed during retry); silent fallthrough on
+                            # filesystems that don't support O_EXCL.
+                            rprint(
+                                "[yellow]track_cost: could not acquire CSV "
+                                "lock after 30s; writing without serialization. "
+                                "Concurrent PDD processes may interleave rows "
+                                "during legacy cost.csv migration.[/yellow]"
+                            )
 
                         try:
                             # If file exists with an older header that
@@ -333,7 +446,7 @@ def track_cost(func):
                                     writer.writeheader()
                                 writer.writerow(row)
                         finally:
-                            _release_atomic_lock(lock_fd, lock_path)
+                            _release_atomic_lock(lock_handle, lock_path)
 
             except Exception as e:
                 rprint(f"[red]Error tracking cost: {e}[/red]")
