@@ -3539,6 +3539,28 @@ def _commit_and_push_if_changed(
     if result.returncode != 0:
         return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
 
+    # Capture the fixer commit's SHA right after committing so every rebase
+    # retry below can reset to the same starting point. Without this, a first
+    # rebase that fast-forwards or drops the fixer commit as empty (because the
+    # fetched PR head already contains the patch) leaves HEAD on a remote
+    # commit; a second remote-advance retry's HEAD~1..HEAD range would then
+    # describe that remote commit instead of our fix, which can resurrect work
+    # a maintainer just force-pushed away.
+    fixer_sha_result = subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if fixer_sha_result.returncode != 0:
+        return False, (
+            "Failed to capture fixer commit SHA before push: "
+            f"{fixer_sha_result.stderr.strip() or fixer_sha_result.stdout.strip()}"
+        )
+    fixer_sha = fixer_sha_result.stdout.strip()
+    if not fixer_sha:
+        return False, "Failed to capture fixer commit SHA before push: empty rev-parse output"
+
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
     head_owner = pr_metadata.get("head_owner", "")
@@ -3546,27 +3568,12 @@ def _commit_and_push_if_changed(
     if not clone_url or not head_ref or not head_owner or not head_repo:
         return False, "Cannot push fixes: PR head repo/ref metadata is unavailable."
 
-    success, error = push_with_retry(
-        worktree,
-        repo_owner=head_owner,
-        repo_name=head_repo,
-        remote=clone_url,
-        refspec=f"HEAD:{head_ref}",
-        set_upstream=False,
-        force_with_lease_on_non_fast_forward=False,
-    )
-    if success:
-        return True, "Pushed fixes to PR branch."
-    if _is_remote_advanced_push_error(error):
-        rebased, rebase_message = _rebase_onto_updated_pr_head(
-            worktree,
-            clone_url=clone_url,
-            head_ref=head_ref,
-            repo_owner=head_owner,
-            repo_name=head_repo,
-        )
-        if not rebased:
-            return False, rebase_message
+    error = ""
+    rebased_for_remote_advance = False
+    # Another checkup attempt, maintainer, or bot can push to the PR branch
+    # between our fetch/rebase and retry. Give that narrow race up to three
+    # attempts without ever falling back to force-push.
+    for rebase_attempt in range(3):
         success, error = push_with_retry(
             worktree,
             repo_owner=head_owner,
@@ -3577,8 +3584,32 @@ def _commit_and_push_if_changed(
             force_with_lease_on_non_fast_forward=False,
         )
         if success:
-            return True, "Pushed fixes to PR branch after rebasing onto updated PR head."
-    return False, f"Failed to push fixes to PR branch: {error.strip()}"
+            if rebased_for_remote_advance:
+                return (
+                    True,
+                    "Pushed fixes to PR branch after rebasing onto updated PR head.",
+                )
+            return True, "Pushed fixes to PR branch."
+        if not _is_remote_advanced_push_error(error):
+            break
+        if rebase_attempt == 2:
+            break
+        rebased, rebase_message = _rebase_onto_updated_pr_head(
+            worktree,
+            clone_url=clone_url,
+            head_ref=head_ref,
+            repo_owner=head_owner,
+            repo_name=head_repo,
+            fixer_sha=fixer_sha,
+        )
+        if not rebased:
+            return False, rebase_message
+        rebased_for_remote_advance = True
+    # git may echo the tokenized remote URL back from the push helper when the
+    # retry path used `https://x-access-token:...@github.com/...`. Scrub before
+    # surfacing so secrets cannot leak into operator-visible logs or reports.
+    token = _github_token_from_env()
+    return False, f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}"
 
 
 def _is_remote_advanced_push_error(error: str) -> bool:
@@ -3603,18 +3634,25 @@ def _rebase_onto_updated_pr_head(
     head_ref: str,
     repo_owner: str,
     repo_name: str,
+    fixer_sha: str,
 ) -> Tuple[bool, str]:
     """Fetch the updated PR head and replay the local fix commit on top.
 
     Review-loop fixes can race with auto-heal or a maintainer push to the same
     PR branch. Force-pushing over those commits would discard remote work, so
     recover by rebasing before retrying the push. Fetch the exact branch ref so
-    tags with the same name cannot populate FETCH_HEAD. Rebase only the fixer
-    commit range (HEAD~1..HEAD) onto FETCH_HEAD so a force-pushed PR head cannot
-    resurrect commits the remote branch intentionally dropped. Use a plain
-    rebase: if the fixer commit conflicts with remote changes, abort and let
-    the next run review/fix from the updated PR head instead of choosing a side
-    silently.
+    tags with the same name cannot populate FETCH_HEAD. Before each rebase,
+    hard-reset the worktree to ``fixer_sha`` (captured immediately after the
+    commit step) so every retry starts from the same local state: that way the
+    ``HEAD~1..HEAD`` range always describes the original fixer commit, even if
+    a previous rebase fast-forwarded HEAD past the fix because the fetched PR
+    head already contained the patch. Without this reset, a later retry could
+    replay a remote commit instead of our fix and resurrect work a maintainer
+    force-pushed away. Rebase only the fixer commit range (HEAD~1..HEAD) onto
+    FETCH_HEAD so a force-pushed PR head cannot resurrect commits the remote
+    branch intentionally dropped. Use a plain rebase: if the fixer commit
+    conflicts with remote changes, abort and let the next run review/fix from
+    the updated PR head instead of choosing a side silently.
     """
     fetched, fetch_message = _fetch_pr_head_for_rebase(
         worktree,
@@ -3629,8 +3667,37 @@ def _rebase_onto_updated_pr_head(
             f"{fetch_message}"
         )
 
+    # Pin the local state to the original fixer commit before every rebase so
+    # the rebase range below is stable across retries. On the first retry this
+    # is effectively a no-op (HEAD already equals ``fixer_sha``); on later
+    # retries it undoes any moves a prior rebase made (fast-forward when the
+    # patch was empty, or replay onto a prior FETCH_HEAD) and reasserts the
+    # contract that we only ever replay our own commit.
+    reset = subprocess.run(
+        ["git", "reset", "--hard", fixer_sha],
+        cwd=worktree,
+        capture_output=True,
+        text=True,
+    )
+    if reset.returncode != 0:
+        return False, (
+            "Failed to reset to original fixer commit before rebase: "
+            f"{reset.stderr.strip() or reset.stdout.strip()}"
+        )
+
     rebase = subprocess.run(
-        ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"],
+        [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ],
         cwd=worktree,
         capture_output=True,
         text=True,
@@ -3638,15 +3705,25 @@ def _rebase_onto_updated_pr_head(
     if rebase.returncode == 0:
         return True, "Rebased fixes onto updated PR head."
 
-    subprocess.run(
+    abort = subprocess.run(
         ["git", "rebase", "--abort"],
         cwd=worktree,
         capture_output=True,
         text=True,
     )
+    token = _github_token_from_env()
+    rebase_tail = _redact_secret(
+        rebase.stderr.strip() or rebase.stdout.strip(), token
+    )
+    abort_note = ""
+    if abort.returncode != 0:
+        abort_tail = _redact_secret(
+            abort.stderr.strip() or abort.stdout.strip(), token
+        )
+        abort_note = f" (rebase --abort also failed: {abort_tail})"
     return False, (
         "Failed to rebase fixes onto updated PR branch before retrying push: "
-        f"{rebase.stderr.strip() or rebase.stdout.strip()}"
+        f"{rebase_tail}{abort_note}"
     )
 
 
