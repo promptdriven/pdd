@@ -1320,6 +1320,70 @@ def test_cloud_fix_errors_parses_attempted_models(mock_cloud_config, mock_reques
     assert result[7] == ["cloud:claude-opus", "cloud:claude-sonnet"]
 
 
+def test_cloud_fix_errors_timeout_attaches_attempted_models(
+    mock_cloud_config, mock_requests
+):
+    """Regression (codex round-9, P2): when cloud_fix_errors raises after
+    the HTTP request was attempted (e.g. timeout), the RuntimeError MUST
+    carry ``attempted_models=['cloud:auto']`` so the caller in
+    fix_error_loop can recover the cloud attempt and propagate it to ctx
+    for @track_cost (issue #1086).
+    """
+    import requests as _requests
+
+    mock_cloud_config.get_jwt_token.return_value = "fake_token"
+    mock_cloud_config.get_endpoint_url.return_value = "http://api/fix"
+    mock_requests.exceptions.Timeout = _requests.exceptions.Timeout
+    mock_requests.post.side_effect = _requests.exceptions.Timeout("read timed out")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cloud_fix_errors("t", "c", "p", "e", "f", 0.5, 0.1)
+
+    assert getattr(exc_info.value, "attempted_models", None) == ["cloud:auto"], (
+        f"Expected cloud:auto sentinel on timeout RuntimeError, got "
+        f"{getattr(exc_info.value, 'attempted_models', None)!r}"
+    )
+
+
+def test_fix_error_loop_propagates_failed_cloud_attempt_to_ctx(
+    mock_console, mock_files
+):
+    """Regression (codex round-9, P2): when cloud_fix_errors raises and
+    fix_error_loop falls back to local, the cloud attempt
+    (``e.attempted_models``) MUST be propagated to ctx BEFORE the local
+    fallback runs. Otherwise cost.csv records only the local model and
+    loses the cloud attempt that actually happened.
+    """
+    from unittest.mock import patch as _patch
+    code, test, prompt = mock_files
+
+    cloud_err = RuntimeError("simulated cloud timeout")
+    cloud_err.attempted_models = ["cloud:auto"]
+
+    with _patch("pdd.fix_error_loop.cloud_fix_errors", side_effect=cloud_err), \
+         _patch("pdd.fix_error_loop.fix_errors_from_unit_tests") as mock_local, \
+         _patch("pdd.fix_error_loop.run_pytest_on_file") as mock_pytest, \
+         _patch("pdd.fix_error_loop.subprocess") as mock_subprocess, \
+         _patch("pdd.fix_error_loop._propagate_attempted_models_to_ctx") as mock_propagate:
+        mock_pytest.side_effect = [(1, 0, 0, "Fail"), (0, 0, 0, "Pass")]
+        mock_local.return_value = (
+            True, True, "fixed_test", "fixed_code", "local fallback analysis",
+            0.02, "local-model",
+        )
+        mock_subprocess.run.return_value.returncode = 0
+
+        fix_error_loop(
+            test, code, prompt, "prompt", "verify.py", 0.5, 0.1, 5, 1.0,
+            use_cloud=True,
+        )
+
+    # The cloud failure path must have propagated the recovered chain.
+    propagated_chains = [c.args[0] for c in mock_propagate.call_args_list]
+    assert ["cloud:auto"] in propagated_chains, (
+        f"Expected ['cloud:auto'] in propagated chains; got {propagated_chains}"
+    )
+
+
 def test_cloud_fix_errors_no_token(mock_cloud_config):
     """Test error when no JWT token is available."""
     mock_cloud_config.get_jwt_token.return_value = None

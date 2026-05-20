@@ -40,6 +40,24 @@ def escape_brackets(text: str) -> str:
     return text.replace("[", "\\[").replace("]", "\\]")
 
 
+def _raise_cloud_fix_error(message: str, chain: Optional[List[str]] = None) -> None:
+    """Raise a ``RuntimeError`` with ``attempted_models`` attached.
+
+    Mirrors the pattern from ``_llm_invoke_cloud`` (round 2): when a cloud
+    HTTP attempt fails AFTER the request was dispatched, the chain needs
+    to escape via the exception so the caller can recover it for
+    ``track_cost`` (issue #1086). When the server failed before reporting
+    a model, fall back to the ``cloud:auto`` sentinel.
+    """
+    err = RuntimeError(message)
+    try:
+        err.attempted_models = list(chain) if chain else ['cloud:auto']
+    except Exception:
+        # Some exception subclasses are immutable; best-effort attach only.
+        pass
+    raise err
+
+
 def cloud_fix_errors(
     unit_test: str,
     code: str,
@@ -170,7 +188,7 @@ def cloud_fix_errors(
         return update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name, attempted_models
 
     except requests.exceptions.Timeout:
-        raise RuntimeError(f"Cloud fix timed out after {get_cloud_timeout()}s")
+        _raise_cloud_fix_error(f"Cloud fix timed out after {get_cloud_timeout()}s")
 
     except requests.exceptions.HTTPError as e:
         status_code = e.response.status_code if e.response else 0
@@ -182,24 +200,26 @@ def cloud_fix_errors(
                 error_data = e.response.json()
                 current_balance = error_data.get("currentBalance", "unknown")
                 estimated_cost = error_data.get("estimatedCost", "unknown")
-                raise RuntimeError(f"Insufficient credits. Balance: {current_balance}, estimated cost: {estimated_cost}")
+                _raise_cloud_fix_error(
+                    f"Insufficient credits. Balance: {current_balance}, estimated cost: {estimated_cost}"
+                )
             except json.JSONDecodeError:
-                raise RuntimeError(f"Insufficient credits: {err_content}")
+                _raise_cloud_fix_error(f"Insufficient credits: {err_content}")
         elif status_code == 401:
-            raise RuntimeError(f"Authentication failed: {err_content}")
+            _raise_cloud_fix_error(f"Authentication failed: {err_content}")
         elif status_code == 403:
-            raise RuntimeError(f"Access denied: {err_content}")
+            _raise_cloud_fix_error(f"Access denied: {err_content}")
         elif status_code == 400:
-            raise RuntimeError(f"Invalid request: {err_content}")
+            _raise_cloud_fix_error(f"Invalid request: {err_content}")
         else:
             # 5xx or other errors - raise for caller to handle
-            raise RuntimeError(f"Cloud HTTP error ({status_code}): {err_content}")
+            _raise_cloud_fix_error(f"Cloud HTTP error ({status_code}): {err_content}")
 
     except requests.exceptions.RequestException as e:
-        raise RuntimeError(f"Cloud network error: {e}")
+        _raise_cloud_fix_error(f"Cloud network error: {e}")
 
     except json.JSONDecodeError:
-        raise RuntimeError("Cloud returned invalid JSON response")
+        _raise_cloud_fix_error("Cloud returned invalid JSON response")
 
 
 # ---------- Normalize any agentic return shape to a 4-tuple ----------
@@ -766,6 +786,15 @@ def fix_error_loop(unit_test_file: str,
                     if attempted_models:
                         _propagate_attempted_models_to_ctx(attempted_models)
                 except RuntimeError as cloud_err:
+                    # Recover the cloud attempt from the exception (attached
+                    # by _raise_cloud_fix_error on every HTTP-error path) so
+                    # @track_cost still records the cloud attempt even on
+                    # failed cloud → fallback-local or failed cloud → stop
+                    # paths. Issue #1086 contract: cloud attempts MUST land
+                    # in cost.csv whether or not the cloud call succeeded.
+                    failed_chain = getattr(cloud_err, "attempted_models", None) or []
+                    if failed_chain:
+                        _propagate_attempted_models_to_ctx(failed_chain)
                     # Cloud failed - fall back to local if it's a recoverable error
                     if "Insufficient credits" in str(cloud_err) or "Authentication failed" in str(cloud_err) or "Access denied" in str(cloud_err):
                         # Non-recoverable errors - stop the loop
