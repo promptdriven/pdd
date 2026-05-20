@@ -3320,6 +3320,8 @@ class TestShaBackedVerificationTrustBoundary:
         assert "fresh-final-review: missing" in report
         # Render-time re-fetch returned no SHA — rendered as ``unknown``.
         assert "remote-pr-head-sha: unknown" in report
+        assert "Primary reviewer is satisfied" not in report
+        assert "verification is treated as unverified" in report
 
         final_state = json.loads(
             (
@@ -3331,6 +3333,7 @@ class TestShaBackedVerificationTrustBoundary:
             ).read_text()
         )
         assert final_state["verification_status_by_round"]["1"] == "stale"
+        assert "verification is treated as unverified" in final_state["stop_reason"]
         assert all(
             f["status"] != "fixed" for f in final_state["findings"]
         ), final_state["findings"]
@@ -3720,6 +3723,8 @@ class TestShaBackedVerificationTrustBoundary:
         assert "fresh-final-review: clean" not in report
         assert "fresh-final-review: missing" in report
         assert "remote-pr-head-sha: unknown" in report
+        assert "Primary reviewer is satisfied" not in report
+        assert "verification is treated as unverified" in report
 
         final_state = json.loads(
             (
@@ -3732,6 +3737,7 @@ class TestShaBackedVerificationTrustBoundary:
         )
         assert final_state["fresh_final_status"] == "missing"
         assert final_state["remote_pr_head_sha"] is None
+        assert "verification is treated as unverified" in final_state["stop_reason"]
 
     def test_budget_exhausted_after_verifier_clean_pins_round_and_sha(
         self, monkeypatch: Any, tmp_path: Path

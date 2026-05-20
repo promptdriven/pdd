@@ -4605,6 +4605,11 @@ def _finalize(
             stale_head = True
             if state.fresh_final_status == "clean":
                 state.fresh_final_status = "missing"
+                state.stop_reason = (
+                    "Remote PR head could not be fetched or confirmed; "
+                    "verification is treated as unverified. "
+                    "Rerun the review loop."
+                )
         if stale_head:
             # Issue #1088: the rendered report alone is not enough — the
             # canonical machine-readable ``final-state.json`` must also
