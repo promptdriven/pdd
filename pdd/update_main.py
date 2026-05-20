@@ -1104,7 +1104,7 @@ def _finalize_single_file_fingerprint(
         return
 
     from .operation_log import (
-        clear_run_report,
+        _clear_run_report_before_fingerprint,
         infer_module_identity,
         save_fingerprint,
     )
@@ -1117,13 +1117,33 @@ def _finalize_single_file_fingerprint(
             )
         return
 
+    # Reuse the shared helper so the single-file finalize path enforces the
+    # same invariant the `log_operation` decorator and repo-mode block already
+    # do: a fresh fingerprint must never coexist with a stale `_run.json`
+    # (issue #1106). The helper re-checks that the run report is actually
+    # gone after `clear_run_report()` and emits a console warning if a
+    # silent `os.remove` failure left it behind — see
+    # `pdd.operation_log._clear_run_report_before_fingerprint`. The warning
+    # surfaces unconditionally (the helper does not consult `quiet`): the
+    # contract the issue text quotes is "print a warning" without qualifying
+    # on quiet mode, and the user should learn that runtime verification
+    # state still describes the pre-mutation files even when --quiet
+    # suppresses other chatter (why: informational about a real metadata
+    # problem, not status fluff).
     try:
-        clear_run_report(basename, language)
+        fingerprint_allowed = _clear_run_report_before_fingerprint(basename, language)
     except Exception as exc:
+        # Defensive: surrounding pattern in this function treats metadata
+        # cleanup as best-effort; an unexpected raise must not break the
+        # successful update tuple. Warn and skip the save, matching the
+        # `save_fingerprint` except-arm below.
         if not quiet:
             rprint(
                 f"[warning][metadata] Run report clear failed: {exc}[/warning]"
             )
+        return
+    if not fingerprint_allowed:
+        return
 
     try:
         save_fingerprint(

@@ -9,6 +9,7 @@ import git
 
 from pdd import DEFAULT_STRENGTH
 from pdd.update_main import (
+    _finalize_single_file_fingerprint,
     _included_docs_for_drift_report,
     find_and_resolve_all_pairs,
     update_main,
@@ -3215,6 +3216,130 @@ def test_default_single_file_update_clears_stale_run_report(
         "fingerprint for the (prompt, code) pair."
     )
     assert (meta_dir / "foo_python.json").exists()
+
+
+def test_finalize_single_file_fingerprint_skips_save_when_run_report_survives_clear(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    # Issue #1106 Gap 1: when a pre-existing `<basename>_<language>_run.json`
+    # survives `clear_run_report()` (e.g. silent `os.remove` failure due to
+    # permissions / race), the finalizer must NOT write a fresh fingerprint —
+    # otherwise the freshly-finalized fingerprint coexists with stale runtime
+    # verification state, which is exactly what
+    # `pdd.operation_log._clear_run_report_before_fingerprint` prevents in the
+    # `log_operation` decorator path and what repo-mode update already does.
+    # Repro: patch `pdd.operation_log.os.remove` to a no-op, then call
+    # `_finalize_single_file_fingerprint` directly. On `upstream/main` this
+    # leaves both run_report AND fingerprint present.
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt body\n")
+    code_path = tmp_path / "foo.py"
+    code_path.write_text("def foo(): return 1\n")
+
+    # save_fingerprint and clear_run_report resolve META_DIR relative to cwd.
+    monkeypatch.chdir(tmp_path)
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    run_report_path = meta_dir / "foo_python_run.json"
+    run_report_path.write_text('{"passed": true, "stale": true}')
+
+    # Patch the lowest-level os.remove call so `clear_run_report` "succeeds"
+    # silently but the file persists on disk — exactly the silent-failure
+    # class the issue calls out.
+    import pdd.operation_log as ol
+    monkeypatch.setattr(ol.os, "remove", lambda *a, **kw: None)
+
+    _finalize_single_file_fingerprint(
+        prompt_path=prompt_path,
+        code_path=code_path,
+        sync_metadata=False,
+        dry_run=False,
+        quiet=False,
+        cost=0.0,
+        model="test-model",
+    )
+
+    # Acceptance criteria:
+    # - The stale run report still exists (because os.remove was nulled).
+    # - A fresh fingerprint was NOT written.
+    # - A user-facing warning surfaced explaining the skip.
+    assert run_report_path.exists(), (
+        "Test setup invariant: os.remove patched to no-op, run report must "
+        "remain on disk."
+    )
+    fingerprint_path = meta_dir / "foo_python.json"
+    assert not fingerprint_path.exists(), (
+        "Finalizer must NOT write a fresh fingerprint while a stale "
+        "_run.json from before the update still exists — that pairing is "
+        "the silent-stale-state class the operation_log helper prevents."
+    )
+    # Rich's Console wraps long lines on narrow terminals (e.g. CI/headless
+    # runs) and may insert a newline mid-phrase between "after" and "clear".
+    # Normalize whitespace before substring-matching so the assertion is
+    # robust to terminal width.
+    captured = " ".join(capsys.readouterr().out.split())
+    assert "still exists after clear" in captured, (
+        f"Expected a 'still exists after clear' warning explaining the "
+        f"skip; got stdout: {captured!r}"
+    )
+
+
+def test_finalize_single_file_fingerprint_warns_about_stale_run_report_even_when_quiet(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    # Issue #1106 codex-review pitfall #1 lock-down: the
+    # `_clear_run_report_before_fingerprint` helper prints its warning via
+    # `Console()` and does not honour the caller's `quiet` flag, so the
+    # silent-stale-state warning still surfaces with `quiet=True`. The
+    # surrounding `_finalize_single_file_fingerprint` documents this as
+    # intentional — the warning describes a real metadata problem the user
+    # needs to know about even when other status output is suppressed.
+    # Lock that contract here so a future "quiet should mute everything"
+    # change cannot silently re-introduce the stale-state class.
+    prompts_dir = tmp_path / "prompts"
+    prompts_dir.mkdir()
+    prompt_path = prompts_dir / "foo_python.prompt"
+    prompt_path.write_text("prompt body\n")
+    code_path = tmp_path / "foo.py"
+    code_path.write_text("def foo(): return 1\n")
+
+    monkeypatch.chdir(tmp_path)
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    run_report_path = meta_dir / "foo_python_run.json"
+    run_report_path.write_text('{"passed": true, "stale": true}')
+
+    import pdd.operation_log as ol
+    monkeypatch.setattr(ol.os, "remove", lambda *a, **kw: None)
+
+    _finalize_single_file_fingerprint(
+        prompt_path=prompt_path,
+        code_path=code_path,
+        sync_metadata=False,
+        dry_run=False,
+        quiet=True,  # explicit: warning must surface anyway
+        cost=0.0,
+        model="test-model",
+    )
+
+    assert not (meta_dir / "foo_python.json").exists()
+    # Rich's Console wraps long lines on narrow terminals; normalize
+    # whitespace before substring-matching so the assertion is robust to
+    # terminal width.
+    captured = " ".join(capsys.readouterr().out.split())
+    assert "still exists after clear" in captured, (
+        f"Even with quiet=True the helper must surface the stale-run-report "
+        f"warning so the user learns runtime verification state still "
+        f"describes the pre-mutation files; got stdout: {captured!r}"
+    )
 
 
 def test_default_single_file_update_skips_fingerprint_when_identity_unknown(
