@@ -1742,3 +1742,145 @@ def test_f1_prompt_specifies_module_prompt_include_is_dep() -> None:
         "module prompt (e.g. b_python.prompt) so the LLM has a concrete "
         "example of an attribute-bearing module-prompt include that IS a dep."
     )
+
+
+def test_f2_path_qualified_same_tail_include_kept_as_dep(tmp_path: Path) -> None:
+    """[F2 / third-party codex review] ``merge_auto_deps_includes_into_architecture``
+    must NOT silently self-skip a path-qualified same-tail dep.
+
+    Setup: ``commands/fix_python.prompt`` newly ``<include>``s
+    ``server/fix_python.prompt``. Both prompts are independent modules in
+    ``architecture.json``. Before this fix, both
+    ``_architecture_filename_for_module_include`` and the
+    ``merge_auto_deps_includes_into_architecture`` self-skip compared via
+    ``extract_module_from_include`` — a bare-stem function that returns
+    ``"fix"`` for both paths. The result: either the include resolved to
+    the wrong entry, or the self-skip dropped the dep (the include's
+    ``dep_base`` matched the current entry's ``current_base`` even though
+    the two prompts live in different folders).
+
+    Path-preserving keys distinguish the two, so the
+    ``server/fix_python.prompt`` dep is correctly added to the
+    ``commands/fix_python.prompt`` entry.
+
+    Regression scope: ensures the F2 fix does NOT regress flat-layout
+    behavior — a self-include in a flat layout (same dir, same stem) is
+    still self-skipped via the bare-stem degradation.
+    """
+    from pdd.auto_deps_architecture import (
+        _architecture_filename_for_module_include,
+        merge_auto_deps_includes_into_architecture,
+    )
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts = project_root / "prompts"
+    commands = prompts / "commands"
+    server = prompts / "server"
+    commands.mkdir(parents=True)
+    server.mkdir(parents=True)
+
+    self_prompt = commands / "fix_python.prompt"
+    self_prompt.write_text("%\n", encoding="utf-8")
+    (server / "fix_python.prompt").write_text("%\n", encoding="utf-8")
+
+    architecture = [
+        {"filename": "commands/fix_python.prompt", "dependencies": []},
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+    arch_path = project_root / "architecture.json"
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    # 1) Direct unit-level: same-tail include must resolve to the
+    #    cross-folder entry, NOT the same-folder same-tail self entry.
+    resolved = _architecture_filename_for_module_include(
+        "server/fix_python.prompt", architecture
+    )
+    assert resolved == "server/fix_python.prompt", (
+        "Path-preserving include→arch mapping must pick the cross-folder "
+        f"same-tail entry; got {resolved!r}"
+    )
+
+    # 2) End-to-end via merge_auto_deps_includes_into_architecture: the
+    #    new include must drive an architecture update that adds the
+    #    cross-folder dep, NOT silently self-skip on bare-stem collision.
+    old = "%\n"
+    new = (
+        "%\n"
+        "<include>server/fix_python.prompt</include>\n"
+    )
+    report = merge_auto_deps_includes_into_architecture(
+        project_root, self_prompt, old, new
+    )
+
+    assert report["updated"] is True, (
+        "Same-tail cross-folder include must drive an arch update; "
+        f"got report={report!r}"
+    )
+    assert report["added_dependencies"] == ["server/fix_python.prompt"], (
+        "Cross-folder same-tail dep must be added (not self-skipped); "
+        f"got {report['added_dependencies']!r}"
+    )
+
+    data = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = next(
+        e for e in data if e["filename"] == "commands/fix_python.prompt"
+    )
+    assert "server/fix_python.prompt" in entry["dependencies"], (
+        "Architecture entry must list the cross-folder same-tail dep; "
+        f"got {entry['dependencies']!r}"
+    )
+    # Sanity: the current module must NOT have been added to its own deps.
+    assert "commands/fix_python.prompt" not in entry["dependencies"], (
+        "Self-edge must still be suppressed for the current path-qualified "
+        f"entry; got {entry['dependencies']!r}"
+    )
+
+
+def test_f2_flat_layout_self_include_still_self_skipped(tmp_path: Path) -> None:
+    """[F2 regression guard] A true self-include in a flat layout must
+    still be self-skipped by ``merge_auto_deps_includes_into_architecture``.
+
+    Without this check, the F2 path-preserving keys could over-correct and
+    let a flat ``a_python.prompt`` include itself become a dependency of
+    itself. ``_path_preserving_module_key`` degrades to the bare stem when
+    no directory segment is present, so flat layouts retain the original
+    self-skip behavior.
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    project_root = tmp_path
+    (project_root / ".git").mkdir()
+    prompts = project_root / "prompts"
+    prompts.mkdir()
+    self_prompt = prompts / "a_python.prompt"
+    self_prompt.write_text("%\n", encoding="utf-8")
+
+    architecture = [
+        {"filename": "a_python.prompt", "dependencies": []},
+    ]
+    arch_path = project_root / "architecture.json"
+    arch_path.write_text(json.dumps(architecture, indent=2), encoding="utf-8")
+
+    old = "%\n"
+    # Flat-layout self-include — bare stem identical, no directory.
+    new = "%\n<include>a_python.prompt</include>\n"
+
+    report = merge_auto_deps_includes_into_architecture(
+        project_root, self_prompt, old, new
+    )
+
+    # Either updated=False (because the only fresh include is a
+    # self-edge) or, if updated=True, the dep must NOT include
+    # ``a_python.prompt``.
+    if report["updated"]:
+        assert "a_python.prompt" not in report["added_dependencies"], (
+            "Flat-layout self-include must still be self-skipped; "
+            f"got {report['added_dependencies']!r}"
+        )
+    data = json.loads(arch_path.read_text(encoding="utf-8"))
+    entry = data[0]
+    assert "a_python.prompt" not in entry["dependencies"], (
+        "Flat-layout self-include must not become a self-edge in arch; "
+        f"got {entry['dependencies']!r}"
+    )
