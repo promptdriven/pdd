@@ -5518,6 +5518,86 @@ class TestPromptSourceGuardChangedFilesParsing:
         assert reason is None
 
 
+class TestGitChangedFilesPorcelainDelegation:
+    """``_git_changed_files`` must delegate parsing to the shared
+    :mod:`pdd.git_porcelain` helper so copies do NOT emit the copy
+    source as a "changed" path.
+
+    A copy (``C`` record) means git detected that a new file is a
+    duplicate of an existing one. The destination is the new/changed
+    path; the source is referenced but not modified. The earlier
+    hand-rolled parser at the call site emitted BOTH paths, which would
+    cause ``_check_prompt_source_guard`` to incorrectly flag the copy
+    source's prompt-owned module as needing a prompt update — a latent
+    bug surfaced if ``git config status.renames=copies`` (or equivalent
+    copy detection) were ever enabled.
+
+    These tests stub ``subprocess.run`` directly so they don't depend on
+    git's copy-detection heuristics, and they pin the exact byte-level
+    contract the shared helper expects.
+    """
+
+    def test_copy_record_only_emits_destination_not_source(
+        self, monkeypatch
+    ) -> None:
+        """``C  pdd/copied.py\\x00pdd/source.py\\x00 M tests/foo.py\\x00``
+        must yield ``["pdd/copied.py", "tests/foo.py"]``. The source
+        path of a copy is unchanged and must NOT appear.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        class _FakeResult:
+            returncode = 0
+            stdout = (
+                b"C  pdd/copied.py\x00pdd/source.py\x00"
+                b" M tests/foo.py\x00"
+            )
+
+        def _fake_run(cmd, **kwargs):
+            # Match the exact invocation; ensure text-mode is NOT used.
+            assert cmd[:3] == ["git", "status", "--porcelain=v1"]
+            assert "-z" in cmd
+            assert kwargs.get("text") is not True
+            return _FakeResult()
+
+        monkeypatch.setattr(
+            "pdd.checkup_review_loop.subprocess.run", _fake_run
+        )
+
+        result = _git_changed_files(Path("/tmp/does-not-matter"))
+
+        assert result == ["pdd/copied.py", "tests/foo.py"], (
+            f"copy source must not appear in changed-files; got {result!r}"
+        )
+        assert "pdd/source.py" not in result
+
+    def test_rename_record_emits_both_old_and_new_paths(
+        self, monkeypatch
+    ) -> None:
+        """``R  new.py\\x00old.py\\x00`` must yield ``["new.py", "old.py"]``
+        — renames surface both sides so the guard sees the registered
+        old path move out from under its prompt.
+        """
+        from pdd.checkup_review_loop import _git_changed_files
+
+        class _FakeResult:
+            returncode = 0
+            stdout = b"R  new.py\x00old.py\x00"
+
+        def _fake_run(cmd, **kwargs):
+            return _FakeResult()
+
+        monkeypatch.setattr(
+            "pdd.checkup_review_loop.subprocess.run", _fake_run
+        )
+
+        result = _git_changed_files(Path("/tmp/does-not-matter"))
+
+        assert result == ["new.py", "old.py"], (
+            f"rename must emit both sides; got {result!r}"
+        )
+
+
 class TestPromptSourceGuardIntegration:
     """Wires the guard into the main review loop.
 

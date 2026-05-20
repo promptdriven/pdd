@@ -2261,10 +2261,17 @@ def _revert_out_of_scope_changes(
     cwd_str = str(cwd.resolve())
     if not any(str(p).startswith(cwd_str) for p in allowed_paths):
         return []
+    # Use the structured ``--porcelain=v1 -z`` parser so staged renames
+    # surface BOTH the new and old paths as discrete fields. The earlier
+    # text-mode ``line[3:]`` parser collapsed renames into a literal
+    # ``"old -> new"`` path that ``git checkout HEAD -- <fake>`` never
+    # matched, so an out-of-scope rename silently survived the guard.
+    # See issue #1080.
+    from pdd.git_porcelain import parse_porcelain_z  # local import: avoid cycles
     try:
         result = subprocess.run(
-            ["git", "-C", str(cwd), "status", "--porcelain", "-uno"],
-            capture_output=True, text=True, timeout=30,
+            ["git", "-C", str(cwd), "status", "--porcelain=v1", "-z", "-uno"],
+            capture_output=True, timeout=30,
         )
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
         _scope_guard_logger.warning("Scope guard: git status failed: %s", exc)
@@ -2272,38 +2279,82 @@ def _revert_out_of_scope_changes(
     if result.returncode != 0:
         _scope_guard_logger.warning(
             "Scope guard: git status returned %d: %s",
-            result.returncode, result.stderr.strip(),
+            result.returncode, result.stderr.decode("utf-8", errors="replace").strip(),
         )
         return []
+    entries = parse_porcelain_z(result.stdout)
     reverted: List[Path] = []
-    to_restore: List[str] = []
-    for line in result.stdout.splitlines():
-        if len(line) < 4:
+    paths_to_checkout: List[str] = []  # paths to restore from HEAD
+    paths_to_reset: List[str] = []     # paths to unstage from the index
+    paths_to_unlink: List[str] = []    # paths to remove from the worktree
+    for entry in entries:
+        new_resolved = (cwd / entry.path).resolve()
+        is_rename = entry.old_path is not None and "R" in entry.status
+        is_copy = entry.old_path is not None and "C" in entry.status
+        if is_rename:
+            old_resolved = (cwd / entry.old_path).resolve()
+            in_scope = (
+                new_resolved in allowed_paths
+                and old_resolved in allowed_paths
+            )
+        elif is_copy:
+            in_scope = new_resolved in allowed_paths
+        else:
+            in_scope = new_resolved in allowed_paths
+        if in_scope:
             continue
-        rel_path = line[3:].strip()
-        full_path = (cwd / rel_path).resolve()
-        if full_path not in allowed_paths:
-            to_restore.append(rel_path)
-            reverted.append(full_path)
-    if to_restore:
-        try:
+        if is_rename:
+            # Rename: restore old path from HEAD, unstage + delete new path.
+            paths_to_checkout.append(entry.old_path)
+            paths_to_reset.extend([entry.path, entry.old_path])
+            paths_to_unlink.append(entry.path)
+            reverted.append(old_resolved)
+            reverted.append(new_resolved)
+        elif is_copy:
+            # Copy: only the destination is changed. The source old_path
+            # is informational and must not be reset, checked out, or
+            # reported as reverted.
+            paths_to_reset.append(entry.path)
+            paths_to_unlink.append(entry.path)
+            reverted.append(new_resolved)
+        else:
+            paths_to_checkout.append(entry.path)
+            reverted.append(new_resolved)
+    if not reverted:
+        return reverted
+    try:
+        if paths_to_reset:
             subprocess.run(
-                ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + to_restore,
+                ["git", "-C", str(cwd), "reset", "HEAD", "--"] + paths_to_reset,
                 capture_output=True, timeout=30,
             )
-        except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
-            _scope_guard_logger.warning(
-                "Scope guard: git checkout failed for %d file(s): %s",
-                len(to_restore), exc,
+        if paths_to_checkout:
+            subprocess.run(
+                ["git", "-C", str(cwd), "checkout", "HEAD", "--"] + paths_to_checkout,
+                capture_output=True, timeout=30,
             )
-            reverted.clear()
-        else:
-            if reverted:
-                _scope_guard_logger.info(
-                    "Scope guard reverted %d out-of-scope file(s): %s",
-                    len(reverted),
-                    ", ".join(str(p.name) for p in reverted[:10]),
+        for rel in paths_to_unlink:
+            try:
+                (cwd / rel).unlink()
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                _scope_guard_logger.warning(
+                    "Scope guard: failed to remove %s: %s", rel, exc,
                 )
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError) as exc:
+        _scope_guard_logger.warning(
+            "Scope guard: git revert failed for %d file(s): %s",
+            len(reverted), exc,
+        )
+        reverted.clear()
+    else:
+        if reverted:
+            _scope_guard_logger.info(
+                "Scope guard reverted %d out-of-scope file(s): %s",
+                len(reverted),
+                ", ".join(str(p.name) for p in reverted[:10]),
+            )
     return reverted
 
 _CLAUDE_OAUTH_PROBE_TIMEOUT_SECONDS = 10
