@@ -4263,6 +4263,24 @@ def _check_architecture_registry_edit_guard(
 
     offenders_added: List[Tuple[str, str]] = []
     for code, prompt in sorted(added_only):
+        # Round-14 finding: a fixer can register an importable Python
+        # file as a "prompt" to exempt it from the unregistered-new-code
+        # scan (which skips paths already in ``worktree_registered_paths``).
+        # E.g. ``architecture.json`` is rewritten to register
+        # ``(pdd/foo_v2.py, pdd/prompts/foo_v2.py)`` — pointing the prompt
+        # at a .py file. The added-pair check then sees both paths on disk
+        # and in the change set, ALLOWS the add, the 10b scan skips
+        # ``pdd/prompts/foo_v2.py`` because it is now "registered", and
+        # ``pdd.prompts.foo_v2`` lands as importable unregistered Python.
+        # Defence: a registered prompt path MUST end with ``.prompt`` —
+        # the canonical PDD prompt-source suffix. Anything else (.py,
+        # .pyc, .pyw, .pyo, .so, .pyd, ...) is the codex-pass-#13/#14
+        # bypass shape. Case-insensitive to mirror the round-9 /
+        # round-12 prefix/suffix normalization for case-insensitive
+        # filesystems.
+        if not prompt.lower().endswith(".prompt"):
+            offenders_added.append((code, prompt))
+            continue
         # Round-3 finding 3: reject symlinks for prompt-source presence
         # checks. ``Path.is_file()`` follows symlinks, so an attacker
         # could satisfy the check with ``pdd/prompts/<filename>`` as a
@@ -4509,21 +4527,56 @@ def _check_architecture_registry_edit_guard(
                 "updated"
             )
     for code, prompt in offenders_added:
-        parts.append(
-            f"added {code}\u2194{prompt} without prompt source on disk"
-        )
+        # Round-14 finding: distinguish the "non-.prompt suffix"
+        # bypass shape (importable code disguised as a prompt) from
+        # the original "missing prompt on disk" shape so the operator
+        # sees the precise attack the guard refused.
+        if not prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"added {code}\u2194{prompt} where the registered prompt "
+                f"path is not a .prompt file (importable code disguised "
+                f"as a prompt)"
+            )
+        else:
+            parts.append(
+                f"added {code}\u2194{prompt} without prompt source on disk"
+            )
     for code, prompt in offenders_removed:
         parts.append(
             f"removed {code}\u2194{prompt} with code still present"
         )
     for code, old_prompt, new_prompt in repointed_by_code:
-        parts.append(
-            f"repointed {code} from {old_prompt} to {new_prompt}"
-        )
+        # Round-14 finding (symmetry with the added-pair check): a
+        # repoint whose NEW prompt path is not a ``.prompt`` file is the
+        # same "importable code disguised as a prompt" attack shape,
+        # just dressed as a repoint instead of an added pair. Surface
+        # the precise attack so the refusal is traceable.
+        if not new_prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"repointed {code} from {old_prompt} to {new_prompt} "
+                f"where the new prompt path is not a .prompt file "
+                f"(importable code disguised as a prompt)"
+            )
+        else:
+            parts.append(
+                f"repointed {code} from {old_prompt} to {new_prompt}"
+            )
     for prompt, old_code, new_code in repointed_by_prompt:
-        parts.append(
-            f"repointed {prompt} from {old_code} to {new_code}"
-        )
+        # Round-14 finding (defence-in-depth symmetry): ``prompt`` here
+        # is HEAD-side (the unchanged registry key), so it should
+        # already be a ``.prompt`` file — but mirror the check so a
+        # future poisoning of HEAD that flows through the prompt-loop
+        # repoint path is still surfaced distinctly.
+        if not prompt.lower().endswith(".prompt"):
+            parts.append(
+                f"repointed {prompt} from {old_code} to {new_code} "
+                f"where the registered prompt path is not a .prompt "
+                f"file (importable code disguised as a prompt)"
+            )
+        else:
+            parts.append(
+                f"repointed {prompt} from {old_code} to {new_code}"
+            )
     for path in submodule_offenders:
         parts.append(
             f"new git submodule {path} introduced via .gitmodules edit "

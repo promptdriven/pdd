@@ -5881,6 +5881,231 @@ class TestArchitectureRegistryEditGuardHelper:
         assert "pdd/baz.py" in reason
         assert "without prompt source on disk" in reason
 
+    def test_added_pair_with_py_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 finding (codex review pass #14): a fixer rewrites
+        ``architecture.json`` to register ``(pdd/foo_v2.py,
+        pdd/prompts/foo_v2.py)`` — pointing the "prompt" at a ``.py``
+        file. Both files are added in the change set so the existing
+        prompt-on-disk + in-changeset check would allow it, and the
+        unregistered-new-code scan would skip ``pdd/prompts/foo_v2.py``
+        because it is now in ``worktree_registered_paths`` — letting
+        ``pdd.prompts.foo_v2`` land as importable unregistered Python.
+        The guard MUST reject the added pair because the registered
+        prompt path is not a ``.prompt`` file.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Retire the original pair and add the disguised pair.
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        # The "prompt" is actually a .py file (the bypass shape).
+        (tmp_path / "pdd" / "prompts" / "foo_v2.py").write_text(
+            "# disguised\n", encoding="utf-8"
+        )
+        new_arch = [
+            {"filename": "foo_v2.py", "filepath": "pdd/foo_v2.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        # The refusal MUST name the disguised pair distinctively so
+        # the operator sees the precise attack shape.
+        assert "pdd/foo_v2.py" in reason
+        assert "pdd/prompts/foo_v2.py" in reason
+        assert "not a .prompt file" in reason
+        assert "importable code disguised as a prompt" in reason
+
+    def test_added_pair_with_pyc_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 follow-up: same shape but with a ``.pyc`` suffix
+        instead of ``.py``. Sourceless bytecode is importable via
+        ``importlib.machinery.SourcelessFileLoader``, so ``.pyc`` is
+        equally lethal disguised as a prompt.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.pyc").write_bytes(
+            b"\x42\x0d\x0d\x0a"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            {"filename": "foo_v2.pyc", "filepath": "pdd/foo_v2.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_v2.pyc",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.pyc" in reason
+        assert "not a .prompt file" in reason
+
+    def test_added_pair_with_so_prompt_is_refused(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 follow-up: native extension ``.so`` disguised as a
+        prompt. A C extension imports as ``pdd.prompts.<name>`` via
+        ``importlib.machinery.ExtensionFileLoader`` with no Python
+        source on disk.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        (tmp_path / "pdd" / "foo_v2.py").write_text(
+            "# new\n", encoding="utf-8"
+        )
+        (tmp_path / "pdd" / "prompts" / "foo_v2.so").write_bytes(
+            b"\x7fELF"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            {"filename": "foo_v2.so", "filepath": "pdd/foo_v2.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo_v2.py",
+                "pdd/prompts/foo_v2.so",
+            ],
+        )
+        assert reason is not None
+        assert "pdd/prompts/foo_v2.so" in reason
+        assert "not a .prompt file" in reason
+
+    def test_repoint_to_py_prompt_is_refused_with_disguise_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 finding (repoint variant): a repoint whose new
+        prompt path is a ``.py`` file is the same disguised-prompt
+        attack shape, dressed as a repoint instead of an added pair.
+        The existing repoint check refuses unconditionally, but the
+        refusal message MUST distinguish the disguised-prompt shape
+        so the operator sees the precise attack.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Repoint the existing code at a .py "prompt".
+        (tmp_path / "pdd" / "prompts" / "foo_python.py").write_text(
+            "# disguised\n", encoding="utf-8"
+        )
+        new_arch = [
+            {"filename": "foo_python.py", "filepath": "pdd/foo.py"},
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/prompts/foo_python.py",
+            ],
+        )
+        assert reason is not None
+        assert "repointed pdd/foo.py" in reason
+        assert "pdd/prompts/foo_python.py" in reason
+        assert "not a .prompt file" in reason
+        assert "importable code disguised as a prompt" in reason
+
+    def test_added_pair_with_prompt_suffix_still_allowed_post_r14(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-14 regression: the legitimate add-new-module flow
+        (a real ``.prompt`` file alongside new code, both in the
+        change set) must STILL be allowed after the new
+        ``.prompt``-suffix check is in place. This is the same shape
+        as ``test_added_pair_with_prompt_on_disk_and_in_changeset_is_allowed``
+        above, but specifically guards against the R14 check
+        accidentally tightening the happy path.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+        # Add a new registered module with a real .prompt source.
+        (tmp_path / "pdd" / "baz.py").write_text("# new\n", encoding="utf-8")
+        (tmp_path / "pdd" / "prompts" / "baz_python.prompt").write_text(
+            "p\n", encoding="utf-8"
+        )
+        new_arch = [
+            _arch_pair("foo_python.prompt", "pdd/foo.py"),
+            _arch_pair("baz_python.prompt", "pdd/baz.py"),
+        ]
+        (tmp_path / "architecture.json").write_text(
+            json.dumps(new_arch), encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/baz.py",
+                "pdd/prompts/baz_python.prompt",
+            ],
+        )
+        assert reason is None
+
     def test_swap_repoint_two_pairs_is_refused_with_both_entries(
         self, tmp_path: Path
     ) -> None:
