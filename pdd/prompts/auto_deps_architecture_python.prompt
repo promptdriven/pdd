@@ -28,8 +28,10 @@
 %   from pathlib import Path
 %   from typing import Any, Dict, List, Optional, Set, Tuple
 %   logger = logging.getLogger(__name__)
+%   from .agentic_sync_runner import _basename_from_architecture_filename
 %   from .architecture_include_validation import resolve_architecture_prompt_path
 %   from .architecture_registry import extract_modules, find_architecture_for_project, find_project_root
+%   from .architecture_sync import _normalize_prompt_filename
 %   from .sync_order import extract_module_from_include
 
 % ── Responsibilities ──
@@ -38,11 +40,15 @@
 %    - Function: _parse_include_attrs(attrs_text: str) -> Dict[str, str]
 %    - Parse quoted attributes from an ``<include ...>`` opening tag into lower-cased keys
 %    - Function: _is_module_prompt_include_target(body: str) -> bool
-%    - Return True when the include body names a module prompt — i.e. the body ends in
-%      ``.prompt`` and ``extract_module_from_include`` resolves it. Mirrors
+%    - Return True when the include target names a module prompt — i.e. the stripped
+%      target ends in ``.prompt`` and ``extract_module_from_include`` resolves it. Mirrors
 %      ``architecture_include_validation._module_prompt_include_target`` so the auto-deps
 %      writer and the validator agree on which includes are architecture edges.
-%    - Function: _include_is_architecture_dependency_candidate(attrs: Dict[str, str], body: str = "") -> bool
+%    - Function: _include_is_architecture_dependency_candidate(attrs: Dict[str, str], target: str = "") -> bool
+%    - The second parameter is the **effective include target** (``attrs.get("path")``
+%      when set, otherwise the tag body). The validator/preprocessor resolves the include
+%      from ``path=`` when present and ignores the body, so the candidate check must
+%      classify by the same target.
 %    - Module-prompt include targets are ALWAYS architecture edges, even with
 %      ``mode="interface"`` / ``select=`` / ``query=`` / ``lines=`` — the validator
 %      treats them as required deps regardless of attributes, so the writer must too.
@@ -51,9 +57,20 @@
 %      - any non-empty ``select=``, ``query=``, or ``lines=`` attribute
 %    - Context-only source-file include selectors are LLM source context, not architecture edges.
 %    - Function: extract_include_paths_from_prompt_text(text: str) -> Set[str]
-%    - Parse ``<include>...</include>`` tags (supports attributes on the tag like ``<include foo="bar">path</include>``)
-%    - Pattern: r"<include(?P<attrs>[^>]*)>(?P<body>.*?)</include>" with re.DOTALL
-%    - Return set of stripped, non-empty paths only for includes that pass _include_is_architecture_dependency_candidate(attrs, body)
+%    - Parse both ``<include ...>body</include>`` (body form) and ``<include ... />``
+%      (self-closing form). Two-branch regex with ``re.DOTALL``:
+%        body-form:   r"<include(?P<attrs>\s+[^>]*?)?(?<!/)>(?P<body>.*?)</include>"
+%        self-closing: r"<include(?P<attrs_self>\s+[^>]*?)\s*/>"
+%      The body-form branch carries a ``(?<!/)`` negative lookbehind on its closing
+%      ``>`` so a self-closing ``<include path="x" />`` followed on a later line by
+%      ``<include>y</include>`` is not swallowed as one body-form match (mirrors
+%      ``pdd/sync_order.py::extract_includes_from_file``).
+%    - Effective target = ``(attrs.get("path") or "").strip() or body``. When ``path=``
+%      is set the body is ignored (matches the validator/preprocessor contract).
+%      Self-closing tags have no body, so a ``path=`` attribute is required to produce
+%      a non-empty target — empty targets are skipped.
+%    - Return Set[str] of stripped, non-empty effective targets for includes that pass
+%      ``_include_is_architecture_dependency_candidate(attrs, target)``.
 
 % 2. Find architecture record for a prompt file
 %    - Function: _find_architecture_record_for_prompt_file(project_root: Path, prompt_file_resolved: Path) -> Optional[Tuple[Path, List[Dict[str, Any]], int]]
@@ -104,20 +121,34 @@
 %    - Validate result with json.loads; return None if invalid
 
 % 10. Map include path to architecture filename
+%    - Helper: _path_preserving_module_key(filename: str) -> Optional[str]
+%      For ``.prompt`` filenames, canonicalize via ``_normalize_prompt_filename`` (strip
+%      ``./`` and leading ``prompts/``) and derive the basename via
+%      ``_basename_from_architecture_filename`` so directory segments are preserved
+%      (``commands/fix_python.prompt`` → ``"commands/fix"``; unqualified
+%      ``fix_python.prompt`` → ``"fix"``). For non-prompt context paths
+%      (``context/models_example.py``), fall back to ``extract_module_from_include`` so
+%      the example-path → module mapping is preserved.
 %    - Function: _architecture_filename_for_module_include(include_path: str, same_file_arch_entries: List[Dict[str, Any]]) -> Optional[str]
-%    - Use extract_module_from_include to get module basename from include_path
-%    - Find matching entry in same_file_arch_entries by comparing module basenames
-%    - Return the entry's ``filename`` or None
+%    - Gate up front via ``extract_module_from_include(include_path)`` so non-module
+%      includes are rejected.
+%    - Compare path-preserving keys (``_path_preserving_module_key``) between the
+%      include path and each entry's ``filename`` — bare-stem comparison silently
+%      collapses path-qualified same-tail modules (``commands/fix_python.prompt`` and
+%      ``server/fix_python.prompt`` both → ``"fix"``).
+%    - Return the entry's ``filename`` when keys match, or None.
 
 % 11. Main merge function
 %    - Function: merge_auto_deps_includes_into_architecture(project_root, written_prompt_path, old_prompt_text, new_prompt_text, *, dry_run=False) -> Dict[str, Any]
 %    - Return dict with keys: ``updated`` (bool), ``architecture_path`` (Optional[Path]), ``added_dependencies`` (list[str]), ``messages`` (list[str])
 %    - Steps:
 %      a. Find architecture record for written_prompt_path
-%      b. Extract current module's filename and basename
+%      b. Extract current module's filename and path-preserving key via
+%         ``_path_preserving_module_key`` (NOT bare-stem ``extract_module_from_include``)
+%         so same-tail path-qualified entries do not collide in the self-skip
 %      c. Diff old vs new include paths to find fresh includes
 %      d. For each fresh include, map to architecture filename via _architecture_filename_for_module_include
-%      e. Skip self-references (same basename or same filename as current entry)
+%      e. Skip self-references (same path-preserving key OR same filename as current entry)
 %      f. Skip already-existing dependencies
 %      g. If no additions needed, return updated=False with appropriate message
 %      h. If not dry_run:
