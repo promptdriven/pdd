@@ -4,7 +4,7 @@
   "command": "example",
   "prompt_hash": "ce43b505ea639d1be1810a69314e79ac114be16bc1fcd2eda6a68843d74b7ecf",
   "code_hash": "6a6d4038c1aa807d08ba5bc25a5a781d4a2e117549ca77c81aea2790efb8b48c",
-  "example_hash": "17324f86442ab3cc55c995319ded801d8625615b460ebc3db352ad4bc9d94aba",
+  "example_hash": "74bf0192fd6aa73150e3179f124db82137a0d5412b38d29332ce217c4026de1c",
   "test_hash": "9cec35eb0aa6a0f9cc67d14fd2e5efd8ea4c237561a593bea973eb549cfd48eb",
   "test_files": {
     "test_llm_invoke.py": "9cec35eb0aa6a0f9cc67d14fd2e5efd8ea4c237561a593bea973eb549cfd48eb",
