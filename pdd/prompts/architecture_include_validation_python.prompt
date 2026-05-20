@@ -7,10 +7,12 @@
 %   - .architecture_registry: BUNDLED_SAMPLE_TOPLEVEL_DIRS, extract_modules,
 %     find_architecture_for_project, find_project_root
 %   - .sync_order: extract_includes_from_file, extract_module_from_include
-%   - .architecture_sync: parse_prompt_tags
+%   - .architecture_sync (lazy): parse_prompt_tags, _normalize_prompt_filename,
+%     build_dependency_resolver
+%   - .agentic_sync_runner (lazy): _basename_from_architecture_filename
 
 <pdd.architecture_sync>
-    <include select="def:example_parse_tags,def:example_validate_dependencies,def:example_get_entry">context/architecture_sync_example.py</include>
+    <include select="def:example_parse_tags,def:example_validate_dependencies,def:example_get_entry,def:example_build_dependency_resolver">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
 <pdd.architecture_registry>
     <include>context/architecture_registry_example.py</include>
@@ -26,6 +28,12 @@
 %      prompt file has no <include> or <pdd-dependency> referencing that module's prompt.
 %   2. Reverse mismatch: a prompt <include>s another module's prompt, but
 %      architecture.json dependencies do not list that module.
+%
+% Path-qualified modules (F4): comparison keys preserve the directory prefix so
+% same-tail module prompts (e.g. ``commands/fix_python.prompt`` and
+% ``server/fix_python.prompt``) are treated as distinct nodes. Unqualified
+% legacy filenames degrade to their bare stem so flat-layout architectures keep
+% working unchanged.
 % It also provides a generation-time contract preflight for existing modules:
 %   3. Prompt contract/context mismatch: a prompt declares a broad module interface
 %      while <include>ing only a selected slice of the existing output source.
@@ -41,13 +49,36 @@
 % Internal helpers
 % ============================================================
 
+% _path_preserving_module_key(filename: str) -> Optional[str]
+%   - Return a path-preserving module key for an include or arch filename. Mirrors
+%     ``auto_deps_architecture._path_preserving_module_key`` (F4 third-party codex
+%     review). The helper is duplicated here rather than imported because
+%     ``auto_deps_architecture`` already imports ``resolve_architecture_prompt_path``
+%     from this module — sharing the helper would create a circular import. Both
+%     copies MUST stay in sync.
+%   - Gate inputs through ``extract_module_from_include`` so non-module references
+%     (e.g. ``context/python_preamble.prompt``) return None and remain ignored.
+%   - For accepted ``.prompt`` paths, canonicalize via
+%     ``architecture_sync._normalize_prompt_filename`` (strip ``./`` and leading
+%     ``prompts/``) and derive the basename via
+%     ``agentic_sync_runner._basename_from_architecture_filename`` so directory
+%     segments are preserved (``"commands/fix_python.prompt"`` -> ``"commands/fix"``,
+%     ``"fix_python.prompt"`` -> ``"fix"``).
+%   - For accepted non-prompt module references (example ``.py`` files), degrade
+%     to the bare-stem ``extract_module_from_include`` result so the long-standing
+%     example-path -> module mapping is preserved.
+%   - Returns None when no module key can be derived.
+
 % _module_prompt_include_target(include_path: str) -> Optional[str]
-%   - Map an <include> path to a module basename ONLY when it names another module prompt
-%     (i.e. path ends with ".prompt").
-%   - Context/example files (e.g. context/foo_example.py) are ignored so validation
-%     matches architecture.json, which lists dependencies between module prompts,
-%     not every referenced artifact.
-%   - Uses extract_module_from_include from sync_order.
+%   - Map an <include> path to a path-preserving module key only when it names
+%     another module prompt (i.e. path ends with ".prompt"). Returns a directory-
+%     qualified key (``"commands/fix"``) when the include is path-qualified, or
+%     the bare stem (``"fix"``) for unqualified legacy paths (F4 third-party
+%     codex review).
+%   - Context/example files (e.g. context/foo_example.py) and non-language-suffix
+%     ``.prompt`` files are ignored so validation matches architecture.json, which
+%     lists dependencies between module prompts, not every referenced artifact.
+%   - Delegates the heavy lifting to ``_path_preserving_module_key``.
 
 % _BUNDLED_SAMPLE_TOPLEVEL_DIRS: FrozenSet[str]
 %   - Re-exported from architecture_registry.BUNDLED_SAMPLE_TOPLEVEL_DIRS for
@@ -66,12 +97,33 @@
 % resolve_architecture_prompt_path(filename: str, project_root: Path) -> Path
 %   - Public API wrapper around _resolve_architecture_prompt_path.
 
-% _pdd_dependency_modules(prompt_path: Path, self_mod: str) -> set[str]
-%   - Return module basenames declared via <pdd-dependency> tags in the prompt header.
-%   - Per docs/prompting_guide.md, <pdd-dependency> is the authoritative architectural
-%     declaration and <include> is purely for LLM context.
-%   - Uses parse_prompt_tags from .architecture_sync to extract "dependencies" tags.
-%   - Filters out self_mod and uses extract_module_from_include for each dependency.
+% _pdd_dependency_modules(
+%     prompt_path: Path,
+%     self_mod: str,
+%     arch_data: Optional[List[Dict[str, Any]]] = None,
+%     *,
+%     dep_resolver: Optional[Callable[[str], str]] = None,
+% ) -> set[str]
+%   - Return path-preserving module keys declared via <pdd-dependency> tags in
+%     the prompt header.
+%   - Per docs/prompting_guide.md, <pdd-dependency> is the authoritative
+%     architectural declaration and a module-prompt <include> is ALSO an
+%     architecture edge under the union semantics. The forward check accepts
+%     either as proof that the prompt has declared the dependency.
+%   - Uses parse_prompt_tags from .architecture_sync to extract "dependencies"
+%     tags, then keys each entry through _path_preserving_module_key.
+%   - Filters out self_mod.
+%   - F7 third-party codex review: when ``dep_resolver`` is supplied (preferred,
+%     reused across all entries in one validation run) OR when ``arch_data`` is
+%     supplied, raw declarations are first run through the resolver so a bare
+%     ``<pdd-dependency>fix_python.prompt</pdd-dependency>`` resolves to its
+%     unambiguous path-qualified arch entry (e.g. ``server/fix_python.prompt``)
+%     BEFORE path-preserving keying. Without this step a bare declaration would
+%     key to ``"fix"`` while the arch dep keys to ``"server/fix"`` and the
+%     validator would falsely warn that the prompt is missing a declaration.
+%   - F11 third-party codex review: if both are None, no resolution is performed;
+%     when only ``arch_data`` is given, build the resolver on demand via
+%     ``architecture_sync.build_dependency_resolver(arch_data)``.
 %   - Returns empty set on OSError or empty content.
 
 % _IncludeReference dataclass
@@ -159,39 +211,61 @@
 %     project_root: Path,
 % ) -> List[str]
 %
-% Compare each architecture entry's "dependencies" (as module basenames) with
-% module targets of <include> tags in the corresponding prompt file.
+% Compare each architecture entry's "dependencies" (as path-preserving module
+% keys) with module targets of <include> tags in the corresponding prompt file.
 %
 % A declared dependency is satisfied if the prompt either <include>s the
-% dependency's prompt OR declares it via <pdd-dependency> (the metadata
-% tag the prompting guide calls the authoritative architectural declaration).
+% dependency's prompt OR declares it via <pdd-dependency>. Both are
+% architecture edges under the union semantics (see prompting_guide.md and
+% agentic_sync_identify_modules_LLM.prompt).
 %
 % The reverse direction (<include> of a module prompt without a matching
 % arch dep) still warns; drift between <pdd-dependency> tags and
 % architecture.json is handled by architecture_sync, not this check.
 %
 % Non-module includes (docs, preambles, etc.) are ignored via
-% extract_module_from_include.
+% _module_prompt_include_target which only accepts ".prompt" paths.
+%
+% F4 third-party codex review: comparisons use _path_preserving_module_key so
+% directory-qualified entries like "commands/fix_python.prompt" and
+% "server/fix_python.prompt" stay distinct. Unqualified arch filenames degrade
+% to their bare stem so flat-layout architectures still work.
 %
 % Algorithm:
-%   1. Build filename_to_basename mapping for all entries using extract_module_from_include.
-%   2. For each entry with a valid filename and module basename:
+%   1. Build filename_to_basename mapping for all entries using
+%      _path_preserving_module_key (path-preserving, NOT bare-stem).
+%   2. Build dep_resolver ONCE per validation run via
+%      architecture_sync.build_dependency_resolver(arch_data) (F11 third-party
+%      codex review). Reuse the same resolver across every entry's forward check
+%      and across every _pdd_dependency_modules call below — never rebuild per
+%      entry. This is a precomputed O(1)-per-dep index, not a per-call scan.
+%   3. For each entry with a valid filename and module key:
 %      a. Resolve prompt path; if file not found, emit a skip warning and continue.
-%      b. Extract <include> targets from the prompt file, filter to module prompt targets
-%         (via _module_prompt_include_target), excluding self.
-%      c. Extract <pdd-dependency> modules (via _pdd_dependency_modules), excluding self.
+%      b. Extract <include> targets from the prompt file, filter to module prompt
+%         keys (via _module_prompt_include_target), excluding self.
+%      c. Extract <pdd-dependency> modules via _pdd_dependency_modules, passing
+%         the shared dep_resolver so bare declarations resolve to their
+%         unambiguous path-qualified arch entries before keying.
 %      d. forward_declared = include_modules | tag_modules
-%      e. Extract arch_modules from entry's "dependencies" list using filename_to_basename.
-%      f. For each module in (arch_modules - forward_declared): emit forward mismatch warning
-%         including the dependency filename proof if available.
-%         Warning format: "architecture.json / <include> mismatch: {fn!r} declares dependency
-%         on module {d!r}{extra} but the prompt has no <include> or <pdd-dependency> of that
-%         module's prompt"
-%      g. For each module in (include_modules - arch_modules): emit reverse mismatch warning
-%         including the include path proof.
-%         Warning format: "architecture.json / <include> mismatch: {fn!r} <include>s module
-%         {i!r} ({inc_s!r}) but architecture.json dependencies do not list that module"
-%   3. Return list of warning strings (empty if no mismatches).
+%      e. Extract arch_modules from entry's "dependencies" list. F10 third-party
+%         codex review: every raw dep string MUST go through dep_resolver(raw_dep)
+%         FIRST so stale-but-bare arch entries like ["fix_python.prompt"] resolve
+%         to the unambiguous path-qualified filename ("server/fix_python.prompt")
+%         before filename_to_basename lookup. Without this step a bare arch dep
+%         keys to "fix" while the prompt's path-qualified declaration keys to
+%         "server/fix" and the validator would falsely warn drift.
+%      f. For each module in (arch_modules - forward_declared): emit forward
+%         mismatch warning including the dependency filename proof if available
+%         (preserving the original raw dep string in the message).
+%         Warning format: "architecture.json / <include> mismatch: {fn!r} declares
+%         dependency on module {d!r}{extra} but the prompt has no <include> or
+%         <pdd-dependency> of that module's prompt"
+%      g. For each module in (include_modules - arch_modules): emit reverse
+%         mismatch warning including the include path proof.
+%         Warning format: "architecture.json / <include> mismatch: {fn!r}
+%         <include>s module {i!r} ({inc_s!r}) but architecture.json dependencies
+%         do not list that module"
+%   4. Return list of warning strings (empty if no mismatches).
 
 % ============================================================
 % Collection / aggregation functions
@@ -248,9 +322,19 @@
 %   - Module docstring describing Phase 5 cross-validation purpose.
 %   - from __future__ import annotations
 %   - Imports: ast, json, re, dataclasses.dataclass, pathlib.Path, typing
-%     (Any, Dict, FrozenSet, List, Optional, Set)
-%   - Relative imports from .architecture_registry and .sync_order at top level.
-%   - Lazy imports of click, rich, .architecture_sync, .architecture_registry inside
-%     functions that need them (to avoid circular imports).
+%     (Any, Callable, Dict, FrozenSet, List, Optional, Set)
+%   - Relative imports from .architecture_registry (BUNDLED_SAMPLE_TOPLEVEL_DIRS,
+%     extract_modules) and .sync_order (extract_includes_from_file,
+%     extract_module_from_include) at top level.
+%   - Lazy imports inside functions to avoid circular imports:
+%       * click, rich for CLI output
+%       * .architecture_registry.find_architecture_for_project,
+%         .architecture_registry.find_project_root for discovery
+%       * .architecture_sync.parse_prompt_tags for tag extraction
+%       * .architecture_sync._normalize_prompt_filename and
+%         .architecture_sync.build_dependency_resolver for path-preserving
+%         keying and dependency resolution
+%       * .agentic_sync_runner._basename_from_architecture_filename for
+%         deriving path-qualified module keys
 %   - All functions and constants described above with their exact signatures,
 %     return types, and behavior.

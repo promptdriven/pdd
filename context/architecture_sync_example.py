@@ -14,6 +14,7 @@ from pdd.architecture_sync import (
     get_architecture_entry_for_prompt,
     has_pdd_tags,
     generate_tags_from_architecture,
+    build_dependency_resolver,
 )
 
 
@@ -262,6 +263,48 @@ Your goal is to implement a data processor...
         return final_content
 
     return prompt_content
+
+
+# --- Example: build a dependency resolver once and reuse it ---
+def example_build_dependency_resolver():
+    """Precompute a path-qualified dependency resolver for an architecture.
+
+    Callers that resolve many <pdd-dependency> / arch.json dep entries against
+    the same architecture data (e.g. the per-entry forward check in the
+    architecture/<include> validator, and the parallel sync graph builder)
+    should build the resolver ONCE per arch_data and reuse the returned
+    ``resolve(dep)`` callable for every dep — this is O(1) per dep after the
+    one-time index build instead of O(N) per dep.
+
+    The resolver normalizes bare declarations to their unambiguous path-
+    qualified arch filenames when possible. Example::
+
+        arch_data = [
+            {"filename": "server/fix_python.prompt"},
+            {"filename": "commands/maintenance_python.prompt"},
+        ]
+        resolve = build_dependency_resolver(arch_data)
+
+        # Bare basenames resolve to their unambiguous path-qualified entry:
+        assert resolve("fix_python.prompt") == "server/fix_python.prompt"
+
+        # Already-path-qualified entries pass through unchanged:
+        assert resolve("commands/maintenance_python.prompt") == \
+            "commands/maintenance_python.prompt"
+
+        # Ambiguous or unresolved deps return the normalized form unchanged,
+        # so callers can still emit "orphan dependency" warnings.
+    """
+    arch_data = [
+        {"filename": "server/fix_python.prompt"},
+        {"filename": "commands/maintenance_python.prompt"},
+    ]
+    resolve = build_dependency_resolver(arch_data)
+
+    for raw in ("fix_python.prompt", "commands/maintenance_python.prompt"):
+        print(f"  {raw!r} -> {resolve(raw)!r}")
+
+    return resolve
 
 
 if __name__ == "__main__":

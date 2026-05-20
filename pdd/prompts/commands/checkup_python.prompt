@@ -9,7 +9,7 @@
   - `--no-fix` flag
   - `--timeout-adder` (float, default `0.0`)
   - `--no-github-state` flag
-  - `--validate-arch-includes` flag (local mode — cross-validates `architecture.json` against module prompt `<include>` tags; mutually exclusive with `target` and `--pr`/`--issue`)
+  - `--validate-arch-includes` flag (local mode — cross-validates `architecture.json` against the union of module prompt `<include>` tags and `<pdd-dependency>` declarations; either kind of tag satisfies a declared arch dependency. Mutually exclusive with `target` and `--pr`/`--issue`)
   - `--project-root` (path, used with `--validate-arch-includes`)
   - `--strict` flag (used with `--validate-arch-includes`)
   - `--pr <pr-url>` (PR-verification mode — verify an existing PR instead of opening one; requires `--issue`, mutually exclusive with `target`)

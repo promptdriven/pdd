@@ -19,7 +19,11 @@ from ..core.errors import handle_error
     "validate_arch_includes",
     is_flag=True,
     default=False,
-    help="Cross-check architecture.json against module <include> tags (no GitHub issue).",
+    help=(
+        "Cross-check architecture.json against module <include> and "
+        "<pdd-dependency> declarations (no GitHub issue). Both are "
+        "architecture edges; a declared dependency is satisfied by either."
+    ),
 )
 @click.option(
     "--project-root",
@@ -255,7 +259,8 @@ def checkup(
     PR mode: pass --pr <pr-url> and --issue <issue-url> to verify an existing PR
              against its source issue without creating a new PR.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
-    architecture.json entries against module prompt <include> tags.
+    architecture.json entries against module prompt <include> tags and
+    <pdd-dependency> declarations (either satisfies a declared arch dep).
     """
     ctx.ensure_object(dict)
 
