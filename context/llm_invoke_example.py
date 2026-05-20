@@ -3,9 +3,15 @@ import sys
 from typing import Optional
 from pydantic import BaseModel
 
-# Pin the runtime model BEFORE importing pdd.llm_invoke, because
-# DEFAULT_BASE_MODEL is captured from PDD_MODEL_DEFAULT at import time.
+# Configure the runtime BEFORE importing pdd.llm_invoke:
+# - PDD_MODEL_DEFAULT is captured into DEFAULT_BASE_MODEL at import time.
+# - PDD_FORCE_LOCAL=1 keeps llm_invoke on the local LiteLLM path so a user
+#   with PDD Cloud credentials configured doesn't silently route this
+#   OpenAI-pinned example through cloud execution (the OPENAI_API_KEY guard
+#   below only validates the local path).
+# - PDD_FORCE=1 makes missing-key handling non-interactive.
 os.environ["PDD_FORCE"] = "1"
+os.environ["PDD_FORCE_LOCAL"] = "1"
 os.environ["PDD_MODEL_DEFAULT"] = "openai/gpt-4o-mini"
 
 # Import the llm_invoke function from the pdd module
