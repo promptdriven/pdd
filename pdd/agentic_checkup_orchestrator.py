@@ -295,6 +295,82 @@ def _commit_and_push_if_changed(
     return commit_and_push(worktree, pr_metadata, message)
 
 
+def _git_changed_files(worktree: Path) -> List[str]:
+    """Lazy wrapper around the review-loop changed-files helper.
+
+    Re-exported at module scope so tests can patch
+    ``pdd.agentic_checkup_orchestrator._git_changed_files`` without
+    monkey-patching across module boundaries.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _git_changed_files as fn,
+    )
+
+    return fn(worktree)
+
+
+def _git_rev_parse_head(worktree: Path) -> str:
+    """Lazy wrapper around the review-loop HEAD-SHA helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _git_rev_parse_head as fn,
+    )
+
+    return fn(worktree)
+
+
+def _check_prompt_source_guard(
+    worktree: Path, changed_files: List[str]
+) -> Optional[str]:
+    """Lazy wrapper around the review-loop prompt-source guard (clause 10a).
+
+    PDD's source-of-truth contract is that prompts generate code. Bare PR-mode
+    used to push fixer-generated edits directly to the PR head without ever
+    running this guard, so a code-only patch could land and silently violate
+    #1063 until the next ``pdd sync`` overwrote the bot's edits. Re-exporting
+    the review-loop guard here lets the orchestrator enforce the same policy
+    BEFORE the push (matching the review-loop call site).
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _check_prompt_source_guard as fn,
+    )
+
+    return fn(worktree, changed_files)
+
+
+def _check_architecture_registry_edit_guard(
+    worktree: Path, changed_files: List[str]
+) -> Optional[str]:
+    """Lazy wrapper around the review-loop architecture-registry guard (clause 10b).
+
+    Sibling of ``_check_prompt_source_guard``. Catches the coordinated
+    rename + prompt delete + registry rewrite shape (issue #1081) that
+    10a alone cannot detect.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _check_architecture_registry_edit_guard as fn,
+    )
+
+    return fn(worktree, changed_files)
+
+
+def _redact_secret(text: str, secret: str) -> str:
+    """Lazy wrapper around the review-loop secret-redaction helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _redact_secret as fn,
+    )
+
+    return fn(text, secret)
+
+
+def _github_token_from_env() -> str:
+    """Lazy wrapper around the review-loop env-token helper."""
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _github_token_from_env as fn,
+    )
+
+    return fn()
+
+
 def _setup_pr_worktree(
     cwd: Path,
     pr_owner: str,
@@ -355,8 +431,15 @@ def _setup_pr_worktree(
         )
     except subprocess.CalledProcessError as e:
         err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+        # Redact any GH token that git may echo back from a tokenized remote
+        # URL (e.g. when callers seed ``https://x-access-token:...@github.com``
+        # into the resolved remote). Matches the push-failure redaction at
+        # ``checkup_review_loop._commit_and_push_if_changed``.
+        token = _github_token_from_env()
+        safe_err = _redact_secret(err_msg.strip(), token) if token else err_msg.strip()
+        safe_remote = _redact_secret(remote_target, token) if token else remote_target
         return None, (
-            f"Failed to fetch PR #{pr_number} from {remote_target}: {err_msg.strip()}. "
+            f"Failed to fetch PR #{pr_number} from {safe_remote}: {safe_err}. "
             f"Confirm the PR exists and you have read access to "
             f"{pr_owner}/{pr_repo}."
         )
@@ -609,14 +692,33 @@ def run_agentic_checkup_orchestrator(
     fix_verify_iteration = 0
     previous_fixes = ""
 
+    # PR head SHA observed for the CURRENT invocation. Captured once via
+    # ``_fetch_pr_metadata`` when entering PR mode so the resume path can
+    # invalidate cached step outputs whose verification ran against a
+    # different (older) head. Empty/None when metadata is unavailable —
+    # callers degrade gracefully rather than block.
+    current_pr_head_sha: str = ""
+    if pr_mode:
+        assert pr_owner is not None and pr_repo is not None and pr_number is not None
+        try:
+            metadata_for_guard = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+        except Exception:  # noqa: BLE001 — metadata is best-effort
+            metadata_for_guard = {}
+        current_pr_head_sha = str(metadata_for_guard.get("head_sha", "") or "")
+
     if state is not None:
         # State-identity guard. A state from a prior run on the same
-        # issue_number must match the current invocation across THREE
+        # issue_number must match the current invocation across FOUR
         # axes before reuse:
         #   (a) mode (issue vs pr) — different worktree paths
         #   (b) pr_number — same issue can verify different PRs over time
         #   (c) pr_owner/pr_repo — fork-PR identity (same pr_number could
         #       refer to different upstream/fork combos)
+        #   (d) pr_head_sha — the PR branch can advance between runs
+        #       (maintainer push, auto-heal, etc.). Cached step outputs
+        #       describing build/test/verify results from the OLD SHA
+        #       would otherwise be silently replayed against new code
+        #       (codex round-1 blocker #1).
         # Any mismatch carries stale step outputs and a stale
         # `.pdd/worktrees/checkup-pr-A` path into a verification of PR B,
         # silently running all subsequent steps against the wrong code.
@@ -644,6 +746,21 @@ def run_agentic_checkup_orchestrator(
                     f"pr_repo "
                     f"(cached={cached_pr_owner}/{cached_pr_repo}, "
                     f"current={pr_owner}/{pr_repo})"
+                )
+            # Head-SHA invalidation. Skip the check when EITHER side is
+            # empty — a missing cached SHA means the state predates this
+            # axis, and a missing current SHA means metadata was
+            # unavailable (don't fail closed and brick resume).
+            cached_pr_head_sha = state.get("pr_head_sha") or ""
+            if (
+                cached_pr_head_sha
+                and current_pr_head_sha
+                and cached_pr_head_sha != current_pr_head_sha
+            ):
+                identity_mismatch_reasons.append(
+                    f"pr_head_sha "
+                    f"(cached={cached_pr_head_sha[:8]}, "
+                    f"current={current_pr_head_sha[:8]})"
                 )
         if identity_mismatch_reasons:
             if not quiet:
@@ -769,6 +886,7 @@ def run_agentic_checkup_orchestrator(
             pr_number=pr_number,
             pr_owner=pr_owner,
             pr_repo=pr_repo,
+            pr_head_sha=current_pr_head_sha if pr_mode else None,
         )
         github_comment_id = save_workflow_state(
             cwd=cwd, issue_number=issue_number, workflow_type="checkup",
@@ -1132,6 +1250,43 @@ def run_agentic_checkup_orchestrator(
             assert pr_number is not None
             if worktree_path is not None:
                 pr_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+
+                # Codex round-1 blocker #3: prompt-source + architecture-
+                # registry guards. The review-loop runs these BEFORE its
+                # push (checkup_review_loop.py:1183/:1194); bare PR-mode
+                # used to skip them, opening a #1063/#1081 bypass. Run
+                # 10b first (registry-edit) and 10a second (prompt-
+                # source) to mirror the review-loop ordering.
+                guard_changed_files = _git_changed_files(worktree_path)
+                pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+
+                registry_refusal = _check_architecture_registry_edit_guard(
+                    worktree_path, guard_changed_files
+                )
+                if registry_refusal:
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir
+                        / "architecture-registry-guard-refusal.txt"
+                    ).write_text(registry_refusal + "\n")
+                    step_outputs["pr_push"] = registry_refusal
+                    context["pr_push_output"] = registry_refusal
+                    _save_state()
+                    return False, registry_refusal, total_cost, last_model_used
+
+                prompt_refusal = _check_prompt_source_guard(
+                    worktree_path, guard_changed_files
+                )
+                if prompt_refusal:
+                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                    (
+                        pr_artifacts_dir / "prompt-source-guard-refusal.txt"
+                    ).write_text(prompt_refusal + "\n")
+                    step_outputs["pr_push"] = prompt_refusal
+                    context["pr_push_output"] = prompt_refusal
+                    _save_state()
+                    return False, prompt_refusal, total_cost, last_model_used
+
                 push_ok, push_message = _commit_and_push_if_changed(
                     worktree_path,
                     pr_metadata,
@@ -1141,7 +1296,26 @@ def run_agentic_checkup_orchestrator(
                 context["pr_push_output"] = push_message
                 _save_state()
                 if not push_ok:
-                    return False, push_message, total_cost, last_model_used
+                    # Codex round-1 blocker #2: enrich the failure message
+                    # so the operator can recover the unpushed local fix.
+                    # _commit_and_push_if_changed creates a local commit
+                    # before pushing, so HEAD now points at the would-be
+                    # PR-head SHA. Surface BOTH the worktree path AND
+                    # that local SHA — without them the user has to dig
+                    # through ``.pdd/worktrees/`` to find the artifact.
+                    local_sha = _git_rev_parse_head(worktree_path)
+                    recovery = (
+                        f" Local fix commit retained in worktree: "
+                        f"{worktree_path}"
+                    )
+                    if local_sha:
+                        recovery += f" (commit {local_sha})"
+                    sep = "" if push_message.rstrip().endswith(".") else "."
+                    enriched = push_message + sep + recovery
+                    step_outputs["pr_push"] = enriched
+                    context["pr_push_output"] = enriched
+                    _save_state()
+                    return False, enriched, total_cost, last_model_used
                 if not quiet:
                     console.print(f"[green]{push_message}[/green]")
             if 8 >= start_step:
@@ -1218,6 +1392,7 @@ def _build_state(
     pr_number: Optional[int] = None,
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
+    pr_head_sha: Optional[str] = None,
 ) -> Dict:
     """Build a serialisable state dict for persistence.
 
@@ -1228,6 +1403,12 @@ def _build_state(
     issue-mode worktree could be silently reused by a subsequent PR-mode
     run on the same issue_number (or vice versa) and all steps would
     execute against the wrong code.
+
+    ``pr_head_sha`` (codex round-1 blocker #1) records the PR head SHA the
+    cached step outputs were verified against. On resume, ``run_agentic_
+    checkup_orchestrator`` invalidates the cache when this differs from
+    the fresh remote head SHA so a maintainer push to the PR branch
+    cannot leave stale build/test/verify outputs in place.
     """
     return {
         "workflow": "checkup",
@@ -1246,4 +1427,5 @@ def _build_state(
         "pr_number": pr_number,
         "pr_owner": pr_owner,
         "pr_repo": pr_repo,
+        "pr_head_sha": pr_head_sha,
     }

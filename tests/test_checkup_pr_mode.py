@@ -692,7 +692,14 @@ class TestPrModeFixPushBack:
 
         assert success is True, msg
         assert executed_steps == [1, 2, 3, 4, 5, 6.1, 6.2, 6.3, 7]
-        metadata_mock.assert_called_once_with("o", "r", 200)
+        # _fetch_pr_metadata is now called twice in PR fix-mode: once at
+        # entry to capture the head SHA for the state identity guard
+        # (codex round-1 blocker #1) and once before push to feed
+        # clone_url/head_ref into _commit_and_push_if_changed. Each call
+        # must target the same PR.
+        assert metadata_mock.call_count >= 1
+        for call in metadata_mock.call_args_list:
+            assert call.args == ("o", "r", 200)
         push_mock.assert_called_once()
         assert push_mock.call_args.args[0] == wt
 
@@ -817,3 +824,561 @@ class TestPrResumeWorktreeRecreation:
             tmp_path, "o", "r", 200, True, resume_existing=True
         )
         setup_issue.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Blocker #1 (codex round-1): pr_head_sha axis in state identity guard.
+# Cached step outputs are stale if the PR branch advanced between runs.
+# ---------------------------------------------------------------------------
+
+
+class TestStateIdentityPrHeadSha:
+    """The state guard must invalidate cache when the PR head SHA advanced."""
+
+    def test_build_state_records_pr_head_sha(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _build_state
+
+        s = _build_state(
+            issue_number=42, issue_url="u", last_completed_step=3,
+            step_outputs={}, total_cost=0.0, model_used="m", github_comment_id=None,
+            mode="pr", pr_number=99, pr_owner="acme", pr_repo="thing",
+            pr_head_sha="deadbeef",
+        )
+        assert s["pr_head_sha"] == "deadbeef"
+
+    def test_resume_discards_cache_when_pr_head_sha_advanced(
+        self, tmp_path: Path
+    ) -> None:
+        """Cached state from a verification of SHA `aaa` MUST NOT be reused
+        against a re-run where the remote PR head has advanced to `bbb`.
+        Step outputs from the old SHA describe code that no longer exists."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        saved_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "aaaaaaaa",  # cached SHA
+            "last_completed_step": 5,
+            "worktree_path": str(tmp_path / "wt"),
+            "step_outputs": {
+                "1": "cached-1", "2": "cached-2",
+                "3": "cached-3", "4": "cached-4", "5": "cached-5",
+            },
+            "total_cost": 0.0,
+            "model_used": "fake",
+            "fix_verify_iteration": 0,
+            "previous_fixes": "",
+        }
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        executed_steps: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed_steps.append(step_num)
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(saved_state, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            # Remote head now at bbbbbbbb — cache MUST be discarded.
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "bbbbbbbb",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "No changes to push."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="bbbbbbbb",
+        ):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True
+        # Cache invalidation: steps 1-5 MUST have re-executed against the new SHA.
+        # Without invalidation they'd be replayed from cache and never appear.
+        assert 1 in executed_steps, (
+            f"Step 1 must re-run when PR head SHA advanced; ran: {executed_steps}"
+        )
+        assert 5 in executed_steps, (
+            f"Step 5 must re-run when PR head SHA advanced; ran: {executed_steps}"
+        )
+
+    def test_resume_reuses_cache_when_pr_head_sha_matches(
+        self, tmp_path: Path
+    ) -> None:
+        """When the remote PR head SHA matches the cached SHA, cached step
+        outputs MUST be reused (no regression to a forced re-verification)."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        saved_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": "aaaaaaaa",
+            "last_completed_step": 5,
+            "worktree_path": str(tmp_path / "wt"),
+            "step_outputs": {
+                "1": "cached-1", "2": "cached-2",
+                "3": "cached-3", "4": "cached-4", "5": "cached-5",
+            },
+            "total_cost": 0.0,
+            "model_used": "fake",
+            "fix_verify_iteration": 0,
+            "previous_fixes": "",
+        }
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        executed_steps: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed_steps.append(step_num)
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(saved_state, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            # Same SHA — cache should be reused.
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "aaaaaaaa",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "No changes to push."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa",
+        ):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True
+        # Cache reuse: cached steps 1-5 MUST NOT have re-run; only 6.1, 6.2, 6.3, 7 should.
+        assert 1 not in executed_steps, (
+            "Step 1 must NOT re-run when SHA matches; got "
+            f"{executed_steps}"
+        )
+        assert 5 not in executed_steps, (
+            "Step 5 must NOT re-run when SHA matches; got "
+            f"{executed_steps}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Blocker #2 (codex round-1): on push failure, surface worktree path + local
+# commit SHA so the user can recover the local fixes.
+# ---------------------------------------------------------------------------
+
+
+class TestPrModePushFailureDiagnostics:
+    def test_push_failure_message_includes_worktree_and_local_sha(
+        self, tmp_path: Path
+    ) -> None:
+        """If _commit_and_push_if_changed fails on the final iteration, the
+        returned error MUST give the user enough to recover: the worktree
+        path AND the local commit SHA containing the unpushed fixes."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(False, "Failed to push fixes to PR branch: permission denied"),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            # Called once on push failure to capture the local commit SHA.
+            return_value="local_commit_sha_222",
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False
+        assert str(wt) in msg, (
+            f"Expected worktree path '{wt}' in failure message, got: {msg}"
+        )
+        assert "local_commit_sha_222" in msg, (
+            "Expected local commit SHA in failure message so user can "
+            f"cherry-pick or push manually. Got: {msg}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Blocker #3 (codex round-1): bare PR-mode push MUST run prompt-source +
+# architecture-registry guards before pushing. Otherwise it bypasses #1063
+# and #1081 enforcement that review-loop already has.
+# ---------------------------------------------------------------------------
+
+
+class TestPrModeGuardsBeforePush:
+    def _run_with_guard_refusal(
+        self,
+        tmp_path: Path,
+        prompt_refusal: str | None,
+        registry_refusal: str | None,
+    ):
+        """Helper: drive PR-mode through to the guard step, mocking refusals."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=["pdd/some_module.py"],
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+            return_value=prompt_refusal,
+        ) as prompt_guard, patch(
+            "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+            return_value=registry_refusal,
+        ) as registry_guard, patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
+            result = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+        return result, prompt_guard, registry_guard, push_mock, wt
+
+    def test_prompt_source_guard_refusal_blocks_push(self, tmp_path: Path) -> None:
+        """If _check_prompt_source_guard refuses, push MUST NOT be invoked."""
+        refusal = (
+            "generated-code-only fix refused: pdd/foo.py is generated from "
+            "pdd/prompts/foo_python.prompt."
+        )
+        (success, msg, _c, _m), _pg, _rg, push_mock, _wt = (
+            self._run_with_guard_refusal(tmp_path, prompt_refusal=refusal, registry_refusal=None)
+        )
+        assert success is False
+        push_mock.assert_not_called()
+        assert "generated-code-only fix refused" in msg
+
+    def test_prompt_source_guard_refusal_writes_artifact(self, tmp_path: Path) -> None:
+        """Refusal artifact MUST be written for post-mortem (matches review-loop pattern)."""
+        refusal = (
+            "generated-code-only fix refused: pdd/foo.py is generated from "
+            "pdd/prompts/foo_python.prompt."
+        )
+        self._run_with_guard_refusal(tmp_path, prompt_refusal=refusal, registry_refusal=None)
+        candidates = list((tmp_path / ".pdd").rglob("*prompt-source-guard-refusal*"))
+        assert candidates, (
+            "Expected a prompt-source-guard-refusal artifact under .pdd/, "
+            f"got: {list((tmp_path / '.pdd').rglob('*')) if (tmp_path / '.pdd').exists() else 'no .pdd dir'}"
+        )
+        body = candidates[0].read_text()
+        assert "generated-code-only fix refused" in body
+
+    def test_architecture_registry_guard_refusal_blocks_push(self, tmp_path: Path) -> None:
+        """If _check_architecture_registry_edit_guard refuses, push MUST NOT be invoked."""
+        refusal = (
+            "architecture-registry edit refused: repointed pair "
+            "pdd/foo.py from prompts/foo_python.prompt -> prompts/bar.prompt."
+        )
+        (success, msg, _c, _m), _pg, _rg, push_mock, _wt = (
+            self._run_with_guard_refusal(tmp_path, prompt_refusal=None, registry_refusal=refusal)
+        )
+        assert success is False
+        push_mock.assert_not_called()
+        assert "architecture-registry edit refused" in msg
+
+    def test_architecture_registry_guard_refusal_writes_artifact(self, tmp_path: Path) -> None:
+        refusal = (
+            "architecture-registry edit refused: repointed pair "
+            "pdd/foo.py from prompts/foo_python.prompt -> prompts/bar.prompt."
+        )
+        self._run_with_guard_refusal(tmp_path, prompt_refusal=None, registry_refusal=refusal)
+        candidates = list((tmp_path / ".pdd").rglob("*architecture-registry-guard-refusal*"))
+        assert candidates, (
+            "Expected an architecture-registry-guard-refusal artifact under .pdd/."
+        )
+        body = candidates[0].read_text()
+        assert "architecture-registry edit refused" in body
+
+    def test_guards_pass_then_push_is_invoked(self, tmp_path: Path) -> None:
+        """Sanity check: when neither guard refuses, push proceeds normally."""
+        (success, _msg, _c, _m), prompt_guard, registry_guard, push_mock, _wt = (
+            self._run_with_guard_refusal(tmp_path, prompt_refusal=None, registry_refusal=None)
+        )
+        assert success is True
+        prompt_guard.assert_called_once()
+        registry_guard.assert_called_once()
+        push_mock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Minor #4 (codex round-1): _setup_pr_worktree fetch errors must be redacted
+# in case the resolved remote target carries a tokenized URL.
+# ---------------------------------------------------------------------------
+
+
+class TestSetupPrWorktreeFetchErrorRedaction:
+    def test_token_in_fetch_error_is_redacted(self, tmp_path: Path) -> None:
+        """If git fetch error stderr echoes the tokenized URL, the returned
+        message MUST scrub it via _redact_secret."""
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        secret_token = "ghs_supersecrettoken1234"
+        # git's "could not resolve host" path tends to echo the URL back.
+        leaky_stderr = (
+            f"fatal: unable to access "
+            f"'https://x-access-token:{secret_token}@github.com/acme/thing.git/': "
+            "Could not resolve host"
+        ).encode("utf-8")
+
+        def fake_run(cmd, **_kwargs):  # noqa: ANN001
+            if len(cmd) > 1 and cmd[1] == "fetch":
+                raise subprocess.CalledProcessError(
+                    returncode=128, cmd=cmd, stderr=leaky_stderr
+                )
+            return MagicMock(returncode=0, stderr=b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists", return_value=False
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._github_token_from_env",
+            return_value=secret_token,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            wt_path, err = _setup_pr_worktree(
+                cwd=tmp_path,
+                pr_owner="acme",
+                pr_repo="thing",
+                pr_number=77,
+                quiet=True,
+            )
+
+        assert wt_path is None
+        assert err is not None
+        assert secret_token not in err, (
+            f"Token leaked into fetch-error message: {err!r}"
+        )
+        assert "[REDACTED]" in err
+
+
+# ---------------------------------------------------------------------------
+# Minor #5 (codex round-1): --review-loop --pr stays separate from the bare
+# orchestrator's new PR-mode push path. The dispatcher must early-return into
+# run_checkup_review_loop and NEVER reach the bare orchestrator.
+# ---------------------------------------------------------------------------
+
+
+class TestReviewLoopPrRoutingSeparation:
+    def test_review_loop_pr_routes_through_review_loop_not_bare_orchestrator(
+        self, tmp_path: Path
+    ) -> None:
+        """--review-loop --pr must invoke run_checkup_review_loop and NEVER
+        the bare run_agentic_checkup_orchestrator (which now has its own PR
+        push path). Mixing them up would double-fire push or skip guards."""
+        from pdd.agentic_checkup import run_agentic_checkup
+
+        # Stub the gh CLI responses for issue fetch.
+        def fake_gh(cmd, *_a, **_kw):  # noqa: ANN001
+            # Issue body fetch
+            if len(cmd) >= 2 and cmd[0] == "api" and "/issues/" in cmd[1]:
+                return (True, '{"title": "stub", "body": "stub", "comments_url": ""}')
+            # Comments fetch
+            return (True, "[]")
+
+        with patch(
+            "pdd.agentic_checkup._check_gh_cli", return_value=True
+        ), patch(
+            "pdd.agentic_checkup._run_gh_command", side_effect=fake_gh
+        ), patch(
+            "pdd.agentic_checkup._fetch_comments", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._find_project_root", return_value=tmp_path
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json", return_value=({}, None)
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._fetch_pr_context", return_value=""
+        ), patch(
+            "pdd.agentic_checkup.run_checkup_review_loop",
+            return_value=(True, "ok", 0.0, "model"),
+        ) as loop_mock, patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "ok", 0.0, "model"),
+        ) as orch_mock:
+            run_agentic_checkup(
+                issue_url="https://github.com/o/r/issues/2",
+                quiet=True,
+                no_fix=False,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/1",
+                review_loop=True,
+            )
+
+        loop_mock.assert_called_once()
+        orch_mock.assert_not_called()
