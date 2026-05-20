@@ -3806,6 +3806,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -3830,7 +3840,200 @@ class TestCommitAndPushIfChanged:
             "https://github.com/o/r.git",
             "refs/heads/feature",
         ] in runs
-        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+        assert [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ] in runs
+
+    def test_fetch_first_rebases_again_when_retry_also_races(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+        force_flags: List[bool] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            force_flags.append(kwargs.get("force_with_lease_on_non_fast_forward", True))
+            if pushes < 3:
+                return False, " ! [rejected] HEAD -> feature (fetch first)"
+            return True, ""
+
+        rebase_count = 0
+
+        def fake_rebase(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal rebase_count
+            rebase_count += 1
+            return True, "rebased"
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod, "_rebase_onto_updated_pr_head", fake_rebase)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        assert pushes == 3
+        assert rebase_count == 2
+        assert force_flags == [False, False, False]
+
+    def test_three_fetch_first_pushes_exhaust_retries_cleanly(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+        force_flags: List[bool] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            force_flags.append(kwargs.get("force_with_lease_on_non_fast_forward", True))
+            return False, " ! [rejected] HEAD -> feature (fetch first)"
+
+        rebase_count = 0
+
+        def fake_rebase(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal rebase_count
+            rebase_count += 1
+            return True, "rebased"
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod, "_rebase_onto_updated_pr_head", fake_rebase)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is False
+        assert pushes == 3
+        assert rebase_count == 2
+        assert message.startswith("Failed to push fixes to PR branch:")
+        assert "fetch first" in message
+        assert force_flags == [False, False, False]
+
+    def test_non_remote_advance_error_on_retry_breaks_out(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+
+        pushes = 0
+        force_flags: List[bool] = []
+
+        def fake_push(_worktree: Path, **kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            force_flags.append(kwargs.get("force_with_lease_on_non_fast_forward", True))
+            if pushes == 1:
+                return False, " ! [rejected] HEAD -> feature (fetch first)"
+            return False, "fatal: Authentication failed for 'https://github.com/o/r.git'"
+
+        rebase_count = 0
+
+        def fake_rebase(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal rebase_count
+            rebase_count += 1
+            return True, "rebased"
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+        monkeypatch.setattr(mod, "_rebase_onto_updated_pr_head", fake_rebase)
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+        assert success is False
+        assert pushes == 2
+        assert rebase_count == 1
+        assert "Authentication failed" in message
+        assert force_flags == [False, False]
 
     def test_non_fast_forward_rebases_instead_of_force_push(
         self, monkeypatch: Any, tmp_path: Path
@@ -3868,6 +4071,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
         monkeypatch.setattr(mod, "push_with_retry", fake_push)
@@ -3892,7 +4105,18 @@ class TestCommitAndPushIfChanged:
             "https://github.com/o/r.git",
             "refs/heads/feature",
         ] in runs
-        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+        assert [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ] in runs
 
     def test_fetch_first_rebase_failure_aborts_before_second_push(
         self, monkeypatch: Any, tmp_path: Path
@@ -3920,7 +4144,17 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
-            if cmd[:2] == ["git", "rebase"] and "--abort" not in cmd:
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
+            if "rebase" in cmd and "--abort" not in cmd:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": "conflict"})()
             return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
 
@@ -3967,6 +4201,16 @@ class TestCommitAndPushIfChanged:
             runs.append(list(cmd))
             if cmd == ["git", "diff", "--cached", "--quiet"]:
                 return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
+                        "stderr": "",
+                    },
+                )()
             if cmd[:3] == ["git", "fetch", "--no-tags"]:
                 if "x-access-token" not in cmd[3]:
                     return type(
@@ -4001,7 +4245,18 @@ class TestCommitAndPushIfChanged:
         ]
         assert "x-access-token" in fetches[1][3]
         assert fetches[1][4] == "refs/heads/feature"
-        assert ["git", "rebase", "--onto", "FETCH_HEAD", "HEAD~1", "HEAD"] in runs
+        assert [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+            "rebase",
+            "--onto",
+            "FETCH_HEAD",
+            "HEAD~1",
+            "HEAD",
+        ] in runs
 
     def test_fetch_auth_failure_redacts_token_in_error(
         self, monkeypatch: Any, tmp_path: Path
@@ -4047,6 +4302,93 @@ class TestCommitAndPushIfChanged:
         assert "ghs_secret" not in message
         assert "[REDACTED]" in message
 
+    def test_rotated_retry_rebases_on_prior_attempt_remote_commit(
+        self, tmp_path: Path
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        def git(cwd: Path, *args: str) -> str:
+            result = subprocess.run(
+                ["git", *args],
+                cwd=cwd,
+                capture_output=True,
+                check=True,
+                text=True,
+            )
+            return result.stdout.strip()
+
+        def configure_identity(repo: Path) -> None:
+            git(repo, "config", "user.name", "Test Bot")
+            git(repo, "config", "user.email", "test@example.com")
+
+        remote = tmp_path / "remote.git"
+        seed = tmp_path / "seed"
+        previous_attempt = tmp_path / "previous-attempt"
+        current_attempt = tmp_path / "current-attempt"
+
+        subprocess.run(
+            ["git", "init", "--bare", "--initial-branch=main", str(remote)],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "init", "--initial-branch=main", str(seed)],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        configure_identity(seed)
+        (seed / "base.txt").write_text("base\n", encoding="utf-8")
+        git(seed, "add", "base.txt")
+        git(seed, "commit", "-m", "base")
+        git(seed, "remote", "add", "origin", str(remote))
+        git(seed, "push", "origin", "HEAD:feature")
+
+        subprocess.run(
+            ["git", "clone", "--branch", "feature", str(remote), str(previous_attempt)],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        subprocess.run(
+            ["git", "clone", "--branch", "feature", str(remote), str(current_attempt)],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+
+        configure_identity(previous_attempt)
+        (previous_attempt / "prior.txt").write_text("prior attempt\n", encoding="utf-8")
+        git(previous_attempt, "add", "prior.txt")
+        git(previous_attempt, "commit", "-m", "prior checkup attempt")
+        git(previous_attempt, "push", "origin", "HEAD:feature")
+
+        (current_attempt / "current.txt").write_text("current attempt\n", encoding="utf-8")
+
+        success, message = mod._commit_and_push_if_changed(
+            current_attempt,
+            {
+                "clone_url": str(remote),
+                "head_ref": "feature",
+                "head_owner": "o",
+                "head_repo": "r",
+            },
+            "fix: address findings",
+        )
+
+        assert success is True
+        assert "rebasing" in message
+        verify = tmp_path / "verify"
+        subprocess.run(
+            ["git", "clone", "--branch", "feature", str(remote), str(verify)],
+            capture_output=True,
+            check=True,
+            text=True,
+        )
+        assert (verify / "prior.txt").read_text(encoding="utf-8") == "prior attempt\n"
+        assert (verify / "current.txt").read_text(encoding="utf-8") == "current attempt\n"
+
     def test_push_with_retry_can_leave_non_fast_forward_to_caller(
         self, tmp_path: Path
     ) -> None:
@@ -4080,6 +4422,152 @@ class TestCommitAndPushIfChanged:
         assert success is False
         assert "non-fast-forward" in err
         assert not any("--force-with-lease" in cmd for cmd in calls)
+
+    def test_rebase_retry_uses_stable_fixer_sha_after_empty_rebase(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Codex round-3 HIGH regression: a fast-forward / empty-skip on the
+        first rebase must not let a second remote-advance retry replay a
+        stale remote commit. The retry loop captures the fixer commit's SHA
+        right after the bot commit and ``git reset --hard <fixer_sha>``
+        before every rebase, so the rebase range always describes the
+        original fixer commit even if a prior rebase fast-forwarded HEAD
+        past our fix.
+        """
+        import pdd.checkup_review_loop as mod
+
+        metadata = {
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "feature",
+            "head_owner": "o",
+            "head_repo": "r",
+        }
+        monkeypatch.setattr(mod, "_git_changed_files", lambda _worktree: ["pdd/foo.py"])
+        monkeypatch.setattr(mod, "_git_untracked_files", lambda _worktree: [])
+
+        # Two fetch-first rejections, then success on the third push.
+        pushes = 0
+
+        def fake_push(_worktree: Path, **_kwargs: Any) -> Tuple[bool, str]:
+            nonlocal pushes
+            pushes += 1
+            if pushes < 3:
+                return False, " ! [rejected] HEAD -> feature (fetch first)"
+            return True, ""
+
+        monkeypatch.setattr(mod, "push_with_retry", fake_push)
+
+        # Force the real ``_rebase_onto_updated_pr_head`` to run so the new
+        # ``git reset --hard <fixer_sha>`` step is actually executed.
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_head_for_rebase",
+            lambda *_a, **_kw: (True, ""),
+        )
+
+        captured_fixer_sha = "deadbeefcafebabe1234567890abcdef12345678"
+        recorded: List[List[str]] = []
+        reset_targets: List[str] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            recorded.append(list(cmd))
+            if cmd == ["git", "diff", "--cached", "--quiet"]:
+                # Pretend something is staged so the commit step proceeds.
+                return type("R", (), {"returncode": 1, "stdout": "", "stderr": ""})()
+            if cmd == ["git", "rev-parse", "HEAD"]:
+                return type(
+                    "R",
+                    (),
+                    {
+                        "returncode": 0,
+                        "stdout": f"{captured_fixer_sha}\n",
+                        "stderr": "",
+                    },
+                )()
+            if len(cmd) >= 3 and cmd[:3] == ["git", "reset", "--hard"]:
+                reset_targets.append(cmd[3])
+                return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+            # Everything else (add, commit, rebase) is a no-op success.
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        success, message = mod._commit_and_push_if_changed(
+            tmp_path,
+            metadata,
+            "fix: address findings",
+        )
+
+        assert success is True, message
+        assert pushes == 3
+        # Reset MUST have run exactly twice (once before each of the two
+        # rebases) and MUST have targeted the SAME fixer SHA captured at
+        # commit-time.
+        assert reset_targets == [captured_fixer_sha, captured_fixer_sha], reset_targets
+
+        # And the reset MUST precede each rebase in argv order.
+        rebase_cmd_index = [
+            i
+            for i, cmd in enumerate(recorded)
+            if "rebase" in cmd
+            and "--onto" in cmd
+            and "FETCH_HEAD" in cmd
+        ]
+        reset_cmd_index = [
+            i
+            for i, cmd in enumerate(recorded)
+            if len(cmd) >= 3 and cmd[:3] == ["git", "reset", "--hard"]
+        ]
+        assert len(rebase_cmd_index) == 2
+        assert len(reset_cmd_index) == 2
+        for reset_idx, rebase_idx in zip(reset_cmd_index, rebase_cmd_index):
+            assert reset_idx < rebase_idx, (reset_idx, rebase_idx, recorded)
+
+    def test_rebase_resets_to_supplied_fixer_sha_before_running_rebase(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Standalone contract test for ``_rebase_onto_updated_pr_head``: it
+        MUST hard-reset the worktree to the supplied ``fixer_sha`` BEFORE
+        invoking ``git rebase``, regardless of where HEAD currently sits.
+        """
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_head_for_rebase",
+            lambda *_a, **_kw: (True, ""),
+        )
+
+        recorded: List[List[str]] = []
+
+        def fake_run(cmd: List[str], **_kwargs: Any):
+            recorded.append(list(cmd))
+            return type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+        monkeypatch.setattr(mod.subprocess, "run", fake_run)
+
+        sha = "0123456789abcdef0123456789abcdef01234567"
+        success, message = mod._rebase_onto_updated_pr_head(
+            tmp_path,
+            clone_url="https://github.com/o/r.git",
+            head_ref="feature",
+            repo_owner="o",
+            repo_name="r",
+            fixer_sha=sha,
+        )
+
+        assert success is True, message
+        # First subprocess.run call MUST be the reset, second MUST be the
+        # rebase. No other commands in between.
+        assert recorded[0] == ["git", "reset", "--hard", sha]
+        assert recorded[1][:5] == [
+            "git",
+            "-c",
+            "user.name=PDD Bot",
+            "-c",
+            "user.email=pdd-bot@users.noreply.github.com",
+        ]
+        assert "rebase" in recorded[1] and "--onto" in recorded[1]
 
 
 class TestStaticAnalysisCandidateFindingsIntegration:

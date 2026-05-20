@@ -230,6 +230,12 @@ def run_checkup_review_loop(
 # Cumulative dedup snapshot (overwritten at each step within a round):
 #   dedup-state-round-{N}.json -- list of normalized findings, one per dedup key
 #
+# Pre-push policy-guard refusal artifacts (written when the corresponding
+# guard refuses; persisted alongside the round files so an operator can
+# audit which discriminator fired):
+#   round-{N}-prompt-source-guard-refusal.txt          -- clause 10a refusal text
+#   round-{N}-architecture-registry-guard-refusal.txt  -- clause 10b refusal text
+#
 # Final outputs at end of loop:
 #   final-report.md  -- exact bytes returned by run_checkup_review_loop;
 #                       includes the optional ``### Reviewer Diagnostics``
