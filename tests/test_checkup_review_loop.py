@@ -203,9 +203,21 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                # Issue #1088: the final-report render re-fetches the
+                # remote PR head SHA to detect stale-head drift. Include
+                # ``head_sha`` matching the ``_git_rev_parse_head`` stub
+                # below so the happy-path stays clean.
+                "head_sha": "a" * 40,
             },
         )
         monkeypatch.setattr(mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed"))
+        # Issue #1088 trust boundary: ``_git_rev_parse_head`` returns "" on
+        # ``tmp_path`` because it is not a real git repo. Return a stable
+        # stub SHA so tests model the production case where a successful
+        # push always yields an observable HEAD SHA.
+        monkeypatch.setattr(
+            mod, "_git_rev_parse_head", lambda *a, **k: "a" * 40
+        )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
 
     def test_clean_pass_requires_primary_reviewer_only(
@@ -335,6 +347,84 @@ class TestCheckupReviewLoopRuntime:
         assert "issue_aligned: unknown" in report
         assert "The API accepts invalid input." in report
         assert "verification=unverified" in report
+
+    def test_budget_exhausted_with_fixer_claim_does_not_show_unverified_fixed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 regression: the fixer can claim
+        ``disposition='fixed'`` with a rationale (``"Added test..."``)
+        even when verification is skipped (budget exhausted after the
+        fixer pushed). The rendered Fixer Rationale section must not
+        contain a bare ``claude: fixed - <prose>`` line — every fixer
+        disposition has to be qualified (``fixer_disposition=fixed``)
+        and tagged ``verification=unverified`` so the report cannot be
+        read as a verifier verdict.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        finding = {
+            "severity": "critical",
+            "area": "api",
+            "location": "pdd/api.py:5",
+            "evidence": "missing guard",
+            "finding": "The API accepts invalid input.",
+            "required_fix": "Validate the input before use.",
+        }
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                key = mod._normalize_findings([finding], "codex", 1)[0].key
+                return (
+                    True,
+                    json.dumps(
+                        {
+                            "summary": "Added regression test.",
+                            "changed_files": ["pdd/api.py"],
+                            "findings": [
+                                {
+                                    "key": key,
+                                    "disposition": "fixed",
+                                    "rationale": "Added test covering the validation path.",
+                                }
+                            ],
+                        }
+                    ),
+                    1.0,
+                    role,
+                )
+            return True, _json("findings", [finding]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: (True, "pushed"),
+        )
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "max-cost-reached: true" in report
+        # The trust-boundary contract: bare ``claude: fixed - ...``
+        # must never appear in the final report, regardless of which
+        # section the prose ended up in.
+        assert "claude: fixed - " not in report
+        # The qualified form must appear instead, alongside the
+        # explicit verification state.
+        assert "fixer=claude fixer_disposition=fixed" in report
+        assert "verification=unverified" in report
+        # The rationale text still surfaces — qualification, not
+        # suppression — so reviewers see what the fixer claimed.
+        assert "Added test covering the validation path." in report
 
     def test_unparseable_review_at_cost_cap_skips_parse_repair(
         self, monkeypatch: Any, tmp_path: Path
@@ -1069,7 +1159,13 @@ class TestCheckupReviewLoopRuntime:
         assert "reviewer-status: codex=findings claude=fixer fresh-final=missing" in report
         assert "| blocker | open | pdd/review.py:9 |" in report
         assert "### Fixer Rationale" in report
-        assert "not_valid - The existing behavior matches the API contract." in report
+        assert "fixer=claude fixer_disposition=not_valid" in report
+        assert "The existing behavior matches the API contract." in report
+        assert "verification=unverified" in report
+        # The bare "claude: <disposition> - <text>" form is the
+        # exact trust-boundary confusion issue #1088 forbids — the
+        # rendered prose must always qualify the disposition.
+        assert "claude: not_valid - " not in report
 
     def test_artifacts_are_persisted_per_round(
         self, monkeypatch: Any, tmp_path: Path
@@ -2993,6 +3089,935 @@ class TestCheckupReviewLoopRuntime:
             f"state.active_fixer must remain unset when fallback is skipped; "
             f"got {state.active_fixer!r}"
         )
+
+
+class TestShaBackedVerificationTrustBoundary:
+    """Regressions for issue #1088: a finding may only be promoted to
+    ``fixed`` after the verifier clears the SHA the fixer just pushed,
+    observed at the rendered report's PR head re-fetch.
+
+    Covers the three acceptance scenarios called out in the issue
+    (happy-path-same-SHA, verifier-clean-then-head-advances,
+    budget-exhausted-after-fixer-success) plus the no-pushed-SHA guard
+    introduced by R-V1/R-V2.
+    """
+
+    @staticmethod
+    def _finding() -> Dict[str, str]:
+        return {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:1",
+            "evidence": "ev",
+            "finding": "broken api",
+            "required_fix": "fix it",
+        }
+
+    @staticmethod
+    def _patch_common(
+        monkeypatch: Any,
+        tmp_path: Path,
+        *,
+        head_sha: str = "a" * 40,
+        push_result: Tuple[bool, str] = (True, "pushed"),
+        rev_parse_head: str = "a" * 40,
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_sha": head_sha,
+            },
+        )
+        monkeypatch.setattr(
+            mod, "_commit_and_push_if_changed", lambda *a, **k: push_result
+        )
+        monkeypatch.setattr(
+            mod, "_git_rev_parse_head", lambda *a, **k: rev_parse_head
+        )
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+    def _fake_task(
+        self,
+        *,
+        finding: Dict[str, str] | None = None,
+        verify_clean: bool = True,
+    ):
+        finding_blob = finding or self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "verify-" in label:
+                return (
+                    True,
+                    _json("clean") if verify_clean else _json("findings", [finding_blob]),
+                    0.1,
+                    role,
+                )
+            if "review-" in label:
+                return True, _json("findings", [finding_blob]), 0.1, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("clean"), 0.1, role
+
+        return fake_task
+
+    def test_happy_path_same_sha_marks_finding_fixed(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Happy path: fixer pushes SHA-A, verifier clears SHA-A, remote
+        re-fetch still observes SHA-A. The finding flips to ``fixed`` and
+        ``verification_status_by_round[1]`` is ``"verified"``."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha = "f" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
+        )
+        monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "fresh-final-review: clean" in report
+        assert f"verified-head-sha: {sha}" in report
+        assert f"remote-pr-head-sha: {sha}" in report
+        assert "verification=verified" in report
+        assert "broken api" not in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["verified_head_sha"] == sha
+        assert final_state["remote_pr_head_sha"] == sha
+        assert final_state["verification_status_by_round"]["1"] == "verified"
+        statuses = {
+            f["key"]: f["status"] for f in final_state["findings"]
+        }
+        assert all(status == "fixed" for status in statuses.values()), statuses
+        fixes = final_state["fixes"]
+        assert fixes and fixes[0]["push_status"] == "pushed"
+        assert fixes[0]["pushed_head_sha"] == sha
+        assert fixes[0]["fixer_result"] == "attempted"
+
+    def test_verifier_clean_then_head_advances_reverts_fixed_state(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The verifier clears SHA-A, but by the time ``_finalize``
+        re-fetches the PR head a third party has pushed SHA-B.
+        ``final-state.json`` must NOT continue to claim the round
+        was verified or the finding fixed (issue #1088)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha_a = "a" * 40
+        sha_b = "b" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha_b, rev_parse_head=sha_a
+        )
+        monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "fresh-final-review: missing" in report
+        assert f"verified-head-sha: {sha_a}" in report
+        assert f"remote-pr-head-sha: {sha_b}" in report
+        assert "PR head advanced after verification" in report
+        assert "verification=verified" not in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["verification_status_by_round"]["1"] == "stale"
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
+
+    def test_remote_head_refetch_failure_reverts_fixed_state(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V5 fail-closed: when the render-time PR head re-fetch
+        returns no ``head_sha`` we cannot prove the verifier's SHA is
+        still current. The round downgrades to ``stale`` and any
+        ``fixed`` finding reverts to ``open``."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha_a = "a" * 40
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        # First call returns ``head_sha`` (used by the worktree setup
+        # path); the second call (from ``_finalize``) drops it to model
+        # a failed re-fetch.
+        metadata_calls: List[int] = []
+
+        def fake_metadata(*_a: Any, **_kw: Any):
+            metadata_calls.append(1)
+            base = {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+            }
+            if len(metadata_calls) == 1:
+                base["head_sha"] = sha_a
+            return base
+
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
+        monkeypatch.setattr(
+            mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed")
+        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert "fresh-final-review: missing" in report
+        # Render-time re-fetch returned no SHA — rendered as ``unknown``.
+        assert "remote-pr-head-sha: unknown" in report
+        assert "Primary reviewer is satisfied" not in report
+        assert "verification is treated as unverified" in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["verification_status_by_round"]["1"] == "stale"
+        assert "verification is treated as unverified" in final_state["stop_reason"]
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
+
+    def test_no_commit_pushed_skips_verifier_and_keeps_finding_open(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V1: when ``_commit_and_push_if_changed`` returns
+        ``(True, "No changes to push.")`` the fixer produced no commit.
+        The verifier must NOT run and findings must NOT be promoted to
+        ``fixed`` (issue #1088)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_common(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "No changes to push."),
+        )
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":[]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The verifier must NEVER fire when no commit was pushed.
+        assert not any("verify-" in lbl for lbl in calls), calls
+        # The rendered report must not claim a clean fresh-final.
+        assert "fresh-final-review: clean" not in report
+        assert "No findings remain" not in report
+        assert "verification=verified" not in report
+        assert "broken api" in report  # still listed as remaining
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["verification_status_by_round"]["1"] == "skipped"
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
+        fixes = final_state["fixes"]
+        assert fixes and fixes[0]["push_status"] == "not_attempted"
+        assert fixes[0]["pushed_head_sha"] is None
+        assert fixes[0]["fixer_result"] == "skipped"
+
+    def test_pushed_but_no_rev_parse_sha_skips_verifier(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V2: the push helper reports success but ``git rev-parse
+        HEAD`` returns empty. We cannot prove which SHA landed, so the
+        verifier must NOT run and findings must NOT be marked fixed."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_common(
+            monkeypatch,
+            tmp_path,
+            push_result=(True, "pushed"),
+            rev_parse_head="",
+        )
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "verify-" in label:
+                return True, _json("clean"), 0.1, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert not any("verify-" in lbl for lbl in calls), calls
+        assert "fresh-final-review: clean" not in report
+        assert "verification=verified" not in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["verification_status_by_round"]["1"] == "skipped"
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
+
+    def test_budget_exhausted_after_fixer_pushes_leaves_round_unverified(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V6: the fixer's push lands on SHA-A but the budget cap
+        trips before the verifier runs. ``final-state.json`` must
+        reflect ``unverified`` for the round and the per-round fix
+        artifact must persist the trust-boundary fields with the pushed
+        SHA captured."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha = "c" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
+        )
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":["pdd/foo.py"]}',
+                    1.0,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert round(cost, 2) == 1.1
+        # Budget exhausted between push and verify — no verify call.
+        assert not any("verify-" in lbl for lbl in calls), calls
+        assert "max-cost-reached: true" in report
+        assert "verification=unverified" in report
+        assert "verification=verified" not in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["verification_status_by_round"]["1"] == "unverified"
+        assert all(
+            f["status"] != "fixed" for f in final_state["findings"]
+        ), final_state["findings"]
+        fixes = final_state["fixes"]
+        assert fixes and fixes[0]["push_status"] == "pushed"
+        assert fixes[0]["pushed_head_sha"] == sha
+
+    def test_per_round_fix_artifact_carries_trust_boundary_fields(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """The per-round ``round-N-fix-...-findings.json`` artifact must
+        include ``fixer_result``, ``push_status``,
+        ``local_fixer_commit_sha`` and ``pushed_head_sha`` (even as
+        ``null`` when not applicable) so the audit trail on disk
+        matches the PR prompt contract."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha = "d" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
+        )
+        monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
+
+        run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        artifacts_dir = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        )
+        artifact = json.loads(
+            (
+                artifacts_dir / "round-1-fix-claude-for-codex.findings.json"
+            ).read_text()
+        )
+        # Trust-boundary fields are present after push/SHA classification.
+        for key in (
+            "fixer_result",
+            "push_status",
+            "local_fixer_commit_sha",
+            "pushed_head_sha",
+            "round_number",
+        ):
+            assert key in artifact, f"missing trust-boundary key {key!r}"
+        assert artifact["push_status"] == "pushed"
+        assert artifact["pushed_head_sha"] == sha
+        assert artifact["fixer_result"] == "attempted"
+        assert artifact["round_number"] == 1
+
+    def test_initial_reviewer_clean_then_remote_head_advances_downgrades(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V5 (round 2): when the FIRST reviewer returns ``clean`` the
+        loop never runs a fixer or verifier, so the old
+        ``if state.verified_head_sha`` gate in ``_finalize`` skipped the
+        render-time re-fetch entirely. The fix records the reviewed PR
+        head SHA on every clean reviewer path and the re-fetch now fires
+        whenever ``fresh_final_status == "clean"``. If the remote PR
+        head has advanced past what the reviewer saw, the report MUST
+        NOT render ``fresh-final-review: clean``."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha_a = "a" * 40
+        sha_b = "b" * 40
+        # First metadata fetch (loop start) returns SHA-A — that's what
+        # the reviewer sees in the worktree. The render-time re-fetch
+        # in ``_finalize`` returns SHA-B — the remote head advanced.
+        metadata_calls: List[int] = []
+
+        def fake_metadata(*_a: Any, **_kw: Any):
+            metadata_calls.append(1)
+            return {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_sha": sha_a if len(metadata_calls) == 1 else sha_b,
+            }
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
+        # No fixer should run. Fail loudly if push/rev-parse is touched.
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pytest.fail("fixer must not run when reviewer clean"),
+        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            # First reviewer is clean — no fixer, no verifier.
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Only one reviewer call — no verifier, no fixer.
+        assert not any("verify-" in lbl for lbl in calls), calls
+        assert not any("fix-" in lbl for lbl in calls), calls
+        # The render-time re-fetch must have fired exactly once.
+        assert len(metadata_calls) == 2, metadata_calls
+        # The rendered report must no longer claim a clean fresh-final.
+        assert "fresh-final-review: clean" not in report
+        assert "fresh-final-review: missing" in report
+        # ``verified-head-sha:`` is ``none`` (no verifier ran), but the
+        # remote head was observed at the render boundary.
+        assert "verified-head-sha: none" in report
+        assert f"remote-pr-head-sha: {sha_b}" in report
+        assert "PR head advanced after review" in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["fresh_final_status"] == "missing"
+        assert final_state["remote_pr_head_sha"] == sha_b
+        assert final_state["verified_head_sha"] is None
+
+    def test_initial_reviewer_clean_refetch_failure_downgrades(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """R-V5 fail-closed for the no-verifier path: when the first
+        reviewer is clean and the render-time PR-head re-fetch returns
+        no ``head_sha``, the report MUST downgrade fresh-final to
+        ``missing`` and render ``remote-pr-head-sha: unknown`` (the
+        re-fetch was attempted but failed)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha_a = "a" * 40
+        metadata_calls: List[int] = []
+
+        def fake_metadata(*_a: Any, **_kw: Any):
+            metadata_calls.append(1)
+            base: Dict[str, str] = {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+            }
+            if len(metadata_calls) == 1:
+                base["head_sha"] = sha_a
+            # Second call (from ``_finalize``) drops head_sha to model
+            # a failed re-fetch.
+            return base
+
+        monkeypatch.setattr(
+            mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None)
+        )
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_metadata)
+        monkeypatch.setattr(
+            mod,
+            "_commit_and_push_if_changed",
+            lambda *a, **k: pytest.fail("fixer must not run when reviewer clean"),
+        )
+        monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
+        monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(
+            mod,
+            "_run_role_task",
+            lambda role, instruction, cwd, **kwargs: (
+                True, _json("clean"), 0.1, role
+            ),
+        )
+
+        success, report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert len(metadata_calls) == 2
+        assert "fresh-final-review: clean" not in report
+        assert "fresh-final-review: missing" in report
+        assert "remote-pr-head-sha: unknown" in report
+        assert "Primary reviewer is satisfied" not in report
+        assert "verification is treated as unverified" in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        assert final_state["fresh_final_status"] == "missing"
+        assert final_state["remote_pr_head_sha"] is None
+        assert "verification is treated as unverified" in final_state["stop_reason"]
+
+    def test_budget_exhausted_after_verifier_clean_pins_round_and_sha(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Trust-boundary audit-trail regression: when the verifier
+        returns ``clean`` against the pushed head and the budget cap
+        trips on the post-verify ``_budget_exhausted`` check, the
+        per-round verification status and the verified head SHA must
+        already be pinned before the budget break-out — otherwise
+        ``final-state.json`` would render ``status='fixed'`` findings
+        without a matching ``verification_status_by_round`` entry."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha = "e" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
+        )
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "verify-" in label:
+                # Verifier returns clean AND pushes total_cost over the
+                # max so the post-verify ``_budget_exhausted`` check
+                # trips on the very next line.
+                return True, _json("clean"), 0.4, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            # review-: report a finding so the fixer/verifier path runs.
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # review (0.1) + fix (0.1) + verify (0.4) == 0.6 >= 0.5.
+        assert round(cost, 2) == 0.6
+        # The verifier MUST have run (this is the post-verify trip).
+        assert any("verify-" in lbl for lbl in calls), calls
+        assert "max-cost-reached: true" in report
+        assert f"verified-head-sha: {sha}" in report
+        assert f"remote-pr-head-sha: {sha}" in report
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        # The trust-boundary audit trail must be intact: verified SHA
+        # pinned, per-round status recorded as ``verified``, and the
+        # fixed-by-the-verifier findings carry ``status='fixed'``.
+        assert final_state["verified_head_sha"] == sha
+        assert final_state["verification_status_by_round"]["1"] == "verified"
+        assert final_state["max_cost_reached"] is True
+        statuses = {
+            f["key"]: f["status"] for f in final_state["findings"]
+        }
+        assert statuses, final_state["findings"]
+        assert all(status == "fixed" for status in statuses.values()), statuses
+
+    def test_budget_exhausted_after_verifier_partial_records_unverified(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Partial-acceptance audit-trail regression: when the verifier
+        accepts some findings but still reports others against the
+        pushed head, and the budget cap trips on the post-verify
+        ``_budget_exhausted`` check, the per-round verification status
+        must be recorded as ``unverified`` (partial does not advance
+        ``verified_head_sha``) — but the verifier-accepted findings
+        still carry ``status='fixed'`` from
+        ``_mark_findings_fixed``."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        sha = "9" * 40
+        self._patch_common(
+            monkeypatch, tmp_path, head_sha=sha, rev_parse_head=sha
+        )
+        # Two distinct findings — the verifier will accept (omit) the
+        # first and re-report the second.
+        accepted = self._finding()
+        accepted["location"] = "pdd/foo.py:1"
+        accepted["finding"] = "accepted finding"
+        remaining = {
+            "severity": "blocker",
+            "area": "api",
+            "location": "pdd/foo.py:99",
+            "evidence": "ev2",
+            "finding": "remaining finding",
+            "required_fix": "fix it harder",
+        }
+        calls: List[str] = []
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            calls.append(label)
+            if "verify-" in label:
+                # Verifier accepts ``accepted`` (omits it) but still
+                # reports ``remaining``. Cost crosses the budget cap.
+                return True, _json("findings", [remaining]), 0.4, role
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"x","changed_files":["pdd/foo.py"]}',
+                    0.1,
+                    role,
+                )
+            # review-: report both findings so both reach the fixer.
+            return (
+                True,
+                _json("findings", [accepted, remaining]),
+                0.1,
+                role,
+            )
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_cost=0.5),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        assert round(cost, 2) == 0.6
+        assert any("verify-" in lbl for lbl in calls), calls
+
+        final_state = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "final-state.json"
+            ).read_text()
+        )
+        # Partial acceptance does NOT pin ``verified_head_sha``.
+        assert final_state["verified_head_sha"] is None
+        # But the per-round verification status MUST be recorded
+        # (previously this entry was absent after partial+budget-out).
+        assert final_state["verification_status_by_round"]["1"] == "unverified"
+        assert final_state["max_cost_reached"] is True
+        # Verifier-accepted finding flipped to ``fixed``; the other
+        # still-open finding remains ``open``. Discriminate by status
+        # count rather than serialized field name so the test does not
+        # depend on the specific finding-dict layout.
+        fixed_findings = [
+            f for f in final_state["findings"] if f["status"] == "fixed"
+        ]
+        open_findings = [
+            f for f in final_state["findings"] if f["status"] == "open"
+        ]
+        assert len(fixed_findings) == 1, final_state["findings"]
+        assert len(open_findings) == 1, final_state["findings"]
+
+    def test_failed_primary_fixer_writes_trust_boundary_artifact_no_fallback(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 audit-trail completeness: when the primary fixer
+        fails and no ``fixer_fallback`` is configured, the loop breaks
+        BEFORE the canonical post-push artifact rewrite. The per-round
+        ``round-N-fix-...findings.json`` artifact MUST still carry the
+        in-memory ``FixResult`` trust-boundary fields (rather than the
+        ``null`` placeholders ``_run_fix`` initially writes), so the
+        on-disk audit shows ``fixer_result=failed`` and
+        ``push_status=not_attempted``.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_common(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if "fix-" in label:
+                return False, "primary fixer failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        artifact = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "round-1-fix-claude-for-codex.findings.json"
+            ).read_text()
+        )
+        assert artifact["fixer_result"] == "failed", artifact
+        assert artifact["push_status"] == "not_attempted", artifact
+        assert artifact["local_fixer_commit_sha"] is None, artifact
+        assert artifact["pushed_head_sha"] is None, artifact
+        assert artifact["round_number"] == 1, artifact
+
+    def test_failed_primary_and_failed_fallback_write_trust_boundary_artifacts(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 audit-trail completeness: when both the primary
+        fixer and the configured ``fixer_fallback`` fail, the loop breaks
+        BEFORE the canonical post-push artifact rewrite. Both per-round
+        ``round-N-fix-...findings.json`` artifacts (primary's and
+        fallback's) MUST carry their in-memory ``FixResult``
+        trust-boundary fields — ``fixer_result=failed`` and
+        ``push_status=not_attempted`` on each.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_common(monkeypatch, tmp_path)
+        finding = self._finding()
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if label == "checkup-review-loop-review-codex-round1":
+                return True, _json("findings", [finding]), 0.1, role
+            if label == "checkup-review-loop-fix-claude-for-codex-round1":
+                return False, "primary fixer failed", 0.0, role
+            if label == "checkup-review-loop-fix-gemini-for-codex-round1":
+                return False, "fallback fixer also failed", 0.0, role
+            return True, _json("clean"), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(fixer_fallback="gemini"),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        artifacts_dir = (
+            tmp_path / ".pdd" / "checkup-review-loop" / "issue-2-pr-1"
+        )
+        primary_artifact = json.loads(
+            (artifacts_dir / "round-1-fix-claude-for-codex.findings.json").read_text()
+        )
+        fallback_artifact = json.loads(
+            (artifacts_dir / "round-1-fix-gemini-for-codex.findings.json").read_text()
+        )
+        for artifact in (primary_artifact, fallback_artifact):
+            assert artifact["fixer_result"] == "failed", artifact
+            assert artifact["push_status"] == "not_attempted", artifact
+            assert artifact["local_fixer_commit_sha"] is None, artifact
+            assert artifact["pushed_head_sha"] is None, artifact
+            assert artifact["round_number"] == 1, artifact
 
 
 class TestPromptInjection:
@@ -5916,8 +6941,78 @@ class TestPromptSourceGuardIntegration:
         assert "reviewer-status: codex=findings" in report
         assert "fresh-final-review: missing" in report
 
+    def test_prompt_source_guard_refusal_writes_trust_boundary_artifact(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Issue #1088 audit-trail completeness: when the prompt-source
+        guard refuses the push (fixer succeeded but changed only
+        generated code), the loop breaks BEFORE the canonical post-push
+        artifact rewrite. The per-round ``round-N-fix-...findings.json``
+        artifact MUST still carry the in-memory ``FixResult``
+        trust-boundary fields — ``fixer_result=attempted`` (the
+        subprocess returned success) and ``push_status=not_attempted``
+        (the policy layer refused before invoking the push helper).
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
 
-# ---------------------------------------------------------------------------
+        self._patch_io(monkeypatch, tmp_path)
+        self._seed_registry(
+            tmp_path,
+            [_prompt_module("agentic_update_python.prompt", "pdd/agentic_update.py")],
+        )
+
+        # The fake fixer "edits" agentic_update.py without touching its
+        # prompt — exactly the failure mode the guard catches.
+        monkeypatch.setattr(
+            mod, "_git_changed_files", lambda _wt: ["pdd/agentic_update.py"]
+        )
+
+        def fake_push(*_a: Any, **_kw: Any) -> Tuple[bool, str]:
+            pytest.fail("push helper must not be invoked when guard refuses")
+
+        monkeypatch.setattr(mod, "_commit_and_push_if_changed", fake_push)
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            label = kwargs["label"]
+            if "fix-" in label:
+                return (
+                    True,
+                    '{"summary":"edited","changed_files":["pdd/agentic_update.py"]}',
+                    0.1,
+                    role,
+                )
+            return True, _json("findings", [self._finding()]), 0.1, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, _report, _cost, _model = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1, require_final_fresh_review=False),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        artifact = json.loads(
+            (
+                tmp_path
+                / ".pdd"
+                / "checkup-review-loop"
+                / "issue-2-pr-1"
+                / "round-1-fix-claude-for-codex.findings.json"
+            ).read_text()
+        )
+        # The fixer subprocess succeeded, so ``fixer_result`` is
+        # ``attempted``; the guard refused the push so
+        # ``push_status`` stays ``not_attempted`` and both SHA fields
+        # remain null.
+        assert artifact["fixer_result"] == "attempted", artifact
+        assert artifact["push_status"] == "not_attempted", artifact
+        assert artifact["local_fixer_commit_sha"] is None, artifact
+        assert artifact["pushed_head_sha"] is None, artifact
+        assert artifact["round_number"] == 1, artifact
 # Issue #1081: architecture-registry edit guard
 #
 # Coordinated rename + prompt delete + ``architecture.json`` rewrite was

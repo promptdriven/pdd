@@ -9,9 +9,13 @@ interface without importing the real code.
 
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +61,16 @@ class ReviewResult:
 
 @dataclass
 class FixResult:
-    """Output of one fixer pass for a reviewer's findings."""
+    """Output of one fixer pass for a reviewer's findings.
+
+    ``success`` is the bare fixer-subprocess return flag. It MUST NOT
+    be rendered as a leading ``success``/``fixed`` token in the final
+    report (issue #1088). The verification-boundary fields are
+    populated by the loop around ``_commit_and_push_if_changed`` so the
+    rendered ``### Fixes Attempted`` bullet can lead with the
+    structured triple ``fixer_result=… push_status=… verification=…``
+    rather than the untrusted prose.
+    """
 
     fixer: str
     success: bool
@@ -66,6 +79,16 @@ class FixResult:
     raw_output: str = ""
     dispositions: Dict[str, str] = field(default_factory=dict)
     rationales: Dict[str, str] = field(default_factory=dict)
+    # SHA-backed verification trust boundary (issue #1088).
+    # ``fixer_result``: ``"attempted" | "skipped" | "failed"``.
+    # ``push_status``: ``"pushed" | "push_failed" | "not_attempted"``.
+    # SHAs come from ``git rev-parse HEAD`` in the worktree; the loop
+    # MUST NOT infer them from fixer prose.
+    fixer_result: Optional[str] = None
+    push_status: Optional[str] = None
+    local_fixer_commit_sha: Optional[str] = None
+    pushed_head_sha: Optional[str] = None
+    round_number: int = 0
 
 
 @dataclass
@@ -161,6 +184,29 @@ class ReviewLoopState:
     # can enforce the documented "must differ from --reviewer" rule even after
     # the active reviewer has rotated.
     original_reviewer: Optional[str] = None
+    # SHA-backed verification trust boundary (issue #1088).
+    # ``verified_head_sha``: PR head SHA the verifier most recently
+    # reviewed as clean. Updated only when the verifier returns clean
+    # on the SHA the fixer just pushed.
+    # ``remote_pr_head_sha``: PR head SHA observed at final-report
+    # render time via a single ``_fetch_pr_metadata`` re-fetch (R-V5).
+    # ``verification_status_by_round``: per-round verifier outcome,
+    # values in ``{"verified", "unverified", "stale", "skipped"}``.
+    # ``reviewed_head_sha``: PR head SHA observed in the worktree at
+    # the time the reviewer (primary, fallback, or review-only) ran.
+    # Recorded directly from ``git rev-parse HEAD`` in the worktree
+    # rather than from PR metadata, so a PR that advances between
+    # checkout and the metadata fetch cannot poison the comparison
+    # target ``_finalize`` uses at the R-V5 re-fetch.
+    # ``final_refetch_attempted``: True when ``_finalize`` actually
+    # ran the render-time remote-head re-fetch. Lets the render layer
+    # distinguish a missing re-fetch (``remote-pr-head-sha: none``)
+    # from a failed re-fetch (``remote-pr-head-sha: unknown``).
+    verified_head_sha: Optional[str] = None
+    remote_pr_head_sha: Optional[str] = None
+    verification_status_by_round: Dict[int, str] = field(default_factory=dict)
+    reviewed_head_sha: Optional[str] = None
+    final_refetch_attempted: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +352,34 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
     "fix_attempts_by_key": {},
     "dispute_notes_by_key": {},
     "reviewer_feedback_by_key": {},
+    # SHA-backed verification trust boundary (issue #1088). Always
+    # present in ``final-state.json`` so downstream consumers can rely
+    # on the schema rather than feature-detecting.
+    "verified_head_sha": "0123456789abcdef0123456789abcdef01234567",
+    "remote_pr_head_sha": "0123456789abcdef0123456789abcdef01234567",
+    "reviewed_head_sha": "0123456789abcdef0123456789abcdef01234567",
+    "verification_status_by_round": {"1": "verified"},
     "findings": [EXAMPLE_NORMALIZED_FINDING],
+    # Each fix entry in ``final-state.json`` carries the structured
+    # trust fields so downstream consumers can distinguish "fixer
+    # attempted" from "verified on current PR head".
+    "fixes": [
+        {
+            "fixer": "claude",
+            "success": True,
+            "summary": "Added regression test and tightened the assertion.",
+            "changed_files": ["tests/test_foo.py", "pdd/foo.py"],
+            "dispositions": {EXAMPLE_NORMALIZED_FINDING["key"]: "fixed"},
+            "rationales": {
+                EXAMPLE_NORMALIZED_FINDING["key"]: "Added the missing regression coverage.",
+            },
+            "round_number": 1,
+            "fixer_result": "attempted",
+            "push_status": "pushed",
+            "local_fixer_commit_sha": "0123456789abcdef0123456789abcdef01234567",
+            "pushed_head_sha": "0123456789abcdef0123456789abcdef01234567",
+        }
+    ],
 }
 
 
@@ -325,6 +398,8 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 #   active-reviewer: <role>
 #   reviewer-status: <role>=<status> ... fresh-final=<status>
 #   fresh-final-review: clean|findings|failed|degraded|missing
+#   verified-head-sha: <sha>|none
+#   remote-pr-head-sha: <sha>|none|unknown
 #   max-rounds-reached: true|false
 #   max-cost-reached: true|false
 #   max-duration-reached: true|false
@@ -338,6 +413,26 @@ EXAMPLE_FINAL_STATE_PAYLOAD: Dict[str, object] = {
 # <fallback>)` so downstream verdict adapters drop the failed primary from
 # the required-reviewer set and resolve the report to `ship_degraded`
 # instead of `unknown`.
+#
+# `verified-head-sha:` and `remote-pr-head-sha:` are the SHA-backed
+# verification trust boundary (issue #1088). They are always present.
+# `verified-head-sha` renders `none` when no verifier pass has cleared a
+# pushed head this loop. `remote-pr-head-sha` renders `none` only when
+# the final-report re-fetch was not needed (no verifier pin, no clean
+# fresh-final reviewer status, no fixed findings, no recorded fixer
+# push), `unknown` when an attempted re-fetch returned no head SHA
+# (R-V5), and otherwise the observed remote PR head SHA. When the
+# observed remote head differs from the SHA the verifier cleared,
+# downstream verdict adapters MUST treat the report as stale even if
+# `fresh-final-review:` would otherwise be `clean`.
+#
+# Each `### Fixes Attempted` bullet MUST be rendered in the fixed-field
+# form `- round=<N> fixer=<role> fixer_result=<value>
+# push_status=<value> local_sha=<short_sha_or_none>
+# pushed_sha=<short_sha_or_none> changed_files=<files>
+# verification=<value> [summary=<one-line-fixer-summary>]`. The bare
+# fixer-subprocess return flag MUST NEVER appear as the leading status
+# token (R-V7 — the #1088 failure mode).
 #
 # Fixer disagreement is not terminal. If the fixer returns `not_valid` or
 # `blocked`, the active reviewer either accepts the rationale by omitting the
@@ -353,6 +448,8 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
     "active-reviewer: codex\n"
     "reviewer-status: codex=clean claude=fixer fresh-final=clean\n"
     "fresh-final-review: clean\n"
+    "verified-head-sha: 0123456789abcdef0123456789abcdef01234567\n"
+    "remote-pr-head-sha: 0123456789abcdef0123456789abcdef01234567\n"
     "max-rounds-reached: false\n"
     "max-cost-reached: false\n"
     "max-duration-reached: false\n"
