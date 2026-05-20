@@ -26,7 +26,7 @@ Entry point for the agentic checkup workflow. Accepts a GitHub issue URL, fetche
 13. Post error comment on GitHub issue if the legacy orchestrator raises an exception
 
 % Helper Functions
-- `_extract_json_from_text(text: str) -> Optional[Dict[str, Any]]`: extract JSON from markdown code blocks or raw text
+- `_extract_json_from_text(text: str) -> Optional[Dict[str, Any]]`: extract the LAST top-level JSON object from agent output. Use `json.JSONDecoder.raw_decode` starting at every `{` and keep the LAST successfully-parsed dict. This honors the Step 7 prompt contract ("The JSON report MUST be the last output") so earlier intermediate-reasoning blocks — fenced or unfenced — never mask the final verdict. Returning the FIRST JSON block silently bypassed the PR-mode gate when an interior summary block looked clean (round-5 Finding 2).
 - `_load_pddrc_content(project_root: Path) -> str`: read `.pddrc` file, return "No .pddrc found." if missing
 - `_post_checkup_comment(owner, repo, issue_number, report)`: post structured checkup results as GitHub comment with issues table
 - `_post_error_comment(owner, repo, issue_number, message)`: post error message as GitHub comment

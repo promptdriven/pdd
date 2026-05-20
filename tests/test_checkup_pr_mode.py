@@ -2928,3 +2928,492 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
         # not the pre-push (passing) one — ``_run_single_step`` refreshes
         # ``step_outputs["7"]`` each call.
         assert "issue_aligned: false" in body
+
+
+# ---------------------------------------------------------------------------
+# Round-5 Finding 2: Step 7 verdict parser must pick the LAST JSON block.
+# The prompt requires the verdict JSON to be last; the pre-round-5 parser
+# returned the FIRST match, so an earlier passing block could mask a final
+# failing verdict.
+# ---------------------------------------------------------------------------
+
+
+class TestStep7PassedUsesLastJsonBlock:
+    """Pin the contract: when multiple fenced JSON blocks appear, the gate
+    decides on the LAST one (the prompt's required verdict location)."""
+
+    def test_step7_passed_uses_last_json_block_when_multiple_present(self) -> None:
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        first_clean = json.dumps({
+            "success": True,
+            "issue_aligned": True,
+            "issues": [],
+            "changed_files": [],
+            "message": "early-iteration summary",
+        })
+        last_failing = json.dumps({
+            "success": True,
+            "issue_aligned": False,
+            "issues": [],
+            "changed_files": [],
+            "message": "PR does not address the issue",
+        })
+        text = (
+            "## Iteration 1 summary\n"
+            f"```json\n{first_clean}\n```\n\n"
+            "## Final verdict\n"
+            f"```json\n{last_failing}\n```\n"
+        )
+        passed, reason = _step7_passed(text, pr_mode=True)
+        assert passed is False, (
+            "Gate must decide on the LAST JSON block; the first block "
+            "(issue_aligned=true) is an interior summary and must not mask "
+            "the final verdict."
+        )
+        assert "issue_aligned=false" in reason
+
+    def test_step7_passed_with_single_json_block_unchanged(self) -> None:
+        """Behaviour for a single JSON block stays identical."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        payload = json.dumps({
+            "success": True,
+            "issue_aligned": True,
+            "issues": [],
+            "changed_files": [],
+        })
+        text = f"## Verdict\n```json\n{payload}\n```"
+        passed, _ = _step7_passed(text, pr_mode=True)
+        assert passed is True
+
+    def test_step7_passed_with_trailing_non_json_text(self) -> None:
+        """Free text AFTER the JSON block must not defeat parsing."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        payload = json.dumps({
+            "success": True,
+            "issue_aligned": True,
+            "issues": [],
+            "changed_files": [],
+        })
+        text = (
+            f"```json\n{payload}\n```\n\n"
+            "Note: agent ended with additional commentary the prompt forbade, "
+            "but the LAST JSON block must still be parsed."
+        )
+        passed, _ = _step7_passed(text, pr_mode=True)
+        assert passed is True
+
+    def test_step7_passed_no_json_at_all_fails_closed(self) -> None:
+        """No JSON anywhere — gate still fails closed (unchanged)."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        passed, reason = _step7_passed(
+            "Step 7 verdict: All good!\nNo JSON.", pr_mode=True
+        )
+        assert passed is False
+        assert "Step 7 verdict JSON could not be parsed" in reason
+
+    def test_step7_passed_last_block_unfenced_after_fenced_passing(self) -> None:
+        """If the LAST verdict isn't fenced (model forgot the markdown
+        fences), the parser should still prefer it over an earlier fenced
+        passing block. Defensive fallback for the documented contract."""
+        from pdd.agentic_checkup_orchestrator import _step7_passed
+
+        first_clean = json.dumps({
+            "success": True,
+            "issue_aligned": True,
+            "issues": [],
+            "changed_files": [],
+        })
+        last_failing = json.dumps({
+            "success": False,
+            "issue_aligned": True,
+            "issues": [],
+            "changed_files": [],
+            "message": "tests still red",
+        })
+        text = (
+            f"```json\n{first_clean}\n```\n\n"
+            "Final verdict (unfenced):\n"
+            f"{last_failing}\n"
+        )
+        passed, reason = _step7_passed(text, pr_mode=True)
+        assert passed is False
+        assert "success=false" in reason
+
+
+# ---------------------------------------------------------------------------
+# Round-5 Finding 4: comment-post failures must NOT be silently ignored.
+# `post_pr_comment` / `post_step_comment` return booleans. The orchestrator
+# must surface failures via (a) the returned message (suffix), (b)
+# `step_outputs["pr_post_status"]`, and (c) `.pdd/checkup-pr-<n>/final-report.md`.
+# The gate outcome itself is NOT flipped — gh/network flakiness is independent
+# of code-verification truth.
+# ---------------------------------------------------------------------------
+
+
+def _last_saved_pr_post_status(save_mock) -> str:
+    for call in reversed(save_mock.call_args_list):
+        state = call.kwargs.get("state")
+        if state is None and call.args:
+            state = call.args[-1] if isinstance(call.args[-1], dict) else None
+        if state is None:
+            continue
+        step_outputs = state.get("step_outputs", {}) or {}
+        status = step_outputs.get("pr_post_status")
+        if status:
+            return status
+    return ""
+
+
+def _run_fix_mode_pr_with_post_returns(
+    tmp_path: Path,
+    *,
+    pr_comment_return: bool,
+    issue_comment_return: bool,
+):
+    from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+    def fake_step(step_num, _name, _context, *_args, **_kwargs):  # noqa: ANN001
+        output = _step7_clean_output() if step_num == 7 else f"Step {step_num} output"
+        return (True, output, 0.0, "fake-model")
+
+    wt = tmp_path / "wt"
+    wt.mkdir()
+
+    with patch(
+        "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+        return_value=(wt, None),
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.load_workflow_state",
+        return_value=(None, None),
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.save_workflow_state",
+        return_value=None,
+    ) as save_mock, patch(
+        "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+        return_value={
+            "clone_url": "https://github.com/o/r.git",
+            "head_ref": "change/test",
+            "head_owner": "o",
+            "head_repo": "r",
+            "head_sha": "deadbeef",
+        },
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+        return_value=(True, "Pushed fixes to PR branch."),
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._git_changed_files",
+        return_value=[],
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+        return_value=None,
+    ), patch(
+        "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+        return_value=None,
+    ), patch(
+        "pdd.agentic_checkup_orchestrator.post_pr_comment",
+        return_value=pr_comment_return,
+    ) as pr_comment_mock, patch(
+        "pdd.agentic_checkup_orchestrator.post_step_comment",
+        return_value=issue_comment_return,
+    ) as issue_comment_mock:
+        success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_content="stub",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=99,
+            issue_title="stub",
+            architecture_json="{}",
+            pddrc_content="",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            no_fix=False,
+            timeout_adder=0.0,
+            use_github_state=True,
+            pr_url="https://github.com/o/r/pull/200",
+            pr_owner="o",
+            pr_repo="r",
+            pr_number=200,
+        )
+
+    return success, msg, save_mock, pr_comment_mock, issue_comment_mock
+
+
+class TestPrModePostFailureSurface:
+    """Comment-post failures don't change the gate outcome (gh / network
+    flakiness shouldn't fail a checkup whose code verification passed) but
+    they MUST be surfaced via the returned message AND persisted into
+    ``step_outputs['pr_post_status']``."""
+
+    def test_pr_mode_post_failure_does_not_fail_gate_but_surfaces(
+        self, tmp_path: Path
+    ) -> None:
+        success, msg, save_mock, pr_comment_mock, issue_comment_mock = (
+            _run_fix_mode_pr_with_post_returns(
+                tmp_path,
+                pr_comment_return=False,
+                issue_comment_return=True,
+            )
+        )
+        assert success is True, msg
+        assert "report post" in msg.lower(), msg
+        persisted = _last_saved_pr_post_status(save_mock)
+        assert persisted
+        assert "pr" in persisted.lower()
+        pr_comment_mock.assert_called_once()
+        issue_comment_mock.assert_called_once()
+
+    def test_pr_mode_issue_post_failure_surfaces(
+        self, tmp_path: Path
+    ) -> None:
+        success, msg, save_mock, pr_comment_mock, issue_comment_mock = (
+            _run_fix_mode_pr_with_post_returns(
+                tmp_path,
+                pr_comment_return=True,
+                issue_comment_return=False,
+            )
+        )
+        assert success is True, msg
+        assert "report post" in msg.lower(), msg
+        persisted = _last_saved_pr_post_status(save_mock)
+        assert persisted
+        assert "issue" in persisted.lower()
+        pr_comment_mock.assert_called_once()
+        issue_comment_mock.assert_called_once()
+
+    def test_pr_mode_both_posts_succeed_no_status_noise(
+        self, tmp_path: Path
+    ) -> None:
+        success, msg, save_mock, pr_comment_mock, issue_comment_mock = (
+            _run_fix_mode_pr_with_post_returns(
+                tmp_path,
+                pr_comment_return=True,
+                issue_comment_return=True,
+            )
+        )
+        assert success is True, msg
+        assert "report post" not in msg.lower(), (
+            f"Happy path must not mention report-post status; got: {msg!r}"
+        )
+        persisted = _last_saved_pr_post_status(save_mock)
+        assert persisted == "", (
+            f"pr_post_status should not be persisted on happy path; got: {persisted!r}"
+        )
+        pr_comment_mock.assert_called_once()
+        issue_comment_mock.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Round-5 Finding 3: PR-mode must audit the PR's architecture.json / .pddrc,
+# not the parent checkout's.
+# ---------------------------------------------------------------------------
+
+
+class TestPrModeRefreshesContextFromWorktree:
+    """``_refresh_pr_context_from_worktree`` must overwrite the orchestrator
+    context's ``architecture_json``, ``pddrc_content``, and ``project_root``
+    with values loaded from the PR worktree once the worktree is checked
+    out. ``cwd`` itself stays the parent repo (gh + state ops need it)."""
+
+    def _make_pr_worktree(self, root: Path) -> Path:
+        wt = root / "wt"
+        wt.mkdir()
+        (wt / "architecture.json").write_text(
+            json.dumps([
+                {
+                    "module": "from_pr_worktree",
+                    "language": "python",
+                    "prompt": "from_pr_worktree.prompt",
+                }
+            ]),
+            encoding="utf-8",
+        )
+        (wt / ".pddrc").write_text(
+            "pddrc_marker: from_pr_worktree\n", encoding="utf-8"
+        )
+        return wt
+
+    def test_refresh_overrides_caller_supplied_architecture_and_pddrc(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = self._make_pr_worktree(tmp_path)
+        seen_arch: list[str] = []
+        seen_pddrc: list[str] = []
+        seen_project_root: list[str] = []
+
+        def fake_step(step_num, _name, context, *_args, **_kwargs):  # noqa: ANN001
+            seen_arch.append(context.get("architecture_json", ""))
+            seen_pddrc.append(context.get("pddrc_content", ""))
+            seen_project_root.append(context.get("project_root", ""))
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ):
+            caller_arch = json.dumps([
+                {
+                    "module": "from_caller",
+                    "language": "python",
+                    "prompt": "from_caller.prompt",
+                }
+            ])
+            caller_pddrc = "pddrc_marker: from_caller\n"
+            run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json=caller_arch,
+                pddrc_content=caller_pddrc,
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert seen_arch, "expected at least one fake_step invocation"
+        for arch in seen_arch:
+            assert "from_pr_worktree" in arch, (
+                "Step received pre-PR-worktree architecture; refresh did "
+                f"not run. Saw: {arch!r}"
+            )
+            assert "from_caller" not in arch, (
+                "Pre-PR-worktree architecture leaked into a step's "
+                f"context. Saw: {arch!r}"
+            )
+        for pddrc in seen_pddrc:
+            assert "from_pr_worktree" in pddrc, (
+                f"Step received pre-PR-worktree .pddrc. Saw: {pddrc!r}"
+            )
+        for proot in seen_project_root:
+            assert str(wt) in proot, (
+                f"project_root must resolve inside the PR worktree; got: {proot!r}"
+            )
+
+    def test_refresh_handles_missing_worktree_architecture_and_pddrc(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        seen_arch: list[str] = []
+        seen_pddrc: list[str] = []
+
+        def fake_step(step_num, _name, context, *_args, **_kwargs):  # noqa: ANN001
+            seen_arch.append(context.get("architecture_json", ""))
+            seen_pddrc.append(context.get("pddrc_content", ""))
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ):
+            caller_arch = json.dumps([
+                {
+                    "module": "from_caller",
+                    "language": "python",
+                    "prompt": "from_caller.prompt",
+                }
+            ])
+            caller_pddrc = "pddrc_marker: from_caller\n"
+            run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json=caller_arch,
+                pddrc_content=caller_pddrc,
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert seen_arch
+        for arch in seen_arch:
+            assert "from_caller" not in arch, (
+                "Pre-PR-worktree architecture leaked when worktree was "
+                f"empty. Saw: {arch!r}"
+            )
+        for pddrc in seen_pddrc:
+            assert "from_caller" not in pddrc, (
+                f"Pre-PR-worktree .pddrc leaked when worktree was empty. "
+                f"Saw: {pddrc!r}"
+            )

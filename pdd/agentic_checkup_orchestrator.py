@@ -478,6 +478,55 @@ def _format_pr_mode_final_report(step7_output: str, push_message: str) -> str:
     return _sanitize_comment_body(body)
 
 
+def _refresh_pr_context_from_worktree(
+    context: Dict[str, str],
+    worktree_path: Path,
+) -> None:
+    """Re-load project context from the PR worktree.
+
+    ``run_agentic_checkup`` loads architecture.json / .pddrc from the
+    *pre-worktree* checkout before the orchestrator runs (round-5
+    Finding 3). When ``pdd checkup --pr`` checks out the PR head into
+    ``.pdd/worktrees/checkup-pr-<n>``, any architecture/config changes
+    the PR makes are invisible to downstream prompts unless we refresh
+    the context here.
+
+    Overwrites ``project_root``, ``architecture_json``, and
+    ``pddrc_content`` in place. Falls back to the canonical "missing"
+    string when the worktree lacks either file — stale caller content
+    must not leak through.
+
+    Imports are lazy because :mod:`agentic_checkup` imports this module
+    at top level; eager imports would form a cycle.
+    """
+    import json as _json  # pylint: disable=import-outside-toplevel
+
+    from .agentic_checkup import (  # pylint: disable=import-outside-toplevel
+        _escape_format_braces,
+        _load_pddrc_content,
+    )
+    from .agentic_sync import (  # pylint: disable=import-outside-toplevel
+        _find_project_root,
+        _load_architecture_json,
+    )
+
+    pr_project_root = _find_project_root(worktree_path)
+    context["project_root"] = str(pr_project_root)
+
+    try:
+        architecture, _arch_path = _load_architecture_json(pr_project_root)
+    except Exception:  # pylint: disable=broad-except
+        architecture = None
+    if architecture:
+        raw_arch_json_str = _json.dumps(architecture, indent=2)
+    else:
+        raw_arch_json_str = "No architecture.json available."
+    context["architecture_json"] = _escape_format_braces(raw_arch_json_str)
+
+    raw_pddrc_content = _load_pddrc_content(pr_project_root)
+    context["pddrc_content"] = _escape_format_braces(raw_pddrc_content)
+
+
 def _setup_pr_worktree(
     cwd: Path,
     pr_owner: str,
@@ -800,6 +849,14 @@ def run_agentic_checkup_orchestrator(
     fix_verify_iteration = 0
     previous_fixes = ""
 
+    # Round-5 Finding 4: accumulates a suffix when the canonical PR-mode
+    # final report could not be posted to GitHub. The gate outcome stays
+    # source-of-truth — gh / network flakiness must not flip a clean
+    # code-verification — but the suffix is appended to the returned
+    # ``message`` on success paths so consumers (pdd-issue, pdd_cloud)
+    # see the partial-post condition.
+    pending_post_suffix: str = ""
+
     # PR head SHA observed for the CURRENT invocation. Captured once via
     # ``_fetch_pr_metadata`` when entering PR mode so the resume path can
     # invalidate cached step outputs whose verification ran against a
@@ -955,6 +1012,13 @@ def run_agentic_checkup_orchestrator(
                 worktree_path = wt_path
                 current_cwd = worktree_path
             context["worktree_path"] = str(worktree_path)
+            # Round-5 Finding 3: refresh project context on resume too.
+            # The state dict does not persist architecture_json/pddrc/
+            # project_root; on resume the caller-supplied (pre-worktree)
+            # values land in ``context`` and post-resume steps would
+            # otherwise audit stale architecture/config.
+            if pr_mode:
+                _refresh_pr_context_from_worktree(context, worktree_path)
 
         # Restore context from cached step outputs.
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
@@ -1138,7 +1202,22 @@ def run_agentic_checkup_orchestrator(
             )
         return None
 
-    def _post_pr_mode_final_report(final_step7_output: str) -> None:
+    def _post_pr_mode_final_report(final_step7_output: str) -> str:
+        """Post the canonical PR-mode final report to PR + issue threads.
+
+        Returns a ``status_suffix`` (empty when reporting is not applicable
+        or both posts succeeded). On failure, the rendered body is also
+        persisted under ``.pdd/checkup-pr-<n>/final-report.md`` and a
+        human-readable status is written into
+        ``step_outputs["pr_post_status"]`` so downstream consumers can
+        detect the partial-post condition without parsing the message.
+
+        The gate outcome is NOT flipped by a post failure — gh / network
+        flakiness must remain decoupled from code-verification truth
+        (round-5 Finding 4). Callers should append the returned suffix
+        to whatever message they return so pdd-issue / pdd_cloud see the
+        partial-post in their summary surface.
+        """
         if not (
             pr_mode
             and use_github_state
@@ -1147,14 +1226,14 @@ def run_agentic_checkup_orchestrator(
             and pr_number is not None
             and final_step7_output.strip()
         ):
-            return
+            return ""
 
         body = _format_pr_mode_final_report(
             final_step7_output,
             context.get("pr_push_output", ""),
         )
-        post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
-        post_step_comment(
+        pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+        step_posted = post_step_comment(
             repo_owner=repo_owner,
             repo_name=repo_name,
             issue_number=issue_number,
@@ -1165,6 +1244,52 @@ def run_agentic_checkup_orchestrator(
             cwd=cwd,
             body=body,
         )
+        if pr_posted and step_posted:
+            return ""
+
+        # Comment-post failed: persist the body so the report is not lost.
+        artifact_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+        artifact_path: Optional[Path] = artifact_dir / "final-report.md"
+        try:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(body, encoding="utf-8")
+        except OSError as exc:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: failed to persist final report "
+                    f"artifact at {artifact_path}: {exc}[/yellow]"
+                )
+            artifact_path = None
+
+        failed_surfaces: List[str] = []
+        if not pr_posted:
+            failed_surfaces.append("PR")
+        if not step_posted:
+            failed_surfaces.append("issue")
+        surfaces_str = " and ".join(failed_surfaces)
+        if artifact_path is not None:
+            persisted = (
+                f"Final report post failed for {surfaces_str} surface; "
+                f"saved to {artifact_path}"
+            )
+            suffix = (
+                f" (report post failed for {surfaces_str} surface; "
+                f"saved to {artifact_path})"
+            )
+        else:
+            persisted = (
+                f"Final report post failed for {surfaces_str} surface; "
+                f"artifact also could not be persisted"
+            )
+            suffix = (
+                f" (report post failed for {surfaces_str} surface; "
+                f"artifact could not be saved)"
+            )
+        step_outputs["pr_post_status"] = persisted
+        _save_state()
+        if not quiet:
+            console.print(f"[yellow]{persisted}[/yellow]")
+        return suffix
 
     # ==================================================================
     # PR mode: create the PR-branch worktree up-front. All subsequent steps
@@ -1181,6 +1306,13 @@ def run_agentic_checkup_orchestrator(
         worktree_path = wt_path
         current_cwd = worktree_path
         context["worktree_path"] = str(worktree_path)
+
+        # Round-5 Finding 3: refresh project context from the PR worktree
+        # so downstream prompts audit the PR's project state. Caller
+        # passed architecture/pddrc loaded from the pre-PR-worktree
+        # ``cwd``; if the PR modifies either file, the audit otherwise
+        # never sees the change.
+        _refresh_pr_context_from_worktree(context, worktree_path)
 
         if not quiet:
             console.print(
@@ -1347,14 +1479,19 @@ def run_agentic_checkup_orchestrator(
             # because the orchestrator owns the report. Skipping the post
             # here leaves downstream consumers (pdd-issue, reviewers) with
             # no record of what was checked or why it failed.
-            _post_pr_mode_final_report(nofix_step7_output)
-            return False, nofix_gate_reason, total_cost, last_model_used
+            post_suffix = _post_pr_mode_final_report(nofix_step7_output)
+            return (
+                False,
+                f"{nofix_gate_reason}{post_suffix}",
+                total_cost,
+                last_model_used,
+            )
 
         # No-fix gate passed: post the canonical report so PR consumers see
         # the verification verdict. The fix-mode equivalent runs after the
         # push at the bottom of this function; the no-fix path never pushes,
         # so we post here.
-        _post_pr_mode_final_report(nofix_step7_output)
+        pending_post_suffix = _post_pr_mode_final_report(nofix_step7_output)
 
     else:
         # --- Fix mode: iterative loop over steps 3-7 ---
@@ -1493,8 +1630,15 @@ def run_agentic_checkup_orchestrator(
             # the orchestrator owns the canonical report. Post it here so
             # the PR thread records the max-iteration verdict instead of
             # going silent.
-            _post_pr_mode_final_report(step_outputs.get("7", step7_output))
-            return False, max_reason, total_cost, last_model_used
+            post_suffix = _post_pr_mode_final_report(
+                step_outputs.get("7", step7_output)
+            )
+            return (
+                False,
+                f"{max_reason}{post_suffix}",
+                total_cost,
+                last_model_used,
+            )
 
         # --------------------------------------------------------------
         # Round-4 Finding 1: gate the orchestrator on Step 7's structured
@@ -1527,8 +1671,15 @@ def run_agentic_checkup_orchestrator(
             # the orchestrator owns the canonical report. Post it on the
             # gate-fail path too so the PR thread shows the verdict
             # instead of going silent.
-            _post_pr_mode_final_report(step_outputs.get("7", step7_output))
-            return False, gate_reason, total_cost, last_model_used
+            post_suffix = _post_pr_mode_final_report(
+                step_outputs.get("7", step7_output)
+            )
+            return (
+                False,
+                f"{gate_reason}{post_suffix}",
+                total_cost,
+                last_model_used,
+            )
 
         # ==============================================================
         # Section 3: Step 8 (create PR) — after the loop
@@ -1568,8 +1719,15 @@ def run_agentic_checkup_orchestrator(
                     # Step 7 already ran successfully; the registry guard
                     # blocks the push, not the verdict. Post the canonical
                     # report so the PR records why the push was refused.
-                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
-                    return False, registry_refusal, total_cost, last_model_used
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{registry_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
 
                 prompt_refusal = _check_prompt_source_guard(
                     worktree_path, guard_changed_files
@@ -1586,8 +1744,15 @@ def run_agentic_checkup_orchestrator(
                     # guard blocks the push, not the verdict. Post the
                     # canonical report so the PR records why the push was
                     # refused.
-                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
-                    return False, prompt_refusal, total_cost, last_model_used
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{prompt_refusal}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
 
                 push_ok, push_message = _commit_and_push_if_changed(
                     worktree_path,
@@ -1626,8 +1791,15 @@ def run_agentic_checkup_orchestrator(
                     # Step 7 already ran successfully; the push itself
                     # failed. Post the canonical report so the PR records
                     # the verdict and the enriched failure context.
-                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
-                    return False, enriched, total_cost, last_model_used
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{enriched}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
                 if not quiet:
                     console.print(f"[green]{push_message}[/green]")
                 post_push_abort = _run_post_push_reverify_if_needed(push_message)
@@ -1638,9 +1810,19 @@ def run_agentic_checkup_orchestrator(
                     # context. ``step_outputs["7"]`` is refreshed by
                     # ``_run_single_step``'s persistence so it reflects the
                     # latest (post-rebase) verdict.
-                    _post_pr_mode_final_report(step_outputs.get("7", step7_output))
-                    return post_push_abort
-                _post_pr_mode_final_report(step_outputs.get("7", step7_output))
+                    abort_ok, abort_reason, abort_cost, abort_model = post_push_abort
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        abort_ok,
+                        f"{abort_reason}{post_suffix}",
+                        abort_cost,
+                        abort_model,
+                    )
+                pending_post_suffix = _post_pr_mode_final_report(
+                    step_outputs.get("7", step7_output)
+                )
             if 8 >= start_step:
                 if not quiet:
                     console.print(
@@ -1696,7 +1878,12 @@ def run_agentic_checkup_orchestrator(
         if worktree_path:
             console.print(f"   Worktree: {worktree_path}")
 
-    return True, final_msg, total_cost, last_model_used
+    return (
+        True,
+        f"{final_msg}{pending_post_suffix}",
+        total_cost,
+        last_model_used,
+    )
 
 
 def _build_state(
