@@ -35,8 +35,8 @@ pdd checkup --validate-arch-includes --strict
 
 You should see warnings listing each `architecture.json` path and the kind of drift
 (dependency listed in JSON but no module `<include>` or `<pdd-dependency>`, or the
-reverse — prompt `<include>`s a module not in the arch dependency list). Sample
-output (abridged):
+reverse — a prompt-declared edge with no matching arch dep, fired by either a
+module `<include>` OR a `<pdd-dependency>` tag). Sample output (abridged):
 
 ```
 Warning: examples/arch/architecture.json: architecture.json / <include> mismatch: 'order_api_Python.prompt' declares dependency on module 'order_models' ...

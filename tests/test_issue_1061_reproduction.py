@@ -336,7 +336,7 @@ def test_identify_modules_prompt_declares_pdd_dependency_authoritative() -> None
     # Context-only rule: <include> (incl. mode="interface" / select=) is NOT
     # an architectural edge. Accept either literal `<include>` or the
     # entity-escaped `&lt;include&gt;` form (F8: inline doc examples are escaped
-    # to keep extract_includes_from_file_ordered from parsing prose as live tags).
+    # to keep extract_includes_from_text_ordered from parsing prose as live tags).
     assert "<include>" in rendered or "&lt;include&gt;" in rendered, (
         "Prompt must mention <include> directives (literal or entity-escaped)"
     )
@@ -1191,7 +1191,7 @@ def test_m1_iter2_same_tail_path_qualified_include_kept_as_dep(
 
     # Direct unit-level: re-conv must keep the cross-folder same-tail dep.
     direct_deps = _module_prompt_include_dependencies(
-        self_prompt, self_filename="commands/fix_python.prompt"
+        self_prompt.read_text(encoding="utf-8"), self_filename="commands/fix_python.prompt"
     )
     assert "server/fix_python.prompt" in direct_deps, (
         "Path-preserving self-edge guard must keep same-tail cross-folder "
@@ -1255,7 +1255,7 @@ def test_m1_iter2_real_path_qualified_self_include_still_dropped(
     )
 
     deps = _module_prompt_include_dependencies(
-        self_prompt, self_filename="commands/fix_python.prompt"
+        self_prompt.read_text(encoding="utf-8"), self_filename="commands/fix_python.prompt"
     )
     assert "commands/fix_python.prompt" not in deps, (
         "Real path-qualified self-include must still be dropped; got "
@@ -1292,7 +1292,7 @@ def test_n1_iter2_include_dependencies_preserve_source_order(
         (prompts_dir / f"{name}_python.prompt").write_text("%", encoding="utf-8")
 
     deps = _module_prompt_include_dependencies(
-        self_prompt, self_filename="owner_python.prompt"
+        self_prompt.read_text(encoding="utf-8"), self_filename="owner_python.prompt"
     )
 
     expected = [
@@ -1309,12 +1309,12 @@ def test_n1_iter2_include_dependencies_preserve_source_order(
 
 
 def test_n1_iter2_ordered_extractor_in_sync_order(tmp_path: Path) -> None:
-    """[N1.iter2] Direct unit test for ``extract_includes_from_file_ordered``:
+    """[N1.iter2] Direct unit test for ``extract_includes_from_text_ordered``:
     declarations come back in source order with first-occurrence dedup,
     and the three include forms (body, self-closing, include-many) all
     interleave correctly.
     """
-    from pdd.sync_order import extract_includes_from_file_ordered
+    from pdd.sync_order import extract_includes_from_text_ordered
 
     path = tmp_path / "mixed.prompt"
     path.write_text(
@@ -1326,7 +1326,7 @@ def test_n1_iter2_ordered_extractor_in_sync_order(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    ordered = extract_includes_from_file_ordered(path)
+    ordered = extract_includes_from_text_ordered(path.read_text(encoding="utf-8"))
     assert ordered == [
         "first.md",
         "second.md",
@@ -1363,7 +1363,7 @@ def test_m1_iter3_prompts_prefixed_self_include_is_dropped(
     )
 
     deps = _module_prompt_include_dependencies(
-        self_prompt, self_filename="self_python.prompt"
+        self_prompt.read_text(encoding="utf-8"), self_filename="self_python.prompt"
     )
     assert "prompts/self_python.prompt" not in deps, (
         "``prompts/`` prefixed self-include must be canonicalized and "
@@ -1395,7 +1395,7 @@ def test_m1_iter3_dot_slash_prefixed_self_include_is_dropped(
     )
 
     deps = _module_prompt_include_dependencies(
-        self_prompt, self_filename="owner_python.prompt"
+        self_prompt.read_text(encoding="utf-8"), self_filename="owner_python.prompt"
     )
     assert deps == [], (
         "``./``-prefixed self-include must be canonicalized and dropped; "
@@ -2084,7 +2084,7 @@ def test_f2_flat_layout_self_include_still_self_skipped(tmp_path: Path) -> None:
 
 
 def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
-    """F8 regression: extract_includes_from_file_ordered must not parse documentation
+    """F8 regression: extract_includes_from_text_ordered must not parse documentation
     prose <include> tags as live tags. PR #1073 touched three prompts that contain
     inline <include> examples in docs; the extractor must return ONLY the real
     dependency includes (live tags in the % Dependencies section).
@@ -2097,7 +2097,7 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
     against documentation prose."""
     import re
     from pathlib import Path
-    from pdd.sync_order import extract_includes_from_file_ordered
+    from pdd.sync_order import extract_includes_from_text_ordered
 
     repo_root = Path(__file__).resolve().parent.parent
     prompts = [
@@ -2112,7 +2112,7 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
 
     for prompt_path in prompts:
         assert prompt_path.is_file(), f"Missing fixture: {prompt_path}"
-        out = extract_includes_from_file_ordered(prompt_path)
+        out = extract_includes_from_text_ordered(prompt_path.read_text(encoding="utf-8"))
         for entry in out:
             assert len(entry) < 500, (
                 f"{prompt_path.name}: garbage extracted (len={len(entry)}): "
@@ -2137,7 +2137,7 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
     validator_prompt = (
         repo_root / "pdd" / "prompts" / "architecture_include_validation_python.prompt"
     )
-    validator_includes = extract_includes_from_file_ordered(validator_prompt)
+    validator_includes = extract_includes_from_text_ordered(validator_prompt.read_text(encoding="utf-8"))
     assert "context/architecture_sync_example.py" in validator_includes, (
         f"validator prompt lost arch_sync example include: {validator_includes!r}"
     )
@@ -2148,7 +2148,7 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
     arch_sync_prompt = (
         repo_root / "pdd" / "prompts" / "architecture_sync_python.prompt"
     )
-    arch_sync_includes = extract_includes_from_file_ordered(arch_sync_prompt)
+    arch_sync_includes = extract_includes_from_text_ordered(arch_sync_prompt.read_text(encoding="utf-8"))
     assert "./context/python_preamble.prompt" in arch_sync_includes, (
         f"arch_sync prompt lost python_preamble include: {arch_sync_includes!r}"
     )
@@ -2156,7 +2156,7 @@ def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
     checkup_prompt = (
         repo_root / "pdd" / "prompts" / "commands" / "checkup_python.prompt"
     )
-    checkup_includes = extract_includes_from_file_ordered(checkup_prompt)
+    checkup_includes = extract_includes_from_text_ordered(checkup_prompt.read_text(encoding="utf-8"))
     assert "context/agentic_common_example.py" in checkup_includes, (
         f"checkup prompt lost agentic_common example include: {checkup_includes!r}"
     )

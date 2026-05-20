@@ -60,7 +60,7 @@ from .sync_main import _detect_languages_with_context
 from .sync_order import (
     build_dependency_graph,
     extract_includes_from_file,
-    extract_includes_from_file_ordered,
+    extract_includes_from_text_ordered as _extract_includes_from_text_ordered,
     extract_module_from_include,
     topological_sort,
 )
@@ -1827,7 +1827,8 @@ def _resolve_prompt_for_architecture_correction(
 
 
 def _module_prompt_include_dependencies(
-    prompt_path: Path, self_filename: Optional[str] = None
+    prompt_content: str,
+    self_filename: Optional[str] = None,
 ) -> List[str]:
     """Return ``<include>`` targets that name *another* module prompt.
 
@@ -1847,10 +1848,19 @@ def _module_prompt_include_dependencies(
     degrade gracefully to bare basenames when no directory is present, so
     flat-layout self-includes are still dropped.
 
-    Declaration order is preserved by reading ``<include>`` tags in source
-    order via ``extract_includes_from_file_ordered``; the iter-1
+    Declaration order is preserved by parsing ``<include>`` tags in source
+    order via ``sync_order.extract_includes_from_text_ordered``; the iter-1
     implementation iterated a ``set`` and produced hash-dependent ordering
     (codex iter-2 finding N1.iter2).
+
+    PR #1073 finding 3 + CodeQL hardening: the function takes
+    ``prompt_content`` directly — no ``prompt_path``. Callers are
+    responsible for the file read (they already open the file for tag
+    parsing). Keeping file I/O at the call site means this helper does not
+    introduce a new path-expression sink that CodeQL's default scan would
+    flag vs ``main``, and it guarantees the in-memory text used for tag
+    parsing is the same text used for include extraction (the union no
+    longer silently mixes on-disk includes with in-memory tags).
     """
     self_key = (
         _basename_from_architecture_filename(
@@ -1859,9 +1869,10 @@ def _module_prompt_include_dependencies(
         if self_filename
         else None
     )
+    include_iter: List[str] = _extract_includes_from_text_ordered(prompt_content)
     deps: List[str] = []
     seen: set[str] = set()
-    for inc in extract_includes_from_file_ordered(prompt_path):
+    for inc in include_iter:
         # First gate: is this include even a module-prompt target?
         if _module_prompt_include_target(inc) is None:
             continue
@@ -1917,7 +1928,7 @@ def _declared_prompt_dependencies(
     has_dep_tags = tags.get("has_dependency_tags", False) or bool(declared)
 
     include_deps = _module_prompt_include_dependencies(
-        prompt_path, self_filename=self_filename
+        prompt_content, self_filename=self_filename
     )
     if not has_dep_tags and not include_deps:
         return None

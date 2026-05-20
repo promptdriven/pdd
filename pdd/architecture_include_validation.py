@@ -712,7 +712,8 @@ def _pdd_dependency_modules(
     arch_data: Optional[List[Dict[str, Any]]] = None,
     *,
     dep_resolver: Optional[Any] = None,
-) -> set[str]:
+    return_proof: bool = False,
+) -> Any:
     """
     Return path-preserving module keys declared via ``<pdd-dependency>`` tags in
     the prompt header.
@@ -736,17 +737,28 @@ def _pdd_dependency_modules(
     before path-preserving keying. Without this step a bare declaration would
     key to ``"fix"`` while the arch dep keys to ``"server/fix"`` and the
     validator would falsely warn that the prompt is missing a declaration.
+
+    PR #1073 reverse-symmetry fix: when ``return_proof`` is True the helper
+    additionally returns a ``Dict[str, str]`` mapping each module key to the
+    raw ``<pdd-dependency>`` text that produced it. The reverse-drift check
+    needs this so the warning message can name the tag the user actually wrote
+    (not the resolved arch filename). Default behavior (``return_proof=False``)
+    preserves the original ``set[str]``-only signature so existing callers and
+    tests do not have to change.
     """
+    if return_proof:
+        empty: tuple[set[str], Dict[str, str]] = (set(), {})
     try:
         content = prompt_path.read_text(encoding="utf-8")
     except OSError:
-        return set()
+        return empty if return_proof else set()
     if not content:
-        return set()
+        return empty if return_proof else set()
 
     from .architecture_sync import parse_prompt_tags, build_dependency_resolver
 
     modules: set[str] = set()
+    proof: Dict[str, str] = {}
     tags = parse_prompt_tags(content)
     raw_deps = list(tags.get("dependencies", []) or [])
     # F11 third-party codex review: prefer a precomputed resolver when the caller
@@ -755,14 +767,14 @@ def _pdd_dependency_modules(
     # entirely when neither is available.
     if dep_resolver is None and arch_data:
         dep_resolver = build_dependency_resolver(arch_data)
-    if dep_resolver is not None:
-        resolved_iter = (dep_resolver(d) for d in raw_deps)
-    else:
-        resolved_iter = iter(raw_deps)
-    for dep in resolved_iter:
-        m = _path_preserving_module_key(dep)
+    for raw in raw_deps:
+        resolved = dep_resolver(raw) if dep_resolver is not None else raw
+        m = _path_preserving_module_key(resolved)
         if m and m != self_mod:
             modules.add(m)
+            proof.setdefault(m, raw)
+    if return_proof:
+        return modules, proof
     return modules
 
 
@@ -778,9 +790,15 @@ def cross_validate_architecture_with_prompt_includes(
     dependency's prompt OR declares it via ``<pdd-dependency>`` (the metadata
     tag the prompting guide calls the authoritative architectural declaration).
 
-    The reverse direction (``<include>`` of a module prompt without a matching
-    arch dep) still warns; drift between ``<pdd-dependency>`` tags and
-    ``architecture.json`` is handled by ``architecture_sync``, not this check.
+    The reverse direction (a prompt-declared edge with no matching arch dep)
+    warns symmetrically: a module-prompt ``<include>`` OR a
+    ``<pdd-dependency>`` tag that names a module not listed in
+    ``architecture.json`` both surface as drift. PR #1073 review: the prior
+    asymmetric check ignored ``<pdd-dependency>`` drift here on the
+    assumption that ``architecture_sync`` would heal it, but a user running
+    ``pdd checkup --validate-arch-includes`` without first running ``pdd
+    sync`` would never see the drift. Validation must be authoritative on
+    its own.
 
     Non-module includes (docs, preambles, etc.) are ignored via
     ``_module_prompt_include_target`` which only accepts ``.prompt`` paths.
@@ -837,13 +855,28 @@ def cross_validate_architecture_with_prompt_includes(
         include_modules: set[str] = set()
         include_proof: Dict[str, str] = {}
         for inc in includes:
-            m = _module_prompt_include_target(inc)
+            # First gate: only module-prompt paths participate (drops context,
+            # preambles, example .py files).
+            if _module_prompt_include_target(inc) is None:
+                continue
+            # PR #1073 finding 1: bare includes like ``<include>b_python.prompt</include>``
+            # written from a path-qualified prompt (``commands/a_python.prompt``)
+            # would key to bare ``"b"`` while sync's ``_normalize_dependency_filenames``
+            # writes the arch dep as ``commands/b_python.prompt`` (keyed
+            # ``"commands/b"``). The two sides then diverge and the validator
+            # raises a false-positive mismatch on a perfectly-synced repo. Resolve
+            # the include through the same precomputed ``dep_resolver`` so disk
+            # and arch keying converge. When the resolver can't disambiguate
+            # (genuine ambiguity or no matching arch entry), it returns the input
+            # unchanged and the original bare-stem keying still applies.
+            resolved_inc = dep_resolver(inc)
+            m = _path_preserving_module_key(resolved_inc)
             if m and m != mod_base:
                 include_modules.add(m)
                 include_proof.setdefault(m, inc)
 
-        tag_modules = _pdd_dependency_modules(
-            prompt_path, mod_base, dep_resolver=dep_resolver
+        tag_modules, tag_proof = _pdd_dependency_modules(
+            prompt_path, mod_base, dep_resolver=dep_resolver, return_proof=True
         )
         forward_declared = include_modules | tag_modules
 
@@ -852,6 +885,20 @@ def cross_validate_architecture_with_prompt_includes(
         # ``server/fix_python.prompt``). Resolve via the same precomputed
         # dep_resolver before keying so the validator sees the same edges the
         # graph builder will resolve to.
+        #
+        # PR #1073 finding 2 follow-up: when ``filename_to_basename`` has no
+        # entry for the resolved dep (the prompt named in the dep is not a
+        # tracked arch module), fall back to ``_path_preserving_module_key``
+        # directly so the dep still produces a key. Otherwise an
+        # arch-declared dep on an untracked module silently vanishes from
+        # ``arch_modules``, while the SAME dep declared as a
+        # ``<pdd-dependency>`` on the prompt side keys via the same helper
+        # and sticks in ``forward_declared`` — producing a false reverse
+        # mismatch on a perfectly aligned pair of declarations. Both sides
+        # of the comparison now use the same keying rule. If the dep names
+        # something that isn't a module-prompt path at all (no language
+        # suffix), the helper returns ``None`` and the dep is correctly
+        # skipped.
         arch_modules: set[str] = set()
         dep_fn_to_resolved: Dict[str, str] = {}
         for dep_fn in entry.get("dependencies", []):
@@ -860,6 +907,8 @@ def cross_validate_architecture_with_prompt_includes(
             resolved_fn = dep_resolver(dep_fn)
             dep_fn_to_resolved[dep_fn] = resolved_fn
             db = filename_to_basename.get(resolved_fn)
+            if db is None:
+                db = _path_preserving_module_key(resolved_fn)
             if db and db != mod_base:
                 arch_modules.add(db)
 
@@ -879,11 +928,26 @@ def cross_validate_architecture_with_prompt_includes(
                 f"{d!r}{extra} but the prompt has no <include> or <pdd-dependency> of that module's prompt"
             )
 
-        for i in sorted(include_modules - arch_modules):
-            inc_s = include_proof.get(i, "")
-            warnings.append(
-                f"architecture.json / <include> mismatch: {fn!r} <include>s module {i!r} "
-                f"({inc_s!r}) but architecture.json dependencies do not list that module"
-            )
+        # PR #1073 finding 2: reverse direction must also catch
+        # ``<pdd-dependency>`` drift. The forward and reverse checks must be
+        # symmetric — both kinds of tag are architecture edges under the union
+        # semantics, so both kinds must be reported when arch.json omits them.
+        # The warning text distinguishes the two artifact kinds so users know
+        # which tag to fix.
+        for m in sorted(forward_declared - arch_modules):
+            inc_s = include_proof.get(m)
+            tag_s = tag_proof.get(m)
+            if inc_s is not None:
+                warnings.append(
+                    f"architecture.json / <include> mismatch: {fn!r} <include>s module {m!r} "
+                    f"({inc_s!r}) but architecture.json dependencies do not list that module"
+                )
+            else:
+                proof_extra = f" ({tag_s!r})" if tag_s else ""
+                warnings.append(
+                    f"architecture.json / <include> mismatch: {fn!r} declares "
+                    f"<pdd-dependency> on module {m!r}{proof_extra} but architecture.json "
+                    f"dependencies do not list that module"
+                )
 
     return warnings

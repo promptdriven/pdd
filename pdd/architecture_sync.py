@@ -578,9 +578,9 @@ def _normalize_dependency_filenames(
 
 
 def _prompt_dependency_union(
-    prompt_path: Path,
     tags: Dict[str, Any],
     arch_data: List[Dict[str, Any]],
+    prompt_content: str,
     self_filename: Optional[str] = None,
 ) -> Tuple[List[str], bool]:
     """Re-converge a prompt's architecture dependencies from the union of
@@ -618,13 +618,22 @@ def _prompt_dependency_union(
     Lazy import: ``_module_prompt_include_dependencies`` lives in
     ``agentic_sync`` which already imports from this module — lazy import here
     avoids a load-time cycle. Same pattern the validator uses.
+
+    PR #1073 finding 3 + CodeQL hardening: ``prompt_content`` is a required
+    positional arg so this helper performs no file I/O of its own. The
+    caller (``update_architecture_from_prompt`` or
+    ``register_untracked_prompts``) reads the prompt once at the existing
+    on-``main`` site and threads the same string in. Both tag parsing and
+    include extraction see the same in-memory text, and we don't add a
+    new path-expression sink that CodeQL's default scan would flag vs
+    ``main``.
     """
     from .agentic_sync import _module_prompt_include_dependencies  # noqa: WPS433
 
     declared = list(tags.get("dependencies", []) or [])
     has_dep_tags = tags.get("has_dependency_tags", False) or bool(declared)
     include_deps = _module_prompt_include_dependencies(
-        prompt_path, self_filename=self_filename
+        prompt_content, self_filename=self_filename
     )
     if not has_dep_tags and not include_deps:
         return [], False
@@ -725,7 +734,7 @@ def register_untracked_prompts(
         # ``_prompt_dependency_union`` leaves it literal so the next
         # validation pass surfaces it instead of silently dropping it.
         union_dependencies, _ = _prompt_dependency_union(
-            prompt_file, tags, arch_data, self_filename=filename
+            tags, arch_data, content, self_filename=filename
         )
 
         max_priority += 1
@@ -1188,7 +1197,10 @@ def update_architecture_from_prompt(
         # ``<pdd-dependency></pdd-dependency>`` is still an explicit-clear and
         # is counted via ``has_dependency_tags``.
         union_dependencies, has_dep_intent = _prompt_dependency_union(
-            prompt_path, tags, arch_data, self_filename=prompt_filename
+            tags,
+            arch_data,
+            prompt_content,
+            self_filename=prompt_filename,
         )
         if has_dep_intent:
             old_deps = module_entry.get('dependencies', [])

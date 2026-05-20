@@ -115,32 +115,25 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
         return set()
 
 
-def extract_includes_from_file_ordered(file_path: Path) -> List[str]:
+def extract_includes_from_text_ordered(content: str) -> List[str]:
     """
-    Same tag tolerance as :func:`extract_includes_from_file`, but returns
-    includes in **source declaration order** with first-occurrence dedup.
+    Parse ``<include*>`` paths from raw prompt text in source declaration order.
 
-    The set-returning variant above is used by callers that only care
-    about *which* paths a prompt includes. Callers that need to preserve
-    or expose declaration order — e.g. when re-converging an
-    architecture entry's ``dependencies`` (#1061 iter-2 N1) — must use
-    this helper so the on-disk diff is hash-independent and stable.
+    Same tag tolerance as :func:`extract_includes_from_file` but
+    preserves source order with first-occurrence dedup, and operates on
+    pre-loaded content. Callers that have a ``Path`` should do their own
+    read first; this keeps file I/O at the call site (where the path's
+    trust context is already established by existing patterns) rather
+    than in a sync_order helper that CodeQL flags as a new
+    path-expression sink.
 
-    Returns:
-        List of unique include path strings in the order they first
-        appear in ``file_path``. Returns ``[]`` when the file cannot be
-        read.
+    Used by:
+      * ``architecture_sync.update_architecture_from_prompt`` —
+        receives an optional ``prompt_content_override`` and passes it
+        straight in.
+      * ``agentic_sync._module_prompt_include_dependencies`` — reads
+        ``prompt_path`` then passes the content here.
     """
-    if not file_path.exists() or not file_path.is_file():
-        logger.warning(f"File not found or not a file: {file_path}")
-        return []
-
-    try:
-        content = file_path.read_text(encoding="utf-8")
-    except Exception as e:
-        logger.error(f"Error reading file {file_path}: {e}")
-        return []
-
     ordered: List[str] = []
     seen: Set[str] = set()
 
@@ -202,6 +195,8 @@ def extract_includes_from_file_ordered(file_path: Path) -> List[str]:
                     _emit(item)
 
     return ordered
+
+
 
 
 def extract_module_from_include(include_path: str) -> Optional[str]:

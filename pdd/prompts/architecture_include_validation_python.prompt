@@ -103,7 +103,8 @@
 %     arch_data: Optional[List[Dict[str, Any]]] = None,
 %     *,
 %     dep_resolver: Optional[Callable[[str], str]] = None,
-% ) -> set[str]
+%     return_proof: bool = False,
+% ) -> Union[set[str], Tuple[set[str], Dict[str, str]]]
 %   - Return path-preserving module keys declared via &lt;pdd-dependency&gt; tags in
 %     the prompt header.
 %   - Per docs/prompting_guide.md, &lt;pdd-dependency&gt; is the authoritative
@@ -124,7 +125,14 @@
 %   - F11 third-party codex review: if both are None, no resolution is performed;
 %     when only ``arch_data`` is given, build the resolver on demand via
 %     ``architecture_sync.build_dependency_resolver(arch_data)``.
-%   - Returns empty set on OSError or empty content.
+%   - PR #1073 finding 2: when ``return_proof`` is True, additionally return a
+%     Dict[str, str] mapping each module key to the raw &lt;pdd-dependency&gt; text
+%     that produced it (first-occurrence wins). The reverse-drift check uses
+%     this so warnings can name the tag the user actually wrote (not the
+%     post-resolver arch filename). Default (False) preserves the original
+%     set[str]-only return type for callers that just need the keys.
+%   - Returns empty result on OSError or empty content (empty set, or
+%     (empty set, empty dict) when return_proof=True).
 
 % _IncludeReference dataclass
 %   - Fields: path: str, attrs: Dict[str, str].
@@ -219,9 +227,15 @@
 % architecture edges under the union semantics (see prompting_guide.md and
 % agentic_sync_identify_modules_LLM.prompt).
 %
-% The reverse direction (&lt;include&gt; of a module prompt without a matching
-% arch dep) still warns; drift between &lt;pdd-dependency&gt; tags and
-% architecture.json is handled by architecture_sync, not this check.
+% The reverse direction (a prompt-declared edge with no matching arch dep)
+% warns symmetrically: a module-prompt &lt;include&gt; OR a &lt;pdd-dependency&gt; tag
+% that names a module not listed in architecture.json both surface as drift.
+% PR #1073 review fix: the prior asymmetric implementation skipped
+% &lt;pdd-dependency&gt; drift here on the assumption architecture_sync would
+% heal it, but a user running pdd checkup --validate-arch-includes without
+% running pdd sync first would never see the drift. Validation must be
+% authoritative on its own — both kinds of tag are architecture edges,
+% so both must be reported when arch.json omits them.
 %
 % Non-module includes (docs, preambles, etc.) are ignored via
 % _module_prompt_include_target which only accepts ".prompt" paths.
@@ -241,30 +255,51 @@
 %      entry. This is a precomputed O(1)-per-dep index, not a per-call scan.
 %   3. For each entry with a valid filename and module key:
 %      a. Resolve prompt path; if file not found, emit a skip warning and continue.
-%      b. Extract &lt;include&gt; targets from the prompt file, filter to module prompt
-%         keys (via _module_prompt_include_target), excluding self.
-%      c. Extract &lt;pdd-dependency&gt; modules via _pdd_dependency_modules, passing
-%         the shared dep_resolver so bare declarations resolve to their
-%         unambiguous path-qualified arch entries before keying.
+%      b. Extract &lt;include&gt; targets from the prompt file, filter to module-prompt
+%         paths (via _module_prompt_include_target). PR #1073 finding 1: BEFORE
+%         keying, run each include through dep_resolver(inc) so a bare include
+%         like "b_python.prompt" written from a path-qualified prompt
+%         ("commands/a_python.prompt") resolves to the unambiguous arch entry
+%         ("commands/b_python.prompt"). Without this step the include keys to
+%         bare "b" while sync writes "commands/b_python.prompt" (key "commands/b"),
+%         producing a false-positive mismatch on a perfectly-synced repo. Key
+%         the resolved filename via _path_preserving_module_key, excluding self,
+%         and record include_proof[module] = original include path.
+%      c. Extract (tag_modules, tag_proof) via _pdd_dependency_modules(...,
+%         dep_resolver=dep_resolver, return_proof=True). The proof map carries
+%         the raw &lt;pdd-dependency&gt; text so reverse-drift warnings can name
+%         the tag the user actually wrote.
 %      d. forward_declared = include_modules | tag_modules
 %      e. Extract arch_modules from entry's "dependencies" list. F10 third-party
 %         codex review: every raw dep string MUST go through dep_resolver(raw_dep)
 %         FIRST so stale-but-bare arch entries like ["fix_python.prompt"] resolve
 %         to the unambiguous path-qualified filename ("server/fix_python.prompt")
-%         before filename_to_basename lookup. Without this step a bare arch dep
-%         keys to "fix" while the prompt's path-qualified declaration keys to
-%         "server/fix" and the validator would falsely warn drift.
+%         before filename_to_basename lookup. PR #1073 finding 2 follow-up:
+%         when filename_to_basename has no entry for the resolved dep (the prompt
+%         named in the dep is not a tracked arch module), fall back to
+%         _path_preserving_module_key(resolved_fn) directly. Both sides of the
+%         comparison MUST use the same keying rule, else an arch-declared dep on
+%         an untracked module silently vanishes while the SAME dep declared as a
+%         &lt;pdd-dependency&gt; sticks in forward_declared and produces a false
+%         reverse mismatch.
 %      f. For each module in (arch_modules - forward_declared): emit forward
 %         mismatch warning including the dependency filename proof if available
 %         (preserving the original raw dep string in the message).
 %         Warning format: "architecture.json / &lt;include&gt; mismatch: {fn!r} declares
 %         dependency on module {d!r}{extra} but the prompt has no &lt;include&gt; or
 %         &lt;pdd-dependency&gt; of that module's prompt"
-%      g. For each module in (include_modules - arch_modules): emit reverse
-%         mismatch warning including the include path proof.
-%         Warning format: "architecture.json / &lt;include&gt; mismatch: {fn!r}
-%         &lt;include&gt;s module {i!r} ({inc_s!r}) but architecture.json dependencies
+%      g. For each module in (forward_declared - arch_modules): emit reverse
+%         mismatch warning. PR #1073 finding 2: the reverse check is symmetric
+%         with the forward check — &lt;include&gt; AND &lt;pdd-dependency&gt; drift both
+%         fire. Pick the warning text by which proof map carries the module key:
+%         include_proof yields "&lt;include&gt;s module" wording; tag_proof yields
+%         "declares &lt;pdd-dependency&gt; on module" wording.
+%         Include-form: "architecture.json / &lt;include&gt; mismatch: {fn!r}
+%         &lt;include&gt;s module {m!r} ({inc_s!r}) but architecture.json dependencies
 %         do not list that module"
+%         Tag-form: "architecture.json / &lt;include&gt; mismatch: {fn!r} declares
+%         &lt;pdd-dependency&gt; on module {m!r}{tag_extra} but architecture.json
+%         dependencies do not list that module"
 %   4. Return list of warning strings (empty if no mismatches).
 
 % ============================================================

@@ -75,6 +75,11 @@ A utility module that parses `<include>` tags from prompt files, builds a depend
 Helper: `_is_document_include(include_path: str) -> bool`
    - True when the path ends with a documentation extension (`.md`, `.rst`, `.txt`) and is NOT a `.prompt` file, an `_example.*` file, or a code file. Used to filter raw `<include>` and `<include-many>` payloads down to doc candidates.
 
+Helper: `extract_includes_from_text_ordered(content: str) -> List[str]`
+   - Parse `<include*>` paths from raw prompt text in source declaration order, with the same tag tolerance as `extract_includes_from_file` and first-occurrence dedup.
+   - PR #1073 finding 3: lets callers pass an in-memory `prompt_content_override` through the dependency-extraction pipeline without round-tripping it via the filesystem (used by `architecture_sync.update_architecture_from_prompt` and `agentic_sync._module_prompt_include_dependencies`). Without this, in-memory tag content and on-disk include content silently diverged for any caller using the override API.
+   - Deliberately does NOT take a `Path`: callers that have a file do their own `Path.read_text` first, keeping the path-expression sink at the call site where the path's trust context is already established. Adding a `Path`-taking wrapper here would introduce a new path-expression sink that CodeQL's default scan flags as a new alert (vs `main`'s existing `extract_includes_from_file`).
+
 % Dependencies
 <auto_include_example>
 <include select="def:main">context/auto_include_example.py</include>
