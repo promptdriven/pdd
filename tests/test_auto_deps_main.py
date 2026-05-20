@@ -1236,3 +1236,55 @@ def test_auto_deps_finalization_captures_attributed_include_deps(
     assert len(include_deps["parent.py"]) == 64, (
         "include_deps hash should be a SHA-256 hex digest"
     )
+
+
+@patch("pdd.auto_deps_main.construct_paths")
+@patch("pdd.auto_deps_main.insert_includes")
+def test_auto_deps_propagates_attempted_models_to_ctx(
+    mock_insert_includes,
+    mock_construct_paths,
+    mock_ctx,
+    tmp_dir,
+):
+    """Regression (PR #1087): auto_deps_main delegates the LLM call to
+    insert_includes, which calls llm_invoke. llm_invoke already
+    best-effort propagates the attempted_models chain to
+    ctx.obj['attempted_models'] on success (per the round-4 'at most
+    once' contract), so when the @track_cost decorator on the
+    auto-deps command reads ctx.obj['attempted_models'] at finally-time
+    it sees the chain. Simulate insert_includes calling
+    _propagate_attempted_models_to_ctx as llm_invoke would, and assert
+    the chain lands on ctx.
+    """
+    from pdd.llm_invoke import _propagate_attempted_models_to_ctx
+
+    output_path = os.path.join(tmp_dir, "output.prompt")
+    csv_path = os.path.join(tmp_dir, "project_dependencies.csv")
+    mock_construct_paths.return_value = _make_construct_paths_return(
+        output_path, csv_path
+    )
+
+    def _insert_includes_side_effect(*args, **kwargs):
+        # llm_invoke (called from inside insert_includes) propagates the
+        # chain to the current Click context. Mirror that behavior here so
+        # the test exercises the real propagation path that production
+        # code follows.
+        _propagate_attempted_models_to_ctx(['gpt-4', 'gpt-4o'])
+        return _make_insert_includes_return()
+
+    mock_insert_includes.side_effect = _insert_includes_side_effect
+
+    with mock_ctx:
+        auto_deps_main(
+            ctx=mock_ctx,
+            prompt_file="sample_prompt_python.prompt",
+            directory_path="context/",
+            auto_deps_csv_path=None,
+            output=None,
+            force_scan=False,
+        )
+
+    assert mock_ctx.obj.get('attempted_models') == ['gpt-4', 'gpt-4o'], (
+        f"Expected ctx.obj['attempted_models']=['gpt-4','gpt-4o'], "
+        f"got {mock_ctx.obj.get('attempted_models')!r}"
+    )

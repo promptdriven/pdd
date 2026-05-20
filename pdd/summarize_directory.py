@@ -13,7 +13,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
 
 # Internal imports based on package structure
-from .llm_invoke import llm_invoke
+from .llm_invoke import llm_invoke, _propagate_attempted_models_to_ctx
 from .load_prompt_template import load_prompt_template
 from . import DEFAULT_TIME
 
@@ -234,6 +234,12 @@ def summarize_directory(
     results_data: List[Dict[str, str]] = []
     total_cost = 0.0
     last_model_name = "cached"
+    # Aggregate attempted-model chains from every per-file llm_invoke call so
+    # we can propagate the full chronological list to the parent Click ctx
+    # after the (potentially threaded) loop completes. Worker threads' ctx
+    # is thread-local — propagating from inside the worker would not reach
+    # the @track_cost decorator on the parent command.
+    aggregated_attempted_models: List[str] = []
 
     # Step 6: Iterate through files with progress reporting
     total_files = len(files)
@@ -242,7 +248,7 @@ def summarize_directory(
         real = os.path.realpath(file_path)
         return os.path.relpath(real, base_dir) if base_dir else real
 
-    def _process_file(i: int, file_path: str) -> Tuple[float, str]:
+    def _process_file(i: int, file_path: str) -> Tuple[float, str, List[str]]:
         """Process a single file and accumulate results."""
         rel_path = _compute_rel_path(file_path)
         return _process_single_file_logic(
@@ -262,11 +268,11 @@ def summarize_directory(
         from concurrent.futures import ThreadPoolExecutor, as_completed
         cost_lock = threading.Lock()
 
-        def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str]:
+        def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str, List[str], Optional[Dict[str, str]]]:
             """Thread-safe wrapper that returns index for ordering."""
             rel_path = _compute_rel_path(file_path)
             local_results: List[Dict[str, str]] = []
-            cost, model = _process_single_file_logic(
+            cost, model, chain = _process_single_file_logic(
                 file_path,
                 rel_path,
                 existing_data,
@@ -277,16 +283,20 @@ def summarize_directory(
                 verbose,
                 local_results
             )
-            return i, cost, model, local_results[0] if local_results else None
+            return i, cost, model, chain, local_results[0] if local_results else None
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
                 executor.submit(_threaded_process, i, fp): i
                 for i, fp in enumerate(files)
             }
+            # Order chains by submission index so the propagated chain matches
+            # file order, not completion order (as_completed returns futures
+            # in whatever order they finish).
+            chains_by_index: Dict[int, List[str]] = {}
             completed = 0
             for future in as_completed(futures):
-                idx, cost, model, result_row = future.result()
+                idx, cost, model, chain, result_row = future.result()
                 with cost_lock:
                     total_cost += cost
                     if model != "cached":
@@ -295,16 +305,20 @@ def summarize_directory(
                         results_data.append(result_row)
                     if csv_path:
                         _flush_csv_to_disk(results_data, csv_path)
+                    chains_by_index[idx] = chain
                 completed += 1
                 if progress_callback:
                     progress_callback(completed, total_files)
+            for i in sorted(chains_by_index):
+                aggregated_attempted_models.extend(chains_by_index[i])
     elif progress_callback:
         for i, file_path in enumerate(files):
             progress_callback(i + 1, total_files)
-            cost, model = _process_file(i, file_path)
+            cost, model, chain = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
+            aggregated_attempted_models.extend(chain)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
     elif verbose:
@@ -318,21 +332,29 @@ def summarize_directory(
         ) as progress:
             task = progress.add_task("[cyan]Processing files...", total=len(files))
             for i, file_path in enumerate(files):
-                cost, model = _process_file(i, file_path)
+                cost, model, chain = _process_file(i, file_path)
                 total_cost += cost
                 if model != "cached":
                     last_model_name = model
+                aggregated_attempted_models.extend(chain)
                 if csv_path:
                     _flush_csv_to_disk(results_data, csv_path)
                 progress.advance(task)
     else:
         for i, file_path in enumerate(files):
-            cost, model = _process_file(i, file_path)
+            cost, model, chain = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
+            aggregated_attempted_models.extend(chain)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
+
+    # Best-effort propagation to the main thread's Click context so the
+    # @track_cost decorator on the parent command records the full chain.
+    # The helper is a no-op when there's no active Click context.
+    if aggregated_attempted_models:
+        _propagate_attempted_models_to_ctx(aggregated_attempted_models)
 
     # Step 7: Merge in existing entries that were not part of this scan.
     # This preserves cached summaries for files outside the current
@@ -374,13 +396,22 @@ def _process_single_file_logic(
     time: float,
     verbose: bool,
     results_data: List[Dict[str, str]]
-) -> Tuple[float, str]:
+) -> Tuple[float, str, List[str]]:
     """
     Helper function to process a single file: read, hash, check cache, summarize if needed.
-    Returns (cost, model_name).
+    Returns (cost, model_name, attempted_models).
+
+    The third element is the attempted-model fallback chain reported by
+    ``llm_invoke`` for this file's summarization call (empty list on cache
+    hits). Callers running in worker threads must aggregate these chains
+    and propagate to the main-thread Click context via
+    ``_propagate_attempted_models_to_ctx`` so ``@track_cost`` records the
+    full chain for the parent command — worker threads' ``click.get_current_context``
+    cannot see the parent ctx.
     """
     cost = 0.0
     model_name = "cached"
+    attempted_models: List[str] = []
 
     try:
         # Step 6a: Read file
@@ -449,6 +480,9 @@ def _process_single_file_logic(
             
             cost = llm_result.get('cost', 0.0)
             model_name = llm_result.get('model_name', "unknown")
+            raw_chain = llm_result.get('attempted_models', []) or []
+            if isinstance(raw_chain, list):
+                attempted_models = [str(m) for m in raw_chain if m]
 
         # Print verbose per-file summary (only for freshly summarized files)
         if verbose and not cache_hit:
@@ -475,5 +509,5 @@ def _process_single_file_logic(
             'dependencies': "[]",
             'content_hash': "error"
         })
-        
-    return cost, model_name
+
+    return cost, model_name, attempted_models

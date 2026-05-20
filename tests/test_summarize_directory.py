@@ -1921,6 +1921,46 @@ class TestMaxWorkers:
 
         assert abs(cost - 0.5) < 1e-9, f"Expected 0.5 total cost for 5 files, got {cost}"
 
+    def test_max_workers_propagates_attempted_models_to_main_ctx(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """Regression (PR #1087): worker threads' Click context is
+        thread-local, so when llm_invoke calls _propagate_attempted_models_to_ctx
+        from inside a worker thread it cannot reach the main thread's ctx.
+        summarize_directory must aggregate every worker's attempted_models
+        chain and propagate to the parent ctx on the main thread after the
+        executor finishes, so @track_cost records the full chain in the
+        cost CSV for parallel pdd commands.
+        """
+        for i in range(3):
+            (tmp_path / f"file{i}.py").write_text(f"content_{i}")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm, \
+             patch('pdd.summarize_directory._propagate_attempted_models_to_ctx') as mock_propagate:
+            mock_llm.return_value = {
+                'result': FileSummary(file_summary="Summary", key_exports=["x"], dependencies=["y"]),
+                'cost': 0.1,
+                'model_name': "gpt-4o",
+                'attempted_models': ['gpt-4', 'gpt-4o'],
+            }
+            summarize_directory(
+                directory_path=str(tmp_path / "*.py"),
+                strength=0.5,
+                temperature=0.0,
+                max_workers=2,
+            )
+
+        # Propagation must fire exactly once on the main thread (not per-worker),
+        # with the aggregated chain across all 3 files (each contributed
+        # ['gpt-4', 'gpt-4o'] = 2 entries × 3 files = 6 entries).
+        assert mock_propagate.call_count == 1, (
+            f"Expected exactly 1 main-thread propagate call, got {mock_propagate.call_count}"
+        )
+        propagated_chain = mock_propagate.call_args.args[0]
+        assert propagated_chain == ['gpt-4', 'gpt-4o'] * 3, (
+            f"Expected ['gpt-4','gpt-4o']*3 aggregated chain, got {propagated_chain}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Real-LLM: Multi-directory CSV accumulation and cache (requires API key)
