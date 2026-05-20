@@ -696,6 +696,15 @@ def build_dep_graph_from_architecture_data(
         for a in aliases:
             alias_to_entry.setdefault(a, entry)
 
+    # F10 third-party codex review: a bare dep string like ``"fix_python.prompt"``
+    # in arch.json must resolve to its unambiguous path-qualified entry (e.g.
+    # ``server/fix_python.prompt``) BEFORE the alias-based lookup, otherwise the
+    # graph builder reports the edge as an orphan and silently drops it from
+    # scheduling. Use the same resolver the validator uses so both agree on the
+    # canonical filename. Built once per call (F11) and reused per dep below.
+    from .architecture_sync import build_dependency_resolver
+    dep_resolver = build_dependency_resolver(entries)
+
     # Map every alias of every target -> target_basename
     target_alias_map: Dict[str, str] = {}
     for tb in target_basenames:
@@ -717,9 +726,14 @@ def build_dep_graph_from_architecture_data(
             continue
 
         resolved: List[str] = []
-        for dep in deps_field:
-            if not isinstance(dep, str):
+        for raw_dep in deps_field:
+            if not isinstance(raw_dep, str):
                 continue
+            # F10: normalize bare dep names against arch filenames before lookup.
+            # If the raw form is already an exact arch filename, dep_resolver
+            # returns it unchanged. Otherwise an unambiguous match resolves the
+            # bare form (e.g. "fix_python.prompt" -> "server/fix_python.prompt").
+            dep = dep_resolver(raw_dep) if dep_resolver is not None else raw_dep
             # Try both filename and filepath interpretations
             dep_basename = _basename_from_architecture_filename(dep)
             if dep_basename is None:
@@ -750,18 +764,28 @@ def build_dep_graph_from_architecture_data(
                     break
 
             if matched is None:
+                # Preserve the raw form in user-facing messages so operators can
+                # find the literal arch.json line they wrote; show the resolved
+                # form too when it differs.
+                shown_dep = (
+                    raw_dep if raw_dep == dep else f"{raw_dep!r} (resolved as {dep!r})"
+                )
                 if not resolved_via_entry:
                     # Orphan: the dep filename has no matching architecture entry
                     warnings.append(
                         f"{source_name}: module '{tb}' lists orphan dependency "
+                        f"{shown_dep} (no matching architecture entry)"
+                        if raw_dep != dep
+                        else f"{source_name}: module '{tb}' lists orphan dependency "
                         f"'{dep}' (no matching architecture entry)"
                     )
                 else:
                     # Outside the target sync set
                     display = sorted(dep_aliases)[0] if dep_aliases else dep
+                    via = raw_dep if raw_dep == dep else f"{raw_dep!r} -> {dep!r}"
                     warnings.append(
                         f"{source_name}: module '{tb}' depends on '{display}' "
-                        f"(via '{dep}'), which is not in the sync target set; "
+                        f"(via {via}), which is not in the sync target set; "
                         "edge omitted from schedule"
                     )
                 continue

@@ -2211,3 +2211,98 @@ def test_f7_validator_warns_on_truly_ambiguous_bare_pdd_dep(tmp_path):
         f"F7: ambiguous bare <pdd-dependency> should NOT silently match a "
         f"specific path-qualified arch entry; validator should warn. Got: {cli_warnings!r}"
     )
+
+
+def test_f10_graph_builder_resolves_bare_dep_to_path_qualified_arch_entry():
+    """F10 regression: a stale/hand-edited arch.json with dependencies
+    ['fix_python.prompt'] (bare) when the actual entry is
+    'server/fix_python.prompt' must NOT be dropped from the sync graph as
+    an orphan. The graph builder must use the same normalization as the
+    validator so both agree on the canonical filename."""
+    from pdd.agentic_sync_runner import build_dep_graph_from_architecture_data
+
+    architecture = [
+        {
+            "filename": "commands/cli_python.prompt",
+            "dependencies": ["fix_python.prompt"],  # BARE, not server/fix_python.prompt
+        },
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+    targets = ["commands/cli", "server/fix"]
+    result = build_dep_graph_from_architecture_data(
+        architecture, targets, source_name="test_f10"
+    )
+    # Edge from commands/cli to server/fix must be present after normalization
+    # (without F10, bare 'fix_python.prompt' would be reported as orphan).
+    assert result.graph.get("commands/cli") == ["server/fix"], (
+        f"F10: bare arch dep should resolve to unambiguous path-qualified entry; "
+        f"got graph={result.graph!r} warnings={result.warnings!r}"
+    )
+    orphan_warnings = [w for w in result.warnings if "orphan" in w.lower()]
+    assert orphan_warnings == [], (
+        f"F10: bare dep should not be reported as orphan when unambiguous; "
+        f"got warnings: {orphan_warnings!r}"
+    )
+
+
+def test_f10_graph_builder_warns_on_truly_ambiguous_bare_dep():
+    """F10 mirror: when the bare dep could match multiple path-qualified arch
+    entries, the graph builder must NOT silently pick one — it should report
+    the orphan/ambiguous edge."""
+    from pdd.agentic_sync_runner import build_dep_graph_from_architecture_data
+
+    architecture = [
+        {
+            "filename": "other/cli_python.prompt",
+            "dependencies": ["fix_python.prompt"],
+        },
+        {"filename": "commands/fix_python.prompt", "dependencies": []},
+        {"filename": "server/fix_python.prompt", "dependencies": []},
+    ]
+    targets = ["other/cli", "commands/fix", "server/fix"]
+    result = build_dep_graph_from_architecture_data(
+        architecture, targets, source_name="test_f10_ambig"
+    )
+    # The bare dep is ambiguous — must NOT silently match either entry.
+    # The edge should not bridge to commands/fix OR server/fix.
+    assert result.graph.get("other/cli") == [], (
+        f"F10: ambiguous bare dep must not silently match a specific entry; "
+        f"got graph={result.graph!r}"
+    )
+
+
+def test_f11_dependency_resolver_built_once_for_validation_run(mocker):
+    """F11 perf regression: cross_validate_architecture_with_prompt_includes must
+    build the dependency resolver ONCE per call, not once per arch entry. With
+    N entries the validator should call build_dependency_resolver exactly once,
+    not N times."""
+    from pdd.architecture_include_validation import (
+        cross_validate_architecture_with_prompt_includes,
+    )
+    import pdd.architecture_include_validation as mod
+
+    # Spy on the import-site reference
+    original = mod.cross_validate_architecture_with_prompt_includes
+    call_count = {"build_dependency_resolver": 0}
+
+    import pdd.architecture_sync as arch_sync
+    real_builder = arch_sync.build_dependency_resolver
+
+    def counting_builder(arch_data):
+        call_count["build_dependency_resolver"] += 1
+        return real_builder(arch_data)
+
+    mocker.patch.object(arch_sync, "build_dependency_resolver", counting_builder)
+
+    arch_data = [
+        {"filename": f"mod_{i}_python.prompt", "dependencies": []}
+        for i in range(20)
+    ]
+    # Even with 20 entries, the resolver should be built only once.
+    cross_validate_architecture_with_prompt_includes(
+        arch_data, Path("/tmp/nonexistent-project-root-for-f11-test")
+    )
+    assert call_count["build_dependency_resolver"] == 1, (
+        f"F11: expected exactly 1 call to build_dependency_resolver per validation "
+        f"run; got {call_count['build_dependency_resolver']}"
+    )
