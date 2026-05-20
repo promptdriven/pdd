@@ -430,6 +430,9 @@ def _echo_architecture_sync_result(result: Dict[str, Any], *, dry_run: bool) -> 
         elif not entry.get("success"):
             click.echo(f"ERROR {entry['filename']}: {entry.get('error')}")
 
+    for filename in result.get("registered", []):
+        click.echo(f"REGISTERED {filename}")
+
     sync_errors = result.get("errors", [])
     validation = result.get("validation", {})
     validation_errors = validation.get("errors", [])

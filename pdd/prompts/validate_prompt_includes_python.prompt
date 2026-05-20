@@ -1,3 +1,5 @@
+<pdd-reason>Validates that all <include> tags in a prompt point to existing files.</pdd-reason>
+
 % You are an expert Python Software Engineer. Your goal is to write a Python module that validates and cleans `<include>` tags in generated prompt files, removing or replacing references to non-existent files or invalid structural selectors.
 
 % This module addresses Issue #225 and follow-up sync regressions: LLM-generated prompts may contain `<include>` tags that reference files that do not exist, or selected includes that point to existing files but request symbols/sections that are not present. The module validates these references and cleans them up before the prompt is saved so later `preprocess`/`pdd sync` does not silently fall back to full-file context.

@@ -1,3 +1,24 @@
+<pdd-reason>Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "code_generator_main",
+        "signature": "(prompt_path: str, *, language: Optional[str] = None, output: Optional[str] = None, examples_dir: Optional[str] = None, tests_dir: Optional[str] = None, force: bool = False, incremental: bool = False, original_prompt_file: Optional[str] = None, strength: float = 0.5, temperature: float = 0.0, time_budget: float = 0.2, verbose: bool = False, quiet: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Tuple[str, bool, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>construct_paths_python.prompt</pdd-dependency>
+<pdd-dependency>preprocess_python.prompt</pdd-dependency>
+<pdd-dependency>code_generator_python.prompt</pdd-dependency>
+<pdd-dependency>incremental_code_generator_python.prompt</pdd-dependency>
+<pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>auto_include_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>_keyring_timeout_python.prompt</pdd-dependency>
@@ -147,7 +168,7 @@ You are an expert Python Backend Engineer responsible for the `code_generator_ma
 - **Repair Directive Injection**: After path construction and unit-test prompt augmentation, read `os.environ.get("PDD_REPAIR_DIRECTIVE")`. When present and non-empty after stripping whitespace, append a blank-line-separated `<architecture_repair_directive>` block containing the stripped directive to `prompt_content`. This must happen before the prompt is preprocessed for either cloud or local generation so both execution modes receive the retry instruction.
 - **Discovery**: Implement a `_run_discovery` helper that scans the filesystem based on `discover` patterns in front-matter to populate template variables.
 - **Incremental Logic**: If `force_incremental_flag` is set, but no original prompt is found via Git or file arguments, warn the user and fallback to full generation.
-- **Context Handling**: Ensure all Rich console outputs honor the `quiet` and `verbose` flags to maintain a clean CLI experience.
+- **Context Handling**: Ensure all Rich console outputs honor the `quiet` and `verbose` flags to maintain a clean CLI experience. Use the label "Model:" (e.g., `Model: {model_name}`) for success panels. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive).
 
 # Deliverables
 A single Python file containing:

@@ -1,3 +1,23 @@
+<pdd-reason>CLI wrapper function `bug_main` that generates unit tests either from a GitHub issue (agentic mode) or from manual file arguments (legacy mode).</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "bug_main",
+        "signature": "(ctx, issue_url: Optional[str] = None, manual: bool = False, prompt_file: Optional[str] = None, code_file: Optional[str] = None, program_file: Optional[str] = None, current_output: Optional[str] = None, desired_output: Optional[str] = None, output: Optional[str] = None, language: Optional[str] = None) -> Tuple[str, float, str]"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_bug_python.prompt</pdd-dependency>
+<pdd-dependency>bug_to_unit_test_python.prompt</pdd-dependency>
+<pdd-dependency>core/cloud_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Write a CLI wrapper function `bug_main` that generates unit tests either from a GitHub issue (agentic mode) or from manual file arguments (legacy mode).
 
 <include>./context/python_preamble.prompt</include>
@@ -26,7 +46,7 @@
         - Require all 5 file arguments (prompt_file, code_file, program_file, current_output, desired_output)
         - Call `construct_paths(command='bug', context_override=ctx.obj.get('context'))` to resolve paths
         - Call `bug_to_unit_test(current_output_str, desired_output_str, prompt_str, code_str, program_str, strength, temperature, time, language)`
-        - Save to output path; print model/cost when not quiet
+        - Save to output path; print model/cost when not quiet. Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive).
     4. Retrieve ctx.obj options: strength, temperature, time, force, quiet, verbose
     5. On error: print message (unless quiet) and sys.exit(1)
 
@@ -46,7 +66,9 @@
       Also pass `confirm_callback=ctx.obj.get('confirm_callback')` for TUI confirmation support.
     - Use Cloud vs Local Execution Strategy (see below) to generate bug tests.
     - Validate generated content is non-empty after stripping; on empty, print diagnostics and return an error result.
-    - Save to the resolved output path (creating parent directories if needed). Print model and cost when not quiet, and always print the generated unit test to the console.
+    - Save to the resolved output path (creating parent directories if needed). If not quiet, print the execution results (Status, Message, Cost, Model) in that order.
+    - **Model suppression**: Suppress the "Model: ..." line if the model name is empty, "unknown", or "N/A" (case-insensitive).
+    - Always print the generated unit test to the console.
     - On any error (path construction, generation, or file I/O), print a Rich-formatted error and return an error result tuple `("", 0.0, f"Error: {exception}")` to allow the orchestrator to handle gracefully.
     - Re-raise `click.Abort` and `click.UsageError` exceptions to properly handle user cancellations and non-recoverable errors.
 
@@ -68,7 +90,6 @@
 %  6. Environment variable `PDD_CLOUD_ONLY` or `PDD_NO_LOCAL_FALLBACK` prevents fallback to local.
 
 <examples>
-<construct_paths_example>
 <include>context/construct_paths_example.py</include>
 </construct_paths_example>
 
