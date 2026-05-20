@@ -7688,6 +7688,14 @@
             ]
           },
           {
+            "name": "_refresh_pr_context_from_worktree",
+            "signature": "(context: Dict[str, str], worktree_path: Path) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Mutates context in place with PR-worktree architecture.json, .pddrc, and project_root values"
+            ]
+          },
+          {
             "name": "_setup_worktree",
             "signature": "(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool) -> Tuple[Optional[Path], Optional[str]]",
             "returns": "Tuple[Optional[Path], Optional[str]]",
