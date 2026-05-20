@@ -4264,6 +4264,52 @@ class TestSelectModelCandidates:
         candidates = llm_mod._select_model_candidates(0.5, "gpt-4", df)
         assert len(candidates) == 3
 
+    def test_cloud_run_vertex_default_missing_does_not_cross_provider(
+        self, llm_mod, tmp_path
+    ):
+        """TDD bug repro for issue #1113.
+
+        Cloud Run sync configured with
+        ``PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash`` (newer than the
+        local CSV) used to fall through to the surrogate-base branch with
+        the full available_df, so at strength=1.0 the ELO sort surfaced
+        higher-rated direct Anthropic / Fireworks rows whose credentials
+        (ANTHROPIC_API_KEY / FIREWORKS_API_KEY) are not available in a
+        Google-only execution environment. Every candidate must stay
+        inside the Vertex provider boundary the routing prefix implies.
+        """
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Anthropic,claude-opus-4-7,5.0,25.0,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p6,0.95,4.0,1529,"
+            "FIREWORKS_API_KEY,False,none,0,0,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-flash,0.5,3.0,1440,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "cloud_run_repro.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "vertex_ai/gemini-3.5-flash", df
+        )
+
+        assert candidates, "expected non-empty candidate list"
+        offending = [
+            c for c in candidates if c["provider"] not in {"Google Vertex AI"}
+        ]
+        assert not offending, (
+            "vertex_ai/ prefix must keep fallback inside the Vertex provider "
+            f"boundary; offending rows: {[c['model'] for c in offending]}"
+        )
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""
@@ -4366,12 +4412,12 @@ class TestSelectModelCandidates:
             0.5, "vertex_ai/claude-opus-4-6", df
         )
         # CSV has no `Google Vertex AI,claude-opus-4-6` row → strip-attempt
-        # constrained to provider="Google Vertex AI" finds nothing → falls
-        # through to surrogate-base = first row (AWS Bedrock).
+        # constrained to provider="Google Vertex AI" finds nothing → provider
+        # locked surrogate-base stays on the first Vertex row.
         assert candidates[0]["model"] != "claude-opus-4-6", (
             "vertex_ai/ prefix must not silently match direct Anthropic row"
         )
-        assert candidates[0]["model"] == "anthropic.claude-opus-4-6-v1"
+        assert candidates[0]["provider"] == "Google Vertex AI"
 
     def test_vertex_prefix_does_not_match_gemini_direct_row(self, llm_mod, tmp_path):
         """Provider-boundary regression: vertex_ai/gemini-3-flash-preview
@@ -4388,6 +4434,7 @@ class TestSelectModelCandidates:
         assert candidates[0]["model"] != "gemini/gemini-3-flash-preview", (
             "vertex_ai/ prefix must not silently match direct Gemini row"
         )
+        assert candidates[0]["provider"] == "Google Vertex AI"
 
     def test_vertex_prefix_resolves_correctly_when_vertex_row_exists(self, llm_mod, tmp_path):
         """Positive companion to the negative tests: when the configured
@@ -4401,6 +4448,417 @@ class TestSelectModelCandidates:
         # Should resolve to the Google Vertex AI row, not anything else.
         assert candidates[0]["model"] == "gemini-3.1-pro-preview"
         assert candidates[0]["provider"] == "Google Vertex AI"
+
+    def test_provider_prefixed_base_strength_one_stays_with_provider(self, llm_mod, tmp_path):
+        """Cloud regression: `PDD_MODEL_DEFAULT=vertex_ai/...` is an explicit
+        provider boundary. At strength=1.0 the selector must not jump to
+        higher-ELO direct Anthropic/Fireworks rows that need missing API keys."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Anthropic,claude-opus-4-7,5.0,25.0,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p6,0.95,4.0,1529,"
+            "FIREWORKS_API_KEY,False,none,0,0,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-flash,0.5,3.0,1440,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "cloud_provider_boundary.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "vertex_ai/gemini-3.1-flash", df
+        )
+
+        assert candidates
+        assert {candidate["provider"] for candidate in candidates} == {"Google Vertex AI"}
+        assert candidates[0]["model"] == "vertex_ai/gemini-3.1-pro-preview"
+
+    def test_unknown_provider_prefixed_base_uses_provider_surrogate(self, llm_mod, tmp_path):
+        """If a prefixed deployment default is newer than the local CSV, soft
+        fallback must stay inside the requested provider instead of using the
+        first or highest-ELO model from another provider."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Anthropic,claude-opus-4-7,5.0,25.0,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "unknown_prefixed_default.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "vertex_ai/gemini-3.5-flash", df
+        )
+
+        assert candidates
+        assert candidates[0]["provider"] == "Google Vertex AI"
+        assert candidates[0]["model"] == "vertex_ai/gemini-3.1-pro-preview"
+
+    def test_provider_prefixed_base_low_strength_stays_with_provider(
+        self, llm_mod, tmp_path
+    ):
+        """Issue #1113 regression for the cost-interpolation path (strength<0.5).
+
+        The bug was first observed at strength=1.0 (ELO sort), but the fix
+        scopes selection_df for every strength branch. A `vertex_ai/...`
+        default that's missing from the CSV must keep every candidate inside
+        the Vertex provider, even when fallback drives candidate ordering
+        through `avg_cost` interpolation rather than ELO.
+        """
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # Highest-ELO, also cheapest direct row — a tempting cross-provider
+            # match for both ELO and cost interpolation paths.
+            "Anthropic,claude-opus-4-7,0.10,0.30,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            "Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p6,"
+            "0.05,0.20,1529,FIREWORKS_API_KEY,False,none,0,0,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            "Google Vertex AI,vertex_ai/gemini-3.1-flash,0.5,3.0,1440,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "cloud_low_strength.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        # strength=0.25 → cost-interpolation branch (strength < 0.5).
+        candidates = llm_mod._select_model_candidates(
+            0.25, "vertex_ai/gemini-3.5-flash", df
+        )
+
+        assert candidates
+        assert {c["provider"] for c in candidates} == {"Google Vertex AI"}, (
+            "cost-interpolation fallback must stay within the Vertex lock "
+            f"set; got providers {[c['provider'] for c in candidates]}"
+        )
+
+        # Strength=0.0 also rides the cost branch; same expectation.
+        zero_candidates = llm_mod._select_model_candidates(
+            0.0, "vertex_ai/gemini-3.5-flash", df
+        )
+        assert zero_candidates
+        assert {c["provider"] for c in zero_candidates} == {"Google Vertex AI"}
+
+    def test_legitimate_unprefixed_provider_label_is_accepted(
+        self, llm_mod, tmp_path
+    ):
+        """P2-A regression (codex review of #1113 first cut).
+
+        A CSV row whose ``model`` field carries the correct routing prefix
+        (``gemini/gemini-2.0-flash-exp``) but whose ``provider`` column uses
+        a friendly label that's NOT in the alias set (``Gemini`` instead of
+        ``Google Gemini``) must still be accepted under the matching lock.
+        LiteLLM routes by model prefix, so the row works fine at runtime;
+        rejecting it would break legitimate user CSVs.
+        """
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Gemini,gemini/gemini-2.0-flash-exp,0.5,3.0,1440,GEMINI_API_KEY,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "unprefixed_provider_label.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            0.5, "gemini/gemini-2.0-flash-exp", df
+        )
+
+        assert candidates, "expected non-empty candidate list"
+        assert candidates[0]["model"] == "gemini/gemini-2.0-flash-exp"
+
+    def test_google_provider_label_with_gemini_prefix_does_not_leak_into_vertex_lock(
+        self, llm_mod, tmp_path
+    ):
+        """Regression: a legacy CSV that uses bare ``provider="Google"`` for
+        BOTH Vertex and direct-Gemini rows must not let the higher-ELO
+        ``gemini/...`` row slip into the Vertex lock. The dual-signal filter
+        rejects rows whose ``model`` prefix is a different known routing
+        prefix, so the Gemini row is rejected regardless of provider column.
+
+        (The companion path — bare-model rows under bare ``"google"``
+        provider — is covered by
+        ``test_bare_google_provider_does_not_leak_into_vertex_lock`` below.)
+        """
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # Higher-ELO direct Gemini row under legacy "Google" provider.
+            "Google,gemini/gemini-3.1-pro-preview,2.0,12.0,1500,GEMINI_API_KEY,"
+            "True,effort,1000000,8192,0\n"
+            # Lower-ELO Vertex row under legacy "Google" provider — accepted
+            # via the model-prefix branch of `_provider_filter`.
+            "Google,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "google_label_mixed_prefixes.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "vertex_ai/gemini-3.5-flash", df
+        )
+
+        assert candidates
+        # No gemini/* rows should slip into a Vertex-locked candidate list.
+        offending_models = [
+            c["model"]
+            for c in candidates
+            if not str(c["model"]).startswith("vertex_ai/")
+        ]
+        assert not offending_models, (
+            f"Vertex lock leaked non-Vertex rows: {offending_models}"
+        )
+        # No GEMINI_API_KEY rows should leak in either.
+        offending_keys = [
+            c["api_key"]
+            for c in candidates
+            if "GOOGLE_APPLICATION_CREDENTIALS" not in str(c["api_key"])
+        ]
+        assert not offending_keys, (
+            f"Vertex lock leaked non-Vertex credentials: {offending_keys}"
+        )
+
+    def test_bare_google_provider_does_not_leak_into_vertex_lock(
+        self, llm_mod, tmp_path
+    ):
+        """P2 regression (codex round 3 of #1113 review).
+
+        Round 2 still aliased the bare value ``"google"`` into both Vertex
+        and Gemini locks. With that alias and a CSV row like
+        ``google,gemini-pro,...,GOOGLE_API_KEY,...`` (no routing prefix on
+        the model name), a configured ``vertex_ai/gemini-pro`` default
+        accepted the direct-Gemini row as a Vertex candidate — exactly the
+        cross-provider violation #1113 is meant to prevent.
+
+        Fix: drop the bare ``"google"`` alias from both lock sets. The
+        ambiguous unprefixed row no longer matches; only the explicit
+        ``Google Vertex AI`` row does.
+        """
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # Ambiguous legacy row: bare ``google`` provider, no routing
+            # prefix on the model name. Must NOT match the Vertex lock.
+            "google,gemini-pro,1.25,5,1200,GOOGLE_API_KEY,True,none,"
+            "1000000,8192,0\n"
+            # Explicit Vertex row — the only legitimate match.
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1456,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "bare_google_provider.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "vertex_ai/gemini-pro", df
+        )
+
+        assert candidates
+        # All candidates must come from the explicit ``Google Vertex AI``
+        # row only — the ambiguous bare-``google`` row stays out.
+        assert {c["provider"] for c in candidates} == {"Google Vertex AI"}, (
+            "Bare ``google`` row leaked into the Vertex lock; got providers "
+            f"{[c['provider'] for c in candidates]}"
+        )
+        # Every model in the candidate list must carry the vertex_ai/ prefix.
+        offending_models = [
+            c["model"]
+            for c in candidates
+            if not str(c["model"]).startswith("vertex_ai/")
+        ]
+        assert not offending_models, (
+            f"Vertex lock leaked non-prefixed rows: {offending_models}"
+        )
+        # The direct-Gemini credential variable must not appear.
+        offending_keys = [
+            c["api_key"] for c in candidates if str(c["api_key"]) == "GOOGLE_API_KEY"
+        ]
+        assert not offending_keys, (
+            f"Vertex lock leaked GOOGLE_API_KEY credential rows: "
+            f"{offending_keys}"
+        )
+
+    def test_bare_google_only_csv_with_vertex_default_raises(
+        self, llm_mod, tmp_path
+    ):
+        """Companion to
+        ``test_bare_google_provider_does_not_leak_into_vertex_lock``.
+
+        When the CSV contains ONLY the ambiguous bare-``google`` row and the
+        configured default is ``vertex_ai/...``, the empty-selection guard
+        must raise loudly. Silent fallback to a different provider's
+        credentials is precisely what the lock is preventing.
+        """
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "google,gemini-pro,1.25,5,1200,GOOGLE_API_KEY,True,none,"
+            "1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "bare_google_only.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        with pytest.raises(
+            ValueError, match="no models for that provider are available"
+        ):
+            llm_mod._select_model_candidates(1.0, "vertex_ai/gemini-pro", df)
+
+    def test_anthropic_prefix_locks_to_anthropic(self, llm_mod, tmp_path):
+        """Prefix-coverage: ``anthropic/...`` default keeps candidates inside
+        the Anthropic provider, not crossing into a foreign-prefix row even
+        if that row's ELO is higher."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # Surrogate trap: first row, but on a different provider/prefix.
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1600,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            # Matching Anthropic row, prefixed.
+            "Anthropic,anthropic/claude-opus-4-7,5.0,25.0,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            # Foreign-prefix high-ELO row (must be rejected by the lock).
+            "Fireworks,fireworks_ai/accounts/fireworks/models/kimi-k2p6,0.95,4.0,1700,"
+            "FIREWORKS_API_KEY,False,none,0,0,0\n"
+        )
+        csv_path = tmp_path / "anthropic_lock.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "anthropic/claude-opus-4-7-missing", df
+        )
+
+        assert candidates
+        offending = [
+            c["model"]
+            for c in candidates
+            if not str(c["model"]).startswith("anthropic/")
+        ]
+        assert not offending, (
+            f"anthropic/ lock leaked foreign-prefix rows: {offending}"
+        )
+
+    def test_azure_prefix_locks_to_azure(self, llm_mod, tmp_path):
+        """Prefix-coverage: ``azure_ai/...`` default keeps candidates inside
+        the Azure AI provider boundary."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # Surrogate trap: first row, foreign prefix, higher ELO.
+            "Anthropic,anthropic/claude-opus-4-7,5.0,25.0,1700,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+            # Matching Azure row.
+            "Azure AI,azure_ai/gpt-5-mini,1.0,3.0,1440,AZURE_API_KEY,"
+            "True,effort,128000,8192,0\n"
+            # Foreign-prefix Vertex row (must be rejected).
+            "Google Vertex AI,vertex_ai/gemini-3.1-pro-preview,2.0,12.0,1560,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "azure_lock.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        candidates = llm_mod._select_model_candidates(
+            1.0, "azure_ai/gpt-5-mini-missing", df
+        )
+
+        assert candidates
+        offending = [
+            c["model"]
+            for c in candidates
+            if not str(c["model"]).startswith("azure_ai/")
+        ]
+        assert not offending, (
+            f"azure_ai/ lock leaked foreign-prefix rows: {offending}"
+        )
+
+    def test_provider_filter_is_case_insensitive_for_legacy_rows(
+        self, llm_mod, tmp_path
+    ):
+        """Codex P2 regression (round 2 of #1113 review).
+
+        The dual-signal filter's provider-column fallback must match
+        case-insensitively. Bundled and user-authored CSVs alternate between
+        capitalized (``Anthropic``) and lowercased (``anthropic``) provider
+        labels, and other selectors in this module (e.g.
+        ``PDD_SKIP_LOCAL_MODELS``) already lowercase. A naive
+        ``df['provider'].isin({"Anthropic"})`` check would filter out the
+        legitimate ``anthropic,claude-3`` row and leave the candidate list
+        empty.
+        """
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "anthropic,claude-3,15,75,1280,ANTHROPIC_API_KEY,True,budget,"
+            "200000,8192,16000\n"
+            "OPENAI,gpt-4,30,60,1300,OPENAI_API_KEY,True,effort,128000,4096,0\n"
+        )
+        csv_path = tmp_path / "case_insensitive_provider.csv"
+        csv_path.write_text(content)
+        df = llm_mod._load_model_data(csv_path)
+
+        # Call A — literal prefixed base resolves against the lowercased
+        # provider row via the legacy fallback. (`anthropic/claude-3` has the
+        # `anthropic/` prefix on the model; the CSV row has bare `claude-3`
+        # under lowercase provider `anthropic`, so the legacy fallback is
+        # what matches it after `_alternative_base_lookups` strips the prefix.)
+        candidates_a = llm_mod._select_model_candidates(
+            0.5, "anthropic/claude-3", df
+        )
+        assert candidates_a, "expected non-empty candidate list for Call A"
+        offending_a = [
+            c for c in candidates_a if c["provider"].lower() != "anthropic"
+        ]
+        assert not offending_a, (
+            "Anthropic lock leaked non-Anthropic rows from Call A: "
+            f"{[c['model'] for c in offending_a]}"
+        )
+
+        # Call B — base model isn't in CSV under the Anthropic lock; surrogate
+        # fallback must stay inside the lock and NOT pick up the uppercase
+        # ``OPENAI`` row.
+        candidates_b = llm_mod._select_model_candidates(
+            0.5, "anthropic/gpt-4", df
+        )
+        assert candidates_b, "expected non-empty candidate list for Call B"
+        offending_b = [
+            c for c in candidates_b if c["provider"].lower() != "anthropic"
+        ]
+        assert not offending_b, (
+            "Anthropic lock leaked OPENAI row from Call B: "
+            f"{[c['model'] for c in offending_b]}"
+        )
 
 
 class TestAlternativeBaseLookups:
@@ -5563,11 +6021,15 @@ class TestVertexAIClaudeTemperatureFix:
         """
         # provider='anthropic' so the budget path injects 'thinking' into kwargs.
         # This is a regression test — the old code also passed this case.
-        csv_path = self._make_csv(tmp_path, "anthropic", "vertex_ai/claude-sonnet-4-6", "budget")
+        # Use a bare model name (no routing prefix) so the strict provider lock
+        # introduced for #1113 doesn't reject the pairing of provider='anthropic'
+        # with a `vertex_ai/...` model name. The budget+temperature path under
+        # test here is independent of the routing-prefix provider boundary.
+        csv_path = self._make_csv(tmp_path, "anthropic", "claude-sonnet-4-6", "budget")
         monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
         monkeypatch.setenv("TEST_KEY", "sk-test1234567890123456")
         monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
-        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/claude-sonnet-4-6")
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "claude-sonnet-4-6")
 
         captured_kwargs = {}
 
