@@ -1586,3 +1586,121 @@ def test_release_atomic_lock_unlinks_malformed_lock(tmp_path):
         "O_EXCL; otherwise future PDD invocations are blocked for the "
         "mtime stale window."
     )
+
+
+def test_peek_survives_malformed_csv_first_row(mock_click_context, mock_rprint, tmp_path):
+    """Regression (6th-pass review, finding 1): a malformed cost.csv first
+    row (csv.Error during the pre-lock peek) must NOT drop the cost row.
+    Previously only OSError was caught, so csv.Error bubbled up to the
+    outer except and the command silently lost its cost record.
+    """
+    csv_path = tmp_path / "cost.csv"
+    # Malformed CSV: unterminated quoted field — csv.reader raises csv.Error.
+    csv_path.write_bytes(b'timestamp,model,"command\n')
+
+    mock_ctx = create_mock_context(
+        'sync',
+        {'prompt_file': '/p.txt', 'output_cost': str(csv_path), 'output': '/o.txt'},
+        obj={'output_cost': str(csv_path)}
+    )
+    mock_click_context.return_value = mock_ctx
+
+    @track_cost
+    def cmd(ctx_arg, prompt_file, output):
+        return (output, 0.5, 'm1')
+
+    cmd(mock_ctx, '/p.txt', output='/o.txt')
+
+    # The new cost row must be appended despite the malformed prefix.
+    content = csv_path.read_bytes()
+    assert b',m1,' in content, (
+        "malformed CSV must not drop the cost row; final content:\n" + repr(content)
+    )
+    # No error rprint should fire (peek failure is non-fatal).
+    error_calls = [c.args[0] for c in mock_rprint.call_args_list
+                   if 'Error tracking cost' in c.args[0]]
+    assert not error_calls, (
+        f"peek failure must not surface as 'Error tracking cost'; got {error_calls!r}"
+    )
+
+
+def test_peek_survives_non_utf8_csv(mock_click_context, mock_rprint, tmp_path):
+    """Regression (6th-pass review, finding 2): a cost.csv with invalid
+    UTF-8 bytes must NOT drop the new cost row. Previously the peek's
+    `encoding='utf-8'` open raised UnicodeDecodeError, which only OSError
+    caught — so the row was lost via the outer exception handler.
+    """
+    csv_path = tmp_path / "cost.csv"
+    # Header bytes followed by a non-UTF-8 sequence (lone 0x80 continuation).
+    csv_path.write_bytes(
+        b"timestamp,model,command,cost,input_files,output_files\n"
+        b"2026-01-01,gpt-4,sync,0.01,a.py,\x80\x81bad.py\n"
+    )
+
+    mock_ctx = create_mock_context(
+        'sync',
+        {'prompt_file': '/p.txt', 'output_cost': str(csv_path), 'output': '/o.txt'},
+        obj={'output_cost': str(csv_path)}
+    )
+    mock_click_context.return_value = mock_ctx
+
+    @track_cost
+    def cmd(ctx_arg, prompt_file, output):
+        return (output, 0.5, 'm-utf8-fallback')
+
+    cmd(mock_ctx, '/p.txt', output='/o.txt')
+
+    content = csv_path.read_bytes()
+    assert b'm-utf8-fallback' in content, (
+        "non-UTF-8 CSV must not drop the cost row; final content:\n" + repr(content)
+    )
+    error_calls = [c.args[0] for c in mock_rprint.call_args_list
+                   if 'Error tracking cost' in c.args[0]]
+    assert not error_calls, (
+        f"UnicodeDecodeError in peek must not surface as 'Error tracking cost'; got {error_calls!r}"
+    )
+
+
+def test_unsupported_fs_lock_attempts_unlocked_migration(mock_click_context, mock_rprint, tmp_path):
+    """Regression (6th-pass review, finding 3): when migration is needed
+    AND the filesystem doesn't support O_EXCL (unsupported lock, not
+    contended), the previous behavior was to skip the cost row
+    indefinitely until manual migration. The new policy attempts
+    unlocked migration with a documented-tradeoff warning, so
+    single-process use on such filesystems still works.
+    """
+    csv_path = tmp_path / "cost.csv"
+    # Legacy 6-column CSV.
+    csv_path.write_text(
+        "timestamp,model,command,cost,input_files,output_files\n"
+        "2026-01-01T00:00:00.000,gpt-4,sync,0.01,a.py,b.py\n",
+        encoding="utf-8",
+    )
+
+    mock_ctx = create_mock_context(
+        'sync',
+        {'prompt_file': '/p.txt', 'output_cost': str(csv_path), 'output': '/o.txt'},
+        obj={'output_cost': str(csv_path)}
+    )
+    mock_click_context.return_value = mock_ctx
+
+    @track_cost
+    def cmd(ctx_arg, prompt_file, output):
+        return (output, 0.5, 'm-unsupported-fs')
+
+    # Simulate unsupported filesystem: acquire returns (None, False).
+    with patch('pdd.track_cost._acquire_atomic_lock', return_value=(None, False)):
+        cmd(mock_ctx, '/p.txt', output='/o.txt')
+
+    # CSV must be migrated AND the new row appended (single-process safe).
+    content = csv_path.read_text(encoding="utf-8")
+    assert 'attempted_models' in content.splitlines()[0], (
+        "header must be migrated even on unsupported FS; got:\n" + content
+    )
+    assert 'm-unsupported-fs' in content, (
+        "cost row must be appended on unsupported FS; got:\n" + content
+    )
+    warn_calls = [c.args[0] for c in mock_rprint.call_args_list]
+    assert any('lock not supported on this filesystem' in w for w in warn_calls), (
+        f"unsupported-FS tradeoff must be documented via warning; got rprint: {warn_calls!r}"
+    )

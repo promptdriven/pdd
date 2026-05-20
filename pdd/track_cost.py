@@ -398,20 +398,38 @@ def track_cost(func):
                         # filesystem-unsupported lock no longer reopens the
                         # lost-row race on the normal append path.
                         needs_migration_likely = False
+                        peek_failed = False
                         if file_has_content:
                             try:
                                 with open(output_cost_path, 'r', newline='', encoding='utf-8') as _peek:
                                     _peek_header = next(csv.reader(_peek), None)
                                 if _peek_header is not None and 'attempted_models' not in _peek_header:
                                     needs_migration_likely = True
-                            except OSError:
-                                pass
+                            except (OSError, csv.Error, UnicodeDecodeError, StopIteration):
+                                # Pre-lock peek can fail when the existing
+                                # CSV is malformed (csv.Error), not valid
+                                # UTF-8 (UnicodeDecodeError), or unreadable
+                                # (OSError). Don't abort cost logging on
+                                # such a file — fall through to the append
+                                # path so the new row still lands. The
+                                # csv.writer can append regardless of the
+                                # existing content.
+                                peek_failed = True
 
                         # Lock acquisition policy:
-                        #   - Migration needed → MUST hold the lock; on
-                        #     contended timeout or unsupported filesystem,
-                        #     SKIP the write entirely (better to lose one
-                        #     cost row than to corrupt the legacy CSV).
+                        #   - Migration needed AND lock held → migrate +
+                        #     append under lock (the read-modify-write
+                        #     race needs serialization).
+                        #   - Migration needed AND lock contended (real
+                        #     concurrent holder) → SKIP the cost row with
+                        #     a loud warning; better than racing.
+                        #   - Migration needed AND lock unsupported by
+                        #     the filesystem → attempt UNLOCKED migration
+                        #     with a one-line warning. Filesystems that
+                        #     reject O_EXCL are typically single-process
+                        #     environments (e.g. some network mounts);
+                        #     refusing forever would be worse than the
+                        #     theoretical multi-process race.
                         #   - Pure append → acquire best-effort; on any
                         #     failure, fall through to unlocked append
                         #     (relying on POSIX O_APPEND atomicity).
@@ -421,17 +439,29 @@ def track_cost(func):
                         if needs_migration_likely:
                             lock_handle, lock_contended = _acquire_atomic_lock(lock_path)
                             if lock_handle is None:
-                                rprint(
-                                    "[yellow]track_cost: could not acquire "
-                                    "CSV lock for legacy migration "
-                                    f"({'contended' if lock_contended else 'unsupported'}); "
-                                    "skipping this cost row to avoid corrupting "
-                                    f"{output_cost_path}.[/yellow]"
-                                )
-                                # Skip the write — return without recording.
-                                if exception_raised is not None:
-                                    raise exception_raised
-                                return result
+                                if lock_contended:
+                                    rprint(
+                                        "[yellow]track_cost: could not acquire "
+                                        "CSV lock for legacy migration after 30s "
+                                        "(another PDD process is still holding it); "
+                                        "skipping this cost row to avoid corrupting "
+                                        f"{output_cost_path}.[/yellow]"
+                                    )
+                                    # Skip the write entirely under real contention.
+                                    if exception_raised is not None:
+                                        raise exception_raised
+                                    return result
+                                else:
+                                    # Unsupported filesystem: a single-process
+                                    # unlocked migration is the lesser evil.
+                                    # Document the tradeoff in the warning.
+                                    rprint(
+                                        "[yellow]track_cost: lock not supported on "
+                                        f"this filesystem; migrating {output_cost_path} "
+                                        "without serialization (safe for single-process "
+                                        "use; concurrent PDD writers on this filesystem "
+                                        "can lose rows during legacy migration).[/yellow]"
+                                    )
                         else:
                             lock_handle, lock_contended = _acquire_atomic_lock(lock_path)
                             # On pure-append, lock failure is acceptable —
