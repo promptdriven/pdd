@@ -1173,24 +1173,16 @@
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "wrapper",
-            "signature": "()",
-            "returns": "None",
+            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
+            "returns": "Tuple[List[str], List[str]]",
             "sideEffects": [
               "None"
             ]
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str)",
-            "returns": "None",
+            "signature": "(path_str) -> bool",
+            "returns": "bool",
             "sideEffects": [
               "None"
             ]

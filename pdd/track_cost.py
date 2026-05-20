@@ -4,9 +4,15 @@ import csv
 import os
 import click
 from rich import print as rprint
-from typing import Any, Tuple
+from typing import Any, List, Tuple
 
-def looks_like_file(path_str):
+# Tracks cost-CSV paths we've already warned the user about for the
+# "legacy header, attempted_models column will be omitted" case. Keyed on
+# absolute path so a long-running session doesn't spam the same notice.
+_legacy_csv_warned: set = set()
+
+
+def looks_like_file(path_str) -> bool:
     """Check if string looks like a file path."""
     if not path_str or not isinstance(path_str, str):
         return False
@@ -106,6 +112,17 @@ def track_cost(func):
                                 if 'attempted_models' not in first_line:
                                     fieldnames = legacy_fieldnames
                                     del row['attempted_models']
+                                    abs_path = os.path.abspath(output_cost_path)
+                                    if abs_path not in _legacy_csv_warned:
+                                        _legacy_csv_warned.add(abs_path)
+                                        rprint(
+                                            "[yellow]Note: cost CSV "
+                                            f"'{output_cost_path}' uses the legacy "
+                                            "header; the new 'attempted_models' "
+                                            "column will not be recorded. Delete or "
+                                            "rename the file to start fresh with the "
+                                            "attempted_models column.[/yellow]"
+                                        )
 
                         with open(output_cost_path, 'a', newline='', encoding='utf-8') as csvfile:
                             writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -139,9 +156,9 @@ def extract_cost_and_model(result: Any) -> Tuple[Any, str]:
         return result[-2], result[-1]
     return '', ''
 
-def collect_files(args, kwargs):
-    input_files = []
-    output_files = []
+def collect_files(args, kwargs) -> Tuple[List[str], List[str]]:
+    input_files: List[str] = []
+    output_files: List[str] = []
 
     input_param_names = {
         'prompt_file', 'prompt', 'input', 'input_file', 'source', 'source_file',
@@ -192,7 +209,3 @@ def collect_files(args, kwargs):
                     input_files.append(item)
 
     return input_files, output_files
-
-def wrapper(*args, **kwargs):
-    """Dummy wrapper exposed at the module level to satisfy architectural exports."""
-    pass

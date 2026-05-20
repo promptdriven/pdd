@@ -94,6 +94,15 @@ def clear_pytest_env_for_cost_tests():
         yield
 
 
+@pytest.fixture(autouse=True)
+def reset_legacy_csv_warned():
+    """Process-level legacy-CSV warning dedup must not leak across tests."""
+    from pdd import track_cost as _tc_mod
+    _tc_mod._legacy_csv_warned.clear()
+    yield
+    _tc_mod._legacy_csv_warned.clear()
+
+
 def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_open_file, mock_rprint):
     """When CSV file exists AND has content, header should NOT be written (append mode).
     File is read first to detect legacy header (without attempted_models column)."""
@@ -124,7 +133,11 @@ def test_csv_row_appended_if_file_exists_with_content(mock_click_context, mock_o
     row_pattern = re.compile(r'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+,gpt-3,generate,25.5,/path/to/prompt.txt,/path/to/output\r\n')
     assert any(row_pattern.match(call.args[0]) for call in handle.write.call_args_list)
 
-    mock_rprint.assert_not_called()
+    # Legacy-CSV path emits a one-time UX warning telling the user how to
+    # opt in to the new attempted_models column.
+    mock_rprint.assert_called_once()
+    warn_msg = mock_rprint.call_args[0][0]
+    assert "attempted_models" in warn_msg and "/path/to/cost.csv" in warn_msg
     assert result == ('/path/to/output', 25.5, 'gpt-3')
 
 
@@ -969,6 +982,41 @@ def test_legacy_csv_without_attempted_models_header_is_not_rewritten(
     # New row appended without an attempted_models field (6 columns only)
     assert contents[2].count(',') == 5, contents[2]
     assert contents[2].endswith(',new-model,gen,0.02,,') or ',new-model,gen,0.02,' in contents[2]
+
+
+def test_legacy_csv_warning_fires_once_per_path(
+    mock_click_context, mock_rprint, tmp_path
+):
+    """The legacy-header UX warning must appear at most once per file in a
+    single process, regardless of how many tracked commands append to it."""
+    cost_path = tmp_path / 'legacy.csv'
+    cost_path.write_text(
+        'timestamp,model,command,cost,input_files,output_files\r\n'
+        '2026-01-01T00:00:00.000,old,gen,0.01,/i,/o\r\n',
+        encoding='utf-8',
+    )
+
+    @track_cost
+    def cmd(ctx, prompt_file: str) -> Tuple[str, float, str]:
+        ctx.obj['attempted_models'] = ['m1']
+        return ('/o', 0.02, 'm1')
+
+    mock_ctx = _make_ctx_with_dict_obj('gen', {'output_cost': str(cost_path)})
+    mock_click_context.return_value = mock_ctx
+
+    cmd(mock_ctx, str(tmp_path / 'p1.txt'))
+    cmd(mock_ctx, str(tmp_path / 'p2.txt'))
+    cmd(mock_ctx, str(tmp_path / 'p3.txt'))
+
+    # Three rows appended, but the warning fired exactly once.
+    legacy_warnings = [
+        c for c in mock_rprint.call_args_list
+        if 'attempted_models' in c.args[0] and str(cost_path) in c.args[0]
+    ]
+    assert len(legacy_warnings) == 1, (
+        f"Expected exactly 1 legacy-CSV warning across 3 commands writing "
+        f"to the same file, got {len(legacy_warnings)}: {legacy_warnings}"
+    )
 
 
 def test_new_csv_includes_attempted_models_header(
