@@ -331,6 +331,7 @@ def run_agentic_checkup(
     blocking_severities: Optional[str] = None,
     clean_reviewer_states: Optional[str] = None,
     fallback_reviewer_on_failure: bool = False,
+    cwd: Optional[Path] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -341,6 +342,7 @@ def run_agentic_checkup(
         no_fix: Report only, don't apply fixes.
         timeout_adder: Additional seconds to add to each step timeout.
         use_github_state: Whether to persist state to GitHub comments.
+        cwd: Project working directory to use when loading local context.
         pr_url: When set, verify this existing PR against ``issue_url`` instead
             of creating a new branch/PR. Step 8 (create_pr) is skipped and the
             worktree is based on the PR's head branch.
@@ -417,7 +419,7 @@ def run_agentic_checkup(
     full_content = _escape_format_braces(raw_full_content)
 
     # 4. Load project context
-    project_root = _find_project_root(Path.cwd())
+    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     architecture, _ = _load_architecture_json(project_root)
     raw_arch_json_str = (
         json.dumps(architecture, indent=2)

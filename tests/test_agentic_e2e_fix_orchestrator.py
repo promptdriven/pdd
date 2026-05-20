@@ -9691,3 +9691,52 @@ class TestIssue1033Step2ResumeReverification:
         assert "verification_failed_on_resume" in section_body_lower
         assert "_verify_tests_independently" in section_body
         assert "deferred post-step-9 success" in section_body_lower
+
+
+class TestFinalCheckupForwardsCwd:
+    def test_run_final_checkup_passes_cwd_to_run_agentic_checkup(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "ok", 0.0, "fake-model"),
+        ) as checkup_mock:
+            _run_final_checkup_on_pr(
+                issue_url="https://github.com/o/r/issues/99",
+                repo_owner="o",
+                repo_name="r",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                reasoning_time=None,
+            )
+
+        assert checkup_mock.call_args.kwargs["cwd"] == tmp_path
+
+    def test_no_pr_found_skips_checkup_without_invoking(self, tmp_path):
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=None,
+        ), patch("pdd.agentic_checkup.run_agentic_checkup") as checkup_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                issue_url="https://github.com/o/r/issues/99",
+                repo_owner="o",
+                repo_name="r",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                reasoning_time=None,
+            )
+
+        assert success is True
+        assert "No open PR" in msg
+        assert not checkup_mock.called

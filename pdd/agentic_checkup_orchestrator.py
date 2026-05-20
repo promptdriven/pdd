@@ -747,20 +747,30 @@ def run_agentic_checkup_orchestrator(
                     f"(cached={cached_pr_owner}/{cached_pr_repo}, "
                     f"current={pr_owner}/{pr_repo})"
                 )
-            # Head-SHA invalidation. Skip the check when EITHER side is
-            # empty — a missing cached SHA means the state predates this
-            # axis, and a missing current SHA means metadata was
-            # unavailable (don't fail closed and brick resume).
+            # Head-SHA invalidation — FAIL CLOSED (codex round-2
+            # follow-through). Reuse cached PR step outputs ONLY when both
+            # the cached and current ``pr_head_sha`` are non-empty AND
+            # equal. Every other combination — missing cached SHA (state
+            # predates this axis), missing current SHA (metadata fetch
+            # unavailable), or different non-empty SHAs — discards cache.
+            #
+            # Fail-open is the bug the SHA axis was added to prevent:
+            # silently replaying step outputs verified against an unknown
+            # or older PR head against new code. A first-PR-run with
+            # cached state predating this field also gets re-verified
+            # rather than reused; since the field isn't released yet, the
+            # one-time cost is acceptable to preserve "if you can't prove
+            # it's the same code, don't trust the verification".
             cached_pr_head_sha = state.get("pr_head_sha") or ""
-            if (
+            if not (
                 cached_pr_head_sha
                 and current_pr_head_sha
-                and cached_pr_head_sha != current_pr_head_sha
+                and cached_pr_head_sha == current_pr_head_sha
             ):
                 identity_mismatch_reasons.append(
                     f"pr_head_sha "
-                    f"(cached={cached_pr_head_sha[:8]}, "
-                    f"current={current_pr_head_sha[:8]})"
+                    f"(cached={cached_pr_head_sha[:8] or '<empty>'}, "
+                    f"current={current_pr_head_sha[:8] or '<empty>'})"
                 )
         if identity_mismatch_reasons:
             if not quiet:
@@ -1296,20 +1306,26 @@ def run_agentic_checkup_orchestrator(
                 context["pr_push_output"] = push_message
                 _save_state()
                 if not push_ok:
-                    # Codex round-1 blocker #2: enrich the failure message
-                    # so the operator can recover the unpushed local fix.
-                    # _commit_and_push_if_changed creates a local commit
-                    # before pushing, so HEAD now points at the would-be
-                    # PR-head SHA. Surface BOTH the worktree path AND
-                    # that local SHA — without them the user has to dig
-                    # through ``.pdd/worktrees/`` to find the artifact.
+                    # Codex round-1 blocker #2 / round-2 nit A: enrich the
+                    # failure message so the operator can recover the
+                    # unpushed local fix.
+                    # ``_commit_and_push_if_changed`` can fail at any of
+                    # several points: ``git add`` (no commit yet), ``git
+                    # commit`` (no commit yet), missing PR metadata after
+                    # commit, or ``push`` after commit. We don't try to
+                    # distinguish; instead we point the operator at the
+                    # worktree HEAD with neutral wording so they can
+                    # inspect for an unpushed fix commit regardless of
+                    # which leg failed.
                     local_sha = _git_rev_parse_head(worktree_path)
-                    recovery = (
-                        f" Local fix commit retained in worktree: "
-                        f"{worktree_path}"
+                    sha_clause = (
+                        f" at SHA {local_sha}" if local_sha else ""
                     )
-                    if local_sha:
-                        recovery += f" (commit {local_sha})"
+                    recovery = (
+                        f" Local HEAD in worktree: {worktree_path}"
+                        f"{sha_clause}; check for an unpushed fix commit "
+                        f"before re-running."
+                    )
                     sep = "" if push_message.rstrip().endswith(".") else "."
                     enriched = push_message + sep + recovery
                     step_outputs["pr_push"] = enriched

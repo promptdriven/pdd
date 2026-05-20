@@ -754,6 +754,7 @@ class TestPrResumeWorktreeRecreation:
             "pr_number": 200,
             "pr_owner": "o",
             "pr_repo": "r",
+            "pr_head_sha": "aaaaaaaa",
             "last_completed_step": 2,
             "worktree_path": str(tmp_path / "missing-wt"),
             "step_outputs": {"1": "done", "2": "done"},
@@ -791,6 +792,7 @@ class TestPrResumeWorktreeRecreation:
                 "head_ref": "change/test",
                 "head_owner": "o",
                 "head_repo": "r",
+                "head_sha": "aaaaaaaa",
             },
             create=True,
         ), patch(
@@ -945,8 +947,14 @@ class TestStateIdentityPrHeadSha:
     def test_resume_reuses_cache_when_pr_head_sha_matches(
         self, tmp_path: Path
     ) -> None:
-        """When the remote PR head SHA matches the cached SHA, cached step
-        outputs MUST be reused (no regression to a forced re-verification)."""
+        """When both cached and current PR head SHAs are non-empty AND equal,
+        cached step outputs MUST be reused (no regression to a forced
+        re-verification). The tightened predicate (codex round-2) only
+        permits reuse on this exact branch: BOTH sides populated + equal.
+        Every other combination is covered by ``test_resume_discards_cache_
+        when_pr_head_sha_advanced`` (different non-empty) and
+        ``test_resume_discards_cache_when_either_side_sha_is_empty``
+        (empty-side combos)."""
         from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
         saved_state = {
@@ -1038,6 +1046,131 @@ class TestStateIdentityPrHeadSha:
             f"{executed_steps}"
         )
 
+    @pytest.mark.parametrize(
+        "cached_sha,current_sha,combo",
+        [
+            ("", "", "both-empty"),
+            ("", "bbbbbbbb", "cached-empty-current-present"),
+            ("aaaaaaaa", "", "cached-present-current-empty"),
+        ],
+        ids=["both_empty", "cached_empty", "current_empty"],
+    )
+    def test_resume_discards_cache_when_either_side_sha_is_empty(
+        self,
+        tmp_path: Path,
+        cached_sha: str,
+        current_sha: str,
+        combo: str,
+    ) -> None:
+        """Codex round-2 follow-through on Blocker #1: the SHA invalidation
+        must FAIL CLOSED. Previously the guard skipped the SHA check when
+        EITHER side was empty, which silently reused cached step outputs
+        verified against an unknown PR head — exactly the failure mode the
+        guard was added to prevent.
+
+        Tightened predicate: reuse cache ONLY when BOTH cached AND current
+        ``pr_head_sha`` are non-empty AND equal. Every other combination
+        (both empty, only-cached, only-current) must discard cache.
+
+        Three parametrized empty-side combos here. The (val, val match) and
+        (val, val mismatch) branches are already covered by
+        ``test_resume_reuses_cache_when_pr_head_sha_matches`` and
+        ``test_resume_discards_cache_when_pr_head_sha_advanced``.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        saved_state = {
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            "pr_head_sha": cached_sha,
+            "last_completed_step": 5,
+            "worktree_path": str(tmp_path / "wt"),
+            "step_outputs": {
+                "1": "cached-1", "2": "cached-2",
+                "3": "cached-3", "4": "cached-4", "5": "cached-5",
+            },
+            "total_cost": 0.0,
+            "model_used": "fake",
+            "fix_verify_iteration": 0,
+            "previous_fixes": "",
+        }
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        executed_steps: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed_steps.append(step_num)
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(saved_state, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": current_sha,
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "No changes to push."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True
+        # Fail-closed invalidation. With cache discarded, steps 1-5 MUST
+        # re-execute. Without the tightening they'd be replayed from cache
+        # and never appear.
+        assert 1 in executed_steps, (
+            f"[{combo}] Step 1 must re-run when pr_head_sha cannot be "
+            f"verified (cached={cached_sha!r}, current={current_sha!r}); "
+            f"ran: {executed_steps}"
+        )
+        assert 5 in executed_steps, (
+            f"[{combo}] Step 5 must re-run when pr_head_sha cannot be "
+            f"verified (cached={cached_sha!r}, current={current_sha!r}); "
+            f"ran: {executed_steps}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Blocker #2 (codex round-1): on push failure, surface worktree path + local
@@ -1046,12 +1179,40 @@ class TestStateIdentityPrHeadSha:
 
 
 class TestPrModePushFailureDiagnostics:
+    @staticmethod
+    def _last_saved_pr_push(save_mock) -> str:
+        """Return the most recent ``step_outputs["pr_push"]`` written via
+        ``save_workflow_state``. The orchestrator's ``_save_state`` calls
+        ``save_workflow_state(..., state=new_state, ...)`` where
+        ``new_state["step_outputs"]`` is the live dict — walk back through
+        ``call_args_list`` to find the latest write that carried a
+        non-empty ``pr_push`` entry."""
+        for call in reversed(save_mock.call_args_list):
+            state = call.kwargs.get("state")
+            if state is None and call.args:
+                # _save_state uses kwargs in production, but accept a
+                # positional fallback for resilience.
+                state = call.args[-1] if isinstance(call.args[-1], dict) else None
+            if state is None:
+                continue
+            step_outputs = state.get("step_outputs", {}) or {}
+            pr_push = step_outputs.get("pr_push")
+            if pr_push:
+                return pr_push
+        return ""
+
     def test_push_failure_message_includes_worktree_and_local_sha(
         self, tmp_path: Path
     ) -> None:
         """If _commit_and_push_if_changed fails on the final iteration, the
         returned error MUST give the user enough to recover: the worktree
-        path AND the local commit SHA containing the unpushed fixes."""
+        path AND the local commit SHA containing the unpushed fixes.
+
+        Codex round-2 nit B: ALSO assert the same enriched message is
+        persisted into ``step_outputs["pr_push"]`` via
+        ``save_workflow_state`` — locking the report surface (not just
+        the returned tuple) so a future change can't quietly drop the
+        recovery hint from saved state."""
         from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
         wt = tmp_path / "wt"
@@ -1072,7 +1233,7 @@ class TestPrModePushFailureDiagnostics:
         ), patch(
             "pdd.agentic_checkup_orchestrator.save_workflow_state",
             return_value=None,
-        ), patch(
+        ) as save_mock, patch(
             "pdd.agentic_checkup_orchestrator.clear_workflow_state"
         ), patch(
             "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
@@ -1119,6 +1280,185 @@ class TestPrModePushFailureDiagnostics:
         assert "local_commit_sha_222" in msg, (
             "Expected local commit SHA in failure message so user can "
             f"cherry-pick or push manually. Got: {msg}"
+        )
+
+        # Nit B: report surface — the same diagnostic MUST also land in
+        # the persisted state under ``step_outputs["pr_push"]``.
+        saved_pr_push = self._last_saved_pr_push(save_mock)
+        assert str(wt) in saved_pr_push, (
+            "save_workflow_state must persist the enriched failure into "
+            f"step_outputs['pr_push']; got: {saved_pr_push!r}"
+        )
+        assert "local_commit_sha_222" in saved_pr_push, (
+            "Persisted step_outputs['pr_push'] must include the local "
+            f"commit SHA; got: {saved_pr_push!r}"
+        )
+
+    def test_push_failure_message_handles_empty_rev_parse_sha(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-2 nit A edge case: ``_git_rev_parse_head`` can
+        return ``""`` (rev-parse fails or staging failed before any
+        commit). The softened diagnostic MUST still include the worktree
+        path so the operator has something actionable — but MUST NOT lie
+        about a non-existent commit SHA."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            # Simulate the staging-failed-before-commit path: helper
+            # returned False and the SHA isn't available.
+            return_value=(False, "git add -u failed: permission denied"),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="",  # rev-parse fails — no SHA to surface.
+        ):
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is False
+        assert str(wt) in msg, (
+            f"Expected worktree path in failure message, got: {msg!r}"
+        )
+        # No SHA was captured — message must NOT contain a bogus "at SHA"
+        # clause. The softened wording either omits the clause entirely
+        # or uses a placeholder; either way "at SHA " followed by an
+        # actual hex string MUST NOT appear.
+        assert "at SHA " not in msg, (
+            "When rev-parse fails, message must not claim a SHA. Got: "
+            f"{msg!r}"
+        )
+
+    def test_push_rebased_success_message_preserved_into_step_outputs(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-2 nit C: when ``_commit_and_push_if_changed``
+        returns the rebased-onto-updated-head success string, the
+        orchestrator MUST preserve that exact string into
+        ``step_outputs["pr_push"]`` (which is what
+        ``save_workflow_state`` persists).
+
+        Without an explicit lock, a future change could silently rewrite
+        the helper's return value before persisting it — destroying the
+        only signal that a remote-advance race was handled."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        # Exact string from checkup_review_loop._commit_and_push_if_changed.
+        rebased_msg = (
+            "Pushed fixes to PR branch after rebasing onto updated PR head."
+        )
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ) as save_mock, patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, rebased_msg),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True
+        # The rebased-success message MUST land verbatim in saved state.
+        saved_pr_push = self._last_saved_pr_push(save_mock)
+        assert saved_pr_push == rebased_msg, (
+            "Orchestrator must preserve the helper's rebased-success "
+            "message verbatim into step_outputs['pr_push']; got: "
+            f"{saved_pr_push!r}"
         )
 
 
