@@ -4344,13 +4344,25 @@ def _check_architecture_registry_edit_guard(
                 continue
             if path in worktree_registered_paths:
                 continue
-            if path.startswith("pdd/prompts/"):
+            # Round-12 finding (codex review pass #12): the prefix
+            # check must be case-insensitive too, mirroring the R10
+            # suffix fix. On case-insensitive filesystems (Windows;
+            # macOS HFS+/APFS in default case-insensitive mode) an
+            # uppercase/mixed-case directory prefix like ``PDD/`` or
+            # ``Pdd/`` aliases to ``pdd/`` on disk, so
+            # ``PDD/foo_v2.py`` is importable as ``pdd.foo_v2``
+            # exactly like ``pdd/foo_v2.py``. A case-sensitive
+            # ``str.startswith("pdd/")`` would let the bypass slip
+            # past; lowercase the path side of the prefix
+            # comparisons.
+            path_lower = path.lower()
+            if path_lower.startswith("pdd/prompts/"):
                 continue
             # Round-6 finding 2: narrow the scan to generated
             # prompt-driven code under ``pdd/``. Anything else
             # (tests, docs, scripts, top-level helpers) falls
             # outside the registry-mutation scope.
-            if not path.startswith("pdd/"):
+            if not path_lower.startswith("pdd/"):
                 continue
             candidate = worktree / path
             # Round-7 finding: a symlink under ``pdd/`` can resolve
@@ -4418,9 +4430,15 @@ def _check_architecture_registry_edit_guard(
     submodule_offenders: List[str] = []
     if gitmodules_changed and (removed_only or implicit_retirement):
         for path in sorted(changed_norm):
-            if not path.startswith("pdd/"):
+            # Round-12 finding (codex review pass #12): match the
+            # 10b scan above — lowercase the path side of the
+            # prefix checks so an uppercase/mixed-case ``PDD/`` or
+            # ``Pdd/`` submodule path doesn't bypass the R11 check
+            # on case-insensitive filesystems.
+            path_lower = path.lower()
+            if not path_lower.startswith("pdd/"):
                 continue
-            if path.startswith("pdd/prompts/"):
+            if path_lower.startswith("pdd/prompts/"):
                 continue
             if path in head_registered_paths:
                 continue

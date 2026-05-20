@@ -7459,6 +7459,142 @@ class TestRound8SourcelessBytecodeBypass:
         assert reason is not None
         assert "pdd/foo_v2.So" in reason
 
+    def test_guard_refuses_uppercase_pdd_prefix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-12 finding (codex review pass #12), sibling of R9: an
+        uppercase ``PDD/foo_v2.py`` directory prefix aliases to
+        ``pdd/foo_v2.py`` on case-insensitive filesystems (Windows;
+        macOS HFS+/APFS in default case-insensitive mode) and is
+        importable as ``pdd.foo_v2``. A case-sensitive
+        ``str.startswith("pdd/")`` would skip the path as out-of-scope
+        and the bypass would land; lowercasing the path side of the
+        prefix comparison closes the hole. Linux is case-sensitive, so
+        the test FS itself distinguishes ``PDD`` from ``pdd`` and the
+        file actually lives at ``PDD/foo_v2.py`` — the guard logic
+        must still flag it because production filesystems can fold the
+        two.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        # ``exist_ok=True`` because the runner FS may be
+        # case-insensitive (macOS APFS in default mode), in which
+        # case ``PDD`` already exists as ``pdd``. On Linux this
+        # creates a sibling ``PDD`` directory; either way the
+        # candidate file lives at the uppercase path and the guard
+        # is fed the uppercase string.
+        (tmp_path / "PDD").mkdir(exist_ok=True)
+        (tmp_path / "PDD" / "foo_v2.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "PDD/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        assert "PDD/foo_v2.py" in reason
+
+    def test_guard_refuses_mixed_case_pdd_prefix_bypass(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-12 follow-up: a mixed-case ``Pdd/foo_v2.py`` prefix
+        must also trip the scan. Confirms the case-insensitive prefix
+        comparison handles every mixed-case permutation, not just
+        fully uppercase prefixes.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "Pdd").mkdir(exist_ok=True)
+        (tmp_path / "Pdd" / "foo_v2.py").write_text(
+            "VALUE = 42\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "Pdd/foo_v2.py",
+            ],
+        )
+        assert reason is not None
+        assert "Pdd/foo_v2.py" in reason
+
+    def test_guard_skips_uppercase_pdd_prompts_subdirectory(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-12 negative: the ``pdd/prompts/`` exclusion must also
+        be case-insensitive. An uppercase ``PDD/PROMPTS/foo.prompt``
+        path aliases to ``pdd/prompts/foo.prompt`` on a
+        case-insensitive filesystem; it should be SKIPPED as a prompts
+        subdir, not flagged. Confirms the prompt-exclusion side of
+        the case-insensitive prefix comparison.
+        """
+        from pdd.checkup_review_loop import (
+            _check_architecture_registry_edit_guard,
+        )
+
+        _seed_repo_with_arch(
+            tmp_path,
+            [_arch_pair("foo_python.prompt", "pdd/foo.py")],
+        )
+
+        (tmp_path / "pdd" / "foo.py").unlink()
+        (tmp_path / "pdd" / "prompts" / "foo_python.prompt").unlink()
+        (tmp_path / "architecture.json").write_text(
+            json.dumps([]), encoding="utf-8"
+        )
+        (tmp_path / "PDD" / "PROMPTS").mkdir(parents=True, exist_ok=True)
+        (tmp_path / "PDD" / "PROMPTS" / "foo.prompt").write_text(
+            "prompt body\n", encoding="utf-8"
+        )
+
+        reason = _check_architecture_registry_edit_guard(
+            tmp_path,
+            [
+                "architecture.json",
+                "pdd/foo.py",
+                "pdd/prompts/foo_python.prompt",
+                "PDD/PROMPTS/foo.prompt",
+            ],
+        )
+        # The PDD/PROMPTS path must be excluded by the case-insensitive
+        # prompts subdir filter, so it does NOT appear as an offender.
+        # The retirement itself is legitimate (no unregistered new
+        # code), so the guard should report no reason.
+        assert reason is None or "PDD/PROMPTS/foo.prompt" not in reason
+
     def test_guard_allows_pdd_fixture_txt_under_broadened_filter(
         self, tmp_path: Path
     ) -> None:
