@@ -176,6 +176,16 @@ from ..core.errors import handle_error
     help="Compatibility flag; the primary reviewer's clean verification is final.",
 )
 @click.option(
+    "--deterministic-gates/--no-deterministic-gates",
+    "deterministic_gates",
+    default=True,
+    show_default=True,
+    help=(
+        "When enabled, qualitative reviewer verdicts cannot override local "
+        "failures such as syntax errors, linting issues, or whitespace violations."
+    ),
+)
+@click.option(
     "--blocking-severities",
     type=str,
     default=None,
@@ -243,6 +253,7 @@ def checkup(
     require_all_reviewers_clean: bool,
     continue_on_reviewer_limit: bool,
     require_final_fresh_review: bool,
+    deterministic_gates: bool,
     blocking_severities: Optional[str],
     clean_reviewer_states: Optional[str],
     fallback_reviewer_on_failure: bool,
@@ -387,6 +398,7 @@ def checkup(
             require_all_reviewers_clean=require_all_reviewers_clean,
             continue_on_reviewer_limit=continue_on_reviewer_limit,
             require_final_fresh_review=require_final_fresh_review,
+            deterministic_gates=deterministic_gates,
             blocking_severities=blocking_severities,
             clean_reviewer_states=clean_reviewer_states,
             fallback_reviewer_on_failure=fallback_reviewer_on_failure,

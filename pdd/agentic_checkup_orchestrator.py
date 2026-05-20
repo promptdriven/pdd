@@ -32,6 +32,7 @@ from .agentic_common import (
 )
 from .load_prompt_template import load_prompt_template
 from .preprocess import preprocess
+from .get_lint_commands import get_lint_commands
 
 console = Console()
 
@@ -445,6 +446,74 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+def _run_deterministic_gates(worktree: Path) -> List[str]:
+    """Run deterministic lint and syntax checks on changed files.
+
+    Returns a list of error messages, or an empty list if all gates pass.
+    """
+    errors = []
+
+    # 1. Identify changed files
+    try:
+        result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        # Porcelain output: "XY path/to/file"
+        changed_files = []
+        for line in result.stdout.splitlines():
+            if len(line) > 3:
+                changed_files.append(line[3:].strip())
+    except subprocess.CalledProcessError:
+        return ["Failed to identify changed files via git status."]
+
+    # 2. Run git diff --check
+    try:
+        subprocess.run(
+            ["git", "diff", "--check"],
+            cwd=worktree,
+            capture_output=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as e:
+        errors.append(f"git diff --check failed:\n{e.stdout.decode('utf-8')}")
+
+    # 3. Run tool-specific gates
+    for rel_path in changed_files:
+        full_path = worktree / rel_path
+        if not full_path.is_file():
+            continue
+
+        lint_commands = get_lint_commands(full_path)
+        for cmd in lint_commands:
+            try:
+                # Replace <file> placeholder if present, otherwise append
+                cmd_str = cmd.command
+                if "<file>" in cmd_str:
+                    cmd_str = cmd_str.replace("<file>", str(full_path))
+                else:
+                    cmd_str = f"{cmd_str} {full_path}"
+
+                subprocess.run(
+                    cmd_str,
+                    shell=True,
+                    cwd=cmd.cwd or worktree,
+                    capture_output=True,
+                    check=True,
+                )
+            except subprocess.CalledProcessError as e:
+                errors.append(
+                    f"Deterministic gate failed: {cmd_str}\n"
+                    f"Exit code: {e.returncode}\n"
+                    f"Output: {e.stdout.decode('utf-8')}\n{e.stderr.decode('utf-8')}"
+                )
+
+    return errors
+
+
 # ---------------------------------------------------------------------------
 # Internal: run a single step
 # ---------------------------------------------------------------------------
@@ -521,6 +590,7 @@ def run_agentic_checkup_orchestrator(
     no_fix: bool = False,
     timeout_adder: float = 0.0,
     use_github_state: bool = True,
+    deterministic_gates: bool = True,
     reasoning_time: Optional[float] = None,
     pr_url: Optional[str] = None,
     pr_owner: Optional[str] = None,
@@ -554,6 +624,7 @@ def run_agentic_checkup_orchestrator(
         "pddrc_content": pddrc_content,
         "project_root": str(cwd),
         "no_fix": "true" if no_fix else "false",
+        "deterministic_gates": "true" if deterministic_gates else "false",
         # PR-mode signals (empty strings when not in PR mode so .format()
         # substitution never KeyErrors on a prompt that references them).
         "pr_mode": "true" if pr_mode else "false",
@@ -950,6 +1021,18 @@ def run_agentic_checkup_orchestrator(
             if not quiet:
                 console.print(f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7}...")
 
+            # Run deterministic gates
+            if deterministic_gates:
+                if not quiet:
+                    console.print("  [blue]Running deterministic gates...[/blue]")
+                gate_errors = _run_deterministic_gates(nofix_step_cwd)
+                if gate_errors:
+                    context["deterministic_gate_errors"] = "\n".join(gate_errors)
+                    if not quiet:
+                        console.print(f"  [yellow]Deterministic gates found {len(gate_errors)} error(s)[/yellow]")
+                else:
+                    context["deterministic_gate_errors"] = "All deterministic gates passed."
+
             result = _run_single_step(
                 7, name7, context,
                 cwd=cwd, step_cwd=nofix_step_cwd,
@@ -1055,6 +1138,17 @@ def run_agentic_checkup_orchestrator(
                         f"[bold][Step {disp}/{TOTAL_STEPS}][/bold] "
                         f"{description} (iter {fix_verify_iteration})..."
                     )
+
+                if step_num == 7 and deterministic_gates:
+                    if not quiet:
+                        console.print("  [blue]Running deterministic gates...[/blue]")
+                    gate_errors = _run_deterministic_gates(step_cwd)
+                    if gate_errors:
+                        context["deterministic_gate_errors"] = "\n".join(gate_errors)
+                        if not quiet:
+                            console.print(f"  [yellow]Deterministic gates found {len(gate_errors)} error(s)[/yellow]")
+                    else:
+                        context["deterministic_gate_errors"] = "All deterministic gates passed."
 
                 result = _run_single_step(
                     step_num, name, context,

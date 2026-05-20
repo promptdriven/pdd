@@ -46,6 +46,7 @@ from .agentic_checkup_orchestrator import _get_git_root, _setup_pr_worktree
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
 from .architecture_registry import extract_modules
+from .get_lint_commands import get_lint_commands
 
 logger = logging.getLogger(__name__)
 console = Console()
@@ -626,6 +627,7 @@ class ReviewLoopConfig:
     # Kept for report compatibility. A clean verifier pass by the primary
     # reviewer satisfies this; no separate fresh reviewer is spawned.
     require_final_fresh_review: bool = True
+    deterministic_gates: bool = True
     timeout_adder: float = 0.0
     reasoning_time: Optional[float] = None
     blocking_severities: Tuple[str, ...] = DEFAULT_BLOCKING_SEVERITIES
@@ -946,6 +948,14 @@ def run_checkup_review_loop(
                             break
                         state.active_reviewer = fallback_result.reviewer
                         if fallback_result.status == "clean":
+                            if _apply_deterministic_gates(worktree, pr_metadata, state, config):
+                                state.reviewer_status[reviewer] = "findings"
+                                state.stop_reason = (
+                                    f"Primary reviewer {reviewer} unavailable "
+                                    f"({review.status}); secondary reviewer {fixer} "
+                                    "clean (fallback), but deterministic gates failed."
+                                )
+                                break
                             state.fresh_final_status = "clean"
                             state.stop_reason = (
                                 f"Primary reviewer {reviewer} unavailable "
@@ -980,22 +990,34 @@ def run_checkup_review_loop(
                         "Review-only mode: primary reviewer reported findings."
                     )
                 else:
-                    _mark_reviewer_findings_fixed(state, reviewer)
-                    state.reviewer_status[reviewer] = "clean"
-                    state.fresh_final_status = "clean"
-                    state.stop_reason = (
-                        "Review-only mode: primary reviewer reported no findings."
-                    )
+                    if _apply_deterministic_gates(worktree, pr_metadata, state, config):
+                        state.reviewer_status[reviewer] = "findings"
+                        state.stop_reason = (
+                            "Review-only mode: primary reviewer reported no findings, but deterministic gates failed."
+                        )
+                    else:
+                        _mark_reviewer_findings_fixed(state, reviewer)
+                        state.reviewer_status[reviewer] = "clean"
+                        state.fresh_final_status = "clean"
+                        state.stop_reason = (
+                            "Review-only mode: primary reviewer reported no findings."
+                        )
                 break
             if not fix_findings:
-                _mark_reviewer_findings_fixed(state, reviewer)
-                state.reviewer_status[reviewer] = "clean"
-                break
+                if _apply_deterministic_gates(worktree, pr_metadata, state, config):
+                    state.reviewer_status[reviewer] = "findings"
+                else:
+                    _mark_reviewer_findings_fixed(state, reviewer)
+                    state.reviewer_status[reviewer] = "clean"
+                    break
         else:
             fix_findings = _actionable_findings(state, pending_findings)
             if not fix_findings:
-                state.reviewer_status[reviewer] = "clean"
-                break
+                if _apply_deterministic_gates(worktree, pr_metadata, state, config):
+                    state.reviewer_status[reviewer] = "findings"
+                else:
+                    state.reviewer_status[reviewer] = "clean"
+                    break
 
         state.reviewer_status[reviewer] = "findings"
         # Capture the worktree HEAD BEFORE the primary fixer runs so the
@@ -1393,6 +1415,13 @@ def run_checkup_review_loop(
             state.reviewer_status[reviewer] = "findings"
             continue
 
+        if _apply_deterministic_gates(worktree, pr_metadata, state, config):
+            state.reviewer_status[reviewer] = "findings"
+            state.verification_status_by_round[round_number] = "unverified"
+            # Re-fetch findings to include the new gate failures
+            pending_findings = _actionable_findings(state, list(state.findings_by_key.values()))
+            continue
+
         state.reviewer_status[reviewer] = "clean"
         state.fresh_final_status = "clean"
         state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
@@ -1519,11 +1548,11 @@ def _normalize_reviewers(reviewers: Sequence[str]) -> List[str]:
     return normalized
 
 
-def _pr_changed_python_files(
+def _pr_changed_files(
     worktree: Path,
     pr_metadata: Optional[Dict[str, Any]],
 ) -> List[str]:
-    """Return the list of Python files changed in the PR's merge-base diff.
+    """Return the list of files changed in the PR's merge-base diff.
 
     Uses ``git diff --name-only <base>...HEAD`` so the answer is the same
     on a fresh ``git fetch pull/N/head`` PR worktree as it is on a
@@ -1585,7 +1614,7 @@ def _pr_changed_python_files(
         names = [
             line.strip()
             for line in diff.stdout.splitlines()
-            if line.strip() and line.strip().endswith(".py")
+            if line.strip()
         ]
         if names or base.endswith(("/main", "/master", "main", "master")):
             # Either we got results or we resolved a canonical base ref:
@@ -1610,8 +1639,140 @@ def _pr_changed_python_files(
     return [
         line.strip()
         for line in diff.stdout.splitlines()
-        if line.strip() and line.strip().endswith(".py")
+        if line.strip()
     ]
+
+
+def _run_deterministic_gates(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, Any]],
+) -> List[ReviewFinding]:
+    """Run deterministic lint and syntax checks on changed files.
+
+    Returns a list of synthetic ReviewFinding instances for any failures.
+    """
+    findings = []
+
+    # 1. Identify changed files
+    try:
+        changed = _pr_changed_files(worktree, pr_metadata)
+    except Exception as exc:
+        logger.debug("gate-runner: changed-file resolution failed: %s", exc)
+        changed = []
+
+    if not changed:
+        return []
+
+    # 2. git diff --check
+    try:
+        # Use merge-base diff for consistency with _pr_changed_files
+        base_ref = "HEAD~1"
+        if pr_metadata and pr_metadata.get("base_ref"):
+            base_ref = str(pr_metadata["base_ref"])
+            # try origin prefix
+            res = subprocess.run(
+                ["git", "rev-parse", "--verify", f"origin/{base_ref}"],
+                cwd=worktree,
+                capture_output=True,
+            )
+            if res.returncode == 0:
+                base_ref = f"origin/{base_ref}"
+
+        proc = subprocess.run(
+            ["git", "diff", "--check", f"{base_ref}...HEAD"],
+            cwd=worktree,
+            capture_output=True,
+            text=True,
+        )
+        if proc.returncode != 0:
+            findings.append(
+                ReviewFinding(
+                    severity="blocker",
+                    reviewer="gate-runner",
+                    area="git",
+                    evidence=json.dumps(
+                        {
+                            "command": f"git diff --check {base_ref}...HEAD",
+                            "exit_code": proc.returncode,
+                            "output": _scrub_secrets(proc.stdout + proc.stderr),
+                        }
+                    ),
+                    finding="Whitespace or conflict marker violations found by git diff --check.",
+                    required_fix="Fix whitespace issues or resolve conflict markers.",
+                    location="git-diff",
+                )
+            )
+    except Exception as exc:
+        logger.debug("gate-runner: git diff --check failed: %s", exc)
+
+    # 3. Tool-specific gates
+    for rel_path in changed:
+        full_path = worktree / rel_path
+        if not full_path.is_file():
+            continue
+
+        lint_commands = get_lint_commands(full_path)
+        for cmd in lint_commands:
+            try:
+                cmd_str = cmd.command
+                if "<file>" in cmd_str:
+                    cmd_str = cmd_str.replace("<file>", str(full_path))
+                else:
+                    cmd_str = f"{cmd_str} {full_path}"
+
+                proc = subprocess.run(
+                    cmd_str,
+                    shell=True,
+                    cwd=cmd.cwd or worktree,
+                    capture_output=True,
+                    text=True,
+                )
+                if proc.returncode != 0:
+                    findings.append(
+                        ReviewFinding(
+                            severity="blocker",
+                            reviewer="gate-runner",
+                            area="lint",
+                            evidence=json.dumps(
+                                {
+                                    "command": cmd_str,
+                                    "exit_code": proc.returncode,
+                                    "output": _scrub_secrets(proc.stdout + proc.stderr),
+                                }
+                            ),
+                            finding=f"Deterministic gate failure in {rel_path}.",
+                            required_fix=f"Fix issues reported by {cmd_str.split()[0]}.",
+                            location=rel_path,
+                        )
+                    )
+            except Exception as exc:
+                logger.debug("gate-runner: command %s failed: %s", cmd.command, exc)
+
+    return findings
+
+
+def _apply_deterministic_gates(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, Any]],
+    state: ReviewLoopState,
+    config: ReviewLoopConfig,
+) -> bool:
+    """Run deterministic gates and inject findings into state.
+
+    Returns True if any gate failures were found.
+    """
+    if not config.deterministic_gates:
+        return False
+
+    gate_findings = _run_deterministic_gates(worktree, pr_metadata)
+    if not gate_findings:
+        return False
+
+    for f in gate_findings:
+        if f.key not in state.findings_by_key:
+            state.findings_by_key[f.key] = f
+
+    return True
 
 
 def _package_companion_python_files(
@@ -1735,20 +1896,22 @@ def _collect_static_analysis_candidate_findings(
         return []
 
     try:
-        changed = _pr_changed_python_files(worktree, pr_metadata)
+        changed = _pr_changed_files(worktree, pr_metadata)
     except Exception as exc:  # noqa: BLE001
         logger.debug("list-drift changed-file resolution failed: %s", exc, exc_info=True)
         changed = []
 
-    if not changed:
+    # Filter for .py files for static analysis
+    changed_py = [f for f in changed if f.endswith(".py")]
+    if not changed_py:
         return []
 
     # Include package companions so cross-file drift pairs are visible
     # (review-major #6).  A typical drift PR changes only the test file;
     # without the unchanged canonical-source file in the scan input,
     # the AST detector cannot pair them.
-    paths: List[Path] = [worktree / rel for rel in changed]
-    paths.extend(_package_companion_python_files(worktree, changed))
+    paths: List[Path] = [worktree / rel for rel in changed_py]
+    paths.extend(_package_companion_python_files(worktree, changed_py))
 
     try:
         findings = detect_static_list_drift(paths)

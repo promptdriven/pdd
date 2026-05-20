@@ -1,9 +1,4 @@
-% You are an expert Python software engineer. Your task is to create a module `get_lint_commands` that resolves the appropriate lint commands for a given source file based on its language.
-
-<include>context/python_preamble.prompt</include>
-
 <pdd-reason>Provides deterministic lint-command resolution for Python files (ruff + mypy).</pdd-reason>
-
 <pdd-interface>
 {
   "type": "module",
@@ -14,8 +9,11 @@
   }
 }
 </pdd-interface>
-
 <pdd-dependency>get_test_command_python.prompt</pdd-dependency>
+
+% You are an expert Python software engineer. Your task is to create a module `get_lint_commands` that resolves the appropriate lint commands for a given source file based on its language.
+
+<include>context/python_preamble.prompt</include>
 
 % Role & Scope
   A utility module responsible for determining the correct lint commands for a given source file. Mirrors the `get_test_command` pattern. Python-only in this version; returns an empty list for non-Python languages as a hybrid contract signaling the caller to fall back to agent-discovered commands.
@@ -27,18 +25,35 @@
 
   2) Function `get_lint_commands(file: Path) -> list[LintCommand]`:
      - Returns a list of `LintCommand` instances for the given source file.
-     - **Hybrid contract**: return an **empty list** for languages without a deterministic implementation (non-Python files). Empty list signals the orchestrator to fall back to agent-discovered commands.
-     - For Python files (`.py` extension): return two commands:
-       a) `ruff check <file>` — with `cwd` set to the directory containing the nearest `pyproject.toml` (walk up from target file), or `None` if not found.
-       b) `mypy <file>` — with `cwd` set to the directory containing the nearest `pyproject.toml` or `mypy.ini` (walk up from target file), or `None` if not found.
+     - Commands MUST be filtered by file extension or language.
+     - **Hybrid contract**: return an **empty list** for languages without a deterministic implementation. Empty list signals the orchestrator to fall back to agent-discovered commands.
+     - Ecosystem-specific rules (return empty list if file extension not matched):
+       a) **Python (`.py`)**:
+          - `python -m py_compile <file>` (always runs first; catches syntax errors)
+          - `ruff check <file>` — with `cwd` set to nearest `pyproject.toml` or `.git` directory.
+          - `ruff format --check <file>` — with `cwd` set to nearest `pyproject.toml` or `.git` directory.
+          - `mypy <file>` — with `cwd` set to nearest `pyproject.toml`, `mypy.ini`, or `.git` directory.
+       b) **JavaScript/TypeScript (`.js`, `.jsx`, `.ts`, `.tsx`)**:
+          - `prettier --check <file>` — with `cwd` set to nearest `package.json`, `.prettierrc`, or `.git`.
+          - `eslint <file>` — with `cwd` set to nearest `package.json`, `.eslintrc*`, `eslint.config.js`, or `.git`.
+       c) **Shell (`.sh`, `.bash`)**:
+          - `shellcheck <file>` — with `cwd` set to nearest `.git`.
+       d) **Go (`.go`)**:
+          - `gofmt -l <file>` — with `cwd` set to nearest `go.mod` or `.git`.
+       e) **C++ (`.cpp`, `.hpp`, `.cc`, `.h`)**:
+          - `cppcheck <file>` — with `cwd` set to nearest `.git`.
 
   3) Config discovery helper `_find_config(start: Path, filenames: list[str], max_levels: int = 10) -> Optional[Path]`:
      - Walk up from `start` directory (max levels) looking for any of the given config filenames.
+     - Include `.git` in the search list for all tools to anchor discovery to the project root when no tool-specific config is present.
      - Return the directory containing the first match, or `None` if not found.
 
   4) Language detection:
-     - Use file extension to determine language (`.py` → Python).
-     - Do not depend on `get_language` — keep this module minimal with no CSV lookup.
+     - Use file extension to determine language.
+     - Do not depend on `get_language` — keep this module minimal.
+
+  5) Universal checks:
+     - `git diff --check` (applied separately by the orchestrator over the PR range; not returned by this function).
 
 % Dependencies
   <get_test_command>

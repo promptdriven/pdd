@@ -1,3 +1,47 @@
+<pdd-reason>Implementing the pdd checkup CLI wrapper for run_agentic_checkup.</pdd-reason>
+<pdd-interface>
+{
+  "type": "command",
+  "command": {
+    "name": "checkup",
+    "description": "Run the agentic checkup workflow to identify and fix issues in a PR or GitHub issue.",
+    "options": [
+      {"name": "target", "type": "str", "positional": true, "required": false},
+      {"name": "no_fix", "type": "bool", "default": false},
+      {"name": "timeout_adder", "type": "float", "default": 0.0},
+      {"name": "no_github_state", "type": "bool", "default": false},
+      {"name": "validate_arch_includes", "type": "bool", "default": false},
+      {"name": "project_root", "type": "Path", "default": null},
+      {"name": "strict", "type": "bool", "default": false},
+      {"name": "pr", "type": "str", "default": null},
+      {"name": "issue", "type": "str", "default": null},
+      {"name": "review_loop", "type": "bool", "default": false},
+      {"name": "review_only", "type": "bool", "default": false},
+      {"name": "reviewers", "type": "str", "default": "codex,claude"},
+      {"name": "reviewer", "type": "str", "default": null},
+      {"name": "fixer", "type": "str", "default": null},
+      {"name": "reviewer_fallback", "type": "str", "default": null},
+      {"name": "fixer_fallback", "type": "str", "default": null},
+      {"name": "max_review_rounds", "type": "int", "default": 5},
+      {"name": "max_review_cost", "type": "float", "default": 50.0},
+      {"name": "max_review_minutes", "type": "float", "default": 90.0},
+      {"name": "require_all_reviewers_clean", "type": "bool", "default": true},
+      {"name": "continue_on_reviewer_limit", "type": "bool", "default": false},
+      {"name": "fallback_reviewer_on_failure", "type": "bool", "default": false},
+      {"name": "require_final_fresh_review", "type": "bool", "default": true},
+      {"name": "deterministic_gates", "type": "bool", "default": true},
+      {"name": "blocking_severities", "type": "str", "default": "blocker,critical,medium"},
+      {"name": "clean_reviewer_states", "type": "str", "default": "clean"}
+    ]
+  }
+}
+</pdd-interface>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_checkup_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_sync_python.prompt</pdd-dependency>
+
 % Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.
 
 <include>context/python_preamble.prompt</include>
@@ -27,6 +71,7 @@
   - `--continue-on-reviewer-limit` (flag; reports provider/rate/context-limit/auth/network/sandbox reviewer failures as `degraded` instead of `failed`, but never marks the active reviewer clean or continues mutation without a completed review)
   - `--fallback-reviewer-on-failure` (flag, default off; when the primary reviewer ends in `failed` or `missing`, run a second review pass using the fixer's identity as a fallback reviewer; only `failed`/`missing` are eligible — `degraded` means reduced quality and must not silently lose signal; on a clean fallback the rendered `reviewer-status:` line shows the primary as `clean` so the cloud verdict adapter's real-reviewer-clean rule can fire, but the primary's original failure is preserved in `reviewer_status_details` with a `superseded_by_fallback="true"` marker and rendered in the `### Reviewer Diagnostics` subsection)
   - `--require-final-fresh-review/--no-require-final-fresh-review` (default true)
+  - `--deterministic-gates/--no-deterministic-gates` (default true; when enabled, qualitative reviewer verdicts cannot override local failures such as syntax errors, linting issues, or whitespace violations)
   - `--blocking-severities` (comma-separated highest-priority severities for review-loop reporting and prompt guidance; the fixer still receives every valid reviewer finding; default `blocker,critical,medium`; unknown severities silently dropped)
   - `--clean-reviewer-states` (compatibility parser for downstream reviewer-status gates; default `clean`; the tokens `failed`, `degraded`, and `missing` are always treated as not-clean regardless of this flag)
 - Signature returns `Optional[Tuple[str, float, str]]`.
@@ -38,7 +83,7 @@
   - Otherwise (default issue mode): require `target`; validate via `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and message must mention "GitHub issue URL").
 - Force `--no-fix` when `--pr` is set and `--review-loop` is NOT set (legacy PR verification still cannot push fixes). Print a warning to stderr explaining why and how to re-invoke if fixes were intended.
 - `ctx.ensure_object(dict)`; read `quiet = ctx.obj.get("quiet", False)` and `verbose = ctx.obj.get("verbose", False)`.
-- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, reviewer_fallback=reviewer_fallback, fixer_fallback=fixer_fallback, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, fallback_reviewer_on_failure=fallback_reviewer_on_failure, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states)` where `pr_url` is `None` in non-PR modes. The CLI exposes `--fixer-fallback` (string, default `None`) as the analog of `--reviewer-fallback`: when the primary fixer cannot address the reviewer's findings (typically because of Claude Code subscription-tier credential exhaustion classified as `credential-limit`), the review loop invokes the configured fallback fixer once before breaking. The fallback must differ from `--fixer` and `--reviewer` to preserve reviewer/fixer role independence.
+- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, reviewer_fallback=reviewer_fallback, fixer_fallback=fixer_fallback, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, fallback_reviewer_on_failure=fallback_reviewer_on_failure, require_final_fresh_review=require_final_fresh_review, deterministic_gates=deterministic_gates, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states)` where `pr_url` is `None` in non-PR modes. The CLI exposes `--fixer-fallback` (string, default `None`) as the analog of `--reviewer-fallback`: when the primary fixer cannot address the reviewer's findings (typically because of Claude Code subscription-tier credential exhaustion classified as `credential-limit`), the review loop invokes the configured fallback fixer once before breaking. The fallback must differ from `--fixer` and `--reviewer` to preserve reviewer/fixer role independence.
 - If not quiet, `click.echo` exactly these lines:
   - `Status: Success|Failed`
   - `Message: {message}`

@@ -2744,6 +2744,7 @@ Options:
 - `--no-fix`: Report-only mode — discover and report issues without applying fixes
 - `--timeout-adder FLOAT`: Add additional seconds to each step's timeout (default: 0.0)
 - `--no-github-state`: Disable GitHub state persistence, use local-only
+- `--deterministic-gates/--no-deterministic-gates`: Enable or disable deterministic gate enforcement (default: true). When enabled, qualitative reviewer verdicts cannot override local failures such as syntax errors, linting issues, or whitespace violations.
 - `--pr PR_URL`: Verify an existing pull request instead of creating a new one. Requires `--issue` and cannot be combined with a positional issue URL.
 - `--issue ISSUE_URL`: Source GitHub issue for `--pr`; used as the expected behavior and acceptance criteria for PR verification.
 - `--review-loop`: In PR mode, run the primary-reviewer/fixer loop. The primary reviewer reviews the PR, the fixer addresses actionable findings, fixes are committed and pushed to the PR branch, and the primary reviewer verifies until clean or a limit is reached.
@@ -2814,6 +2815,13 @@ pdd checkup \
   --reviewer codex \
   --fixer claude \
   --reviewer-fallback gemini
+
+# Run a review loop with deterministic gates disabled
+pdd checkup \
+  --pr https://github.com/myorg/myrepo/pull/123 \
+  --issue https://github.com/myorg/myrepo/issues/42 \
+  --review-loop \
+  --no-deterministic-gates
 
 # Review-loop audit only: no fixer, commits, or pushes
 pdd checkup \
