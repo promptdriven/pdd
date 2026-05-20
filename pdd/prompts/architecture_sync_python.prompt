@@ -54,6 +54,11 @@
         "name": "register_untracked_prompts",
         "signature": "(prompts_dir: Path = PROMPTS_DIR, architecture_path: Path = ARCHITECTURE_JSON_PATH, dry_run: bool = False, only_files: Optional[set] = None) -> Dict[str, Any]",
         "returns": "Dict with keys: registered, skipped, errors"
+      },
+      {
+        "name": "build_dependency_resolver",
+        "signature": "(arch_data: List[Dict[str, Any]]) -> Callable[[str], str]",
+        "returns": "Callable resolve(dep: str) -> filename. Precomputes a path-qualified dependency resolution index once per arch_data and returns an O(1)-per-dep resolver. Used by the architecture/<include> validator and the agentic sync graph builder so bare entries like 'fix_python.prompt' resolve to their unambiguous path-qualified arch filename (e.g. 'server/fix_python.prompt'); ambiguous or unresolved deps return the normalized form unchanged."
       }
     ]
   }
@@ -89,6 +94,7 @@ This module handles the synchronization of architecture metadata between `archit
 18a. During auto-registration, nested `.pddrc` prompt contexts override blanket path-aware inference: if a context declares `prompts_dir: "prompts/commands"` and `generate_output_path: "pdd/commands/"`, then `commands/foo_python.prompt` must infer `pdd/commands/foo.py`. Do not apply a root catch-all `prompts` context to path-qualified source-root prompts such as `src/workers/runtime/gemini_cli_python.prompt`; those remain `src/workers/runtime/gemini_cli.py`.
 19. When prompt dependency tags are synced into architecture entries, normalize them to existing architecture filenames when unambiguous: exact match, case-insensitive exact match, unique suffix match, unique basename match, then clean bare module stem match (for example `api` -> `api_python.prompt`). Deduplicate while preserving order. Leave ambiguous or unresolved dependency strings unchanged so validation can report them instead of silently guessing.
 20. `sync_prompts_to_architecture()` must include `registered` in its returned result, including dry-run results, so callers can see which prompt registrations a real no-filenames run would write.
+21. Export `build_dependency_resolver(arch_data)` as a public module-level function (NOT an inner helper of `_normalize_dependency_filenames`). It returns a closure that resolves a single dependency string to its path-qualified arch filename using a precomputed O(1) index built once from `arch_data`. The same resolution priorities apply as in #19 (exact, case-insensitive exact, unique slash-suffix, unique basename, unique bare stem). Both `architecture_include_validation.cross_validate_architecture_with_prompt_includes` and `agentic_sync_runner.build_dep_graph_from_architecture_data` import this function and call it once per validation/build run to keep their dependency edges in sync with each other and with how `_normalize_dependency_filenames` interprets bare arch deps. Do NOT inline this resolver — both downstream consumers depend on importing the standalone function.
 
 % Dependencies
 - `lxml.etree` for XML parsing with recovery mode

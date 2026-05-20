@@ -1,14 +1,23 @@
-# Architecture vs `<include>` validation
+# Architecture vs `<include>` / `<pdd-dependency>` validation
 
-PDD cross-checks each `architecture.json` **module dependency** against **module prompt**
-`<include>` tags (paths ending in `.prompt` that map to another module). Context and
-example files (e.g. `context/foo_example.py`) are not treated as architecture module
-edges, so the check matches how dependency lists are usually maintained.
+PDD cross-checks each `architecture.json` **module dependency** against the union of
+the prompt's **module-prompt `<include>` tags** (paths ending in `.prompt` that map
+to another module) and its **`<pdd-dependency>` declarations**. Either kind of tag
+satisfies a declared arch dependency — they are both architecture edges under the
+union semantics described in `docs/prompting_guide.md`. Context and example files
+(e.g. `context/foo_example.py`) are not treated as architecture module edges, so the
+check matches how dependency lists are usually maintained.
+
+Path-qualified module prompts (e.g. `commands/fix_python.prompt` vs
+`server/fix_python.prompt`) are compared with their directory prefix preserved, so
+same-tail prompts in different folders are not silently aliased. Bare arch deps
+(`fix_python.prompt`) are first resolved against the architecture file to their
+unambiguous path-qualified entry before comparison.
 
 ## Commands
 
 - **`pdd checkup --validate-arch-includes`** — validate architecture dependencies vs
-  module `<include>` edges.
+  module `<include>` and `<pdd-dependency>` edges.
 - **`pdd checkup --validate-arch-includes --strict`** — also validates bundled sample
   trees (`examples/`, `example_project/`, …). The PDD repo’s sample projects currently
   report many mismatches (declarative deps vs minimal teaching prompts); use this for
@@ -25,8 +34,9 @@ pdd checkup --validate-arch-includes --strict
 ```
 
 You should see warnings listing each `architecture.json` path and the kind of drift
-(dependency listed in JSON but no module `<include>`, or the reverse). Sample output
-(abridged):
+(dependency listed in JSON but no module `<include>` or `<pdd-dependency>`, or the
+reverse — prompt `<include>`s a module not in the arch dependency list). Sample
+output (abridged):
 
 ```
 Warning: examples/arch/architecture.json: architecture.json / <include> mismatch: 'order_api_Python.prompt' declares dependency on module 'order_models' ...

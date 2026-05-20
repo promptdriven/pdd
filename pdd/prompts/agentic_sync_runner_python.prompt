@@ -82,6 +82,8 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 % Function: `build_dep_graph_from_architecture_data(architecture: Any, target_basenames: List[str], *, source_name: str = "architecture.json") -> DepGraphFromArchitectureResult`
 - Build the same scheduled subgraph from already-loaded architecture data.
 - Use this for combined architecture data that merges root and nested architecture.json files.
+- **F10/F11 third-party codex review — dependency resolver normalization (REQUIRED):** Before any alias-based lookup, build a single shared resolver via `from .architecture_sync import build_dependency_resolver; dep_resolver = build_dependency_resolver(entries)` and reuse it for every raw dep on every target in this call. For each raw dep string, compute `dep = dep_resolver(raw_dep)` and only then derive `_basename_from_architecture_filename(dep)` / `_basename_from_architecture_filepath(dep)`. This makes the graph builder agree with the validator: a stale-but-bare arch entry like `["fix_python.prompt"]` resolves to its unambiguous path-qualified form (e.g. `server/fix_python.prompt`) instead of being silently dropped as an orphan, and an unambiguous match also flows into orphan / partial-sync warning messages.
+- **Warning prose must preserve the raw dep string for operator traceability:** when the resolved form differs from the raw form, include both (e.g. `'fix_python.prompt' (resolved as 'server/fix_python.prompt')`) in the orphan-dependency warning; when they match, show the bare form. For partial-sync edges, render the resolution arrow as `raw -> resolved` inside the `via …` clause. Operators must be able to grep their literal arch.json line.
 
 % Helper: `_basename_from_architecture_filename(filename: str) -> Optional[str]`
 - Convert an architecture `filename` to a sync basename while preserving subdirectory prefixes.
@@ -141,7 +143,7 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
 <pdd.sync_order><include>context/sync_order_example.py</include></pdd.sync_order>
 <pdd.agentic_common><include select="def:example_github_state_helpers,def:example_post_step_comment,def:example_run_agentic_task">context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.architecture_sync>
-    <include select="def:example_validate_dependencies,def:example_get_entry">context/architecture_sync_example.py</include>
+    <include select="def:example_validate_dependencies,def:example_get_entry,def:example_build_dependency_resolver">context/architecture_sync_example.py</include>
 </pdd.architecture_sync>
 <pdd.agentic_langtest>
     <include select="def:default_verify_cmd_for">context/agentic_langtest_example.py</include>
