@@ -2017,6 +2017,112 @@ class TestMaxWorkers:
             ['worker-failed', 'worker-success'] * 2
         ), f"Worker contributions missing or wrong, got: {published}"
 
+    def test_max_workers_model_name_matches_attempted_models_tail(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F5 regression (PR #1056 4th-round review): when workers use
+        different final models AND a lower-submission-index file completes
+        AFTER a higher-index one, the returned `model_name` must still
+        match `attempted_models[-1]` (which is sorted by submission idx,
+        not completion order). With completion-order tracking, model_name
+        would be whichever worker finished last in wall-clock — silently
+        disagreeing with the published list's tail.
+        """
+        import click
+        import threading
+        import time as _time
+
+        for i in range(3):
+            (tmp_path / f"f{i}.py").write_text(f"c{i}")
+
+        # Force completion order to be REVERSE of submission order so the
+        # bug would manifest: idx=2 finishes first, idx=0 finishes last.
+        call_order = {'count': 0}
+        order_lock = threading.Lock()
+
+        def fake_llm_invoke(**kwargs):
+            with order_lock:
+                this_call = call_order['count']
+                call_order['count'] += 1
+            # Last-submitted finishes first, first-submitted finishes last.
+            _time.sleep(0.05 * (2 - this_call))
+            return {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.01,
+                # Distinct model per call so the assertion catches the bug.
+                'model_name': f'model-{this_call}',
+                'attempted_models': [f'failed-{this_call}', f'model-{this_call}'],
+            }
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                _, _, returned_model = summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=3,
+                )
+                tail = ctx.obj['attempted_models'][-1]
+
+        assert returned_model == tail, (
+            f"model_name ({returned_model!r}) must equal attempted_models "
+            f"tail ({tail!r}) so the cost.csv `model` column matches the "
+            f"final entry of `attempted_models`. Full list: "
+            f"{ctx.obj['attempted_models']}"
+        )
+
+    def test_max_workers_recovers_attempts_from_terminal_failure(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F6 regression (PR #1056 4th-round review): when an llm_invoke
+        worker exhausts all candidates, it raises RuntimeError with the
+        attempt history attached via setattr. _process_single_file_logic
+        catches the exception and records an error CSV row — but must
+        still surface the worker's attempts (via getattr on the
+        exception) so the failed-substep fallback history reaches
+        cost.csv. Otherwise the workflow users most want to investigate
+        is exactly the one for which we silently drop the data.
+        """
+        import click
+
+        (tmp_path / "ok.py").write_text("ok")
+        (tmp_path / "doomed.py").write_text("doomed")
+
+        def fake_llm_invoke(**kwargs):
+            content = kwargs.get('input_json', {}).get('file_contents', '')
+            if 'doomed' in content:
+                err = RuntimeError("All candidates exhausted")
+                setattr(err, "attempted_models", ['cand-A', 'cand-B', 'cand-C'])
+                raise err
+            return {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.01,
+                'model_name': 'ok-model',
+                'attempted_models': ['ok-model'],
+            }
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=2,
+                )
+                published = ctx.obj.get('attempted_models') or []
+
+        for failed_cand in ('cand-A', 'cand-B', 'cand-C'):
+            assert failed_cand in published, (
+                f"Worker terminal failure must surface its full attempt "
+                f"history; missing {failed_cand!r}. Published: {published}"
+            )
+
 
 # ---------------------------------------------------------------------------
 # Real-LLM: Multi-directory CSV accumulation and cache (requires API key)

@@ -1705,6 +1705,113 @@ def test_llm_invoke_accumulates_attempted_models_across_calls_in_ctx_obj(
     )
 
 
+def test_llm_invoke_terminal_failure_rewinds_ctx_obj_attempted_models(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F7 regression (PR #1056 4th-round review).
+
+    When `llm_invoke` exhausts all candidate models and raises the terminal
+    `RuntimeError`, it must rewind `ctx.obj['attempted_models']` to the
+    state it was in immediately before this call. Callers that wrap
+    `llm_invoke` in `try/except` and recover with a different model (e.g.
+    `auto_include` falling back to `summary_model` when the final
+    `auto_include_LLM` call fails terminally) would otherwise be left with
+    this call's failed attempts trailing `ctx.obj['attempted_models']`,
+    breaking the documented "list ends with the model column" invariant.
+
+    The failed attempts must still be retrievable from the raised
+    exception's `attempted_models` attribute for any caller that wants
+    them explicitly.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="auto_include_LLM_caller")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised_exception: Optional[RuntimeError] = None
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="terminal failure",
+                       request=mock_request,
+                   )) as mock_completion:
+            try:
+                llm_invoke(
+                    prompt="some prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+            except RuntimeError as exc:
+                raised_exception = exc
+
+    assert raised_exception is not None, (
+        "llm_invoke must raise RuntimeError when all candidates are exhausted"
+    )
+    assert ctx.obj.get('attempted_models') == prior_attempts, (
+        f"Terminal failure must rewind ctx.obj['attempted_models'] to its "
+        f"pre-call state. Expected {prior_attempts!r}, got "
+        f"{ctx.obj.get('attempted_models')!r}"
+    )
+    # The failed attempts remain on the exception attribute so callers that
+    # explicitly want them can opt in.
+    exc_attempts = getattr(raised_exception, "attempted_models", None)
+    assert isinstance(exc_attempts, list) and len(exc_attempts) > 0, (
+        f"Failed attempts must remain on the exception's attempted_models "
+        f"attribute (callers like summarize_directory workers rely on this "
+        f"to surface terminal failures). Got: {exc_attempts!r}"
+    )
+
+
+def test_llm_invoke_terminal_failure_pops_ctx_obj_when_no_prior_key(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F7 companion: when the `attempted_models` KEY did not exist on
+    ctx.obj before the failing `llm_invoke` call, the rewind must pop
+    the key entirely rather than leave behind an empty list. A leftover
+    empty list would mask the "no attempts yet" state from any subsequent
+    caller that checks `'attempted_models' in ctx.obj`.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    cmd = click.Command(name="standalone_caller")
+    ctx = click.Context(cmd, obj={})  # No attempted_models key
+
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="terminal failure",
+                       request=mock_request,
+                   )):
+            with pytest.raises(RuntimeError):
+                llm_invoke(
+                    prompt="some prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+
+    assert 'attempted_models' not in ctx.obj, (
+        f"Terminal failure with no prior key must pop the key, not leave "
+        f"an empty list. Got ctx.obj: {ctx.obj!r}"
+    )
+
+
 def test_llm_invoke_responses_api_returns_attempted_models(mock_load_models, mock_set_llm_cache):
     """The OpenAI Responses API success path must include `attempted_models`
     in the returned dict and the last entry must equal `model_name`."""

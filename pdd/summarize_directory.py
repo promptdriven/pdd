@@ -274,6 +274,13 @@ def summarize_directory(
         # finish, then publish the flattened chronological history to the
         # main thread's Click context for track_cost to read.
         worker_attempts: List[Tuple[int, List[str]]] = []
+        # Track the highest-submission-idx worker that actually summarized a
+        # file (model != "cached") so `last_model_name` reflects the model
+        # from the same worker whose attempts terminate the sorted history
+        # below. Using completion order would let model_name disagree with
+        # `attempted_models[-1]` whenever a lower-idx file finishes after a
+        # higher-idx one.
+        last_summarized_idx = -1
 
         def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str, Optional[Dict[str, str]], List[str]]:
             """Thread-safe wrapper that returns index for ordering."""
@@ -302,8 +309,13 @@ def summarize_directory(
                 idx, cost, model, result_row, attempted = future.result()
                 with cost_lock:
                     total_cost += cost
-                    if model != "cached":
+                    # Update last_model_name only when this worker has a
+                    # strictly higher submission index than any previously
+                    # seen — that keeps it in lockstep with the tail of the
+                    # submission-index-sorted attempted_models list.
+                    if model != "cached" and idx > last_summarized_idx:
                         last_model_name = model
+                        last_summarized_idx = idx
                     if result_row:
                         results_data.append(result_row)
                     if csv_path:
@@ -527,5 +539,14 @@ def _process_single_file_logic(
             'dependencies': "[]",
             'content_hash': "error"
         })
-        
+        # llm_invoke attaches its per-call attempt history to the terminal
+        # RuntimeError it raises when all candidates are exhausted. Recover
+        # those attempts so a terminally-failed worker still contributes
+        # its fallback history to the command-level attempted_models list
+        # — otherwise the data we promised in cost.csv gets silently
+        # dropped for the exact failure mode users most want to investigate.
+        err_attempts = getattr(e, "attempted_models", None)
+        if isinstance(err_attempts, list):
+            attempted_models = [str(m) for m in err_attempts]
+
     return cost, model_name, attempted_models

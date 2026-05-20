@@ -229,7 +229,14 @@
     - Include `attempted_models` (a copy of the list) in the returned dictionary on success.
     - On terminal RuntimeError (all candidates exhausted), attach the list to the exception as an
       `attempted_models` attribute via `setattr(exc, "attempted_models", list(attempted_models))`
-      so callers can still surface the full history on failure.
+      so callers can still surface the full history on failure. Before raising, also rewind
+      `ctx.obj['attempted_models']` to the snapshot captured at the top of this `llm_invoke`
+      call: restore the prior list verbatim when the key existed pre-call, otherwise `pop` the
+      key. This keeps the documented "attempted_models ends with the model column" invariant
+      intact when a caller wraps `llm_invoke` in `try/except` and recovers with a different
+      model (e.g. `auto_include` falling back to `summary_model` when the final
+      `auto_include_LLM` call fails terminally). Callers that explicitly want the failed
+      attempts can still read them off the exception's `attempted_models` attribute.
     - Publish progress to the Click context for non-LLM consumers (e.g. `track_cost`):
       attempt to read `click.get_current_context(silent=True)`; if a context is returned and
       `ctx.obj` is a dict (initialize an empty dict on `ctx.obj` only if `ctx.obj is None`,
@@ -241,7 +248,11 @@
       tracked CLI command (e.g. `pdd generate` invoking generation followed by postprocess);
       overwriting with just `list(attempted_models)` would hide an earlier call's fallback in
       the cost CSV. When no Click context exists (library usage, tests), this is a silent
-      no-op — never raise from the context publication step.
+      no-op — never raise from the context publication step. Also record, at snapshot time,
+      a separate flag for whether the `attempted_models` KEY existed on `ctx.obj` (not merely
+      whether the value was a list) — the terminal-failure rewind described above uses this
+      flag to either restore the prior list or pop the key entirely, so a recovered caller
+      sees ctx.obj in exactly the state it had before this call.
 
 % Cloud Execution:
     - Define three cloud-related exceptions:

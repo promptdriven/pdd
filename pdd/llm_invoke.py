@@ -2990,7 +2990,16 @@ def llm_invoke(
     # contributes only its own attempts to `attempted_models`, but the
     # cross-call history on `ctx.obj` must be the union — otherwise an earlier
     # fallback gets overwritten when track_cost reads the CSV column.
+    #
+    # We also record whether the `attempted_models` key existed on ctx.obj
+    # before this call. On terminal failure (all candidates exhausted) we
+    # rewind ctx.obj to this snapshot so a caller that recovers (try/except
+    # around llm_invoke) doesn't have this call's failed attempts pollute
+    # the per-command history — otherwise the documented invariant
+    # "attempted_models ends with the model column" would break whenever a
+    # substep is allowed to fail and another model produces the output.
     _prior_ctx_attempts: List[str] = []
+    _had_prior_ctx_attempts_key = False
     try:
         import click as _click_for_prior  # local import; llm_invoke must work without click
         _ctx_for_prior = _click_for_prior.get_current_context(silent=True)
@@ -2998,9 +3007,11 @@ def llm_invoke(
             _ctx_for_prior is not None
             and isinstance(_ctx_for_prior.obj, dict)
         ):
-            _existing = _ctx_for_prior.obj.get('attempted_models')
-            if isinstance(_existing, list):
-                _prior_ctx_attempts = list(_existing)
+            if 'attempted_models' in _ctx_for_prior.obj:
+                _had_prior_ctx_attempts_key = True
+                _existing = _ctx_for_prior.obj.get('attempted_models')
+                if isinstance(_existing, list):
+                    _prior_ctx_attempts = list(_existing)
     except Exception:
         pass
 
@@ -4575,6 +4586,29 @@ def llm_invoke(
         failure_reason="all_candidate_models_failed",
         last_error_type=type(last_exception).__name__ if last_exception else None,
     )
+    # Rewind ctx.obj['attempted_models'] to the snapshot we took at the
+    # start of the call. A caller that wraps llm_invoke in try/except and
+    # recovers with a different model (e.g. `auto_include` falling back to
+    # `summary_model` when the final auto_include_LLM call fails terminally)
+    # would otherwise be left with this call's failed attempts trailing
+    # ctx.obj['attempted_models'], breaking the documented invariant that
+    # the list ends with the model column. Attempts remain available on
+    # the raised exception via the `attempted_models` attribute below for
+    # callers (e.g. worker threads) that want to preserve them explicitly.
+    try:
+        import click as _click_for_rewind  # local import; keep llm_invoke usable without click
+        _ctx_for_rewind = _click_for_rewind.get_current_context(silent=True)
+        if (
+            _ctx_for_rewind is not None
+            and isinstance(_ctx_for_rewind.obj, dict)
+        ):
+            if _had_prior_ctx_attempts_key:
+                _ctx_for_rewind.obj['attempted_models'] = list(_prior_ctx_attempts)
+            else:
+                _ctx_for_rewind.obj.pop('attempted_models', None)
+    except Exception:
+        pass
+
     terminal_error = RuntimeError(error_message)
     try:
         setattr(terminal_error, "attempted_models", list(attempted_models))
