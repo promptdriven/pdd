@@ -15,10 +15,10 @@
 }
 </pdd-interface>
 
-<pdd-dependency>dump_python.prompt</pdd-dependency>
-<pdd-dependency>errors_python.prompt</pdd-dependency>
-<pdd-dependency>utils_python.prompt</pdd-dependency>
-<pdd-dependency>duplicate_cli_guard_python.prompt</pdd-dependency>
+<pdd-dependency>core/dump_python.prompt</pdd-dependency>
+<pdd-dependency>core/errors_python.prompt</pdd-dependency>
+<pdd-dependency>core/utils_python.prompt</pdd-dependency>
+<pdd-dependency>core/duplicate_cli_guard_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>auto_update_python.prompt</pdd-dependency>
 <pdd-dependency>track_cost_python.prompt</pdd-dependency>

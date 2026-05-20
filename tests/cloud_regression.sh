@@ -308,6 +308,8 @@ run_pdd_command_base() {
     else
         log_error "Command failed with exit code $status."
         log_timestamped "Command: $full_command_str - Failed with exit code $status."
+        echo "[COMMAND OUTPUT] Last 120 lines from failed $command_name invocation:" >&2
+        tail -120 "$temp_output" >&2 || true
     fi
 
     rm -f "$temp_output"

@@ -547,9 +547,9 @@ CLOUD_IMAGE_HASH_FILE := .cloud-image-hash
 
 # Smart run: auto-detects whether image rebuild is needed
 cloud-test:
-	@CURRENT_HASH=$$(cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1); \
+	@CURRENT_HASH=$$(cat $(CLOUD_IMAGE_DEPS) | LC_ALL=C LANG=C shasum -a 256 | cut -d' ' -f1); \
 	STORED_HASH=$$(cat $(CLOUD_IMAGE_HASH_FILE) 2>/dev/null || echo "none"); \
-	if [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
+	if [ -z "$$CURRENT_HASH" ] || [ "$$CURRENT_HASH" != "$$STORED_HASH" ]; then \
 		echo "Image deps changed — rebuilding via Cloud Build"; \
 		$(MAKE) cloud-test-build; \
 	else \
@@ -571,7 +571,7 @@ cloud-test-build:
 		--substitutions=_AR_IMAGE=$(AR_IMAGE) \
 		--project=$(GCP_PROJECT_ID) \
 		.
-	@cat $(CLOUD_IMAGE_DEPS) | shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)
+	@cat $(CLOUD_IMAGE_DEPS) | LC_ALL=C LANG=C shasum -a 256 | cut -d' ' -f1 > $(CLOUD_IMAGE_HASH_FILE)
 
 # No-op — push is handled by Cloud Build
 cloud-test-push:

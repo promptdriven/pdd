@@ -144,8 +144,8 @@ def cloud_fix_errors(
         raise RuntimeError(f"Cloud fix timed out after {get_cloud_timeout()}s")
 
     except requests.exceptions.HTTPError as e:
-        status_code = e.response.status_code if e.response else 0
-        err_content = e.response.text[:200] if e.response else "No response content"
+        status_code = e.response.status_code if e.response is not None else 0
+        err_content = e.response.text[:200] if e.response is not None else "No response content"
 
         # Non-recoverable errors
         if status_code == 402:
