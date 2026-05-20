@@ -66,7 +66,7 @@ def cloud_fix_errors(
     code_file_ext: str = ".py",
     protect_tests: bool = False,
     failure_classification: str | None = None,
-) -> Tuple[bool, bool, str, str, str, float, str]:
+) -> Tuple[bool, bool, str, str, str, float, str, List[str]]:
     """
     Call the cloud fixCode endpoint to fix errors in code and unit tests.
 
@@ -77,10 +77,19 @@ def cloud_fix_errors(
         protect_tests: When True, prevents the LLM from modifying test files.
         failure_classification: Optional classification string to send to cloud.
 
-    Returns: (update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name)
+    Returns: (update_unit_test, update_code, fixed_unit_test, fixed_code, analysis, total_cost, model_name, attempted_models)
+        attempted_models is the chronological list of cloud-side model
+        identifiers tried (each prefixed with `cloud:`), parsed from the
+        response's `attemptedModels` / `attempted_models` / legacy
+        `modelChain` keys. Falls back to `[cloud:<modelName>]` when none
+        are present (non-conforming server) and to `[cloud:auto]` on
+        cloud-error RuntimeError paths.
 
     Raises:
-        RuntimeError: When cloud execution fails with non-recoverable error
+        RuntimeError: When cloud execution fails with non-recoverable error.
+        Every error path attaches `attempted_models=['cloud:auto']` to
+        the raised exception so callers can recover the cloud attempt
+        for track_cost (issue #1086).
     """
 
 def fix_error_loop(

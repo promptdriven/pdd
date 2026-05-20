@@ -2416,8 +2416,8 @@
           },
           {
             "name": "cloud_fix_errors",
-            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, code_file_ext: str = '.py') -> Tuple[bool, bool, str, str, str, float, str]",
-            "returns": "Tuple[bool, bool, str, str, str, float, str]",
+            "signature": "(unit_test: str, code: str, prompt: str, error: str, error_file: str, strength: float, temperature: float, verbose: bool = False, time: float = DEFAULT_TIME, code_file_ext: str = '.py', protect_tests: bool = False, failure_classification: str | None = None) -> Tuple[bool, bool, str, str, str, float, str, List[str]]",
+            "returns": "Tuple[bool, bool, str, str, str, float, str, List[str]]",
             "sideEffects": [
               "None"
             ]
@@ -2440,8 +2440,8 @@
           },
           {
             "name": "fix_error_loop",
-            "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, use_cloud: bool = False)",
-            "returns": "None",
+            "signature": "(unit_test_file: str, code_file: str, prompt_file: str, prompt: str, verification_program: str, strength: float, temperature: float, max_attempts: int, budget: float, error_log_file: str = 'error_log.txt', verbose: bool = False, time: float = DEFAULT_TIME, agentic_fallback: bool = True, protect_tests: bool = False, use_cloud: bool = False, test_files: list[str] | None = None, failure_aware_retries: bool = True) -> Tuple[bool, str, str, int, float, str]",
+            "returns": "Tuple[bool, str, str, int, float, str]",
             "sideEffects": [
               "None"
             ]
