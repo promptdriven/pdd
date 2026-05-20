@@ -979,7 +979,7 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
     text = re.sub(r'__EXCLUDED__(.*?)__END_EXCLUDED__', r'{\1}', text)
     
     # Restore already doubled brackets
-    text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{\1}}', text)
+    text = re.sub(r'__ALREADY_DOUBLED__(.*?)__END_ALREADY__', r'{{{{\1}}}}', text)
 
     # Restore protected ${IDENT} placeholders as ${{IDENT}}
     def _restore_var(m):
@@ -1011,8 +1011,16 @@ def double_curly(text: str, exclude_keys: Optional[List[str]] = None) -> str:
                     processed_lines.append(line)
                 else:
                     processed_line = line
+                    # Protect excluded keys in this line too
+                    for key in exclude_keys:
+                        pattern = r'\{(' + re.escape(key) + r')\}'
+                        processed_line = re.sub(pattern, r'__EXCLUDED__\1__END_EXCLUDED__', processed_line)
+                    
                     if '{' in line and '}' in line:
                         processed_line = processed_line.replace("{", "{{").replace("}", "}}")
+                    
+                    # Restore excluded keys
+                    processed_line = re.sub(r'__EXCLUDED__(.*?)__END_EXCLUDED__', r'{\1}', processed_line)
                     processed_lines.append(processed_line)
             processed_code = '\n'.join(processed_lines)
             return f"```{lang}\n{processed_code}```"

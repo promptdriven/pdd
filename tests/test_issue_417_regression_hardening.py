@@ -50,10 +50,10 @@ def test_pdd_interface_with_mixed_braces_and_vars():
     result = preprocess(prompt, double_curly_brackets=True)
     
     # {val} -> {{val}} -> {val} (NOT replaced because it's protected)
-    # {{lit}} -> {{lit}} (protected) -> {lit}
+    # {{lit}} -> {{{{lit}}}} -> {{lit}}
     # ${VAR} -> ${{VAR}} -> ${VAR}
     formatted = result.format(val=123)
-    assert '<pdd-interface>{"a": {val}, "b": "{lit}", "c": "${VAR}"}</pdd-interface>' in formatted
+    assert '<pdd-interface>{"a": {val}, "b": "{{lit}}", "c": "${VAR}"}</pdd-interface>' in formatted
 
 def test_pdd_interface_with_excluded_keys():
     """Test that exclude_keys allows placeholders to work inside PDD tags."""
@@ -66,13 +66,14 @@ def test_pdd_interface_with_excluded_keys():
     assert '<pdd-interface>{"a": 123}</pdd-interface>' in formatted
 
 def test_already_escaped_braces_in_pdd_content():
-    """Test PDD content that already has {{escaped}} braces doesn't get quadrupled."""
+    """Test PDD content that already has {{escaped}} braces gets quadrupled for byte-preservation."""
     prompt = '<pdd-interface>{"key": "{{escaped}}"}</pdd-interface>'
     result = preprocess(prompt, double_curly_brackets=True)
     
     formatted = result.format()
-    # Invariant: literal double braces in PDD JSON become single braces after .format()
-    assert '<pdd-interface>{"key": "{escaped}"}</pdd-interface>' in formatted
+    # Invariant: literal double braces in PDD JSON should byte-preserve through .format()
+    # This requires preprocess to produce {{{{escaped}}}}
+    assert '<pdd-interface>{"key": "{{escaped}}"}</pdd-interface>' in formatted
 
 def test_empty_pdd_interface_tag_is_format_safe():
     """Test <pdd-interface></pdd-interface> doesn't break format()."""
