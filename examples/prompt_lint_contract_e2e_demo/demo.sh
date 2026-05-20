@@ -2,7 +2,8 @@
 # End-to-end demo for pdd prompt lint / pdd contracts / pdd coverage.
 #
 #   bash examples/prompt_lint_contract_e2e_demo/demo.sh             # deterministic, no API
-#   bash examples/prompt_lint_contract_e2e_demo/demo.sh --live      # adds pdd generate + pdd test
+#   bash examples/prompt_lint_contract_e2e_demo/demo.sh --live      # bash LLM pipeline + artifacts
+#   bash examples/prompt_lint_contract_e2e_demo/demo.sh --live --keep-artifacts
 #   bash examples/prompt_lint_contract_e2e_demo/demo.sh --cleanup   # remove generated files
 
 set -euo pipefail
@@ -30,6 +31,18 @@ if ! "$PY" -c "import pdd.cli" >/dev/null 2>&1; then
     source "$VENV/bin/activate"
     pip install -e "$REPO_ROOT" -q
     PY=python
+fi
+
+if [[ "${1:-}" == "--live" ]]; then
+    shift
+    keep=0
+    for arg in "$@"; do
+        if [[ "$arg" == "--keep-artifacts" ]]; then
+            keep=1
+        fi
+    done
+    export KEEP_ARTIFACTS="$keep"
+    exec bash "$DEMO_DIR/lib/live_pipeline.sh"
 fi
 
 exec "$PY" "$DEMO_DIR/lib/run_e2e.py" "$@"

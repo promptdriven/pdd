@@ -1,4 +1,5 @@
 reports/
+.pdd/
 .venv/
 __pycache__/
 *.pyc
