@@ -1,3 +1,6 @@
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
+
 1) This module acts as the multi-step agentic orchestrator for the `pdd checkup` command, responsible for managing an 8-step workflow that analyzes, fixes, and verifies software issues. It coordinates between LLM-based agents, local environment execution, and git state management, ensuring that changes are isolated in worktrees and that the workflow can be resumed gracefully after interruptions.
 
 2) Requirements:
