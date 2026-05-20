@@ -1921,6 +1921,102 @@ class TestMaxWorkers:
 
         assert abs(cost - 0.5) < 1e-9, f"Expected 0.5 total cost for 5 files, got {cost}"
 
+    def test_max_workers_publishes_attempted_models_to_main_click_ctx(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """Regression for PR #1056 third-pass review finding (issue #897).
+
+        Worker threads cannot publish to ctx.obj via
+        click.get_current_context() because Click's context is thread-local.
+        summarize_directory must collect each worker's `attempted_models`
+        from the llm_invoke result dict and merge them into the main
+        thread's ctx.obj after all workers complete, so track_cost can
+        record the full fallback history for tracked commands like
+        `pdd auto-deps --concurrency > 1`.
+        """
+        import click
+
+        for i in range(4):
+            (tmp_path / f"f{i}.py").write_text(f"content_{i}")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm:
+            mock_llm.return_value = {
+                'result': FileSummary(
+                    file_summary="s", key_exports=["x"], dependencies=["y"]
+                ),
+                'cost': 0.1,
+                'model_name': 'final-success',
+                'attempted_models': ['failed-1', 'failed-2', 'final-success'],
+            }
+
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=3,
+                )
+                published = ctx.obj.get('attempted_models')
+
+        assert published is not None, (
+            "summarize_directory must publish aggregated worker attempts to "
+            "the main thread's ctx.obj['attempted_models']"
+        )
+        # Four files * 3 attempts each = 12 entries
+        assert len(published) == 12, (
+            f"Expected 12 aggregated attempts (4 files * 3 each), got "
+            f"{len(published)}: {published}"
+        )
+        # Every worker's attempt history must be present in chronological
+        # order within its own group; the per-file group ['failed-1',
+        # 'failed-2', 'final-success'] must appear 4 times back-to-back.
+        for chunk_start in range(0, 12, 3):
+            assert published[chunk_start:chunk_start + 3] == [
+                'failed-1', 'failed-2', 'final-success'
+            ], f"Expected intact per-worker group at offset {chunk_start}: {published}"
+
+    def test_max_workers_preserves_existing_attempted_models_in_ctx(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """If ctx.obj['attempted_models'] already contains entries from an
+        earlier main-thread llm_invoke call, summarize_directory must
+        append worker contributions rather than overwrite. Otherwise the
+        prior fallback history is lost when track_cost reads the column.
+        """
+        import click
+
+        (tmp_path / "a.py").write_text("a")
+        (tmp_path / "b.py").write_text("b")
+
+        with patch('pdd.summarize_directory.llm_invoke') as mock_llm:
+            mock_llm.return_value = {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.05,
+                'model_name': 'worker-success',
+                'attempted_models': ['worker-failed', 'worker-success'],
+            }
+
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {'attempted_models': ['prior-failed', 'prior-success']}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=2,
+                )
+                published = ctx.obj.get('attempted_models')
+
+        assert published[:2] == ['prior-failed', 'prior-success'], (
+            f"Prior attempts must be preserved at the head of the list, "
+            f"got: {published}"
+        )
+        assert sorted(published[2:]) == sorted(
+            ['worker-failed', 'worker-success'] * 2
+        ), f"Worker contributions missing or wrong, got: {published}"
+
 
 # ---------------------------------------------------------------------------
 # Real-LLM: Multi-directory CSV accumulation and cache (requires API key)
