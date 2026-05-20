@@ -1607,6 +1607,7 @@ def _run_final_checkup_on_pr(
         use_github_state=use_github_state,
         reasoning_time=reasoning_time,
         pr_url=pr_url,
+        cwd=cwd,
     )
 
 

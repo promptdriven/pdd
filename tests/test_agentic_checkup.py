@@ -743,3 +743,104 @@ class TestCheckupCommand:
         )
 
         assert result.exit_code == 1
+
+
+class TestRunAgenticCheckupCwdParameter:
+    """Regression for checkup PR #1112 / issue #1104.
+
+    ``run_agentic_checkup`` must accept a ``cwd`` argument and use it (instead
+    of ``Path.cwd()``) when locating the project root. Without this, the e2e
+    orchestrator's final-checkup gate would resolve architecture / .pddrc
+    against the wrong directory once the worktree differs from CWD.
+    """
+
+    def test_cwd_kwarg_accepted_in_signature(self) -> None:
+        import inspect
+
+        from pdd.agentic_checkup import run_agentic_checkup
+
+        sig = inspect.signature(run_agentic_checkup)
+        assert "cwd" in sig.parameters, (
+            "run_agentic_checkup must accept a `cwd` keyword argument"
+        )
+        param = sig.parameters["cwd"]
+        # Must be a keyword-only (or at least non-positional) optional arg.
+        assert param.default is None
+
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_cwd_forwarded_to_find_project_root(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+        tmp_path,
+    ) -> None:
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps({"title": "t", "body": "b"})),
+            (True, "[]"),
+        ]
+        mock_orchestrator.return_value = (True, "ok", 0.0, "fake-model")
+
+        run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            cwd=tmp_path,
+            use_github_state=False,
+        )
+
+        # _find_project_root must have been called with the explicit cwd,
+        # not the process's Path.cwd().
+        called_arg = mock_find_root.call_args.args[0]
+        assert called_arg == tmp_path, (
+            f"Expected _find_project_root called with {tmp_path}, "
+            f"got {called_arg}"
+        )
+
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_cwd_none_falls_back_to_path_cwd(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+    ) -> None:
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps({"title": "t", "body": "b"})),
+            (True, "[]"),
+        ]
+        mock_orchestrator.return_value = (True, "ok", 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup.Path.cwd", return_value=Path("/fallback/cwd")
+        ):
+            run_agentic_checkup(
+                "https://github.com/owner/repo/issues/1",
+                quiet=True,
+                use_github_state=False,
+            )
+
+        called_arg = mock_find_root.call_args.args[0]
+        assert called_arg == Path("/fallback/cwd"), (
+            "When cwd is None, _find_project_root should be called with Path.cwd()"
+        )

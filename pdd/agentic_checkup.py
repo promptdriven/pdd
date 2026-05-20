@@ -331,6 +331,7 @@ def run_agentic_checkup(
     blocking_severities: Optional[str] = None,
     clean_reviewer_states: Optional[str] = None,
     fallback_reviewer_on_failure: bool = False,
+    cwd: Optional[Path] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -417,7 +418,7 @@ def run_agentic_checkup(
     full_content = _escape_format_braces(raw_full_content)
 
     # 4. Load project context
-    project_root = _find_project_root(Path.cwd())
+    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     architecture, _ = _load_architecture_json(project_root)
     raw_arch_json_str = (
         json.dumps(architecture, indent=2)

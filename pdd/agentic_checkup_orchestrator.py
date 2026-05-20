@@ -1130,7 +1130,10 @@ def run_agentic_checkup_orchestrator(
             assert pr_owner is not None
             assert pr_repo is not None
             assert pr_number is not None
-            if worktree_path is not None:
+            # In --no-fix mode there are no fixes to push; skip the metadata
+            # fetch + commit/push helpers entirely so a verify-only run does
+            # not make extra `gh api` calls.
+            if worktree_path is not None and not no_fix:
                 pr_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
                 push_ok, push_message = _commit_and_push_if_changed(
                     worktree_path,

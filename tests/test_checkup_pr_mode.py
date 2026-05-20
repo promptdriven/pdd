@@ -817,3 +817,383 @@ class TestPrResumeWorktreeRecreation:
             tmp_path, "o", "r", 200, True, resume_existing=True
         )
         setup_issue.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Regression tests — checkup PR #1112 / issue #1104
+# ---------------------------------------------------------------------------
+
+
+class TestPrModeNoFixSkipsPushHelpers:
+    """PR-mode + --no-fix must skip _fetch_pr_metadata / _commit_and_push_if_changed.
+
+    Regression for the fix in pdd/agentic_checkup_orchestrator.py: in --no-fix
+    PR mode there are no fixes to push, so a verify-only run must not make the
+    extra `gh api` call to fetch PR metadata or attempt a commit/push.
+    """
+
+    def _run_in_pr_no_fix_mode(self, tmp_path: Path):
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(tmp_path / "wt", None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata"
+        ) as fetch_mock, patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "pushed"),
+        ) as push_mock:
+            (tmp_path / "wt").mkdir()
+
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+            return success, fetch_mock, push_mock
+
+    def test_no_fix_skips_metadata_fetch_and_push(self, tmp_path: Path) -> None:
+        success, fetch_mock, push_mock = self._run_in_pr_no_fix_mode(tmp_path)
+        assert success
+        assert not fetch_mock.called, (
+            "_fetch_pr_metadata must not be called under --no-fix "
+            "(no fixes to push → no extra gh api call)"
+        )
+        assert not push_mock.called, (
+            "_commit_and_push_if_changed must not be called under --no-fix"
+        )
+
+    def test_fix_mode_still_invokes_push_helpers(self, tmp_path: Path) -> None:
+        """Sanity check: with no_fix=False the push helpers DO fire.
+
+        Locks the symmetry — the skip is conditioned on `not no_fix`, not a
+        wholesale removal of the push path.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(tmp_path / "wt", None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={"clone_url": "https://github.com/o/r.git", "head_ref": "feat"},
+        ) as fetch_mock, patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "pushed"),
+        ) as push_mock:
+            (tmp_path / "wt").mkdir()
+
+            run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=False,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+            assert fetch_mock.called
+            assert push_mock.called
+
+
+# ---------------------------------------------------------------------------
+# Integration tests — checkup PR #1112 / issue #1104
+#
+# These exercise the *cross-module* chain end to end:
+#
+#   agentic_e2e_fix_orchestrator._run_final_checkup_on_pr
+#     -> agentic_checkup.run_agentic_checkup
+#       -> agentic_checkup._find_project_root            (uses `cwd`)
+#       -> agentic_checkup_orchestrator.run_agentic_checkup_orchestrator
+#         -> _fetch_pr_metadata / _commit_and_push_if_changed
+#            (gated by `no_fix`)
+#
+# Regression tests in test_agentic_checkup.py and test_agentic_e2e_fix_orchestrator.py
+# already pin each module in isolation. These tests verify that `cwd` and
+# `no_fix` propagate through the *whole* call chain without being lost or
+# rewritten by an intermediate layer.
+# ---------------------------------------------------------------------------
+
+
+class TestFinalCheckupIntegrationChain:
+    """End-to-end propagation of `cwd` / `no_fix` through 3 modules."""
+
+    def _common_orchestrator_patches(self, tmp_path):
+        """Patches that stub orchestrator side effects without faking the
+        run_agentic_checkup → orchestrator boundary itself."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = "All Issues Fixed" if step_num == 7 else f"Step {step_num} output"
+            return (True, output, 0.0, "fake-model")
+
+        return wt, fake_step
+
+    def test_final_checkup_propagates_cwd_to_project_root_resolver(
+        self, tmp_path
+    ) -> None:
+        """e2e_fix.`_run_final_checkup_on_pr` → agentic_checkup.`_find_project_root`.
+
+        The integration concern: when `_run_final_checkup_on_pr` is given a
+        worktree that differs from the process CWD, the inner
+        `run_agentic_checkup` call must locate the project root using that
+        worktree, not the ambient CWD. This pins the full forwarding chain
+        across both modules at once.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_checkup._find_project_root",
+            return_value=tmp_path,
+        ) as find_root_mock, patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json",
+            return_value=([], tmp_path / "arch.json"),
+        ), patch(
+            "pdd.agentic_checkup._check_gh_cli", return_value=True
+        ), patch(
+            "pdd.agentic_checkup._run_gh_command"
+        ) as gh_mock, patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "Checkup complete", 0.0, "fake-model"),
+        ):
+            import json as _json
+            gh_mock.side_effect = [
+                (True, _json.dumps({"title": "t", "body": "b"})),
+                (True, "[]"),
+            ]
+
+            success, _msg, _cost, _model = _run_final_checkup_on_pr(
+                issue_url="https://github.com/o/r/issues/99",
+                repo_owner="o",
+                repo_name="r",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                reasoning_time=None,
+            )
+
+        assert success
+        assert find_root_mock.called, (
+            "run_agentic_checkup must reach _find_project_root through the chain"
+        )
+        called_with = find_root_mock.call_args.args[0]
+        assert called_with == tmp_path, (
+            f"cwd lost through chain: _find_project_root saw {called_with!r}, "
+            f"not the worktree {tmp_path!r}"
+        )
+
+    def test_final_checkup_forwards_pr_url_to_orchestrator(self, tmp_path) -> None:
+        """e2e_fix → agentic_checkup → orchestrator: PR URL + no_fix=False reach
+        the orchestrator unchanged so PR-mode fixing is actually triggered."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_checkup._find_project_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup._load_pddrc_content", return_value=""
+        ), patch(
+            "pdd.agentic_checkup._load_architecture_json",
+            return_value=([], tmp_path / "arch.json"),
+        ), patch(
+            "pdd.agentic_checkup._check_gh_cli", return_value=True
+        ), patch(
+            "pdd.agentic_checkup._run_gh_command"
+        ) as gh_mock, patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator",
+            return_value=(True, "Checkup complete", 0.0, "fake-model"),
+        ) as orch_mock:
+            import json as _json
+            gh_mock.side_effect = [
+                (True, _json.dumps({"title": "t", "body": "b"})),
+                (True, "[]"),
+            ]
+
+            _run_final_checkup_on_pr(
+                issue_url="https://github.com/o/r/issues/99",
+                repo_owner="o",
+                repo_name="r",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                reasoning_time=None,
+            )
+
+        assert orch_mock.called
+        kwargs = orch_mock.call_args.kwargs
+        # _run_final_checkup_on_pr hard-codes no_fix=False — verify it survives
+        # the agentic_checkup → orchestrator hop.
+        assert kwargs["no_fix"] is False, (
+            "no_fix=False lost between run_agentic_checkup and the orchestrator"
+        )
+        # PR URL must be carried through so orchestrator enters PR mode.
+        assert kwargs["pr_url"] == "https://github.com/o/r/pull/200"
+        assert kwargs["pr_number"] == 200
+        assert kwargs["pr_owner"] == "o"
+        assert kwargs["pr_repo"] == "r"
+        # cwd at the orchestrator layer is the project root, not the raw cwd
+        # parameter — confirm it is at least set.
+        assert kwargs["cwd"] is not None
+
+    def test_pr_mode_no_fix_chain_skips_push_helpers(self, tmp_path) -> None:
+        """Full chain: e2e → agentic_checkup → orchestrator → push helpers.
+
+        When the chain is invoked with no_fix semantics (here exercised via the
+        orchestrator directly because `_run_final_checkup_on_pr` pins
+        no_fix=False) we still want to lock in that the push-helper gate honors
+        `no_fix` at the orchestrator level — this is the contract the e2e
+        orchestrator depends on for any future code path that passes a
+        verification-only invocation through.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        wt, fake_step = self._common_orchestrator_patches(tmp_path)
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step", side_effect=fake_step
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata"
+        ) as fetch_mock, patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "pushed"),
+        ) as push_mock:
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success
+        assert not fetch_mock.called
+        assert not push_mock.called
+
+    def test_no_pr_path_short_circuits_without_touching_checkup(
+        self, tmp_path
+    ) -> None:
+        """e2e → no PR found → does not call into agentic_checkup at all.
+
+        Integration concern: the short-circuit branch in
+        `_run_final_checkup_on_pr` must not invoke `run_agentic_checkup`, even
+        accidentally. This prevents wasted gh API calls / spurious worktree
+        setup when there is no PR to gate.
+        """
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup_orchestrator"
+        ) as orch_mock, patch(
+            "pdd.agentic_checkup._check_gh_cli", return_value=True
+        ) as gh_check_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                issue_url="https://github.com/o/r/issues/99",
+                repo_owner="o",
+                repo_name="r",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                reasoning_time=None,
+            )
+
+        assert success is True
+        assert "No open PR" in msg
+        assert not orch_mock.called
+        assert not gh_check_mock.called
