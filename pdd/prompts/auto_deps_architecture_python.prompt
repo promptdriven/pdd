@@ -1,5 +1,5 @@
 % Module: auto_deps_architecture_sync
-% Purpose: Update architecture.json dependencies after auto-deps inserts new module <include> tags.
+% Purpose: Update architecture.json dependencies after auto-deps inserts new module &lt;include&gt; tags.
 
 % When ``pdd auto-deps`` adds includes that reference other module prompts (or example
 % paths that map to a module basename), append the corresponding architecture
@@ -38,7 +38,7 @@
 
 % 1. Extract include paths from prompt text
 %    - Function: _parse_include_attrs(attrs_text: str) -> Dict[str, str]
-%    - Parse quoted attributes from an ``<include ...>`` opening tag into lower-cased keys
+%    - Parse quoted attributes from an ``&lt;include ...&gt;`` opening tag into lower-cased keys
 %    - Function: _is_module_prompt_include_target(body: str) -> bool
 %    - Return True when the include target names a module prompt — i.e. the stripped
 %      target ends in ``.prompt`` and ``extract_module_from_include`` resolves it. Mirrors
@@ -57,13 +57,13 @@
 %      - any non-empty ``select=``, ``query=``, or ``lines=`` attribute
 %    - Context-only source-file include selectors are LLM source context, not architecture edges.
 %    - Function: extract_include_paths_from_prompt_text(text: str) -> Set[str]
-%    - Parse both ``<include ...>body</include>`` (body form) and ``<include ... />``
+%    - Parse both ``&lt;include ...&gt;body&lt;/include&gt;`` (body form) and ``&lt;include ... /&gt;``
 %      (self-closing form). Two-branch regex with ``re.DOTALL``:
-%        body-form:   r"<include(?P<attrs>\s+[^>]*?)?(?<!/)>(?P<body>.*?)</include>"
-%        self-closing: r"<include(?P<attrs_self>\s+[^>]*?)\s*/>"
+%        body-form:   r"&lt;include(?P<attrs&gt;\s+[^>]*?)?(?<!/)>(?P<body>.*?)&lt;/include&gt;"
+%        self-closing: r"&lt;include(?P<attrs_self&gt;\s+[^>]*?)\s*/>"
 %      The body-form branch carries a ``(?<!/)`` negative lookbehind on its closing
-%      ``>`` so a self-closing ``<include path="x" />`` followed on a later line by
-%      ``<include>y</include>`` is not swallowed as one body-form match (mirrors
+%      ``>`` so a self-closing ``&lt;include path="x" /&gt;`` followed on a later line by
+%      ``&lt;include&gt;y&lt;/include&gt;`` is not swallowed as one body-form match (mirrors
 %      ``pdd/sync_order.py::extract_includes_from_file``).
 %    - Effective target = ``(attrs.get("path") or "").strip() or body``. When ``path=``
 %      is set the body is ignored (matches the validator/preprocessor contract).

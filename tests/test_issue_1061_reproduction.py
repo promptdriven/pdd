@@ -2077,3 +2077,42 @@ def test_f2_flat_layout_self_include_still_self_skipped(tmp_path: Path) -> None:
         "Flat-layout self-include must not become a self-edge in arch; "
         f"got {entry['dependencies']!r}"
     )
+
+
+def test_f8_modified_prompts_extractor_returns_only_legitimate_includes():
+    """F8 regression: extract_includes_from_file_ordered must not parse documentation
+    prose <include> tags as live tags. PR #1073 touched three prompts that contain
+    inline <include> examples in docs; the extractor must return ONLY the real
+    dependency includes (live tags in the % Dependencies section)."""
+    import re
+    from pathlib import Path
+    from pdd.sync_order import extract_includes_from_file_ordered
+
+    repo_root = Path(__file__).resolve().parent.parent
+    prompts = [
+        repo_root / "pdd" / "prompts" / "agentic_sync_python.prompt",
+        repo_root / "pdd" / "prompts" / "auto_deps_architecture_python.prompt",
+        repo_root / "pdd" / "prompts" / "agentic_sync_identify_modules_LLM.prompt",
+    ]
+    path_re = re.compile(r"^[\w./\-]+$")
+
+    for prompt_path in prompts:
+        assert prompt_path.is_file(), f"Missing fixture: {prompt_path}"
+        out = extract_includes_from_file_ordered(prompt_path)
+        for entry in out:
+            assert len(entry) < 500, (
+                f"{prompt_path.name}: garbage extracted (len={len(entry)}): "
+                f"{entry[:120]!r}"
+            )
+            assert "\n" not in entry, (
+                f"{prompt_path.name}: newline in extracted include {entry!r}"
+            )
+            assert "</include>" not in entry, (
+                f"{prompt_path.name}: </include> in extracted include {entry!r}"
+            )
+            assert "<" not in entry, (
+                f"{prompt_path.name}: '<' in extracted include {entry!r}"
+            )
+            assert path_re.match(entry), (
+                f"{prompt_path.name}: doesn't look like a path: {entry!r}"
+            )
