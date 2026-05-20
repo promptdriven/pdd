@@ -276,6 +276,12 @@ def run_checkup_review_loop(
 # Cumulative dedup snapshot (overwritten at each step within a round):
 #   dedup-state-round-{N}.json -- list of normalized findings, one per dedup key
 #
+# Pre-push policy-guard refusal artifacts (written when the corresponding
+# guard refuses; persisted alongside the round files so an operator can
+# audit which discriminator fired):
+#   round-{N}-prompt-source-guard-refusal.txt          -- clause 10a refusal text
+#   round-{N}-architecture-registry-guard-refusal.txt  -- clause 10b refusal text
+#
 # Final outputs at end of loop:
 #   final-report.md  -- exact bytes returned by run_checkup_review_loop;
 #                       includes the optional ``### Reviewer Diagnostics``
@@ -450,68 +456,45 @@ EXAMPLE_FINAL_REPORT_HEADER: str = (
 )
 
 
-def main() -> None:
-    """Demonstrate the public contract by importing the real module and showing usage."""
-    import json
-    from unittest.mock import patch
+def _demo() -> None:
+    """Print the public contract this example documents."""
+    import sys
+    import os
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-    # Import directly from the live module so this example also acts as an
-    # import smoke test for the package.
-    from pdd.checkup_review_loop import (
-        FixResult as RealFixResult,
-        ReviewFinding as RealReviewFinding,
-        ReviewLoopConfig as RealReviewLoopConfig,
-        ReviewLoopContext as RealReviewLoopContext,
-        ReviewLoopState as RealReviewLoopState,
+    # Verify the runtime module exposes the documented public surface.
+    from pdd.checkup_review_loop import (  # noqa: F401
+        ReviewLoopContext,
+        ReviewLoopConfig,
+        ReviewLoopState,
+        ReviewFinding,
+        ReviewResult,
+        FixResult,
         parse_reviewers,
         run_checkup_review_loop,
     )
 
-    print("=== pdd.checkup_review_loop usage demonstration ===")
+    print("pdd.checkup_review_loop — public contract demo")
     print()
-    print("1. parse_reviewers normalizes the legacy --reviewers CLI value:")
-    print("   parse_reviewers('codex,claude') -> {!r}".format(parse_reviewers("codex,claude")))
-    print("   parse_reviewers('chatgpt,anthropic') -> {!r}".format(parse_reviewers("chatgpt,anthropic")))
-    print("   parse_reviewers(None) -> {!r}".format(parse_reviewers(None)))
-
+    print("Dataclasses exported:")
+    for name in (
+        "ReviewLoopContext",
+        "ReviewLoopConfig",
+        "ReviewLoopState",
+        "ReviewFinding",
+        "ReviewResult",
+        "FixResult",
+    ):
+        print(f"  - {name}")
     print()
-    print("2. Public dataclasses (live shapes):")
-    finding = RealReviewFinding(
-        severity="medium",
-        reviewer="codex",
-        area="test",
-        evidence="tests/test_foo.py missing regression test",
-        finding="The PR does not test the new workflow.",
-        required_fix="Add a regression test in tests/test_foo.py covering X.",
-        location="tests/test_foo.py:1",
-        status="open",
-        round_number=1,
-    )
-    print("   ReviewFinding:", finding)
-
-    fix = RealFixResult(
-        fixer="claude",
-        success=True,
-        summary="Added regression test.",
-        changed_files=["tests/test_foo.py"],
-    )
-    print("   FixResult:", fix)
-
+    print("Role aliases via parse_reviewers():")
+    print(f"  parse_reviewers('chatgpt,anthropic') -> {parse_reviewers('chatgpt,anthropic')}")
+    print(f"  parse_reviewers('openai,google')     -> {parse_reviewers('openai,google')}")
+    print(f"  parse_reviewers(['codex', 'claude']) -> {parse_reviewers(['codex', 'claude'])}")
     print()
-    print("3. EXAMPLE_NORMALIZED_FINDING payload (dedup-state shape):")
-    print(json.dumps(EXAMPLE_NORMALIZED_FINDING, indent=2))
-
-    print()
-    print("4. EXAMPLE_FINAL_REPORT_HEADER (contract for final-report.md header):")
+    print("Example final-report header:")
     print(EXAMPLE_FINAL_REPORT_HEADER)
-
-    print()
-    print("5. run_checkup_review_loop signature (mocked execution skipped to keep example offline).")
-    print("   The real function is invoked by pdd checkup --review-loop and returns")
-    print("   (success: bool, report_md: str, total_cost_usd: float, last_model: str).")
-    print()
-    print("Example complete.")
 
 
 if __name__ == "__main__":
-    main()
+    _demo()
