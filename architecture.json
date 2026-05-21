@@ -6227,12 +6227,13 @@
           },
           {
             "name": "_run_final_checkup_on_pr",
-            "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: str, ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
+            "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: Optional[str], ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Snapshots PR remote head SHA before/after run_agentic_checkup",
               "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup — fail closed without re-validating CI because Step 7 never saw the new code",
-              "When the worktree HEAD matches the post-checkup remote SHA, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
+              "When the worktree HEAD matches the post-checkup remote SHA AND ci_step_template is not None, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
+              "When ci_step_template is None (codex round-9 Finding 1: the --skip-ci contract), the CI re-validation is skipped because no CI ran in the first place; all other safety checks still fire so the final gate cannot be bypassed by --skip-ci",
               "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }

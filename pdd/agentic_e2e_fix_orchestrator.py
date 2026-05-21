@@ -1644,7 +1644,7 @@ def _run_final_checkup_on_pr(
     timeout_adder: float,
     use_github_state: bool,
     reasoning_time: Optional[float],
-    ci_step_template: str,
+    ci_step_template: Optional[str],
     ci_validation_timeout: float,
 ) -> Tuple[bool, str, float, str]:
     """Run full PR-mode checkup against the current branch's open PR.
@@ -1655,6 +1655,14 @@ def _run_final_checkup_on_pr(
     the PR to code that has not been CI-validated. We snapshot the PR head
     SHA before and after; if it advanced, we re-run ``run_ci_validation_loop``
     with ``max_retries=0`` (verify-only — no further fixing on top of fixes).
+
+    ``ci_step_template`` is ``Optional[str]`` to support ``pdd fix --skip-ci``
+    (codex round-9 Finding 1). When ``None``, CI re-validation is skipped
+    because the caller has opted out of CI work entirely — but the final
+    checkup gate itself still runs so the new gate cannot be bypassed by
+    the ``--skip-ci`` flag. All other safety checks (SHA snapshot, external-
+    push detection) still fire because they only depend on `gh api` calls,
+    not on the CI poll.
     """
     pr_number = _find_open_pr_number(repo_owner, repo_name, cwd)
     if pr_number is None:
@@ -1748,6 +1756,21 @@ def _run_final_checkup_on_pr(
             checkup_cost,
             checkup_model,
         )
+
+    # Round-9 Finding 1: ``--skip-ci`` runs reach this point with
+    # ``ci_step_template=None`` — CI was skipped from the start, so there
+    # is no "post-CI mutation hole" to close with a re-validation poll.
+    # All upstream safety checks (SHA snapshot, external-push detection)
+    # have already fired; we just skip the CI poll and return success.
+    if ci_step_template is None:
+        if not quiet:
+            console.print(
+                f"[yellow]Final checkup pushed to PR head "
+                f"({pre_checkup_head_sha[:8]}->{post_checkup_head_sha[:8]}, "
+                f"verified by checkup worktree); skipping CI re-validation "
+                f"(--skip-ci).[/yellow]"
+            )
+        return True, checkup_message, checkup_cost, checkup_model
 
     if not quiet:
         console.print(
@@ -3106,6 +3129,42 @@ def run_agentic_e2e_fix_orchestrator(
             if skip_ci:
                 if not quiet:
                     console.print("[yellow]Skipping CI validation (--skip-ci)[/yellow]")
+
+                # Codex round-9 Finding 1: the final PR checkup gate runs
+                # even on --skip-ci. The gate verifies issue alignment,
+                # tests, and code quality on the existing PR — those checks
+                # are independent of the CI wait that --skip-ci suppresses.
+                # Bypassing the gate would let pdd-issue green-light a PR
+                # whose final state was never verified, contradicting the
+                # README's claim that the gate runs at the end of `pdd fix`.
+                # ``ci_step_template=None`` tells the gate to skip its
+                # internal CI re-validation (which is also moot when no CI
+                # ran in the first place).
+                checkup_success, checkup_message, checkup_cost, checkup_model = (
+                    _run_final_checkup_on_pr(
+                        issue_url=issue_url,
+                        issue_number=issue_number,
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        cwd=cwd,
+                        verbose=verbose,
+                        quiet=quiet,
+                        timeout_adder=timeout_adder,
+                        use_github_state=use_github_state,
+                        reasoning_time=reasoning_time,
+                        ci_step_template=None,
+                        ci_validation_timeout=0.0,
+                    )
+                )
+                total_cost += checkup_cost
+                if checkup_model:
+                    model_used = checkup_model
+                if not checkup_success:
+                    return False, checkup_message, total_cost, model_used, changed_files
+                if checkup_message not in {
+                    "No open PR found for current branch; skipping final checkup",
+                }:
+                    final_message = checkup_message
 
                 clear_workflow_state(cwd, issue_number, workflow_name, state_dir, repo_owner, repo_name, use_github_state)
                 return True, final_message, total_cost, model_used, changed_files

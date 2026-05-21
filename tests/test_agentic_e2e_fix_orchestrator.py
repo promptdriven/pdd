@@ -10032,3 +10032,190 @@ class TestFinalCheckupHeadSafetyChecks:
         # Only the pre-checkup SHA is fetched; the post-checkup fetch must
         # not happen because the checkup failed before any push.
         assert sha_mock.call_count == 1
+
+
+# ---------------------------------------------------------------------------
+# Codex round-9 Finding 1: pdd fix --skip-ci must still run the final
+# PR checkup gate. The gate verifies issue alignment, tests, and code
+# quality — those checks are independent of the CI wait that --skip-ci
+# suppresses. Bypassing the gate would let pdd-issue green-light a PR
+# whose final state was never verified.
+# ---------------------------------------------------------------------------
+
+
+class TestFinalCheckupRunsEvenWithSkipCI:
+    """When `_run_final_checkup_on_pr` is invoked with ci_step_template=None
+    (the contract for --skip-ci callers), all safety checks still fire but
+    the CI re-validation poll is skipped because no CI ran in the first
+    place. The gate itself MUST still run.
+    """
+
+    def _common_args_no_ci(self, tmp_path):
+        return dict(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_number=99,
+            repo_owner="o",
+            repo_name="r",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            timeout_adder=0.0,
+            use_github_state=False,
+            reasoning_time=None,
+            ci_step_template=None,
+            ci_validation_timeout=0.0,
+        )
+
+    def test_skip_ci_with_no_head_change_returns_success(self, tmp_path):
+        """No push happened (worktree HEAD == fresh remote): success path."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "aaaaaaaa"],
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                **self._common_args_no_ci(tmp_path)
+            )
+
+        assert success is True
+        assert msg == "checkup ok"
+        assert not ci_mock.called, (
+            "ci_step_template=None must skip CI re-validation entirely"
+        )
+
+    def test_skip_ci_with_head_change_still_succeeds_without_ci_poll(
+        self, tmp_path
+    ):
+        """Checkup pushed (worktree HEAD == new remote): success without CI
+        poll. The post-CI mutation hole doesn't exist because no CI ran."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "bbbbbbbb"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="bbbbbbbb",
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                **self._common_args_no_ci(tmp_path)
+            )
+
+        assert success is True
+        assert msg == "checkup ok"
+        assert not ci_mock.called, (
+            "--skip-ci means no CI poll, even after the checkup pushed; "
+            "the user opted out of CI work for the whole workflow"
+        )
+
+    def test_skip_ci_still_fails_closed_on_external_push(self, tmp_path):
+        """Round-5 external-push race detection still fires on --skip-ci.
+        The CI poll is skipped, but the worktree-vs-remote head check is
+        not — that safety net is independent of CI."""
+        from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=200,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            side_effect=["aaaaaaaa", "external_sha_xxxx"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._read_checkup_worktree_head_sha",
+            return_value="checkup_pushed_yyyy",
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.5, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model = _run_final_checkup_on_pr(
+                **self._common_args_no_ci(tmp_path)
+            )
+
+        assert success is False, (
+            "--skip-ci must NOT relax the external-push detection — that "
+            "check protects Step 7's verdict scope, not CI"
+        )
+        assert "External push" in msg
+        assert not ci_mock.called
+
+
+class TestSkipCIStillCallsFinalCheckup:
+    """Orchestrator-level: pdd fix --skip-ci must invoke
+    _run_final_checkup_on_pr before returning. The gate verifies issue
+    alignment/quality on the PR; bypassing it lets pdd-issue green-light
+    a PR whose final state was never checked.
+    """
+
+    def test_skip_ci_invokes_final_checkup_with_none_template(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+        e2e_fix_default_args["skip_ci"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            # Pre/post head match → no push happened, success.
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            return_value="aaaaaaaa",
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "Checkup complete", 0.0, "model"),
+        ) as checkup_mock, patch(
+            # CI loop must NOT be invoked under --skip-ci.
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+        ) as ci_mock:
+            success, msg, _cost, _model, _files = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is True, msg
+        checkup_mock.assert_called_once(), (
+            "Round-9 Finding 1: pdd fix --skip-ci must still run the final "
+            "PR checkup gate. Without this, the gate is bypassed entirely."
+        )
+        assert checkup_mock.call_args.kwargs["pr_url"] == (
+            "https://github.com/owner/repo/pull/77"
+        )
+        assert checkup_mock.call_args.kwargs["no_fix"] is False
+        assert not ci_mock.called, (
+            "--skip-ci must not invoke run_ci_validation_loop; the final "
+            "checkup gate handles its own logic with ci_step_template=None"
+        )
