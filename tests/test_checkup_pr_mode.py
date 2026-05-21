@@ -3440,3 +3440,539 @@ class TestPrModeRefreshesContextFromWorktree:
                 f"Pre-PR-worktree .pddrc leaked when worktree was empty. "
                 f"Saw: {pddrc!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Issue #1116: PR head advanced mid-checkup -> bounded auto-rerun.
+#
+# When the remote PR head moves between checkout and push (operator pushes
+# a commit, CI auto-heal lands a fix, etc.), the orchestrator must discard
+# the stale work and restart from the new head rather than fail-closed and
+# force the operator to rerun manually. The retry budget is bounded by
+# ``MAX_PR_HEAD_REFRESHES`` to prevent unbounded looping if the PR keeps
+# moving.
+# ---------------------------------------------------------------------------
+
+
+def _pr_metadata(head_sha: str) -> dict:
+    """Helper: minimal PR metadata payload with a configurable head SHA."""
+    return {
+        "clone_url": "https://github.com/o/r.git",
+        "head_ref": "change/test",
+        "head_owner": "o",
+        "head_repo": "r",
+        "head_sha": head_sha,
+    }
+
+
+class TestPrHeadAdvanceAutoRerun:
+    """Bounded auto-rerun when the remote PR head advances mid-checkup."""
+
+    @staticmethod
+    def _refresh_counter_path(cwd: Path, pr_number: int) -> Path:
+        return cwd / ".pdd" / f"checkup-pr-{pr_number}" / "pr_head_refreshes"
+
+    @staticmethod
+    def _invoke(tmp_path: Path, *, no_fix: bool = False):
+        """Run ``run_agentic_checkup_orchestrator`` with stub kwargs."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        return run_agentic_checkup_orchestrator(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_content="stub",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=99,
+            issue_title="stub",
+            architecture_json="{}",
+            pddrc_content="",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            no_fix=no_fix,
+            timeout_adder=0.0,
+            use_github_state=False,
+            pr_url="https://github.com/o/r/pull/200",
+            pr_owner="o",
+            pr_repo="r",
+            pr_number=200,
+        )
+
+    def test_pr_head_advance_after_step7_triggers_rerun(
+        self, tmp_path: Path
+    ) -> None:
+        """Checkpoint A: Step 7 passes but a refetch shows the head moved
+        from A->B before the push block. The wrapper must discard the
+        stale work, re-enter the inner against the new head, complete a
+        second iteration cleanly, and return success."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Iteration 1: head=A at entry, head=B at checkpoint A -> restart.
+        # Iteration 2: head=B at entry, head=B at checkpoint A, head=B at
+        # push block -> no restart, push succeeds, return clean.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 checkpoint A -> RESTART
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 checkpoint A
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 push-block prefetch
+        ]
+        setup_calls: list = []
+
+        def fake_setup(*args, **kwargs):  # noqa: ANN001
+            setup_calls.append((args, kwargs))
+            return (wt, None)
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            side_effect=fake_setup,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ) as metadata_mock, patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="bbbbbbbb22222222",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is True, msg
+        # Setup must be invoked twice — once per iteration — so the second
+        # attempt starts from the freshly checked-out head.
+        assert len(setup_calls) == 2
+        # The first refetch (iter-1 checkpoint A) consumed the second
+        # sequence entry; push runs only in iteration 2.
+        push_mock.assert_called_once()
+        # 5 calls total: 2 in iter-1, 3 in iter-2.
+        assert metadata_mock.call_count == 5
+
+    def test_pr_head_advance_via_rebase_conflict_triggers_rerun(
+        self, tmp_path: Path
+    ) -> None:
+        """Checkpoint B: push fails with a rebase-conflict message and a
+        refetch confirms the head advanced. The wrapper restarts and the
+        second iteration succeeds."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # iter 1: entry=A, checkpoint A=A (no restart), push prefetch=A,
+        #         push rebase-conflict, checkpoint B refetch=B -> RESTART.
+        # iter 2: entry=B, checkpoint A=B, push prefetch=B, push OK.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 checkpoint A
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 push prefetch
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 checkpoint B refetch
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 checkpoint A
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 push prefetch
+        ]
+        push_responses = [
+            (
+                False,
+                (
+                    "Failed to rebase fixes onto updated PR branch before "
+                    "retrying push: CONFLICT (content): Merge conflict in foo.py"
+                ),
+            ),
+            (True, "Pushed fixes to PR branch."),
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            side_effect=push_responses,
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="ffffffff99999999",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is True, msg
+        # Push attempted twice: first rebase-conflict, then clean push.
+        assert push_mock.call_count == 2
+
+    def test_pr_head_advance_budget_exhausted_fails_clearly(
+        self, tmp_path: Path
+    ) -> None:
+        """If the head keeps advancing past ``MAX_PR_HEAD_REFRESHES``
+        restarts, the wrapper must return a clear failure message that
+        lists the observed SHA transitions and cites the budget value."""
+        from pdd.agentic_checkup_orchestrator import MAX_PR_HEAD_REFRESHES
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Every iteration's checkpoint A sees a different head -> restart.
+        # 3 inner attempts total (initial + 2 restarts) = 6 metadata calls
+        # (entry + checkpoint A per attempt). Use distinct SHAs to verify
+        # the diagnostic surfaces the transition history.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 ckptA -> restart
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
+            _pr_metadata("cccccccc33333333"),  # iter 2 ckptA -> restart
+            _pr_metadata("cccccccc33333333"),  # iter 3 entry
+            _pr_metadata("dddddddd44444444"),  # iter 3 ckptA -> budget exhausted
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="dddddddd44444444",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is False
+        assert "max_pr_head_refreshes=2" in msg, (
+            f"Failure message must cite the budget value; got: {msg!r}"
+        )
+        # The diagnostic must list the observed SHA transitions in short form.
+        assert "aaaaaaaa" in msg and "bbbbbbbb" in msg, msg
+        assert "cccccccc" in msg and "dddddddd" in msg, msg
+        # Push must NOT have run — every restart fired before the push block.
+        push_mock.assert_not_called()
+        # Sanity: design constant is exposed and equals 2.
+        assert MAX_PR_HEAD_REFRESHES == 2
+
+    def test_no_fix_pr_head_advance_does_not_consume_budget(
+        self, tmp_path: Path
+    ) -> None:
+        """In ``--no-fix`` mode, an advance after Step 7 must NOT raise the
+        restart exception (the inner falls through to existing behavior).
+        The persisted refresh counter remains at 0."""
+        from pdd.agentic_checkup_orchestrator import (
+            _load_persisted_refresh_count,
+        )
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Head advances between entry and a hypothetical checkpoint A —
+        # but in --no-fix the checkpoint should not even consult metadata
+        # a second time. We still seed two responses to be defensive.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # entry
+            _pr_metadata("bbbbbbbb22222222"),  # would-be checkpoint A
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa11111111",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            # We don't care about success here, only that no restart was
+            # consumed. The inner takes the existing --no-fix path.
+            self._invoke(tmp_path, no_fix=True)
+
+        # Counter file must not have been created (or, if created, == 0).
+        assert _load_persisted_refresh_count(tmp_path, 200) == 0
+
+    def test_ordinary_push_auth_failure_does_not_trigger_rerun(
+        self, tmp_path: Path
+    ) -> None:
+        """When the push fails for a non-rebase reason (auth, network),
+        the wrapper must NOT refetch / restart. Preserves the existing
+        push-failure surface and guards against false-positive reruns
+        triggered solely by transient head-shift visibility."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Only one inner attempt expected. Three calls per the inner's
+        # existing fetch sites (entry + checkpoint A + push prefetch).
+        # If anything tries to refetch in checkpoint B, this list is too
+        # short and StopIteration will fail the test loudly.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # entry
+            _pr_metadata("aaaaaaaa11111111"),  # checkpoint A
+            _pr_metadata("aaaaaaaa11111111"),  # push prefetch
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ) as setup_mock, patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(
+                False,
+                "Failed to push fixes to PR branch: HTTP 401 Unauthorized",
+            ),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa11111111",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is False
+        assert "401" in msg
+        push_mock.assert_called_once()
+        # Single inner attempt -> setup called exactly once.
+        assert setup_mock.call_count == 1
+
+    def test_refresh_counter_clears_on_clean_success(
+        self, tmp_path: Path
+    ) -> None:
+        """A clean run (no advance) must remove a pre-existing sidecar
+        counter so the next checkup on this PR starts fresh."""
+        counter_path = self._refresh_counter_path(tmp_path, 200)
+        counter_path.parent.mkdir(parents=True, exist_ok=True)
+        counter_path.write_text("1", encoding="utf-8")
+        assert counter_path.exists()
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value=_pr_metadata("aaaaaaaa11111111"),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa11111111",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, _msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is True
+        assert not counter_path.exists(), (
+            "Persisted refresh counter must be cleared after a successful "
+            f"no-advance run; file still present at {counter_path}"
+        )
+
+    def test_refresh_counter_persists_across_process_boundary(
+        self, tmp_path: Path
+    ) -> None:
+        """The counter is durable: after a restart fires the on-disk
+        value must reflect the consumed attempt so a Ctrl-C + manual
+        rerun can't unbound the loop. Force budget exhaustion so the
+        final saved value is observable."""
+        counter_path = self._refresh_counter_path(tmp_path, 200)
+        assert not counter_path.exists()
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Force every attempt to restart. With 3 attempts in total (1 +
+        # 2 restarts), the counter ends at 2.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 ckptA -> restart
+            _pr_metadata("bbbbbbbb22222222"),
+            _pr_metadata("cccccccc33333333"),  # iter 2 ckptA -> restart
+            _pr_metadata("cccccccc33333333"),
+            _pr_metadata("dddddddd44444444"),  # iter 3 ckptA -> exhausted
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="dddddddd44444444",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, _msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is False
+        # After 2 restarts consumed the budget, the sidecar must reflect
+        # the consumed count so a manual resume sees a non-zero starting
+        # point and cannot accidentally unbound the loop.
+        assert counter_path.exists(), (
+            f"Refresh counter file must persist after restarts; "
+            f"expected at {counter_path}"
+        )
+        on_disk = counter_path.read_text(encoding="utf-8").strip()
+        assert on_disk == "2", (
+            f"Counter file should hold the consumed-restart count (=2); "
+            f"got {on_disk!r}"
+        )
