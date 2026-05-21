@@ -6699,6 +6699,138 @@ def test_step9_scope_guard_flags_deletion_of_untracked_preflight_file_as_unrecov
     assert not untracked.exists()
 
 
+# =============================================================================
+# Issue #1123 — Round-4: content-revert detection + resume re-heal
+#
+# Two failure modes round-3 still missed:
+# 1. Step 9 reverting a Step-8.5 mutation back to HEAD content (post-status
+#    no longer lists the path; file still exists). The deletion pass
+#    skipped it because the file existed; the main pass skipped it because
+#    it wasn't in post-status. Result: a silent loss.
+# 2. On scope violation, the saved state kept preflight_drift_healed=True,
+#    so a resume would skip Step 8.5 and run Step 9 against a worktree
+#    that Step 9 had just emptied of Step-8.5's mutations. Now the
+#    violation save path clears the preflight gates.
+# =============================================================================
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_flags_step9_revert_of_preflight_architecture_json(tmp_path):
+    """Step 8.5 modifies architecture.json (status ` M`, content A). Step 9
+    writes it back to HEAD bytes (post-status is clean; file still on disk).
+    Round-3 deletion detection skipped this because the file existed.
+    Round-4 must flag it as an unrecoverable scope violation so the
+    orchestrator stops the workflow and resume re-runs Step 8.5."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modifies arch.json.
+    (repo / "architecture.json").write_text('{"modules": ["healed"]}\n')
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get("architecture.json")
+    assert pre_entry is not None and pre_entry[0] == " M"
+
+    # Step 9 writes arch.json back to HEAD content (post-status will be clean).
+    (repo / "architecture.json").write_text('{"modules": []}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # Path is surfaced so the orchestrator's SCOPE_VIOLATION block fires.
+    assert "architecture.json" in reverted
+    # File is left at HEAD (we have no pre content to re-apply); resume
+    # path will re-run Step 8.5 to re-establish the heal mutation.
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_clears_preflight_flags(temp_cwd):
+    """When the scope-violation save path fires, the saved state must NOT
+    carry preflight_drift_healed / preflight_healed_worktree. Otherwise the
+    resume gate skips Step 8.5 — leaving the worktree without the mutation
+    Step 9 just deleted/reverted. preflight_healed_prompt_paths must
+    remain so Step 10's doc-discovery merge still works on retry."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], ["prompts/foo_python.prompt"])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Drop an out-of-scope file so the scope guard reverts it
+                # and the violation handler fires.
+                (worktree / "tests").mkdir(parents=True, exist_ok=True)
+                (worktree / "tests" / "leak.py").write_text("nope")
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=11231,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert mock_save.called
+    saved_state = mock_save.call_args[0][3]
+    # The violation marker must be present so we know we hit the right path.
+    assert saved_state["step_outputs"]["9"].startswith("FAILED: SCOPE_VIOLATION")
+    # Preflight gates cleared so resume re-runs Step 8.5.
+    assert "preflight_drift_healed" not in saved_state, (
+        "preflight_drift_healed must be cleared on scope violation so "
+        "resume re-runs Step 8.5 and re-establishes the heal mutation "
+        "that Step 9 may have deleted/reverted."
+    )
+    assert "preflight_healed_worktree" not in saved_state, (
+        "preflight_healed_worktree must be cleared on scope violation "
+        "so the per-worktree idempotency check no longer short-circuits."
+    )
+    # Healed prompt paths intentionally preserved (Step 10 discovery
+    # uses them on retry; re-heal will produce identical paths anyway).
+    assert (
+        saved_state.get("preflight_healed_prompt_paths")
+        == ["prompts/foo_python.prompt"]
+    )
+
+
 # -----------------------------------------------------------------------------
 # Blocker 2 — fallback worktree-change detection must include `.rst`/`.txt`
 # -----------------------------------------------------------------------------

@@ -417,6 +417,13 @@ def revert_out_of_scope_changes_with_dirs(
     surface the violation; Step 8.5 is idempotent and will recreate the file
     on the next invocation.
 
+    Content reverts to HEAD are detected too: a pre-snapshot path that is
+    still on disk but absent from the post-Step-9 ``git status`` (because
+    Step 9 wrote it back to HEAD bytes) is unrecoverable — we have no
+    stored pre-content to re-apply. If such a path is out-of-scope, it is
+    appended to the returned list so the caller can fail the workflow; the
+    resume path will re-run Step 8.5.
+
     When *strict* is ``False`` (the default), internal failures (subprocess
     timeouts, non-zero ``git`` returns, OSErrors during ``os.remove`` or
     ``git`` calls) are logged and the function returns whatever was reverted
@@ -653,11 +660,39 @@ def revert_out_of_scope_changes_with_dirs(
         for rel in list(pre_snapshot.keys()):
             if rel in seen_in_post:
                 continue
-            # If the file is on disk, this entry simply went back to clean
-            # (e.g. Step 9 reverted a Step 8.5 modification) — that is a
-            # mutation we already treat via the main-loop iteration on the
-            # POST status. If it's gone, it was deleted.
-            if (cwd / rel).exists():
+            full = cwd / rel
+            if not full.exists():
+                # File is gone → deletion handling (below).
+                pass
+            else:
+                # File is on disk but absent from post-status, meaning it is
+                # now clean vs HEAD. If the pre-snapshot recorded it as dirty
+                # (status or untracked), Step 9 has reverted it to HEAD
+                # content (or removed the untracked addition by overwriting
+                # to HEAD-matching bytes). The main-loop iteration only sees
+                # post-status entries, so without this branch the reversion
+                # is silently lost.
+                pre_entry = pre_snapshot.get(rel)
+                pre_status_code = pre_entry[0] if pre_entry is not None else ""
+                pre_hash = pre_entry[1] if pre_entry is not None else None
+                current_hash = _hash_file_content(full)
+                # Edge: an empty pre-status with matching hash is a no-op.
+                if pre_status_code == "" and pre_hash == current_hash:
+                    continue
+                if _path_in_scope(rel):
+                    # In-scope reversion is allowed.
+                    continue
+                # Out-of-scope reversion: we have no stored pre-content to
+                # auto-restore. Flag as an unrecoverable scope violation —
+                # the orchestrator's resume path will re-run Step 8.5 (its
+                # mutation is idempotent) before the next Step 9 attempt.
+                logger.warning(
+                    "Pre-snapshot file %s is now clean (Step 8.5 mutation "
+                    "overwritten by Step 9 to HEAD content) — unrecoverable; "
+                    "resume will re-run preflight",
+                    rel,
+                )
+                reverted.append(Path(rel))
                 continue
             if _path_in_scope(rel):
                 # Allowed deletion — skip.

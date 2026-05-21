@@ -894,6 +894,93 @@ def test_revert_out_of_scope_changes_with_dirs_flags_untracked_deletion_unrecove
 
 
 # -------------------------------------------------------------------------
+# Round-4 content-revert detection: a pre-snapshot file present on disk but
+# absent from post-status means it is now clean vs HEAD. If the snapshot
+# said it was dirty (modified or untracked), Step 9 has overwritten the
+# Step-8.5 mutation back to HEAD content — unrecoverable because we have
+# no stored pre-content. The helper must flag it as a scope violation so
+# the orchestrator's SCOPE_VIOLATION path fires and resume re-runs Step 8.5.
+# -------------------------------------------------------------------------
+
+
+def test_revert_out_of_scope_changes_with_dirs_flags_step9_revert_of_tracked_pre_snapshot_to_head(
+    tmp_path,
+):
+    """Pre snapshot has `architecture.json` with ` M` and Step-8.5-time
+    content hash. Step 9 writes the file back to its HEAD bytes, so the
+    post `git status` no longer lists it (clean vs HEAD). The main loop
+    sees nothing, and round-3's deletion pass would also miss it (the
+    file still exists on disk). Round-4 must surface it as a reverted
+    out-of-scope path so the orchestrator stops the workflow.
+    """
+    arch = tmp_path / "architecture.json"
+    arch.write_text('{"modules": []}\n')  # back to HEAD content
+    pre_snapshot = {"architecture.json": (" M", "deadbeef" * 8)}  # snapshot hash != current
+    porcelain = b""  # post-status is empty: file is clean
+    with patch(f"{MODULE}.subprocess.run") as mock_run:
+        mock_run.side_effect = [_cp(stdout=porcelain)]  # only status, no restore attempt
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
+            allowed_dirs=set(),
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        # Path must surface as reverted so SCOPE_VIOLATION fires.
+        assert Path("architecture.json") in result
+        # No git restore attempted — we have no pre content to re-apply.
+        assert mock_run.call_count == 1
+
+
+def test_revert_out_of_scope_changes_with_dirs_skips_in_scope_step9_revert_of_pre_snapshot(
+    tmp_path,
+):
+    """If the pre-snapshot path is in scope, a Step-9 revert to HEAD is
+    allowed (in-scope mutations are by definition fine). The helper must
+    NOT flag it as a violation."""
+    prompt_dir = tmp_path / "prompts"
+    prompt_dir.mkdir()
+    (prompt_dir / "foo.prompt").write_text("HEAD content\n")
+    pre_snapshot = {"prompts/foo.prompt": (" M", "cafebabe" * 8)}
+    porcelain = b""
+    with patch(f"{MODULE}.subprocess.run") as mock_run:
+        mock_run.side_effect = [_cp(stdout=porcelain)]
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
+            allowed_dirs={"prompts/"},
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        # In-scope: not flagged.
+        assert result == []
+
+
+def test_revert_out_of_scope_changes_with_dirs_skips_empty_status_with_matching_hash(
+    tmp_path,
+):
+    """Edge case: pre-snapshot somehow recorded a path with empty status and
+    a hash equal to the current on-disk hash. That means the file was
+    already clean at snapshot time and is still clean now — a true no-op,
+    not a Step-9-induced revert. The helper must skip it.
+    """
+    import hashlib
+
+    target = tmp_path / "noop.txt"
+    target.write_text("same bytes\n")
+    current_hash = hashlib.sha256(target.read_bytes()).hexdigest()
+    pre_snapshot = {"noop.txt": ("", current_hash)}
+    porcelain = b""
+    with patch(f"{MODULE}.subprocess.run") as mock_run:
+        mock_run.side_effect = [_cp(stdout=porcelain)]
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
+            allowed_dirs=set(),
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        assert result == []
+
+
+# -------------------------------------------------------------------------
 # Round-3 strict mode: internal failures raise instead of returning [].
 # Default (strict=False) preserves existing silent-fail semantics for
 # callers like e2e_fix.

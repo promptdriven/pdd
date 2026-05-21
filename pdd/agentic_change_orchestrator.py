@@ -2211,6 +2211,18 @@ def run_agentic_change_orchestrator(
                 # Do NOT advance last_completed_step — same pattern as the
                 # "no file changes" fallback below.
                 state["step_comments"] = sorted(step_comments_set)
+                # Issue #1123 round-4: clear preflight gates so resume
+                # re-runs Step 8.5. Step 9 may have deleted or reverted
+                # Step 8.5's mutations (.pdd/meta/*, architecture.json),
+                # and the resume path needs to re-establish them before
+                # the next Step 9 attempt. This applies to BOTH violation
+                # branches above (scope_reverted and scope_guard_error).
+                # Note: preflight_healed_prompt_paths is intentionally
+                # preserved so Step 10's doc-discovery sweep can still
+                # merge in the originally healed prompts on retry — the
+                # re-heal will regenerate them identically.
+                state.pop("preflight_drift_healed", None)
+                state.pop("preflight_healed_worktree", None)
                 save_workflow_state(
                     cwd, issue_number, "change", state, state_dir,
                     repo_owner, repo_name, use_github_state, github_comment_id,
