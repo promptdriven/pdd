@@ -1,13 +1,13 @@
 {
   "pdd_version": "0.0.245",
-  "timestamp": "2026-05-20T21:47:25.663458+00:00",
+  "timestamp": "2026-05-21T04:35:00.000000+00:00",
   "command": "example",
   "prompt_hash": "ce43b505ea639d1be1810a69314e79ac114be16bc1fcd2eda6a68843d74b7ecf",
   "code_hash": "6a6d4038c1aa807d08ba5bc25a5a781d4a2e117549ca77c81aea2790efb8b48c",
   "example_hash": "74bf0192fd6aa73150e3179f124db82137a0d5412b38d29332ce217c4026de1c",
-  "test_hash": "9cec35eb0aa6a0f9cc67d14fd2e5efd8ea4c237561a593bea973eb549cfd48eb",
+  "test_hash": "be60e288235aab646d319ef3fe5d6a5424a492d84a5824fd0e3d41601e07ccb4",
   "test_files": {
-    "test_llm_invoke.py": "9cec35eb0aa6a0f9cc67d14fd2e5efd8ea4c237561a593bea973eb549cfd48eb",
+    "test_llm_invoke.py": "be60e288235aab646d319ef3fe5d6a5424a492d84a5824fd0e3d41601e07ccb4",
     "test_llm_invoke_csv_model_registration.py": "1583b5e076fe5227a11f3d1079034ab4a21bc6131a3433f37bd68e35a99ba49e",
     "test_llm_invoke_integration.py": "2eb4bd2565761a4148762c6fb73c887cb6e12ff962742e05f5c2d4d62b47aaf9",
     "test_llm_invoke_nested_schema.py": "c983a19874abacc3e0ea9d6ca2ec87495960d2dd96d4e93be4039ed1bc995b9b",
