@@ -14,6 +14,7 @@ branch; the worktree is created before the first loop iteration.
 """
 from __future__ import annotations
 
+import hashlib
 import re
 import shutil
 import subprocess
@@ -165,6 +166,12 @@ def _delete_branch(cwd: Path, branch: str) -> Tuple[bool, str]:
         return True, ""
     except subprocess.CalledProcessError as e:
         return False, e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+
+
+def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
+    """Return a PR worktree branch name scoped to this checkout root."""
+    root_scope = hashlib.sha1(str(git_root.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"checkup/pr-{pr_number}-{root_scope}"
 
 
 def _copy_uncommitted_changes(
@@ -554,7 +561,7 @@ def _setup_pr_worktree(
 
     worktree_rel_path = Path(".pdd") / "worktrees" / f"checkup-pr-{pr_number}"
     worktree_path = git_root / worktree_rel_path
-    branch_name = f"checkup/pr-{pr_number}"
+    branch_name = _pr_worktree_branch_name(git_root, pr_number)
 
     # 1. Clean up existing worktree at path
     if worktree_path.exists():

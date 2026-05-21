@@ -2779,7 +2779,7 @@ Options:
 
 **Iterative Fix-Verify Loop**: Steps 3-7 run in a loop (max 3 iterations). If step 7 finds remaining issues, the workflow loops back to step 3 for another pass. The loop exits when step 7 reports "All Issues Fixed" or max iterations are reached.
 
-**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, `checkup/pr-{N}` for PR mode), keeping the user's working directory clean.
+**Git Worktree Isolation**: All fix steps run in an isolated git worktree (`checkup/issue-{N}` branch for issue mode, checkout-scoped `checkup/pr-{N}-<scope>` branch for PR mode), keeping the user's working directory clean.
 
 **Cross-Machine Resume**: Workflow state is stored in a hidden GitHub comment, enabling resume from any machine. Use `--no-github-state` to disable.
 
