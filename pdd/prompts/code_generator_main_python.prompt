@@ -1,19 +1,5 @@
 <pdd-reason>Primary orchestration engine for transitioning .prompt files to source code, handling path resolution, incremental generation, and architectural conformance.</pdd-reason>
 
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {
-        "name": "code_generator_main",
-        "signature": "(prompt_path: str, *, language: Optional[str] = None, output: Optional[str] = None, examples_dir: Optional[str] = None, tests_dir: Optional[str] = None, force: bool = False, incremental: bool = False, original_prompt_file: Optional[str] = None, strength: float = 0.5, temperature: float = 0.0, time_budget: float = 0.2, verbose: bool = False, quiet: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Tuple[str, bool, float, str]"
-      }
-    ]
-  }
-}
-</pdd-interface>
-
 <pdd-dependency>construct_paths_python.prompt</pdd-dependency>
 <pdd-dependency>preprocess_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_python.prompt</pdd-dependency>

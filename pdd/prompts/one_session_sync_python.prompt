@@ -1,19 +1,5 @@
 <pdd-reason>Runs example generation, crash-fix, verify, test generation, and test-fix steps in a single agentic session instead of sequential sync/fix/test calls.</pdd-reason>
 
-<pdd-interface>
-{
-  "type": "module",
-  "module": {
-    "functions": [
-      {
-        "name": "one_session_sync",
-        "signature": "(prompt_path: str, code_path: str, example_path: str, test_path: str, *, project_root: str, language: str = 'Python', strength: float = 0.5, temperature: float = 0.0, time_budget: float = 0.2, max_cycles: int = 3, verbose: bool = False, quiet: bool = False) -> Tuple[bool, str, float, str]"
-      }
-    ]
-  }
-}
-</pdd-interface>
-
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>fix_code_loop_python.prompt</pdd-dependency>
 <pdd-dependency>fix_verification_errors_loop_python.prompt</pdd-dependency>

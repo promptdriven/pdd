@@ -1,16 +1,5 @@
 <pdd-reason>Registers the pdd checkup CLI command, which orchestrates project-wide health checks and fixes.</pdd-reason>
 
-<pdd-interface>
-{
-  "type": "command",
-  "command": {
-    "name": "checkup",
-    "description": "Run agentic project checkup and fix health issues",
-    "signature": "(ctx, issue_url: Optional[str] = None, *, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, review_loop: bool = False, review_only: bool = False, reviewers: str = 'codex', reviewer: Optional[str] = None, fixer: Optional[str] = None, reviewer_fallback: Optional[str] = None, fixer_fallback: Optional[str] = None, max_review_rounds: int = 3, max_review_cost: float = 2.0, max_review_minutes: float = 20.0, require_all_reviewers_clean: bool = False, continue_on_reviewer_limit: bool = False, require_final_fresh_review: bool = False, blocking_severities: Optional[str] = None, clean_reviewer_states: Optional[str] = None, fallback_reviewer_on_failure: bool = False)"
-  }
-}
-</pdd-interface>
-
 <pdd-dependency>agentic_checkup_python.prompt</pdd-dependency>
 
 % Write `pdd/commands/checkup.py` implementing the `pdd checkup` CLI wrapper for `run_agentic_checkup`.

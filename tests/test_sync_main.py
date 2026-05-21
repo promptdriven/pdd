@@ -597,6 +597,40 @@ def test_sync_orchestration_exception(mock_project_dir, mock_construct_paths, mo
     assert "Unexpected API error" in lang_result["error"]
 
 
+def test_sync_no_op_success_details_never_renders_none(
+    mock_project_dir, mock_construct_paths, mock_sync_orchestration, capsys
+):
+    """Regression for #1103: a no-op success must never render 'None' in the Details column.
+
+    Reproduces the historical orchestrator shape (no 'summary', 'error': None) so that the
+    summary table fallback is exercised, and asserts the table does not contain the literal
+    string 'None'.
+    """
+    (mock_project_dir / "prompts" / "noop_app_python.prompt").touch()
+
+    mock_sync_orchestration.return_value = {
+        "success": True,
+        "total_cost": 0.0,
+        "model_name": "",
+        "error": None,
+        "operations_completed": [],
+        "skipped_operations": [],
+    }
+
+    ctx = create_mock_context({})
+    results, total_cost, _ = sync_main(
+        ctx, "noop_app", 3, 10.0, False, False, 90.0, False
+    )
+
+    assert results["overall_success"] is True
+    assert total_cost == 0.0
+
+    captured = capsys.readouterr()
+    combined = (captured.out or "") + (captured.err or "")
+    assert "PDD Sync Complete" in combined, "expected the final summary table to print"
+    assert "None" not in combined, f"no-op success details rendered 'None': {combined!r}"
+
+
 def test_sync_normal_flow_threads_context_override(mock_project_dir, mock_construct_paths, mock_sync_orchestration):
     """Normal (non-log) sync should thread ctx.obj['context'] to construct_paths and sync_orchestration."""
     # Create prompt for python
