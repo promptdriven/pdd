@@ -3707,6 +3707,172 @@ class TestStandaloneStaleHeadGuard:
         assert success is False
         assert "Cannot prove" in msg
 
+    def test_stale_head_blocks_canonical_report_post_in_no_fix_mode(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-7 Finding 1: when the PR head advances during a
+        no-fix run, the stale-head guard must fire BEFORE the canonical
+        "all clear" report posts to the PR thread. Otherwise downstream
+        consumers see a green comment even though the function returns
+        False.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._common_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        step_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="worktree_head_aaaa",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={"head_sha": "external_head_xxxx"},
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_step_comment",
+                step_comment_mock,
+            ),
+        ]
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = True
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        pr_comment_mock.assert_not_called(), (
+            "Canonical 'all clear' PR comment must NOT post when the PR "
+            "head advanced during the checkup — otherwise downstream "
+            "consumers see misleading success on a stale verdict"
+        )
+        step_comment_mock.assert_not_called(), (
+            "Canonical issue-thread post must also be skipped on stale-head"
+        )
+
+    def test_stale_head_blocks_canonical_report_post_in_fix_mode(
+        self, tmp_path: Path
+    ) -> None:
+        """Same contract for fix-mode + push-success + post-push-reverify:
+        the canonical green report must not post when the remote has moved
+        past the worktree HEAD (e.g., a maintainer push that landed
+        between the checkup's push and the final stale-head check).
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._common_patches(tmp_path, step_side_effect)
+        pr_comment_mock = MagicMock(return_value=True)
+        step_comment_mock = MagicMock(return_value=True)
+        patchers += [
+            patch(
+                # Worktree HEAD after a successful push.
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="pushed_head_bbbb",
+            ),
+            patch(
+                # Fresh remote PR head has already moved past the push.
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={"head_sha": "external_head_cccc"},
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                pr_comment_mock,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_step_comment",
+                step_comment_mock,
+            ),
+        ]
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = False
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        pr_comment_mock.assert_not_called()
+        step_comment_mock.assert_not_called()
+
+    def test_post_status_sidecar_survives_clear_workflow_state(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-7 Finding 2: when the canonical comment-post fails,
+        the persisted pr_post_status must survive clear_workflow_state on
+        an otherwise successful run. The durable sidecar at
+        .pdd/checkup-pr-{N}/post-status.txt is the contract.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._common_patches(tmp_path, step_side_effect)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="matching_sha_aaaa",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={"head_sha": "matching_sha_aaaa"},
+            ),
+            # Comment-post fails — triggers the post-status persistence
+            # path inside _post_pr_mode_final_report.
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_pr_comment",
+                return_value=False,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.post_step_comment",
+                return_value=True,
+            ),
+        ]
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = True
+            # use_github_state must be True for _post_pr_mode_final_report
+            # to actually attempt posting — otherwise it returns "" early
+            # and the post-failure persistence path never runs.
+            kwargs["use_github_state"] = True
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        # The overall run is still success — post failures must not flip
+        # the gate (round-5 Finding 4) — so clear_workflow_state DID fire.
+        # But the durable sidecar must persist.
+        assert success is True
+        sidecar = tmp_path / ".pdd" / "checkup-pr-200" / "post-status.txt"
+        assert sidecar.exists(), (
+            "Round-7 Finding 2: post-status sidecar must persist after "
+            f"clear_workflow_state. Expected file at {sidecar}"
+        )
+        content = sidecar.read_text()
+        assert "Final report post failed" in content
+        assert "PR" in content  # the surface that failed
+
 
 # ---------------------------------------------------------------------------
 # Codex round-6 Finding #2: _resolve_pr_remote substring boundary bug.

@@ -7661,7 +7661,9 @@
               "Persists workflow state",
               "In PR mode, may commit and push generated fixes back to the existing PR branch",
               "In PR mode, may post final PR and issue comments after push/reverify success",
-              "Before declaring PR-mode success, runs the round-6 stale-head guard: compares the worktree's HEAD SHA (via _git_rev_parse_head) to a fresh PR head SHA (via _fetch_pr_metadata); divergence or missing SHA fails closed because Step 7's verdict only applies to the worktree HEAD"
+              "Before declaring PR-mode success, runs the round-6 stale-head guard: compares the worktree's HEAD SHA (via _git_rev_parse_head) to a fresh PR head SHA (via _fetch_pr_metadata); divergence or missing SHA fails closed because Step 7's verdict only applies to the worktree HEAD",
+              "Round-7 Finding 1: the stale-head guard MUST run before _post_pr_mode_final_report on every success path so a stale verdict never lands as a green PR comment, regardless of the eventual False return value",
+              "Round-7 Finding 2: when comment-post fails, the persisted status is also written to a durable sidecar at .pdd/checkup-pr-<n>/post-status.txt so the signal survives clear_workflow_state on overall-successful runs"
             ]
           },
           {

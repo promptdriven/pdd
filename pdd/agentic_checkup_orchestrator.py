@@ -1217,15 +1217,76 @@ def run_agentic_checkup_orchestrator(
             )
         return None
 
+    def _check_stale_pr_head() -> Optional[Tuple[bool, str, float, str]]:
+        """Verify the PR remote head still matches the checkup worktree.
+
+        Returns ``None`` when not in PR mode (or no worktree) and when the
+        worktree HEAD equals the fresh PR remote head — both indicating a
+        safe-to-post state. Returns a failure tuple when the heads diverge
+        or either SHA cannot be fetched; callers should return that tuple
+        unchanged BEFORE posting the canonical "all clear" report, so a
+        stale verdict never lands on the PR thread as a green comment
+        (codex round-7 Finding 1).
+        """
+        if not (
+            pr_mode
+            and worktree_path is not None
+            and pr_owner
+            and pr_repo
+            and pr_number is not None
+        ):
+            return None
+        worktree_head = _git_rev_parse_head(worktree_path)
+        try:
+            fresh_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+            fresh_pr_head = str(fresh_metadata.get("head_sha", "") or "")
+        except Exception:  # noqa: BLE001 — best-effort
+            fresh_pr_head = ""
+
+        if not worktree_head or not fresh_pr_head:
+            stale_msg = (
+                "Cannot prove the PR remote head matches what the checkup "
+                "worktree verified — failing closed to avoid green-lighting "
+                "an unverified head."
+            )
+            if not quiet:
+                console.print(f"[red]{stale_msg}[/red]")
+            return False, stale_msg, total_cost, last_model_used
+
+        if worktree_head != fresh_pr_head:
+            stale_msg = (
+                f"PR head advanced to {fresh_pr_head[:8]} during checkup "
+                f"but verification was against worktree HEAD "
+                f"{worktree_head[:8]}. External push during checkup "
+                f"detected — re-run `pdd checkup --pr` so the new head is "
+                f"verified by Step 7."
+            )
+            if not quiet:
+                console.print(f"[red]{stale_msg}[/red]")
+            existing_push_output = context.get("pr_push_output", "")
+            stale_section = f"STALE HEAD: {stale_msg}"
+            context["pr_push_output"] = (
+                f"{existing_push_output}\n\n{stale_section}".strip()
+                if existing_push_output
+                else stale_section
+            )
+            return False, stale_msg, total_cost, last_model_used
+
+        return None
+
     def _post_pr_mode_final_report(final_step7_output: str) -> str:
         """Post the canonical PR-mode final report to PR + issue threads.
 
         Returns a ``status_suffix`` (empty when reporting is not applicable
         or both posts succeeded). On failure, the rendered body is also
-        persisted under ``.pdd/checkup-pr-<n>/final-report.md`` and a
-        human-readable status is written into
-        ``step_outputs["pr_post_status"]`` so downstream consumers can
-        detect the partial-post condition without parsing the message.
+        persisted under ``.pdd/checkup-pr-<n>/final-report.md``,
+        a human-readable status is written into
+        ``step_outputs["pr_post_status"]`` for in-flight introspection,
+        AND the same status is written to a durable sidecar at
+        ``.pdd/checkup-pr-<n>/post-status.txt`` (codex round-7 Finding 2)
+        so downstream consumers can still inspect the partial-post
+        condition after ``clear_workflow_state`` wipes the workflow state
+        on a successful overall run.
 
         The gate outcome is NOT flipped by a post failure — gh / network
         flakiness must remain decoupled from code-verification truth
@@ -1302,6 +1363,23 @@ def run_agentic_checkup_orchestrator(
             )
         step_outputs["pr_post_status"] = persisted
         _save_state()
+        # Codex round-7 Finding 2: workflow state is wiped by
+        # ``clear_workflow_state`` on success, so the ``pr_post_status``
+        # written above is lost — even when the comment-post failure is
+        # the operative anomaly the run wants to surface. Persist the
+        # same status to a durable sidecar so post-run inspection
+        # (pdd-issue, pdd_cloud, operators) still finds it.
+        try:
+            artifact_dir.mkdir(parents=True, exist_ok=True)
+            (artifact_dir / "post-status.txt").write_text(
+                persisted + "\n", encoding="utf-8"
+            )
+        except OSError as exc:
+            if not quiet:
+                console.print(
+                    f"[yellow]Warning: failed to persist post-status "
+                    f"sidecar: {exc}[/yellow]"
+                )
         if not quiet:
             console.print(f"[yellow]{persisted}[/yellow]")
         return suffix
@@ -1502,10 +1580,16 @@ def run_agentic_checkup_orchestrator(
                 last_model_used,
             )
 
-        # No-fix gate passed: post the canonical report so PR consumers see
-        # the verification verdict. The fix-mode equivalent runs after the
-        # push at the bottom of this function; the no-fix path never pushes,
-        # so we post here.
+        # No-fix gate passed. Codex round-7 Finding 1: the stale-head guard
+        # must run BEFORE the canonical "all clear" report posts. Without
+        # this ordering, an external PR-head advance during Step 7 lets us
+        # post a misleading green comment to the PR/issue threads — even
+        # though we later return False from the function-level stale check.
+        # The PR thread is the user-visible source of truth; protect it first.
+        stale_abort = _check_stale_pr_head()
+        if stale_abort is not None:
+            return stale_abort
+        # Safe to advertise the verdict — worktree HEAD matches remote.
         pending_post_suffix = _post_pr_mode_final_report(nofix_step7_output)
 
     else:
@@ -1835,6 +1919,16 @@ def run_agentic_checkup_orchestrator(
                         abort_cost,
                         abort_model,
                     )
+                # Codex round-7 Finding 1: stale-head guard runs BEFORE the
+                # canonical "all clear" report. Even though the push and
+                # any post-push reverify succeeded, the remote can still
+                # have advanced past our pushed SHA via an unrelated
+                # external push. Posting a green PR comment on stale state
+                # would be visible even if we then return False from the
+                # later function-level guard.
+                stale_abort = _check_stale_pr_head()
+                if stale_abort is not None:
+                    return stale_abort
                 pending_post_suffix = _post_pr_mode_final_report(
                     step_outputs.get("7", step7_output)
                 )
@@ -1873,59 +1967,17 @@ def run_agentic_checkup_orchestrator(
             if abort is not None:
                 return abort
 
-    # Round-6 finding #1: standalone `pdd checkup --pr` stale-head guard.
-    #
-    # Step 7's verdict (and any pushed fixes) applies to the worktree's
-    # HEAD. If the PR head has advanced past that SHA — by an external
-    # push during this checkup, a maintainer rebase, another bot — Step 7
-    # never saw the new code, and returning success would green-light an
-    # unverified head.
-    #
-    # The pdd-issue final gate (``_run_final_checkup_on_pr``) enforces
-    # this for its caller, but standalone ``pdd checkup --pr`` invocations
-    # need the same guarantee. Both the no-fix gate-pass path and the
-    # fix-mode + push-success + post-push-reverify path reach this point;
-    # fail closed when worktree HEAD != fresh remote PR head.
-    if pr_mode and worktree_path is not None:
-        assert pr_owner is not None
-        assert pr_repo is not None
-        assert pr_number is not None
-        worktree_head = _git_rev_parse_head(worktree_path)
-        try:
-            fresh_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
-            fresh_pr_head = str(fresh_metadata.get("head_sha", "") or "")
-        except Exception:  # noqa: BLE001 — best-effort
-            fresh_pr_head = ""
-
-        if not worktree_head or not fresh_pr_head:
-            stale_msg = (
-                "Cannot prove the PR remote head matches what the checkup "
-                "worktree verified — failing closed to avoid green-lighting "
-                "an unverified head."
-            )
-            if not quiet:
-                console.print(f"[red]{stale_msg}[/red]")
-            return False, stale_msg, total_cost, last_model_used
-
-        if worktree_head != fresh_pr_head:
-            stale_msg = (
-                f"PR head advanced to {fresh_pr_head[:8]} during checkup "
-                f"but verification was against worktree HEAD "
-                f"{worktree_head[:8]}. External push during checkup "
-                f"detected — re-run `pdd checkup --pr` so the new head is "
-                f"verified by Step 7."
-            )
-            if not quiet:
-                console.print(f"[red]{stale_msg}[/red]")
-            # Surface the warning in any subsequent canonical report.
-            existing_push_output = context.get("pr_push_output", "")
-            stale_section = f"STALE HEAD: {stale_msg}"
-            context["pr_push_output"] = (
-                f"{existing_push_output}\n\n{stale_section}".strip()
-                if existing_push_output
-                else stale_section
-            )
-            return False, stale_msg, total_cost, last_model_used
+    # Round-6 finding #1 (defense-in-depth): the per-post checks above
+    # already short-circuit before the canonical report posts on every
+    # PR-mode success path. This function-level call covers two residual
+    # cases: (a) any future PR-mode success path that reaches the end
+    # without going through one of those pre-post checks, and (b) the
+    # micro-window between a successful pre-post check and the final
+    # return — if an external push lands in that window, we still want to
+    # fail closed.
+    stale_abort = _check_stale_pr_head()
+    if stale_abort is not None:
+        return stale_abort
 
     # All steps complete — clear state.
     clear_workflow_state(
