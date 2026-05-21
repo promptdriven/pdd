@@ -526,3 +526,31 @@ If the workflow stops (e.g., PRD needs clarification):
 - Include tech stack preferences explicitly (e.g., "FastAPI + PostgreSQL" vs. leaving it ambiguous)
 - Review the generated `architecture.json` before generating individual module prompts
 - The `context_urls` field in each module entry provides documentation links for code generation
+
+## Reactive Budget Control in GitHub App
+
+When using PDD via GitHub labels (like `pdd-change` or `pdd-issue`), you can manage your spend in real-time without stopping the job.
+
+### 1. Check current spend
+During any active run, you can comment:
+```
+/pdd settings
+```
+PDD will reply with the current amount spent, the active budget caps, and the job status.
+
+### 2. Set a budget cap for a single command
+If you triggered a run with `pdd-bug` or `pdd-change`, it may start with "Budget cap: none". You can add a limit anytime:
+```
+/pdd budget 5.00
+```
+This sets a hard limit of $5.00 for the entire run.
+
+### 3. Adjust `pdd-issue` tree budgets
+`pdd-issue` runs are more complex. You can adjust the per-node budget and the total tree cap separately:
+```
+/pdd budget node 15
+/pdd budget max 150
+```
+The effective cap will be `min($15 * node_count, $150)`.
+
+If you reach a budget cap, PDD will stop automatically. You can increase the budget and re-apply the label to resume.

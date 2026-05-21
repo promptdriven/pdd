@@ -1,4 +1,7 @@
-<pdd-reason>Orchestrates the 12-step agentic bug workflow with E2E gate, persistent state, and orchestrator-owned GitHub step comments.</pdd-reason>
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Orchestrates the 12-step agentic bug workflow with E2E gate, persistent state, budget control, and orchestrator-owned GitHub step comments.</pdd-reason>
+
 <pdd-interface>
 {
   "type": "module",
@@ -6,21 +9,16 @@
     "functions": [
       {
         "name": "run_agentic_bug_orchestrator",
-        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]",
-        "returns": "Tuple[bool, str, float, str, List[str]]",
-        "sideEffects": [
-          "Posts GitHub issue comments via post_step_comment",
-          "Persists workflow state via save_workflow_state (local + optional GitHub state comment)",
-          "Creates/removes git worktrees and branches under .pdd/worktrees/fix-issue-{N}/",
-          "Spawns external agentic CLI subprocesses (claude/gemini/codex/opencode)"
-        ]
+        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str], Any]",
+        "returns": "Tuple[bool, str, float, str, List[str], Any]"
       }
-    ]
+    ],
+    "classes": []
   }
 }
 </pdd-interface>
 
-<include>context/python_preamble.prompt</include>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_bug_orchestrator.py` module.
@@ -48,8 +46,8 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 ```
 
 % Requirements
-1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]`
-2. Return 5-tuple: (success, final_message, total_cost, model_used, changed_files)
+1. Function: `run_agentic_bug_orchestrator(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str], Any]`
+2. Return 6-tuple: (success, final_message, total_cost, model_used, changed_files, budget_config)
 3. Run 12 steps sequentially, each as a separate `run_agentic_task()` call
 4. Accumulate step outputs to pass as context to subsequent steps
 5. Track total cost across all steps
@@ -57,7 +55,9 @@ BUG_STEP_TIMEOUTS: Dict[int, float] = {
 7. For Step 11: Parse agent output for `E2E_FILES_CREATED: path1, path2` lines to extract E2E test files, extend changed_files list
 8. Pass extracted files to Step 11 (E2E) and Step 12 (PR) via `files_to_stage` context variable for explicit git staging
 9. Persist workflow state between steps via `save_workflow_state` / `load_workflow_state` so a crash can resume; honor `use_github_state` to mirror state into a hidden GitHub state comment
-10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(..., body=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal `posted: True` flag so a later successful retry can still post its report. Persist `state["step_comments"][str(step_num)] = {"posted": True}` only for successful reports so resumes never duplicate comments, and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
+10. After every successfully completed step (including hard-stop reports, which are treated as successful posts before early return), post a visible step comment to the issue via `post_step_comment(repo_owner=..., repo_name=..., issue_number=..., step_num=..., body=..., posted_steps=..., cwd=...)` using the model's `<step_report>` block (issue #964 — orchestrator-owned posting). For soft failures (`step_success=False` without a hard-stop trigger), post the legacy FAILED fallback comment through the orchestrator and continue, but do not set the normal success flag in `step_comments` so a later successful retry can still post its report. Persist `state["step_comments"]` as a sorted `List[int]` of step indices whose trusted success-comment has been posted, so resumes never duplicate comments. Immediately after `load_workflow_state`, hydrate to `Set[int]` via `normalize_step_comments_state()` and backfill any completed step that has a `<step_report>` block but no posted flag on resume entry. If Step 12 fails, return failure instead of reporting a completed investigation. Redact secrets before storing any raw step output in workflow state because state may sync to GitHub.
+11. **Budget Control**: Before the step loop, at the start of each step, AND before every `run_agentic_task` call (including retries), fetch issue comments via `gh api` and call `parse_budget_from_comments()` from `agentic_common` for reactive updates. On the first iteration, call `post_startup_comment()` (passing the actual command name, e.g., `pdd-bug`) to provide immediate feedback on budget settings. Use the refreshed `budget_config` for all subsequent `run_agentic_task` calls in that step. Pass the `job_id` (from environment or generated UUID) to `post_startup_comment`.
+
 
 % Step Execution
 For each step (1-12):
@@ -121,12 +121,16 @@ The orchestrator must parse step output to detect stop conditions:
   posts via `post_step_comment(..., body=...)` using the cloud worker's trusted
   GitHub credentials. This avoids the Gemini sandbox failure mode where
   `GH_TOKEN` is not visible to the agent subprocess.
-- Persist a per-step `state["step_comments"][str(step_num)] = {"posted": True}`
-  entry on every successful post so resumes never duplicate comments. On entry,
-  the orchestrator backfills any completed step whose output contains a
-  `<step_report>` block but lacks a matching `posted: True` flag — that gate
-  skips legacy pre-PR outputs and FAST_TRACK synthetic skipped-step entries,
-  both of which lack the tag.
+- Persist `state["step_comments"]` as a sorted `List[int]` of step
+  indices whose trusted success-comment has been posted. Immediately after
+  `load_workflow_state`, hydrate to `Set[int]` via
+  `normalize_step_comments_state(state.get("step_comments"))` and write
+  `state["step_comments"] = sorted(set)` back so the on-disk form stays
+  canonical. Persist back as a sorted list before every `save_workflow_state`
+  call. On entry, the orchestrator backfills any completed step whose output
+  contains a `<step_report>` block but lacks a matching index in
+  `step_comments` — that gate skips legacy pre-PR outputs and FAST_TRACK
+  synthetic skipped-step entries, both of which lack the tag.
 - After posting (or skipping if already posted), return
   `(False, "Stopped at step N: {reason}", total_cost, model_used, changed_files)`
 - Do NOT continue to subsequent steps
@@ -214,7 +218,9 @@ Use `quiet` flag to suppress all output except errors. Use `verbose` flag to sho
 % Dependencies
 Import from `agentic_common`: `run_agentic_task`, `STEP_TIMEOUTS`,
 `post_step_comment`, `save_workflow_state`, `load_workflow_state`,
-`clear_workflow_state`.
+`clear_workflow_state`, `extract_step_report`,
+`normalize_step_comments_state`, `BudgetConfig`, `parse_budget_from_comments`,
+`post_startup_comment`.
 <pdd.agentic_common><include>context/agentic_common_example.py</include></pdd.agentic_common>
 <pdd.load_prompt_template><include>context/load_prompt_template_example.py</include></pdd.load_prompt_template>
 <pdd.agentic_bug><include>context/agentic_bug_example.py</include></pdd.agentic_bug>

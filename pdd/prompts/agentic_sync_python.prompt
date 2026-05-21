@@ -1,24 +1,42 @@
 <include>context/python_preamble.prompt</include>
-<pdd-reason>Global and GitHub issue-driven module identification plus parallel sync orchestration.</pdd-reason>
+<pdd-reason>Global and GitHub issue-driven module identification plus parallel sync orchestration with budget control.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_sync", "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
-      {"name": "run_global_sync", "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float) -> Tuple[bool, str, float, str]", "returns": "Tuple[bool, str, float, str]"},
-      {"name": "_is_github_issue_url", "signature": "(s: str) -> bool", "returns": "bool"},
-      {"name": "_parse_llm_response", "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]", "returns": "Tuple[List[str], bool, List[Dict]]"}
-    ]
+      {
+        "name": "run_agentic_sync",
+        "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str, Any]",
+        "returns": "Tuple[bool, str, float, str, Any]"
+      },
+      {
+        "name": "run_global_sync",
+        "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]"
+      },
+      {
+        "name": "_is_github_issue_url",
+        "signature": "(s: str) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "_parse_llm_response",
+        "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]",
+        "returns": "Tuple[List[str], bool, List[Dict]]"
+      }
+    ],
+    "classes": []
   }
 }
 </pdd-interface>
 
-<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>auto_deps_main_python.prompt</pdd-dependency>
-<pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
 <pdd-dependency>durable_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>
+<pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync.py` module.
@@ -29,8 +47,8 @@ Entry point for sync orchestration. Supports two public workflows:
 2. `run_global_sync(...)`: Tier 1 no-argument global sync. Triggered by the CLI when `pdd sync` is invoked with no BASENAME. Do not use PRD files, PRD fingerprinting, architecture schema migration, or agentic PRD analysis in v1.
 
 % Requirements
-1. Function: `run_agentic_sync(issue_url: str, *, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, timeout_adder: float = 0.0, use_github_state: bool = True, one_session: bool = False, reasoning_time: Optional[float] = None, durable: bool = False, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None) -> Tuple[bool, str, float, str]`
-2. Return 4-tuple: (success, message, total_cost, model_used)
+1. Function: `run_agentic_sync(issue_url: str, ..., durable_max_parallel: Optional[int] = None) -> Tuple[bool, str, float, str, Any]`
+2. Return 5-tuple: (success, message, total_cost, model_used, budget_config)
 3. Parse GitHub issue URL to extract: owner, repo, issue_number (reuse `_parse_issue_url` from `agentic_change.py`)
 4. Fetch issue content and comments via `gh api` (reuse `_run_gh_command` from `agentic_change.py`)
 5. Escape curly braces in issue content for safe `.format()` calls (reuse `_escape_format_braces`)
@@ -52,6 +70,7 @@ Entry point for sync orchestration. Supports two public workflows:
 18. If `durable=True`, dispatch to `DurableSyncRunner` instead of `AsyncSyncRunner`. Pass the issue URL, durable branch override, `no_resume` flag, and durable max-parallel setting through unchanged. Durable mode must still use the same module identification, dependency graph, dry-run validation, fingerprint filtering, sync options, and initial cost accounting as standard issue sync.
 19. Aggregate costs from LLM identification + dry-run LLM fallback + runner execution
 20. Include `one_session`, `local`, and `target_coverage` in `sync_options` dict passed to the selected runner
+21. **Budget Control**: Before the identification/sync loop AND at the start of every module sync (for reactive updates), fetch issue comments via `gh api` and call `parse_budget_from_comments()` from `agentic_common`. On the first iteration, call `post_startup_comment()` (passing the actual command name, e.g., `pdd-issue`) to provide immediate feedback on budget settings. Use the refreshed `budget_config` for all subsequent `run_agentic_task` calls in that step. Pass the `job_id` (from environment or generated UUID) to `post_startup_comment`.
 
 % Global Sync (Tier 1)
 1. Function: `run_global_sync(*, verbose: bool = False, quiet: bool = False, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, agentic_mode: bool = True, no_steer: bool = True, max_attempts: Optional[int] = None, dry_run: bool = False, target_coverage: Optional[float] = None, one_session: bool = False, local: bool = False, timeout_adder: float = 0.0) -> Tuple[bool, str, float, str]`. Forward `timeout_adder` to the runner via `sync_options['timeout_adder']`.

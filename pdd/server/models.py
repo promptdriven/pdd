@@ -20,6 +20,7 @@ __all__ = [
     "WriteFileRequest",
     "WriteResult",
     "CommandRequest",
+    "BudgetUpdate",
     "JobHandle",
     "JobStatus",
     "JobResult",
@@ -111,6 +112,13 @@ class CommandRequest(BaseModel):
     command: str = Field(..., description="PDD command name (e.g., 'sync', 'generate')")
     args: Dict[str, Any] = Field(default_factory=dict, description="Positional arguments")
     options: Dict[str, Any] = Field(default_factory=dict, description="Command options/flags")
+
+
+class BudgetUpdate(BaseModel):
+    """Request to update budget configuration for a running job."""
+    total_cap: Optional[float] = Field(None, description="Total cost cap in USD")
+    node_budget: Optional[float] = Field(None, description="Budget per node in USD")
+    max_total_cap: Optional[float] = Field(None, description="Maximum total cap in USD")
 
 
 class JobStatus(str, Enum):

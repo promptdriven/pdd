@@ -1,3 +1,21 @@
+<pdd-reason>Main CLI entry point and command dispatcher, re-exporting budget utilities.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "cli",
+  "cli": {
+    "commands": [
+      {
+        "name": "pdd",
+        "description": "The Prompt-Driven Development CLI"
+      }
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write the main entry point for the PDD CLI, `pdd/cli.py`.
 
 % Role & Scope
@@ -35,6 +53,7 @@
     - `construct_paths` from `.construct_paths`
     - `fix_verification_main` from `.fix_verification_main`
     - `console` from `.core.errors`
+    - `post_startup_comment`, `parse_budget_from_comments`, `BudgetConfig` from `.agentic_common`
     - `install_completion` from `.install_completion`
     - `_should_show_onboarding_reminder` from `.core.utils`
     - `process_commands` from `.core.cli`

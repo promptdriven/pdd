@@ -1,15 +1,32 @@
-<pdd-reason>Click decorator that tracks per-command LLM cost, model, and attempted-models history to a CSV file.</pdd-reason>
+<pdd-reason>Click decorator that tracks per-command LLM cost and model to a CSV file, supporting per-job cost attribution.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "track_cost", "signature": "(func)", "returns": "Callable"},
-      {"name": "extract_cost_and_model", "signature": "(result: Any) -> Tuple[Any, str]", "returns": "Tuple[Any, str]"},
-      {"name": "collect_files", "signature": "(args, kwargs)", "returns": "Tuple[List[str], List[str]]"},
-      {"name": "looks_like_file", "signature": "(path_str)", "returns": "bool"}
-    ]
+      {
+        "name": "track_cost",
+        "signature": "(func)",
+        "returns": "Callable"
+      },
+      {
+        "name": "extract_cost_and_model",
+        "signature": "(result: Any) -> Tuple[Any, str]",
+        "returns": "Tuple[Any, str]"
+      },
+      {
+        "name": "collect_files",
+        "signature": "(args, kwargs)",
+        "returns": "Tuple[List[str], List[str]]"
+      },
+      {
+        "name": "looks_like_file",
+        "signature": "(path_str)",
+        "returns": "bool"
+      }
+    ],
+    "classes": []
   }
 }
 </pdd-interface>
@@ -30,6 +47,7 @@
 5. **Retrieve Output Cost Option:** Check if the output cost option is specified directly via `ctx.obj` or via the `PDD_OUTPUT_COST_PATH` environment variable.
 6. **Prepare Cost Data:**
 - Determine the command name from the context.
+- Retrieve the job ID from the `PDD_JOB_ID` environment variable.
 - Extract the cost and model name from the command function's result if available. Generally, the second to the last element of the result tuple will be the cost and the last element will be the model name.
 - Collect input and output file paths from the command arguments using `kwargs`. Input file paths should be validated to ensure they exist, and output file paths should be identified by their parameter names starting with 'output'.
 - Retrieve the audit log of attempted models from `ctx.obj.get('attempted_models')` (populated by `llm_invoke` whenever a model attempt is made, including cloud attempts that recoverably failed and triggered local fallback). The list accumulates across every `llm_invoke` call the wrapped command makes — for example `pdd generate` runs code-generation and postprocess in sequence, so both substeps contribute their attempts to this single per-command list. Sequential command paths emit attempts in wall-clock order; concurrent paths (e.g. `auto-deps --concurrency > 1`, which fans summarization across worker threads) sort their per-file contributions by file-submission index to keep CSV output deterministic across runs — track_cost simply forwards whatever order is on `ctx.obj`. The `model` column (from the wrapped command's return tuple) names the model that produced the operation's output; `attempted_models` is the complete record of what was tried. The two may legitimately differ — e.g. when a command catches a substep terminal failure and recovers with an earlier successful model, the `attempted_models` list will still contain the failed substep's candidates AFTER the `model` column's entry. If the key is missing, empty, or `ctx.obj` is not a dict, default to `[model_name]` so single-attempt commands still emit a meaningful value. Convert each entry to a string and replace any literal `;` characters in model names with `:` to preserve the semicolon as a safe delimiter.
@@ -37,7 +55,7 @@
 - Skip CSV writing entirely when running under pytest (`PYTEST_CURRENT_TEST` environment variable is set). This prevents mock return values from polluting the cost CSV during test runs.
 - If the output cost file does not exist, create it and write the header row.
 - If the file exists, append the cost data to the end of the file.
-- Ensure all columns are included in the CSV file: timestamp, model, command, cost, input files, output files, and attempted_models.
+- Ensure all columns are included in the CSV file: timestamp, job_id, model, command, cost, input files, output files, and attempted_models.
 - The `attempted_models` column MUST be the last column. Its value is the sanitized list joined by `;` (semicolon). Example: `vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat`. For single-attempt commands the value is just the successful model (e.g. `deepseek/deepseek-chat`). For multi-substep commands (e.g. `generate` = code-generation + postprocess), the list contains every attempt across all substeps in the order they were appended to `ctx.obj['attempted_models']` upstream (wall-clock for sequential paths; submission-index order for concurrent worker paths — track_cost does not re-sort). The `model` column is the model that produced the command's output; `attempted_models` is the audit log of what was tried — they may differ when a substep failure was recovered.
 - When a pre-existing CSV file is missing the `attempted_models` column header (older files), append rows in the legacy column order without the new column rather than rewriting the header — never break existing files. Newly created CSV files MUST include the `attempted_models` header.
 - When the legacy-header path is taken, emit a one-time `rprint` warning per file telling the user the new `attempted_models` column will not be recorded and that they should delete or rename the file to opt in. Use a process-level set (e.g. `_legacy_csv_warned: set`) keyed on the absolute `output_cost_path` so the same session does not spam the user with the same notice across multiple commands.

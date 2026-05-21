@@ -34,6 +34,25 @@ For CLI users, PDD also offers powerful **agentic commands** that implement GitH
 
 For prompt-based workflows, the **`sync`** command automates the complete development cycle with intelligent decision-making, real-time visual feedback, and sophisticated state management.
 
+## Cost Budgeting (GitHub App)
+
+When running PDD via the GitHub App, you can control the execution budget directly through issue comments.
+
+### Startup Comments
+For every run triggered by a label, PDD posts a startup comment showing the current budget configuration and available controls.
+
+### Commands
+
+- **/pdd budget N**: Sets the total budget cap (in USD) for the current run.
+  Example: `/pdd budget 25.50`
+- **/pdd budget node N**: (For `pdd-issue`) Sets the per-node budget cap.
+  Example: `/pdd budget node 10.00`
+- **/pdd budget max N**: (For `pdd-issue`) Sets the total maximum cap for the entire solving tree.
+  Example: `/pdd budget max 100.00`
+- **/pdd settings**: Displays current budget settings, amount spent so far, and job status.
+
+Budget enforcement happens in real-time by monitoring the execution cost. If a cap is reached, PDD automatically terminates the process to prevent overspend.
+
 ## Whitepaper
 
 For a detailed explanation of the concepts, architecture, and benefits of Prompt-Driven Development, please refer to our full whitepaper. This document provides an in-depth look at the PDD philosophy, its advantages over traditional development, and includes benchmarks and case studies.

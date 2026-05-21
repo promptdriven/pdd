@@ -893,7 +893,7 @@ class TestVerifierThreeStateContract:
     def test_verifier_accepts_unchanged_marker(self) -> None:
         """An LLM emission of ASSOCIATED_DOCS_UNCHANGED must satisfy the
         contract for the listed docs (no silent-drop alarm)."""
-        from pdd.agentic_change_orchestrator import _verify_doc_sync_contract
+        from pdd.agentic_common import _verify_doc_sync_contract
         output = "ASSOCIATED_DOCS_UNCHANGED: docs/api.md, docs/spec.md"
         mod, conflict, unchanged, dropped, overlapping = _verify_doc_sync_contract(
             ["docs/api.md", "docs/spec.md"], output,
@@ -907,7 +907,7 @@ class TestVerifierThreeStateContract:
     def test_verifier_three_state_partition_no_overlap(self) -> None:
         """A doc is in MODIFIED, CONFLICTS, OR UNCHANGED — exactly one of
         the three. The verifier must not double-count."""
-        from pdd.agentic_change_orchestrator import _verify_doc_sync_contract
+        from pdd.agentic_common import _verify_doc_sync_contract
         output = (
             "ASSOCIATED_DOCS_MODIFIED: docs/edited.md\n"
             "ASSOCIATED_DOCS_CONFLICTS: docs/risky.md\n"
@@ -923,7 +923,7 @@ class TestVerifierThreeStateContract:
 
     def test_partial_unchanged_partial_drop_caught(self) -> None:
         """3 docs discovered; 1 unchanged, 1 modified, 1 silently dropped."""
-        from pdd.agentic_change_orchestrator import _verify_doc_sync_contract
+        from pdd.agentic_common import _verify_doc_sync_contract
         output = (
             "ASSOCIATED_DOCS_MODIFIED: docs/edited.md\n"
             "ASSOCIATED_DOCS_UNCHANGED: docs/clean.md\n"

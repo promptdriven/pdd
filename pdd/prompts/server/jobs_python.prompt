@@ -1,21 +1,57 @@
-<pdd-reason>Job queue manager for async PDD command execution via subprocesses.</pdd-reason>
+<pdd-reason>Job queue manager for async PDD command execution with real-time budget enforcement.</pdd-reason>
 
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "Job", "signature": "(id, command, args, options, status, result, error, cost, ...)", "returns": "Job"},
-      {"name": "JobCallbacks", "signature": "()", "returns": "JobCallbacks"},
-      {"name": "JobManager", "signature": "(max_concurrent: int = 1, executor=None, project_root=None)", "returns": "JobManager"},
-      {"name": "JobManager.submit", "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job", "returns": "Job"},
-      {"name": "JobManager.cancel", "signature": "async (job_id: str) -> bool", "returns": "bool"},
-      {"name": "JobManager.cleanup_old_jobs", "signature": "(max_age_seconds: float = 3600) -> int", "returns": "int"},
-      {"name": "JobManager.shutdown", "signature": "async () -> None", "returns": "None"}
-    ]
+      {
+        "name": "Job",
+        "signature": "(id, command, args, options, status, result, error, cost, ...)",
+        "returns": "Job"
+      },
+      {
+        "name": "JobCallbacks",
+        "signature": "()",
+        "returns": "JobCallbacks"
+      },
+      {
+        "name": "JobManager",
+        "signature": "(max_concurrent: int = 1, executor=None, project_root=None)",
+        "returns": "JobManager"
+      },
+      {
+        "name": "JobManager.submit",
+        "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
+        "returns": "Job"
+      },
+      {
+        "name": "JobManager.cancel",
+        "signature": "async (job_id: str) -> bool",
+        "returns": "bool"
+      },
+      {
+        "name": "JobManager.cleanup_old_jobs",
+        "signature": "(max_age_seconds: float = 3600) -> int",
+        "returns": "int"
+      },
+      {
+        "name": "JobManager.shutdown",
+        "signature": "async () -> None",
+        "returns": "None"
+      },
+      {
+        "name": "JobManager.update_budget",
+        "signature": "async (job_id: str, budget_config: BudgetConfig) -> bool",
+        "returns": "bool"
+      }
+    ],
+    "classes": []
   }
 }
 </pdd-interface>
+
+<pdd-dependency>server/models_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/server/jobs.py`.
 
@@ -73,6 +109,12 @@
 
   5. **Resilient Output**: Ensure `job.result` preserves `live_stdout`/`live_stderr`
      on all failure and exception paths to prevent data loss.
+
+  6. **Real-time Budget Enforcement**:
+     - **JobManager.update_budget**: Allows updating the budget configuration for a running job.
+     - **Subprocess Env**: Every subprocess MUST receive `PDD_JOB_ID` (the job's UUID) and `PDD_OUTPUT_COST_PATH` (absolute path to `pdd_cost.csv` in `project_root` or default) in its environment.
+     - **Monitoring Loop**: The `JobManager` MUST periodically (every 10s) read the CSV at `PDD_OUTPUT_COST_PATH`. It MUST sum the `cost` column for all rows where `job_id` matches the current job's ID.
+     - **Termination**: If the cumulative spend for a job exceeds its `total_cap` (or for `pdd-issue`, the effective cap), the `JobManager` MUST immediately terminate the subprocess (SIGTERM then SIGKILL) and mark the job as failed with a "Budget cap reached" error.
 
 % Dependencies
   <server.jobs><include>context/server/jobs_example.py</include></server.jobs>

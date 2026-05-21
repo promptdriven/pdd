@@ -1119,7 +1119,7 @@ def test_extract_marker_paths_continuation_preserves_prefix_before_inline_termin
     continuation line of FILES_MODIFIED contributes ``b.py``; losing it
     silently drops a real path from Step 10 doc discovery.
     """
-    from pdd.agentic_change_orchestrator import _extract_marker_paths
+    from pdd.agentic_common import _extract_marker_paths
 
     output = "FILES_MODIFIED: a.py\nb.py ARCHITECTURE_FILES_MODIFIED: architecture.json"
     files = _extract_marker_paths("FILES_MODIFIED", output)
@@ -1135,7 +1135,7 @@ def test_extract_marker_paths_truncates_at_inline_terminator():
     payload. Otherwise ``DIRECT_EDITS: b.md`` becomes a bogus path of the
     FILES_MODIFIED section.
     """
-    from pdd.agentic_change_orchestrator import _extract_marker_paths
+    from pdd.agentic_common import _extract_marker_paths
 
     output = "Step 9 done. FILES_MODIFIED: a.py DIRECT_EDITS: b.md"
     files = _extract_marker_paths("FILES_MODIFIED", output)

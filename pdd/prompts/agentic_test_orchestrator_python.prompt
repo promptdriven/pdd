@@ -1,3 +1,21 @@
+<pdd-reason>Orchestrates the 18-step agentic test workflow with budget control.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_test_orchestrator",
+        "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, max_cost) -> Tuple[bool, str, float, str, List[str], Any]",
+        "returns": "Tuple[bool, str, float, str, List[str], Any]"
+      }
+    ],
+    "classes": []
+  }
+}
+</pdd-interface>
+
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
 % You are an expert LLM Prompt Engineer.
@@ -26,11 +44,13 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 7. **Progress Reporting**: Use `set_agentic_progress` to provide real-time updates on step completion and `rich` for console output.
 8. **Resilience**: Implement timeouts per step (mapped in `TEST_STEP_TIMEOUTS`) and utilize a retry mechanism for agentic tasks.
 9. **Trusted Step-Comment Flow**: The orchestrator owns visible per-step `## Step N/18:` comments on the GitHub issue, posted via `gh issue comment` with trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` themselves for successful progress — they emit a `<step_report>...</step_report>` block in their final response and the orchestrator extracts and posts it once.
-   - Import from `pdd.agentic_common`: `extract_step_report(step_output) -> Optional[str]`, `post_step_comment_once(*, repo_owner, repo_name, issue_number, step_num: int, body: str, posted_steps: Set[int], cwd) -> bool`, and `normalize_step_comments_state(raw) -> Set[int]`.
+   - Import from `pdd.agentic_common`: `extract_step_report(step_output) -> Optional[str]`, `post_step_comment(*, repo_owner, repo_name, issue_number, step_num: int, body: str, posted_steps: Set[int], cwd) -> bool`, and `normalize_step_comments_state(raw) -> Set[int]`.
    - **State shape**: `state["step_comments"]` persists as a sorted `List[int]` on disk; hydrate to `Set[int]` via `normalize_step_comments_state` on resume; persist back as a sorted list before every `save_workflow_state` call (success path, hard-stop early-return, abort).
    - **Composite-key encoding (REQUIRED — helper is `Set[int]`-typed)**: the test workflow has fractional steps (5.5) and an iterated manual-testing loop (steps 8/9/10/11 across `iteration in 1..3`). Project each (step_num, iteration) tuple to a deterministic non-negative int via `iteration * 10000 + int(round(step_num * 10))`. Use `iteration=1` for non-iterative steps; pass the actual loop iteration for the manual-testing-loop steps. This guarantees re-runs across iterations get distinct keys and resume-replay reproduces the same key.
-   - **Posting protocol** inside `save_state`: on success and when `description` is provided, compute `report_body = extract_step_report(step_output)`; if `None`, use a short fallback body saying the step completed and raw output is retained in workflow state. Build `f"## Step {step_num}/18: {description}\n\n{report_body}"` and call `post_step_comment_once(...)`. Persist `state["step_comments"] = sorted(step_comments_set)` so the on-disk shape stays canonical. Any exception from extract / post / persist MUST be log-and-continue.
-   - **Relationship to legacy `post_step_comment`**: hard-stop / failure comments continue to flow through the legacy helper unchanged. `post_step_comment_once` is strictly additive — it covers the success-comment case the model used to fill (incorrectly) by invoking `gh issue comment` itself.
+   - **Posting protocol** inside `save_state`: on success and when `description` is provided, compute `report_body = extract_step_report(step_output)`; if `None`, use a short fallback body saying the step completed and raw output is retained in workflow state. Build `f"## Step {step_num}/18: {description}\n\n{report_body}"` and call `post_step_comment(...)`. Persist `state["step_comments"] = sorted(step_comments_set)` so the on-disk shape stays canonical. Any exception from extract / post / persist MUST be log-and-continue.
+   - **Relationship to legacy `post_step_comment`**: hard-stop / failure comments continue to flow through the legacy helper unchanged. `post_step_comment` is strictly additive — it covers the success-comment case the model used to fill (incorrectly) by invoking `gh issue comment` itself.
+
+10. **Budget Control**: Before the step loop AND at the start of every step (for reactive updates), fetch issue comments via `gh api` and call `parse_budget_from_comments()` from `agentic_common`. On the first iteration, call `post_startup_comment()` (passing the actual command name, e.g., `pdd-issue`) to provide immediate feedback on budget settings. Use the refreshed `budget_config` for all subsequent `run_agentic_task` calls in that step. Pass the `job_id` (from environment or generated UUID) to `post_startup_comment`.
 
 # Dependencies
 <agentic_common>
@@ -58,4 +78,4 @@ The module is an **Agentic Test Orchestrator** for an 18-step automated test gen
 7. **Output Formatting**: Ensure all console output uses the `rich` library for consistent styling.
 
 # Deliverable
-A Python module named `agentic_test_orchestrator.py` containing the primary entry point `run_agentic_test_orchestrator`. The function must return a tuple: `(success: bool, message: str, total_cost: float, model: str, changed_files: List[str])`.
+A Python module named `agentic_test_orchestrator.py` containing the primary entry point `run_agentic_test_orchestrator`. The function must return a tuple: `(success: bool, message: str, total_cost: float, model: str, changed_files: List[str], budget_config: Any)`.

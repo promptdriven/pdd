@@ -1753,6 +1753,7 @@ Key differences:
 - [ ] Module purpose is clear (1-2 sentences)
 - [ ] Requirements are testable and behavioral (5-10 items)
 - [ ] Dependencies included (if external or critical)
+- [ ] Budget cap is set (via `/pdd budget`) if running in GitHub App
 - [ ] High-risk MUST/MUST NOT rules have stable IDs
 - [ ] Ambiguous terms are defined in Vocabulary
 

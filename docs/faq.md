@@ -503,3 +503,17 @@ PDD now includes auth-aware detection and scaffolding across the pipeline:
 2. Add Pattern 14 fixtures from `context/test.prompt` to your test files
 3. Ensure auth modules use dependency injection (injectable OAuth client, injectable token verifier)
 4. Re-run `pdd sync` on auth modules to regenerate tests with auth-aware patterns
+
+### Cost & Budgeting (GitHub App)
+
+**How do I set a budget for a GitHub App run?**
+Comment `/pdd budget 30` on the issue to set a $30 limit. For `pdd-issue`, use `/pdd budget node 10` and `/pdd budget max 100`.
+
+**How can I see how much has been spent so far?**
+Comment `/pdd settings` on the issue. PDD will reply with the current spend and status.
+
+**What happens if the budget is reached?**
+PDD will automatically terminate the execution and post a comment notifying you that the budget cap has been reached.
+
+**Can I increase the budget for an active run?**
+Yes. Use the `/pdd budget ...` commands anytime. The active job will pick up the new settings within a few seconds.

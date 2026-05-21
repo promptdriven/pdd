@@ -32,6 +32,12 @@ from pdd.agentic_common import (
     extract_step_report,
     normalize_step_comments_state,
     post_step_comment_once,
+    _verify_doc_sync_contract,
+    _extract_marker_paths,
+    BudgetConfig,
+    parse_budget_from_comments,
+    post_startup_comment,
+    detect_control_token,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -531,22 +537,6 @@ def _setup_worktree(cwd: Path, issue_number: int, quiet: bool) -> Tuple[Optional
     except subprocess.CalledProcessError as e:
         return None, f"Git worktree creation failed: {e}"
 
-_PARSE_CHANGED_FILES_TERMINATORS = (
-    "FILES_CREATED",
-    "FILES_MODIFIED",
-    "ARCHITECTURE_FILES_MODIFIED",
-    "ASSOCIATED_DOCS_MODIFIED",
-    "ASSOCIATED_DOCS_CONFLICTS",
-    "ASSOCIATED_DOCS_UNCHANGED",
-    "DIRECT_EDITS",
-    "MANUAL_REVIEW",
-    "ORCHESTRATOR_POSTCHECK_WARNINGS",
-    "DOC_SYNC_SILENT_DROPS",
-    "DOC_SYNC_BUCKET_OVERLAPS",
-    "STOP_CONDITION",
-)
-
-
 def _collect_manual_review_lines(*sources: str) -> str:
     """Collect ``MANUAL_REVIEW: ...`` lines from one or more text sources,
     de-duped while preserving first-seen order. Returns ``"None"`` when no
@@ -565,114 +555,6 @@ def _collect_manual_review_lines(*sources: str) -> str:
                 seen.add(stripped)
                 ordered.append(stripped)
     return "\n".join(ordered) if ordered else "None"
-
-
-def _find_marker_start(line: str, prefix: str) -> Optional[int]:
-    """Return the index just after ``prefix:`` in ``line`` if it appears at a
-    word boundary, else None. Word boundary means the character before
-    ``prefix`` is not alphanumeric/underscore — this prevents ``MY_FILES_MODIFIED:``
-    from matching ``FILES_MODIFIED:``.
-    """
-    idx = line.find(prefix)
-    while idx != -1:
-        if idx == 0 or not (line[idx - 1].isalnum() or line[idx - 1] == "_"):
-            return idx + len(prefix)
-        idx = line.find(prefix, idx + 1)
-    return None
-
-
-def _truncate_at_inline_terminator(
-    text: str, terminators: Sequence[str], skip_prefix: str
-) -> str:
-    """Trim ``text`` at the first inline occurrence of any terminator marker,
-    skipping ``skip_prefix`` (the marker we're currently inside, so a repeat
-    of our own marker still terminates but our entry-point doesn't).
-    """
-    earliest: Optional[int] = None
-    for term in terminators:
-        term_prefix = f"{term}:"
-        end_after = _find_marker_start(text, term_prefix)
-        if end_after is None:
-            continue
-        # _find_marker_start returns the index AFTER the colon; the marker
-        # itself starts at end_after - len(term_prefix).
-        marker_start = end_after - len(term_prefix)
-        if earliest is None or marker_start < earliest:
-            earliest = marker_start
-    if earliest is None:
-        return text
-    return text[:earliest].rstrip()
-
-
-def _extract_marker_paths(marker: str, output: str) -> List[str]:
-    """Walk lines after ``marker:`` until blank or another known marker.
-
-    Multi-line payloads are supported (LLMs wrap long lists across lines).
-    The marker is also detected when it appears mid-line (e.g.
-    ``Implementation done. FILES_MODIFIED: a.py, b.py``); in that case the
-    section starts at the marker and ends at the line break, matching the
-    behavior of the prior single-line regex parser.
-    """
-    prefix = f"{marker}:"
-    other_terminators = tuple(
-        t for t in _PARSE_CHANGED_FILES_TERMINATORS if t != marker
-    )
-    lines = output.splitlines()
-    payload_lines: List[str] = []
-    in_section = False
-    for line in lines:
-        lstrip = line.lstrip()
-        if not in_section:
-            start_idx = _find_marker_start(line, prefix)
-            if start_idx is None:
-                continue
-            in_section = True
-            # When the marker started inline (mid-line), the remainder of
-            # the line may also contain another marker (e.g.
-            # ``Done. FILES_MODIFIED: a.py DIRECT_EDITS: b.md``). Truncate
-            # at the next inline terminator so we don't swallow the next
-            # section's tag/value as a path.
-            first = _truncate_at_inline_terminator(
-                line[start_idx:], other_terminators, prefix
-            ).strip()
-            if first:
-                payload_lines.append(first)
-            continue
-        stripped = line.strip()
-        if not stripped:
-            break
-        # Preserve any prefix text before an inline terminator on a
-        # continuation line. ``b.py ARCHITECTURE_FILES_MODIFIED: arch.json``
-        # contributes ``b.py`` to FILES_MODIFIED's payload, then ends the
-        # section — losing ``b.py`` would silently drop a real file from
-        # downstream Step 10 doc discovery.
-        truncated = _truncate_at_inline_terminator(
-            line, other_terminators, prefix
-        )
-        if truncated != line:
-            if truncated.strip():
-                payload_lines.append(truncated)
-            break
-        payload_lines.append(line)
-
-    entries: List[str] = []
-    for raw_line in payload_lines:
-        s = raw_line.strip()
-        # Strip leading bullets per line so "- README.md" yields "README.md".
-        while s and s[0] in "-*•":
-            s = s[1:].lstrip()
-        for part in s.split(","):
-            piece = part.strip()
-            # Re-strip bullets per entry so a single inline list like
-            # ``- a.md, - b.md, • c.md`` normalizes each comma-piece.
-            while piece and piece[0] in "-*•":
-                piece = piece[1:].lstrip()
-            # Strip surrounding markdown emphasis / code ticks so
-            # ``**README.md**`` and ```README.md``` both normalize cleanly.
-            piece = piece.strip("*`").strip()
-            if piece:
-                entries.append(piece)
-    return entries
 
 
 def _parse_changed_files(output: str) -> List[str]:
@@ -1061,104 +943,6 @@ def _preflight_drift_heal(
 # ---------------------------------------------------------------------------
 # Step 10.5 — Post-Step-10 associated-document contract verifier
 # ---------------------------------------------------------------------------
-
-
-
-def _verify_doc_sync_contract(
-    discovered_docs: List[str],
-    step10_output: str,
-) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
-    """Enforce the associated-document contract after Step 10.
-
-    The contract: every doc in *discovered_docs* (from Step 10's pre-call to
-    ``discover_associated_documents``) must appear in Step 10's output under
-    EXACTLY ONE of:
-      - ``ASSOCIATED_DOCS_MODIFIED:``  — LLM edited the doc
-      - ``ASSOCIATED_DOCS_CONFLICTS:`` — LLM flagged it for manual review
-      - ``ASSOCIATED_DOCS_UNCHANGED:`` — LLM determined it was already consistent
-
-    Two classes of contract violation are caught:
-
-    1. **Silent drops** — a discovered doc appears in none of the three
-       buckets. The LLM forgot it. Downstream consumers (review loops, PR
-       bodies) never learn the doc was skipped.
-
-    2. **Overlap (contradictory state)** — a discovered doc appears in two or
-       more buckets (e.g. both ``MODIFIED`` and ``UNCHANGED``). The LLM made
-       inconsistent claims about the same file. Treating such a doc as
-       "handled" lets a real state conflict ride through to the PR.
-
-    The Step 10 prompt must instruct the LLM to emit exactly one marker per
-    doc; otherwise this verifier false-positives on every doc.
-
-    Scope:
-        The contract only protects docs the static discovery (`<include>`
-        graph + architecture BFS) actually found. Docs that *should* be
-        referenced via `<include>` but aren't tagged are invisible here —
-        catching that class of gap requires semantic auto-deps discovery,
-        which is tracked separately as future work.
-
-    Args:
-        discovered_docs: The list the orchestrator passed in via
-            ``context["associated_documents"]``. Pass ``[]`` when no docs were
-            discovered (the contract is trivially satisfied).
-        step10_output: Raw Step 10 LLM output text.
-
-    Returns:
-        Tuple of (modified, conflicted, unchanged, silently_dropped, overlapping).
-        Both *silently_dropped* and *overlapping* are alarms — the former lists
-        discovered docs the LLM never addressed, the latter lists discovered
-        docs the LLM placed in more than one bucket simultaneously.
-    """
-    if not discovered_docs:
-        return [], [], [], [], []
-
-    # Reviewer 4th-pass fixes (bugs 1 + 2):
-    #   (a) Multi-line marker values, UNINDENTED continuation. The prior
-    #       regex `[^\n]*(?:\n[ \t]+[^\n]*)*` required continuation lines
-    #       to start with whitespace. LLMs frequently wrap a long list
-    #       without indenting the next line — those entries vanished
-    #       silently and were re-flagged as silent drops. Replaced with a
-    #       line-by-line walk that stops at a blank line or another known
-    #       marker, regardless of indentation.
-    #   (b) Bulleted list with no commas (e.g. "MARKER:\n  - a.md\n  - b.md").
-    #       Joining lines with " " before splitting on "," produced a
-    #       single entry "- a.md   - b.md" which `_strip_entry` could only
-    #       partially un-bullet. Strip the leading bullet *per line* before
-    #       splitting on comma, so each line is its own potential entry.
-    # The verifier and ``_extract_marker_paths`` share marker-walking
-    # semantics by design — if they ever disagree on what Step 10 emitted
-    # the orchestrator's bookkeeping silently diverges from the contract.
-    modified = _extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", step10_output)
-    conflicted = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", step10_output)
-    unchanged = _extract_marker_paths("ASSOCIATED_DOCS_UNCHANGED", step10_output)
-
-    def _normalize(p: str) -> str:
-        # Normalize backslashes to forward slashes BEFORE pathlib so a
-        # windows-style 'docs\\foo.md' matches a posix 'docs/foo.md'.
-        return Path(p.replace("\\", "/")).as_posix()
-
-    mod_norm = {_normalize(p) for p in modified}
-    conf_norm = {_normalize(p) for p in conflicted}
-    unch_norm = {_normalize(p) for p in unchanged}
-    handled: Set[str] = mod_norm | conf_norm | unch_norm
-
-    silently_dropped = [
-        d for d in discovered_docs
-        if _normalize(d) not in handled
-    ]
-
-    # A doc is in overlap if its normalized form appears in 2+ of the three
-    # buckets. Preserves the discovered-list ordering for deterministic output.
-    overlapping = [
-        d for d in discovered_docs
-        if sum(
-            1 for bucket in (mod_norm, conf_norm, unch_norm)
-            if _normalize(d) in bucket
-        ) >= 2
-    ]
-
-    return modified, conflicted, unchanged, silently_dropped, overlapping
 
 
 def _fetch_issue_updated_at(repo_owner: str, repo_name: str, issue_number: int) -> str:
@@ -1854,15 +1638,47 @@ def run_agentic_change_orchestrator(
             discovered_docs = context.get("_associated_documents_discovered", [])
             if discovered_docs:
                 (
-                    _docs_mod,
-                    _docs_conflict,
-                    _docs_unchanged,
+                    docs_mod,
+                    docs_conflict,
+                    docs_unchanged,
                     dropped,
                     overlapping,
                 ) = _verify_doc_sync_contract(
                     discovered_docs=discovered_docs,
                     step10_output=step_output,
                 )
+                
+                # Fix (Issue #1120): Some LLMs incorrectly report MODIFIED docs as UNCHANGED.
+                # Cross-check ASSOCIATED_DOCS_UNCHANGED against actual worktree status.
+                if docs_unchanged and worktree_path:
+                    # Detect worktree changes (including docs)
+                    wt_changes = _detect_worktree_changes(worktree_path)
+                    wt_changes_set = {f.replace("\\", "/") for f in wt_changes}
+                    
+                    real_mods = []
+                    still_unchanged = []
+                    for doc in docs_unchanged:
+                        if doc.replace("\\", "/") in wt_changes_set:
+                            real_mods.append(doc)
+                        else:
+                            still_unchanged.append(doc)
+                    
+                    if real_mods:
+                        if not quiet:
+                            console.print(f"[yellow]Step 10.5: Re-classifying {len(real_mods)} doc(s) as MODIFIED (detected worktree changes)[/yellow]")
+                        # Update the lists
+                        docs_mod = sorted(list(set(docs_mod) | set(real_mods)))
+                        docs_unchanged = still_unchanged
+                        
+                        # Update step_output so Step 11 sees the corrected state
+                        # and the orchestrator stages the files.
+                        mod_line = f"ASSOCIATED_DOCS_MODIFIED: {', '.join(docs_mod)}"
+                        unch_line = f"ASSOCIATED_DOCS_UNCHANGED: {', '.join(docs_unchanged)}"
+                        
+                        # Replace old marker lines in step_output
+                        step_output = re.sub(r"ASSOCIATED_DOCS_MODIFIED:.*", mod_line, step_output)
+                        step_output = re.sub(r"ASSOCIATED_DOCS_UNCHANGED:.*", unch_line, step_output)
+
                 violations: List[str] = []
                 warning_lines: List[str] = []
                 marker_lines: List[str] = []

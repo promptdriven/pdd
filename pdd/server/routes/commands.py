@@ -33,7 +33,7 @@ except ImportError:
 
 from pydantic import BaseModel
 
-from ..models import CommandRequest, JobHandle, JobResult, JobStatus
+from ..models import CommandRequest, BudgetUpdate, JobHandle, JobResult, JobStatus
 from ..jobs import JobManager
 from ..click_executor import ClickCommandExecutor, get_pdd_command
 
@@ -365,6 +365,43 @@ async def cancel_job(
     return {
         "cancelled": cancelled,
         "message": "Cancellation requested" if cancelled else "Could not cancel job"
+    }
+
+
+@router.patch("/jobs/{job_id}/budget")
+async def update_job_budget(
+    job_id: str,
+    update: BudgetUpdate,
+    manager: JobManager = Depends(get_job_manager),
+):
+    """
+    Update the budget configuration for a running job.
+    """
+    job = manager.get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail=f"Job not found: {job_id}")
+
+    if job.status not in (JobStatus.RUNNING, JobStatus.QUEUED):
+        raise HTTPException(
+            status_code=409,
+            detail=f"Cannot update budget for job in status: {job.status.value}"
+        )
+
+    # Update job's budget configuration
+    if update.total_cap is not None:
+        job.budget_config.total_cap = update.total_cap
+    if update.node_budget is not None:
+        job.budget_config.node_budget = update.node_budget
+    if update.max_total_cap is not None:
+        job.budget_config.max_total_cap = update.max_total_cap
+
+    return {
+        "success": True,
+        "budget_config": {
+            "total_cap": job.budget_config.total_cap,
+            "node_budget": job.budget_config.node_budget,
+            "max_total_cap": job.budget_config.max_total_cap,
+        }
     }
 
 

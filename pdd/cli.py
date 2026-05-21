@@ -42,6 +42,11 @@ def _bootstrap_package_defaults() -> None:
 
 _bootstrap_package_defaults()
 
+from .agentic_common import (
+    BudgetConfig,
+    parse_budget_from_comments,
+    post_startup_comment,
+)
 from .core.cli import cli
 from .commands import register_commands
 

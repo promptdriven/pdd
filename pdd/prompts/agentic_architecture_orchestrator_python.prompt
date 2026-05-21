@@ -1,22 +1,33 @@
-<pdd-reason>Orchestrates the multi-step agentic architecture workflow with gates, validation, state persistence, and context accumulation.</pdd-reason>
+<include>context/python_preamble.prompt</include>
+
+<pdd-reason>Orchestrates the multi-step agentic architecture workflow with gates, validation, budget control, and state persistence.</pdd-reason>
+
 <pdd-interface>
 {
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_agentic_architecture_orchestrator", "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, existing_architecture: str, related_issues: Optional[List[int]])", "returns": "Tuple[bool, str, float, str, List[str]]"}
-    ]
+      {
+        "name": "run_agentic_architecture_orchestrator",
+        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, existing_architecture: str, related_issues: Optional[List[int]]) -> Tuple[bool, str, float, str, List[str], Any]",
+        "returns": "Tuple[bool, str, float, str, List[str], Any]"
+      }
+    ],
+    "classes": []
   }
 }
 </pdd-interface>
-<include>context/python_preamble.prompt</include>
+
+<pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 
 % Role & Scope
 Orchestrator for the agentic architecture workflow. Runs each step as a separate agentic task, accumulates context between steps, tracks overall progress and cost, and supports resuming from saved state. Includes gate steps (1b complexity, 2b codebase scan, 5b completeness, 7b self-review, 9b consistency) and per-step validation with in-place fixing (steps 10-12). Post-processes successful output via render_mermaid.py.
 
 % Requirements
-1. Function: `run_agentic_architecture_orchestrator(...) -> Tuple[bool, str, float, str, List[str]]`
-2. Return 5-tuple: (success, final_message, total_cost, model_used, output_files)
+1. Function: `run_agentic_architecture_orchestrator(...) -> Tuple[bool, str, float, str, List[str], Any]`
+2. Return 6-tuple: (success, final_message, total_cost, model_used, output_files, budget_config)
+...
+18. **Budget Control**: Before the step loop AND at the start of each step (for reactive updates), fetch issue comments via `gh api` and call `parse_budget_from_comments()` from `agentic_common`. On the first iteration, call `post_startup_comment()` (passing the actual command name, e.g., `pdd-issue`) to provide immediate feedback on budget settings. Use the refreshed `budget_config` for all subsequent `run_agentic_task` calls in that step. Pass the `job_id` (from environment or generated UUID) to `post_startup_comment`.
 3. Accumulate step outputs as context for subsequent steps; track total cost.
 4. `base_dir = cwd / target_dir` if target_dir else cwd (create if needed).
 5. Support fractional step resume logic (e.g., 1.5, 2.5, 5.5, 7.5, 8.5, 9.5, 9.7).
@@ -77,11 +88,11 @@ ARCH_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
 14. **Validation (10-12)**: Use `_run_validation_with_fix` helper (max 3 retries). If failing, run `agentic_arch_step13_fix_LLM`. If any fail after retries, `validation_success = False`.
 15. **State Persistence**: Use `load_workflow_state`, `save_workflow_state`, `clear_workflow_state`, and `validate_cached_state`. Only advance `last_completed_step` on success.
 16. **Post-Processing**: Call `_save_architecture_files` to clean JSON and generate Mermaid HTML. Deduplicate and return all created/modified files.
-17. **Step Completion Marker**: After each successful step, print `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
+17. **Step completion marker**: After each successful step, print `console.print(f"  → Step {step_num} complete.")`. This marker is required for the executor's credential waterfall to detect successful runs.
 
 % Dependencies
 <agentic_common>
-  <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment,def:example_github_state_helpers">context/agentic_common_example.py</include>
+  <include select="def:example_run_agentic_task,def:example_validate_cached_state,def:example_post_step_comment,def:example_github_state_helpers,def:BudgetConfig,def:parse_budget_from_comments,def:post_startup_comment">context/agentic_common_example.py</include>
 </agentic_common>
 <load_prompt_template>
   <include>context/load_prompt_template_example.py</include>

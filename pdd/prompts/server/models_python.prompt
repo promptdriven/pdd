@@ -1,3 +1,24 @@
+<pdd-reason>Defines Pydantic models for the PDD server API, including budget updates.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "classes": [
+      {
+        "name": "BudgetUpdate",
+        "fields": [
+          "total_cap: Optional[float]",
+          "node_budget: Optional[float]",
+          "max_total_cap: Optional[float]"
+        ]
+      }
+    ],
+    "functions": []
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/models.py`.
 
 % Role & Scope
@@ -25,6 +46,7 @@
      - `JobHandle`: job_id, status, created_at
      - `JobStatus`: status enum (queued/running/completed/failed/cancelled)
      - `JobResult`: job_id, status, result, error, cost, duration_seconds, completed_at
+     - `BudgetUpdate`: total_cap (optional float), node_budget (optional float), max_total_cap (optional float)
 
   3. **WebSocket Message Models**:
      - `WSMessage`: base with type, timestamp, data

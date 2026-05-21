@@ -1,12 +1,12 @@
 [
   {
-    "reason": "Provides shared agentic CLI execution across Claude, Gemini, Codex, and OpenCode.",
+    "reason": "Provides shared agentic CLI execution and budget management across Claude, Gemini, Codex, and OpenCode.",
     "description": "Common functions for running agentic tasks: provider preference, availability detection, subprocess orchestration, JSON output parsing, cost tracking, GitHub state persistence, progress tracking, and OpenCode model resolution.",
     "dependencies": [
       "llm_invoke_python.prompt",
+      "git_porcelain_python.prompt",
       "auth_service_python.prompt",
-      "_keyring_timeout_python.prompt",
-      "git_porcelain_python.prompt"
+      "_keyring_timeout_python.prompt"
     ],
     "priority": 5,
     "filename": "agentic_common_python.prompt",
@@ -72,28 +72,13 @@
           },
           {
             "name": "post_step_comment",
-            "signature": "(repo_owner, repo_name, issue_number, step_num, total_steps, description, output, cwd, body=None) -> bool",
+            "signature": "(*, repo_owner: str, repo_name: str, issue_number: int, step_num: int, body: str, posted_steps: Set[int], cwd: Path) -> bool",
             "returns": "bool"
           },
           {
             "name": "_extract_step_report",
             "signature": "(text: Optional[str]) -> Optional[str]",
             "returns": "Optional[str]"
-          },
-          {
-            "name": "extract_step_report",
-            "signature": "(text: Optional[str]) -> Optional[str]",
-            "returns": "Optional[str]"
-          },
-          {
-            "name": "normalize_step_comments_state",
-            "signature": "(raw: Any) -> Set[int]",
-            "returns": "Set[int]"
-          },
-          {
-            "name": "post_step_comment_once",
-            "signature": "(*, repo_owner: str, repo_name: str, issue_number: int, step_num: int, body: str, posted_steps: Set[int], cwd: Path) -> bool",
-            "returns": "bool"
           },
           {
             "name": "_sanitize_comment_body",
@@ -144,6 +129,26 @@
             "name": "clear_workflow_state",
             "signature": "(cwd: Path, issue_number: int, workflow_type: str, state_dir: Path, repo_owner: str, repo_name: str, use_github_state: bool = True) -> None",
             "returns": "None"
+          },
+          {
+            "name": "parse_budget_from_comments",
+            "signature": "(comments: List[Dict]) -> BudgetConfig",
+            "returns": "BudgetConfig"
+          },
+          {
+            "name": "post_startup_comment",
+            "signature": "(repo_owner, repo_name, issue_number, command, budget_config, cwd, job_id=None, requester=None) -> bool",
+            "returns": "bool"
+          }
+        ],
+        "classes": [
+          {
+            "name": "BudgetConfig",
+            "fields": [
+              "total_cap: Optional[float] = None",
+              "node_budget: Optional[float] = 80.0",
+              "max_total_cap: Optional[float] = 400.0"
+            ]
           }
         ]
       }
@@ -465,57 +470,12 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check — Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
-    "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
-    "dependencies": [],
-    "priority": 18,
-    "filename": "resurface_check_Python.prompt",
-    "filepath": "extensions/recruiting/resurface_check.py",
-    "tags": [
-      "backend",
-      "api",
-      "scheduling",
-      "nurture"
-    ],
-    "context_urls": [
-      {
-        "url": "https://cloud.google.com/scheduler/docs/creating",
-        "purpose": "Cloud Scheduler daily job configuration"
-      },
-      {
-        "url": "https://firebase.google.com/docs/firestore/query-data/queries",
-        "purpose": "Firestore compound queries for contribution threshold scanning"
-      },
-      {
-        "url": "https://docs.github.com/en/rest/pulls/pulls#list-pull-requests",
-        "purpose": "GitHub API for merged PR count verification"
-      },
-      {
-        "url": "https://cloud.google.com/functions/docs/writing/write-http-functions",
-        "purpose": "Cloud Functions HTTP entry point for scheduler triggers"
-      }
-    ],
-    "interface": {
-      "type": "api",
-      "api": {
-        "endpoints": [
-          {
-            "method": "POST",
-            "path": "/recruiting_resurface_check",
-            "auth": "cloud-scheduler",
-            "responseSchema": "{ scanned: int, resurfaced: int, churned: int, reasons: dict }"
-          }
-        ]
-      }
-    }
-  },
-  {
     "reason": "Enhances test plan with contract/schema validation and accessibility test cases.",
     "description": "Step 5b of the 18-step agentic test workflow. Enhances the test plan with OpenAPI contract validation and axe-core accessibility test cases.",
     "dependencies": [],
     "priority": 210,
     "filename": "agentic_test_step5b_enhance_plan_LLM.prompt",
-    "filepath": "prompts/agentic_test_step5b_enhance_plan_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step5b_enhance_plan_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -540,7 +500,7 @@
     "dependencies": [],
     "priority": 211,
     "filename": "agentic_test_step6_coverage_LLM.prompt",
-    "filepath": "prompts/agentic_test_step6_coverage_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step6_coverage_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -565,7 +525,7 @@
     "dependencies": [],
     "priority": 212,
     "filename": "agentic_test_step7_checklist_LLM.prompt",
-    "filepath": "prompts/agentic_test_step7_checklist_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step7_checklist_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -590,7 +550,7 @@
     "dependencies": [],
     "priority": 213,
     "filename": "agentic_test_step8_manual_test_LLM.prompt",
-    "filepath": "prompts/agentic_test_step8_manual_test_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step8_manual_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -615,7 +575,7 @@
     "dependencies": [],
     "priority": 214,
     "filename": "agentic_test_step9_regression_LLM.prompt",
-    "filepath": "prompts/agentic_test_step9_regression_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step9_regression_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -640,7 +600,7 @@
     "dependencies": [],
     "priority": 215,
     "filename": "agentic_test_step10_validate_LLM.prompt",
-    "filepath": "prompts/agentic_test_step10_validate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step10_validate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -665,7 +625,7 @@
     "dependencies": [],
     "priority": 216,
     "filename": "agentic_test_step11_loop_LLM.prompt",
-    "filepath": "prompts/agentic_test_step11_loop_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step11_loop_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -690,7 +650,7 @@
     "dependencies": [],
     "priority": 217,
     "filename": "agentic_test_step15_plan_validation_LLM.prompt",
-    "filepath": "prompts/agentic_test_step15_plan_validation_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step15_plan_validation_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -922,7 +882,7 @@
     "dependencies": [],
     "priority": 25,
     "filename": "agentic_crash_explore_LLM.prompt",
-    "filepath": "prompts/agentic_crash_explore_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_crash_explore_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -946,7 +906,7 @@
     "dependencies": [],
     "priority": 26,
     "filename": "agentic_fix_explore_LLM.prompt",
-    "filepath": "prompts/agentic_fix_explore_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_fix_explore_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -971,7 +931,7 @@
     "dependencies": [],
     "priority": 27,
     "filename": "agentic_update_LLM.prompt",
-    "filepath": "prompts/agentic_update_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_update_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -995,7 +955,7 @@
     "dependencies": [],
     "priority": 28,
     "filename": "agentic_verify_explore_LLM.prompt",
-    "filepath": "prompts/agentic_verify_explore_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_verify_explore_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -1014,9 +974,11 @@
     }
   },
   {
-    "reason": "Main CLI entry point and command dispatcher.",
+    "reason": "Main CLI entry point and command dispatcher, re-exporting budget utilities.",
     "description": "Defines all pdd commands using Click. Routes to appropriate subcommands and handles global options.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 29,
     "filename": "cli_python.prompt",
     "filepath": "pdd/cli.py",
@@ -1025,7 +987,15 @@
       "python"
     ],
     "interface": {
-      "type": "module"
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "pdd",
+            "description": "The Prompt-Driven Development CLI"
+          }
+        ]
+      }
     },
     "position": {
       "x": 8400,
@@ -1135,7 +1105,7 @@
     "dependencies": [],
     "priority": 32,
     "filename": "sync_analysis_LLM.prompt",
-    "filepath": "prompts/sync_analysis_LLM.prompt",
+    "filepath": "pdd/prompts/sync_analysis_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -1154,7 +1124,7 @@
     }
   },
   {
-    "reason": "Click decorator that tracks per-command LLM cost, model, and attempted-models history to a CSV file.",
+    "reason": "Click decorator that tracks per-command LLM cost and model to a CSV file, supporting per-job cost attribution.",
     "description": "Records token usage and calculates costs. Aggregates costs across workflow steps. Captures chronological attempted-models history (including failed cloud attempts that fell back to local) via ctx.obj['attempted_models'].",
     "dependencies": [
       "llm_invoke_python.prompt"
@@ -1173,36 +1143,25 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "Callable",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Callable"
           },
           {
             "name": "extract_cost_and_model",
             "signature": "(result: Any) -> Tuple[Any, str]",
-            "returns": "Tuple[Any, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[Any, str]"
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
-            "returns": "Tuple[List[str], List[str]]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(args, kwargs)",
+            "returns": "Tuple[List[str], List[str]]"
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(path_str)",
+            "returns": "bool"
           }
-        ]
+        ],
+        "classes": []
       }
     },
     "position": {
@@ -1486,9 +1445,11 @@
     }
   },
   {
-    "reason": "Orchestrates the 12-step agentic bug workflow with E2E gate, persistent state, and orchestrator-owned GitHub step comments.",
+    "reason": "Orchestrates the 12-step agentic bug workflow with E2E gate, persistent state, budget control, and orchestrator-owned GitHub step comments.",
     "description": "Coordinates duplicate checking, documentation review, triage, API research, reproduction, root cause analysis, prompt classification, test planning, test generation, verification, E2E testing (gated by E2E_NEEDED classification), and PR creation. Posts per-step progress comments to the issue and persists workflow state for crash-safe resumes.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 42,
     "filename": "agentic_bug_orchestrator_python.prompt",
     "filepath": "pdd/agentic_bug_orchestrator.py",
@@ -1503,16 +1464,11 @@
         "functions": [
           {
             "name": "run_agentic_bug_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str]]",
-            "returns": "Tuple[bool, str, float, str, List[str]]",
-            "sideEffects": [
-              "Posts GitHub issue comments via post_step_comment",
-              "Persists workflow state via save_workflow_state (local + optional GitHub state comment)",
-              "Creates/removes git worktrees and branches under .pdd/worktrees/fix-issue-{N}/",
-              "Spawns external agentic CLI subprocesses (claude/gemini/codex/opencode)"
-            ]
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None) -> Tuple[bool, str, float, str, List[str], Any]",
+            "returns": "Tuple[bool, str, float, str, List[str], Any]"
           }
-        ]
+        ],
+        "classes": []
       }
     },
     "position": {
@@ -1955,7 +1911,7 @@
   },
   {
     "reason": "CLI entry point for the code generator command.",
-    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default).",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method \u2014 declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter \u2014 declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift \u2014 annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default).",
     "dependencies": [
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
@@ -2208,7 +2164,7 @@
     ],
     "priority": 61,
     "filename": "split_LLM.prompt",
-    "filepath": "prompts/split_LLM.prompt",
+    "filepath": "pdd/prompts/split_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -2964,7 +2920,7 @@
     "dependencies": [],
     "priority": 72,
     "filename": "agentic_bug_step1_duplicate_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step1_duplicate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step1_duplicate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -2988,7 +2944,7 @@
     "dependencies": [],
     "priority": 73,
     "filename": "agentic_bug_step2_docs_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step2_docs_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step2_docs_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3012,7 +2968,7 @@
     "dependencies": [],
     "priority": 74,
     "filename": "agentic_bug_step3_triage_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step3_triage_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step3_triage_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3036,7 +2992,7 @@
     "dependencies": [],
     "priority": 75,
     "filename": "agentic_bug_step4_reproduce_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step4_reproduce_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step4_reproduce_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3060,7 +3016,7 @@
     "dependencies": [],
     "priority": 76,
     "filename": "agentic_bug_step6_root_cause_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step6_root_cause_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step6_root_cause_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3084,7 +3040,7 @@
     "dependencies": [],
     "priority": 77,
     "filename": "agentic_bug_step8_test_plan_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step8_test_plan_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step8_test_plan_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3109,7 +3065,7 @@
     "dependencies": [],
     "priority": 78,
     "filename": "agentic_bug_step9_generate_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_generate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step9_generate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3134,7 +3090,7 @@
     "dependencies": [],
     "priority": 79,
     "filename": "agentic_bug_step10_verify_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_verify_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step10_verify_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3158,7 +3114,7 @@
     "dependencies": [],
     "priority": 80,
     "filename": "agentic_bug_step10_pr_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step10_pr_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step10_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3183,7 +3139,7 @@
     "dependencies": [],
     "priority": 81,
     "filename": "agentic_fix_nonpython_LLM.prompt",
-    "filepath": "prompts/agentic_fix_nonpython_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_fix_nonpython_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3208,7 +3164,7 @@
     "dependencies": [],
     "priority": 82,
     "filename": "agentic_fix_primary_LLM.prompt",
-    "filepath": "prompts/agentic_fix_primary_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_fix_primary_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -3233,7 +3189,7 @@
     "dependencies": [],
     "priority": 83,
     "filename": "auto_include_LLM.prompt",
-    "filepath": "prompts/auto_include_LLM.prompt",
+    "filepath": "pdd/prompts/auto_include_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3303,7 +3259,7 @@
     "dependencies": [],
     "priority": 85,
     "filename": "bug_to_unit_test_LLM.prompt",
-    "filepath": "prompts/bug_to_unit_test_LLM.prompt",
+    "filepath": "pdd/prompts/bug_to_unit_test_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3327,7 +3283,7 @@
     "dependencies": [],
     "priority": 86,
     "filename": "change_LLM.prompt",
-    "filepath": "prompts/change_LLM.prompt",
+    "filepath": "pdd/prompts/change_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3350,7 +3306,7 @@
     "dependencies": [],
     "priority": 87,
     "filename": "code_patcher_LLM.prompt",
-    "filepath": "prompts/code_patcher_LLM.prompt",
+    "filepath": "pdd/prompts/code_patcher_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3404,7 +3360,7 @@
     "dependencies": [],
     "priority": 89,
     "filename": "conflict_LLM.prompt",
-    "filepath": "prompts/conflict_LLM.prompt",
+    "filepath": "pdd/prompts/conflict_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3427,7 +3383,7 @@
     "dependencies": [],
     "priority": 90,
     "filename": "continue_generation_LLM.prompt",
-    "filepath": "prompts/continue_generation_LLM.prompt",
+    "filepath": "pdd/prompts/continue_generation_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3450,7 +3406,7 @@
     "dependencies": [],
     "priority": 91,
     "filename": "detect_change_LLM.prompt",
-    "filepath": "prompts/detect_change_LLM.prompt",
+    "filepath": "pdd/prompts/detect_change_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3473,7 +3429,7 @@
     "dependencies": [],
     "priority": 92,
     "filename": "diff_analyzer_LLM.prompt",
-    "filepath": "prompts/diff_analyzer_LLM.prompt",
+    "filepath": "pdd/prompts/diff_analyzer_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3496,7 +3452,7 @@
     "dependencies": [],
     "priority": 94,
     "filename": "example_generator_LLM.prompt",
-    "filepath": "prompts/example_generator_LLM.prompt",
+    "filepath": "pdd/prompts/example_generator_LLM.prompt",
     "tags": [
       "config",
       "generation",
@@ -3520,7 +3476,7 @@
     "dependencies": [],
     "priority": 95,
     "filename": "extract_auto_include_LLM.prompt",
-    "filepath": "prompts/extract_auto_include_LLM.prompt",
+    "filepath": "pdd/prompts/extract_auto_include_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3544,7 +3500,7 @@
     "dependencies": [],
     "priority": 96,
     "filename": "extract_code_LLM.prompt",
-    "filepath": "prompts/extract_code_LLM.prompt",
+    "filepath": "pdd/prompts/extract_code_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3568,7 +3524,7 @@
     "dependencies": [],
     "priority": 97,
     "filename": "extract_conflict_LLM.prompt",
-    "filepath": "prompts/extract_conflict_LLM.prompt",
+    "filepath": "pdd/prompts/extract_conflict_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3592,7 +3548,7 @@
     "dependencies": [],
     "priority": 98,
     "filename": "extract_detect_change_LLM.prompt",
-    "filepath": "prompts/extract_detect_change_LLM.prompt",
+    "filepath": "pdd/prompts/extract_detect_change_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3616,7 +3572,7 @@
     "dependencies": [],
     "priority": 99,
     "filename": "extract_program_code_fix_LLM.prompt",
-    "filepath": "prompts/extract_program_code_fix_LLM.prompt",
+    "filepath": "pdd/prompts/extract_program_code_fix_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3641,7 +3597,7 @@
     "dependencies": [],
     "priority": 100,
     "filename": "extract_prompt_change_LLM.prompt",
-    "filepath": "prompts/extract_prompt_change_LLM.prompt",
+    "filepath": "pdd/prompts/extract_prompt_change_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3665,7 +3621,7 @@
     "dependencies": [],
     "priority": 101,
     "filename": "extract_prompt_split_LLM.prompt",
-    "filepath": "prompts/extract_prompt_split_LLM.prompt",
+    "filepath": "pdd/prompts/extract_prompt_split_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3689,7 +3645,7 @@
     "dependencies": [],
     "priority": 102,
     "filename": "extract_prompt_update_LLM.prompt",
-    "filepath": "prompts/extract_prompt_update_LLM.prompt",
+    "filepath": "pdd/prompts/extract_prompt_update_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3713,7 +3669,7 @@
     "dependencies": [],
     "priority": 103,
     "filename": "extract_promptline_LLM.prompt",
-    "filepath": "prompts/extract_promptline_LLM.prompt",
+    "filepath": "pdd/prompts/extract_promptline_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3737,7 +3693,7 @@
     "dependencies": [],
     "priority": 104,
     "filename": "extract_unit_code_fix_LLM.prompt",
-    "filepath": "prompts/extract_unit_code_fix_LLM.prompt",
+    "filepath": "pdd/prompts/extract_unit_code_fix_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3762,7 +3718,7 @@
     "dependencies": [],
     "priority": 105,
     "filename": "extract_xml_LLM.prompt",
-    "filepath": "prompts/extract_xml_LLM.prompt",
+    "filepath": "pdd/prompts/extract_xml_LLM.prompt",
     "tags": [
       "config",
       "extraction",
@@ -3817,7 +3773,7 @@
     "dependencies": [],
     "priority": 107,
     "filename": "find_verification_errors_LLM.prompt",
-    "filepath": "prompts/find_verification_errors_LLM.prompt",
+    "filepath": "pdd/prompts/find_verification_errors_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3840,7 +3796,7 @@
     "dependencies": [],
     "priority": 108,
     "filename": "fix_code_module_errors_LLM.prompt",
-    "filepath": "prompts/fix_code_module_errors_LLM.prompt",
+    "filepath": "pdd/prompts/fix_code_module_errors_LLM.prompt",
     "tags": [
       "config",
       "fix",
@@ -3864,7 +3820,7 @@
     "dependencies": [],
     "priority": 109,
     "filename": "fix_verification_errors_LLM.prompt",
-    "filepath": "prompts/fix_verification_errors_LLM.prompt",
+    "filepath": "pdd/prompts/fix_verification_errors_LLM.prompt",
     "tags": [
       "config",
       "fix",
@@ -3888,7 +3844,7 @@
     "dependencies": [],
     "priority": 110,
     "filename": "generate_test_LLM.prompt",
-    "filepath": "prompts/generate_test_LLM.prompt",
+    "filepath": "pdd/prompts/generate_test_LLM.prompt",
     "tags": [
       "config",
       "generation",
@@ -3913,7 +3869,7 @@
     "dependencies": [],
     "priority": 111,
     "filename": "increase_tests_LLM.prompt",
-    "filepath": "prompts/increase_tests_LLM.prompt",
+    "filepath": "pdd/prompts/increase_tests_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -3937,7 +3893,7 @@
     "dependencies": [],
     "priority": 112,
     "filename": "insert_includes_LLM.prompt",
-    "filepath": "prompts/insert_includes_LLM.prompt",
+    "filepath": "pdd/prompts/insert_includes_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4495,7 +4451,7 @@
     "dependencies": [],
     "priority": 131,
     "filename": "summarize_file_LLM.prompt",
-    "filepath": "prompts/summarize_file_LLM.prompt",
+    "filepath": "pdd/prompts/summarize_file_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4893,7 +4849,7 @@
     "dependencies": [],
     "priority": 135,
     "filename": "trace_LLM.prompt",
-    "filepath": "prompts/trace_LLM.prompt",
+    "filepath": "pdd/prompts/trace_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4916,7 +4872,7 @@
     "dependencies": [],
     "priority": 136,
     "filename": "trim_results_LLM.prompt",
-    "filepath": "prompts/trim_results_LLM.prompt",
+    "filepath": "pdd/prompts/trim_results_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4939,7 +4895,7 @@
     "dependencies": [],
     "priority": 137,
     "filename": "trim_results_start_LLM.prompt",
-    "filepath": "prompts/trim_results_start_LLM.prompt",
+    "filepath": "pdd/prompts/trim_results_start_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -4962,7 +4918,7 @@
     "dependencies": [],
     "priority": 138,
     "filename": "unfinished_prompt_LLM.prompt",
-    "filepath": "prompts/unfinished_prompt_LLM.prompt",
+    "filepath": "pdd/prompts/unfinished_prompt_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -5024,7 +4980,7 @@
     "dependencies": [],
     "priority": 140,
     "filename": "update_prompt_LLM.prompt",
-    "filepath": "prompts/update_prompt_LLM.prompt",
+    "filepath": "pdd/prompts/update_prompt_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -5080,7 +5036,7 @@
     ],
     "priority": 142,
     "filename": "main_gen_prompt.prompt",
-    "filepath": "prompts/main_gen_prompt.prompt",
+    "filepath": "pdd/prompts/main_gen_prompt.prompt",
     "tags": [
       "config"
     ],
@@ -5195,7 +5151,7 @@
     ],
     "priority": 145,
     "filename": "xml_convertor_LLM.prompt",
-    "filepath": "prompts/xml_convertor_LLM.prompt",
+    "filepath": "pdd/prompts/xml_convertor_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -5368,7 +5324,7 @@
     ],
     "priority": 151,
     "filename": "fix_errors_from_unit_tests_LLM.prompt",
-    "filepath": "prompts/fix_errors_from_unit_tests_LLM.prompt",
+    "filepath": "pdd/prompts/fix_errors_from_unit_tests_LLM.prompt",
     "tags": [
       "config",
       "fix",
@@ -5388,9 +5344,11 @@
     }
   },
   {
-    "reason": "Orchestrates the multi-step agentic architecture workflow with gates, validation, state persistence, and context accumulation.",
+    "reason": "Orchestrates the multi-step agentic architecture workflow with gates, validation, budget control, and state persistence.",
     "description": "Multi-step orchestrator for architecture generation from a GitHub issue PRD. Runs the gated Step 1-13 workflow, including complexity and codebase scans, completeness gates, architecture self-review, shared context-doc merge, prompt generation, cross-file and cross-issue consistency checks, validation/fix loops, state persistence, target-directory support, and post-processing via render_mermaid.",
-    "dependencies": [],
+    "dependencies": [
+      "agentic_common_python.prompt"
+    ],
     "priority": 152,
     "filename": "agentic_architecture_orchestrator_python.prompt",
     "filepath": "pdd/agentic_architecture_orchestrator.py",
@@ -5405,10 +5363,11 @@
         "functions": [
           {
             "name": "run_agentic_architecture_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, existing_architecture: str, related_issues: Optional[List[int]])",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_author: str, issue_title: str, *, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, skip_prompts: bool, target_dir: Optional[str], force_single: bool, sibling_architectures: str, existing_pddrc: str, existing_architecture: str, related_issues: Optional[List[int]]) -> Tuple[bool, str, float, str, List[str], Any]",
+            "returns": "Tuple[bool, str, float, str, List[str], Any]"
           }
-        ]
+        ],
+        "classes": []
       }
     },
     "position": {
@@ -5598,7 +5557,7 @@
     "dependencies": [],
     "priority": 207,
     "filename": "incremental_prd_architecture_patch_LLM.prompt",
-    "filepath": "prompts/incremental_prd_architecture_patch_LLM.prompt",
+    "filepath": "pdd/prompts/incremental_prd_architecture_patch_LLM.prompt",
     "tags": [
       "llm",
       "architecture",
@@ -5666,7 +5625,7 @@
     "dependencies": [],
     "priority": 154,
     "filename": "agentic_arch_step1_analyze_prd_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step1_analyze_prd_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step1_analyze_prd_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5697,7 +5656,7 @@
     ],
     "priority": 155,
     "filename": "agentic_arch_step2_analyze_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step2_analyze_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step2_analyze_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5728,7 +5687,7 @@
     ],
     "priority": 156,
     "filename": "agentic_arch_step3_research_LLM.prompt",
-    "filepath": "prompts/agentic_arch_step3_research_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_arch_step3_research_LLM.prompt",
     "tags": [
       "llm",
       "agentic",
@@ -5757,7 +5716,7 @@
     "dependencies": [],
     "priority": 166,
     "filename": "agentic_bug_step5_5_prompt_classification_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step5_5_prompt_classification_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5781,7 +5740,7 @@
     "dependencies": [],
     "priority": 167,
     "filename": "agentic_bug_step9_e2e_test_LLM.prompt",
-    "filepath": "prompts/agentic_bug_step9_e2e_test_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_bug_step9_e2e_test_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5801,12 +5760,12 @@
     }
   },
   {
-    "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
-    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
+    "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues with budget control and associated-document sync.",
+    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
-      "architecture_sync_python.prompt",
+      "git_porcelain_python.prompt",
       "agentic_common_python.prompt",
-      "git_porcelain_python.prompt"
+      "architecture_sync_python.prompt"
     ],
     "priority": 168,
     "filename": "agentic_change_orchestrator_python.prompt",
@@ -5822,10 +5781,11 @@
         "functions": [
           {
             "name": "run_agentic_change_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, issue_updated_at, *, cwd, verbose, quiet, timeout_adder, use_github_state) -> Tuple[bool, str, float, str, List[str], Any]",
+            "returns": "Tuple[bool, str, float, str, List[str], Any]"
           }
-        ]
+        ],
+        "classes": []
       }
     },
     "position": {
@@ -5874,7 +5834,7 @@
     ],
     "priority": 170,
     "filename": "agentic_change_step10_architecture_update_LLM.prompt",
-    "filepath": "prompts/agentic_change_step10_architecture_update_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step10_architecture_update_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5898,7 +5858,7 @@
     "dependencies": [],
     "priority": 171,
     "filename": "agentic_change_step11_identify_issues_LLM.prompt",
-    "filepath": "prompts/agentic_change_step11_identify_issues_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step11_identify_issues_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5922,7 +5882,7 @@
     "dependencies": [],
     "priority": 172,
     "filename": "agentic_change_step12_fix_issues_LLM.prompt",
-    "filepath": "prompts/agentic_change_step12_fix_issues_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step12_fix_issues_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5947,7 +5907,7 @@
     "dependencies": [],
     "priority": 173,
     "filename": "agentic_change_step13_create_pr_LLM.prompt",
-    "filepath": "prompts/agentic_change_step13_create_pr_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step13_create_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5971,7 +5931,7 @@
     "dependencies": [],
     "priority": 174,
     "filename": "agentic_change_step1_duplicate_LLM.prompt",
-    "filepath": "prompts/agentic_change_step1_duplicate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step1_duplicate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -5995,7 +5955,7 @@
     "dependencies": [],
     "priority": 175,
     "filename": "agentic_change_step2_docs_LLM.prompt",
-    "filepath": "prompts/agentic_change_step2_docs_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step2_docs_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6019,7 +5979,7 @@
     "dependencies": [],
     "priority": 176,
     "filename": "agentic_change_step3_research_LLM.prompt",
-    "filepath": "prompts/agentic_change_step3_research_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step3_research_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6043,7 +6003,7 @@
     "dependencies": [],
     "priority": 177,
     "filename": "agentic_change_step4_clarify_LLM.prompt",
-    "filepath": "prompts/agentic_change_step4_clarify_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step4_clarify_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6067,7 +6027,7 @@
     "dependencies": [],
     "priority": 178,
     "filename": "agentic_change_step5_docs_change_LLM.prompt",
-    "filepath": "prompts/agentic_change_step5_docs_change_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step5_docs_change_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6091,7 +6051,7 @@
     "dependencies": [],
     "priority": 179,
     "filename": "agentic_change_step6_devunits_LLM.prompt",
-    "filepath": "prompts/agentic_change_step6_devunits_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step6_devunits_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6115,7 +6075,7 @@
     "dependencies": [],
     "priority": 180,
     "filename": "agentic_change_step7_architecture_LLM.prompt",
-    "filepath": "prompts/agentic_change_step7_architecture_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step7_architecture_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6139,7 +6099,7 @@
     "dependencies": [],
     "priority": 181,
     "filename": "agentic_change_step8_analyze_LLM.prompt",
-    "filepath": "prompts/agentic_change_step8_analyze_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step8_analyze_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6163,7 +6123,7 @@
     "dependencies": [],
     "priority": 182,
     "filename": "agentic_change_step9_implement_LLM.prompt",
-    "filepath": "prompts/agentic_change_step9_implement_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_change_step9_implement_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6203,8 +6163,8 @@
         "functions": [
           {
             "name": "run_agentic_e2e_fix_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, timeout_adder=0.0, max_cycles=5, resume=True, verbose=False, quiet=False, use_github_state=True, protect_tests=False, ci_retries=3, skip_ci=False, skip_cleanup=False, reasoning_time=None) -> Tuple[bool, str, float, str, List[str], Any]",
+            "returns": "Tuple[bool, str, float, str, List[str], Any]"
           },
           {
             "name": "push_with_retry",
@@ -6240,9 +6200,9 @@
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Snapshots PR remote head SHA before/after run_agentic_checkup",
-              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup — fail closed without re-validating CI because Step 7 never saw the new code",
+              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup \u2014 fail closed without re-validating CI because Step 7 never saw the new code",
               "When the worktree HEAD matches the post-checkup remote SHA, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
-              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
+              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched \u2014 silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -6288,7 +6248,7 @@
     "dependencies": [],
     "priority": 185,
     "filename": "agentic_e2e_fix_step1_unit_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step1_unit_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step1_unit_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6314,7 +6274,7 @@
     "dependencies": [],
     "priority": 186,
     "filename": "agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step2_e2e_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6339,7 +6299,7 @@
     "dependencies": [],
     "priority": 187,
     "filename": "agentic_e2e_fix_step3_root_cause_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step3_root_cause_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step3_root_cause_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6364,7 +6324,7 @@
     "dependencies": [],
     "priority": 188,
     "filename": "agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step4_fix_e2e_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6389,7 +6349,7 @@
     "dependencies": [],
     "priority": 189,
     "filename": "agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step5_identify_devunits_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6414,7 +6374,7 @@
     "dependencies": [],
     "priority": 190,
     "filename": "agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step6_create_unit_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6439,7 +6399,7 @@
     "dependencies": [],
     "priority": 191,
     "filename": "agentic_e2e_fix_step7_verify_tests_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step7_verify_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step7_verify_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6464,7 +6424,7 @@
     "dependencies": [],
     "priority": 192,
     "filename": "agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step8_run_pdd_fix_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6489,7 +6449,7 @@
     "dependencies": [],
     "priority": 193,
     "filename": "agentic_e2e_fix_step9_verify_all_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step9_verify_all_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6514,7 +6474,7 @@
     "dependencies": [],
     "priority": 194,
     "filename": "agentic_test_generate_LLM.prompt",
-    "filepath": "prompts/agentic_test_generate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_generate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6598,11 +6558,10 @@
     }
   },
   {
-    "reason": "Orchestrates the 18-step agentic test workflow with exploratory testing and plan validation.",
+    "reason": "Orchestrates the 18-step agentic test workflow with budget control.",
     "description": "Coordinates duplicate checking, docs review, clarification, frontend detection, test planning, plan enhancement, coverage assessment, manual testing, regression tests, test generation, plan validation, and PR submission.",
     "dependencies": [
-      "agentic_common_python.prompt",
-      "load_prompt_template_python.prompt"
+      "agentic_common_python.prompt"
     ],
     "priority": 196,
     "filename": "agentic_test_orchestrator_python.prompt",
@@ -6618,10 +6577,11 @@
         "functions": [
           {
             "name": "run_agentic_test_orchestrator",
-            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, *, cwd, verbose, quiet, timeout_adder, use_github_state)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(issue_url, issue_content, repo_owner, repo_name, issue_number, issue_author, issue_title, target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, max_cost) -> Tuple[bool, str, float, str, List[str], Any]",
+            "returns": "Tuple[bool, str, float, str, List[str], Any]"
           }
-        ]
+        ],
+        "classes": []
       }
     },
     "position": {
@@ -6667,7 +6627,7 @@
     "dependencies": [],
     "priority": 198,
     "filename": "agentic_test_step1_duplicate_LLM.prompt",
-    "filepath": "prompts/agentic_test_step1_duplicate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step1_duplicate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6692,7 +6652,7 @@
     "dependencies": [],
     "priority": 199,
     "filename": "agentic_test_step2_docs_LLM.prompt",
-    "filepath": "prompts/agentic_test_step2_docs_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step2_docs_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6717,7 +6677,7 @@
     "dependencies": [],
     "priority": 200,
     "filename": "agentic_test_step3_clarify_LLM.prompt",
-    "filepath": "prompts/agentic_test_step3_clarify_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step3_clarify_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6742,7 +6702,7 @@
     "dependencies": [],
     "priority": 201,
     "filename": "agentic_test_step4_detect_frontend_LLM.prompt",
-    "filepath": "prompts/agentic_test_step4_detect_frontend_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step4_detect_frontend_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6767,7 +6727,7 @@
     "dependencies": [],
     "priority": 202,
     "filename": "agentic_test_step5_test_plan_LLM.prompt",
-    "filepath": "prompts/agentic_test_step5_test_plan_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step5_test_plan_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6792,7 +6752,7 @@
     "dependencies": [],
     "priority": 203,
     "filename": "agentic_test_step6_generate_tests_LLM.prompt",
-    "filepath": "prompts/agentic_test_step6_generate_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step6_generate_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6817,7 +6777,7 @@
     "dependencies": [],
     "priority": 204,
     "filename": "agentic_test_step7_run_tests_LLM.prompt",
-    "filepath": "prompts/agentic_test_step7_run_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step7_run_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6842,7 +6802,7 @@
     "dependencies": [],
     "priority": 205,
     "filename": "agentic_test_step8_fix_iterate_LLM.prompt",
-    "filepath": "prompts/agentic_test_step8_fix_iterate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step8_fix_iterate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6868,7 +6828,7 @@
     "dependencies": [],
     "priority": 205,
     "filename": "agentic_test_step16_run_tests_LLM.prompt",
-    "filepath": "prompts/agentic_test_step16_run_tests_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step16_run_tests_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -6893,7 +6853,7 @@
     "dependencies": [],
     "priority": 206,
     "filename": "agentic_test_step9_submit_pr_LLM.prompt",
-    "filepath": "prompts/agentic_test_step9_submit_pr_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_test_step9_submit_pr_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -7074,7 +7034,7 @@
     "dependencies": [],
     "priority": 209,
     "filename": "generate_test_from_example_LLM.prompt",
-    "filepath": "prompts/generate_test_from_example_LLM.prompt",
+    "filepath": "pdd/prompts/generate_test_from_example_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -7130,7 +7090,7 @@
     "dependencies": [],
     "priority": 211,
     "filename": "prompt_code_diff_LLM.prompt",
-    "filepath": "prompts/prompt_code_diff_LLM.prompt",
+    "filepath": "pdd/prompts/prompt_code_diff_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -7153,7 +7113,7 @@
     "dependencies": [],
     "priority": 212,
     "filename": "prompt_diff_LLM.prompt",
-    "filepath": "prompts/prompt_diff_LLM.prompt",
+    "filepath": "pdd/prompts/prompt_diff_LLM.prompt",
     "tags": [
       "config",
       "llm",
@@ -7308,13 +7268,14 @@
     }
   },
   {
-    "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration with budget control.",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
-      "architecture_sync_python.prompt",
+      "agentic_common_python.prompt",
       "auto_deps_main_python.prompt",
+      "durable_sync_runner_python.prompt",
       "agentic_sync_runner_python.prompt",
-      "durable_sync_runner_python.prompt"
+      "architecture_sync_python.prompt"
     ],
     "priority": 215,
     "filename": "agentic_sync_python.prompt",
@@ -7330,37 +7291,26 @@
         "functions": [
           {
             "name": "run_agentic_sync",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "None"
-            ]
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, dry_run: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], timeout_adder: float, use_github_state: bool, one_session: bool, reasoning_time: Optional[float], durable: bool, durable_branch: Optional[str], no_resume: bool, durable_max_parallel: Optional[int]) -> Tuple[bool, str, float, str, Any]",
+            "returns": "Tuple[bool, str, float, str, Any]"
           },
           {
             "name": "run_global_sync",
             "signature": "(*, verbose: bool, quiet: bool, budget: Optional[float], skip_verify: bool, skip_tests: bool, agentic_mode: bool, no_steer: bool, max_attempts: Optional[int], dry_run: bool, target_coverage: Optional[float], one_session: bool, local: bool, timeout_adder: float) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
-            "sideEffects": [
-              "Runs AsyncSyncRunner for stale modules unless dry_run=True; timeout_adder is forwarded via sync_options so --timeout-adder stretches the per-module wall-clock cap on the global-sync path the same way it does on run_agentic_sync"
-            ]
+            "returns": "Tuple[bool, str, float, str]"
           },
           {
             "name": "_is_github_issue_url",
             "signature": "(s: str) -> bool",
-            "returns": "bool",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "bool"
           },
           {
             "name": "_parse_llm_response",
             "signature": "(response: str) -> Tuple[List[str], bool, List[Dict]]",
-            "returns": "Tuple[List[str], bool, List[Dict]]",
-            "sideEffects": [
-              "None"
-            ]
+            "returns": "Tuple[List[str], bool, List[Dict]]"
           }
-        ]
+        ],
+        "classes": []
       }
     },
     "position": {
@@ -7369,12 +7319,13 @@
     }
   },
   {
-    "reason": "Parallel sync engine with env-configurable per-module timeout (PDD_MODULE_TIMEOUT_SECONDS, default 2700s) plus per-run --timeout-adder forwarded via sync_options['timeout_adder'], phase-aware heartbeat, and live GitHub progress updates.",
+    "reason": "Parallel sync runner with dependency-aware scheduling and budget enforcement.",
     "description": "Manages pdd sync subprocesses using ThreadPoolExecutor, preserves architecture subdirectory basenames, strips architecture filename/target language suffixes via PDD's known-language catalog so compound languages such as TypeScriptReact and JavaScriptReact resolve correctly, respects dependency ordering from architecture.json, enforces total-budget sequential execution when requested, shrinks each child/retry budget by persisted module costs plus current-module in-flight retry cost, posts live progress to GitHub issue comments with a total body cap below GitHub's comment limit, keeps unrelated ready modules running after a module failure while blocking transitive failed-dependency dependents, and stops all new scheduling when total budget is exhausted. Detects architecture-conformance failures from per-module sync subprocesses (line prefix 'Architecture conformance error for ') and retries the same module up to MAX_CONFORMANCE_ATTEMPTS=3 with a PDD_REPAIR_DIRECTIVE env var that names the exact missing symbols; stops retrying before launching another repair child if the in-flight repair cost exhausts total_budget, short-circuits when the missing-symbol set repeats, and on hard failure records a structured '=== architecture conformance failure ===' block plus a 'Reproduce locally:' line and an '--- env ---' fingerprint (pdd.__file__, pdd --version, git SHA, dirty flag, repo-vs-site-packages) so the GitHub App surface is actionable without exceeding GitHub comment size limits.",
     "dependencies": [
-      "architecture_sync_python.prompt",
       "agentic_langtest_python.prompt",
-      "agentic_test_orchestrator_python.prompt"
+      "agentic_test_orchestrator_python.prompt",
+      "architecture_sync_python.prompt",
+      "agentic_common_python.prompt"
     ],
     "priority": 216,
     "filename": "agentic_sync_runner_python.prompt",
@@ -7387,40 +7338,26 @@
     "interface": {
       "type": "module",
       "module": {
-        "functions": [
+        "classes": [
           {
             "name": "AsyncSyncRunner",
-            "signature": "(basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, Any], github_info: Optional[Dict[str, Any]], quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
-            "returns": "AsyncSyncRunner",
-            "sideEffects": [
-              "Initializes runner state; total_budget in sync_options forces sequential scheduling and per-child/per-retry remaining-budget caps"
-            ]
-          },
-          {
-            "name": "AsyncSyncRunner.run",
-            "signature": "() -> Tuple[bool, str, float]",
-            "returns": "Tuple[bool, str, float]",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "build_dep_graph_from_architecture",
-            "signature": "(arch_path: Path, target_basenames: List[str]) -> DepGraphFromArchitectureResult",
-            "returns": "DepGraphFromArchitectureResult",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "build_dep_graph_from_architecture_data",
-            "signature": "(architecture: Any, target_basenames: List[str], *, source_name: str = 'architecture.json') -> DepGraphFromArchitectureResult",
-            "returns": "DepGraphFromArchitectureResult",
-            "sideEffects": [
-              "None"
+            "fields": [
+              "basenames",
+              "dep_graph",
+              "sync_options",
+              "github_info",
+              "quiet",
+              "verbose",
+              "issue_url",
+              "module_cwds",
+              "module_targets",
+              "initial_cost",
+              "budget_config",
+              "job_id"
             ]
           }
-        ]
+        ],
+        "functions": []
       }
     },
     "position": {
@@ -7429,10 +7366,11 @@
     }
   },
   {
-    "reason": "Durable issue-sync execution engine that isolates each module in a dedicated git worktree and checkpoints successful module output to a durable branch.",
+    "reason": "Git-backed durable sync runner with remote checkpointing and budget enforcement.",
     "description": "Subclass of AsyncSyncRunner used when run_agentic_sync is invoked with durable=True. Prepares a `sync/issue-<N>` durable branch (or an explicit override) and a `.pdd/worktrees/durable-issue-<N>` worktree, runs each scheduled module inside its own per-module worktree, and on success applies the module diff to the durable branch as a checkpoint commit carrying a `PDD-Sync-Checkpoint-V1: issue=<N> module=<basename>` trailer. Pushes checkpoints with bounded retries, halts further checkpointing on patch conflict or non-fast-forward push, refuses to operate on `main`/`master`/the repository default branch, ignores `.pdd/agentic_sync_state.json` for resume, and emits stdout markers (`PDD_CHECKPOINT: issue=<N> module=<m> commit=<sha> empty=<bool>`) only after a successful push.",
     "dependencies": [
-      "agentic_sync_runner_python.prompt"
+      "agentic_sync_runner_python.prompt",
+      "agentic_common_python.prompt"
     ],
     "priority": 216,
     "filename": "durable_sync_runner_python.prompt",
@@ -7445,24 +7383,26 @@
     "interface": {
       "type": "module",
       "module": {
-        "functions": [
+        "classes": [
           {
             "name": "DurableSyncRunner",
-            "signature": "(*, basenames: List[str], dep_graph: Dict[str, List[str]], sync_options: Dict[str, object], github_info: Optional[Dict[str, object]], issue_number: int, project_root: Path, durable_branch: Optional[str] = None, no_resume: bool = False, durable_max_parallel: Optional[int] = None, quiet: bool = False, verbose: bool = False, issue_url: Optional[str] = None, module_cwds: Optional[Dict[str, Path]] = None, initial_cost: float = 0.0)",
-            "returns": "DurableSyncRunner",
-            "sideEffects": [
-              "Resolves durable branch name and durable worktree path; total_budget in sync_options forces sequential scheduling, otherwise durable_max_parallel caps concurrency"
-            ]
-          },
-          {
-            "name": "DurableSyncRunner.run",
-            "signature": "() -> Tuple[bool, str, float]",
-            "returns": "Tuple[bool, str, float]",
-            "sideEffects": [
-              "Validates git repository and origin remote, prepares the durable branch worktree, prunes orphan per-issue worktrees, optionally pushes any unpushed local checkpoints, marks already-checkpointed modules as resumed (unless no_resume), then delegates scheduling to AsyncSyncRunner.run"
+            "fields": [
+              "basenames",
+              "dep_graph",
+              "sync_options",
+              "github_info",
+              "quiet",
+              "verbose",
+              "issue_url",
+              "module_cwds",
+              "module_targets",
+              "initial_cost",
+              "budget_config",
+              "job_id"
             ]
           }
-        ]
+        ],
+        "functions": []
       }
     },
     "position": {
@@ -7471,7 +7411,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
+    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7576,7 +7516,7 @@
               "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
               "Issue #1088 SHA-backed verification trust boundary: captures the post-push HEAD SHA via _git_rev_parse_head (never inferred from fixer prose), populates FixResult.push_status (pushed | push_failed | not_attempted), FixResult.local_fixer_commit_sha, and FixResult.pushed_head_sha after every fix turn, and rewrites the per-round fix findings.json artifact so the on-disk audit trail carries those fields. The verifier only runs when push_status == pushed AND a non-empty pushed_head_sha was observed; otherwise the round is marked skipped/unverified and the loop stops without claiming the findings as fixed. A clean verify pass pins state.verified_head_sha to that pushed SHA",
-              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify — state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
+              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify \u2014 state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
               "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes verified_head_sha, remote_pr_head_sha, reviewed_head_sha, and verification_status_by_round so downstream consumers can re-verify the trust boundary",
               "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"
@@ -7642,7 +7582,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
+    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7662,8 +7602,8 @@
         "functions": [
           {
             "name": "run_agentic_checkup_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None) -> Tuple[bool, str, float, str]",
-            "returns": "Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None) -> Tuple[bool, str, float, str, List[str], Any]",
+            "returns": "Tuple[bool, str, float, str, List[str], Any]",
             "sideEffects": [
               "Creates or reuses checkup worktrees",
               "Runs LLM checkup steps",
@@ -7795,7 +7735,7 @@
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
@@ -7886,7 +7826,7 @@
     "dependencies": [],
     "priority": 222,
     "filename": "agentic_e2e_fix_step10_ci_validation_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step10_ci_validation_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -7917,7 +7857,7 @@
     "dependencies": [],
     "priority": 223,
     "filename": "agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
-    "filepath": "prompts/agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_e2e_fix_step11_code_cleanup_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8167,11 +8107,12 @@
     }
   },
   {
-    "reason": "Orchestrates the agentic split workflow for diagnosing and splitting large PDD dev units.",
+    "reason": "Orchestrates the multi-step agentic split workflow with budget control.",
     "description": "State machine for agentic split: intent, survey, diagnose, investigate, propose options, setup worktree, phase-extract, extract children with per-child 6v validation/repair gates, final cross-cutting verify, regen gate, arch sync, post-arch checkup, assess, global repair, and refine_check. Resume state tracks per-child status, repair attempts, terminal child failure detail, stops immediately on unrecovered extraction or terminal per-child verify failure, clears stale child failure detail when a child recovers, and migrates legacy extracted children as extracted (not verified) so the new 6v gate still runs.",
     "dependencies": [
-      "agentic_common_worktree_python.prompt",
       "split_validation_python.prompt",
+      "agentic_common_worktree_python.prompt",
+      "agentic_common_python.prompt",
       "architecture_sync_python.prompt"
     ],
     "priority": 224,
@@ -8189,10 +8130,11 @@
         "functions": [
           {
             "name": "run_agentic_split_orchestrator",
-            "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, max_cost)",
-            "returns": "Tuple[bool, str, float, str, List[str]]"
+            "signature": "(target_file, *, cwd, verbose, quiet, timeout_adder, use_github_state, diagnose_only, propose_only, delete_dead, force_split, no_verify, skip_regen_gate, experimental_language, intent, no_phase_extraction, max_cost) -> Tuple[bool, str, float, str, List[str], Any]",
+            "returns": "Tuple[bool, str, float, str, List[str], Any]"
           }
-        ]
+        ],
+        "classes": []
       }
     },
     "position": {
@@ -8248,7 +8190,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step1_survey_LLM.prompt",
-    "filepath": "prompts/agentic_split_step1_survey_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step1_survey_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8275,7 +8217,7 @@
     ],
     "priority": 227,
     "filename": "agentic_split_step2_diagnose_LLM.prompt",
-    "filepath": "prompts/agentic_split_step2_diagnose_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step2_diagnose_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8302,7 +8244,7 @@
     ],
     "priority": 228,
     "filename": "agentic_split_step3_investigate_LLM.prompt",
-    "filepath": "prompts/agentic_split_step3_investigate_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step3_investigate_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8329,7 +8271,7 @@
     ],
     "priority": 229,
     "filename": "agentic_split_step4_propose_options_LLM.prompt",
-    "filepath": "prompts/agentic_split_step4_propose_options_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step4_propose_options_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8356,7 +8298,7 @@
     ],
     "priority": 230,
     "filename": "agentic_split_step6_extract_LLM.prompt",
-    "filepath": "prompts/agentic_split_step6_extract_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step6_extract_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8383,7 +8325,7 @@
     ],
     "priority": 231,
     "filename": "agentic_split_step7_assess_LLM.prompt",
-    "filepath": "prompts/agentic_split_step7_assess_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step7_assess_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8410,7 +8352,7 @@
     ],
     "priority": 232,
     "filename": "agentic_split_step8_repair_LLM.prompt",
-    "filepath": "prompts/agentic_split_step8_repair_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step8_repair_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8437,7 +8379,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step0_intent_LLM.prompt",
-    "filepath": "prompts/agentic_split_step0_intent_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step0_intent_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8464,7 +8406,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step6a_phase_extract_LLM.prompt",
-    "filepath": "prompts/agentic_split_step6a_phase_extract_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step6a_phase_extract_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8491,7 +8433,7 @@
     ],
     "priority": 226,
     "filename": "agentic_split_step9_refine_check_LLM.prompt",
-    "filepath": "prompts/agentic_split_step9_refine_check_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_split_step9_refine_check_LLM.prompt",
     "tags": [
       "agentic",
       "config",
@@ -8785,7 +8727,7 @@
     "dependencies": [],
     "priority": 235,
     "filename": "agentic_sync_identify_modules_LLM.prompt",
-    "filepath": "prompts/agentic_sync_identify_modules_LLM.prompt",
+    "filepath": "pdd/prompts/agentic_sync_identify_modules_LLM.prompt",
     "tags": [
       "llm"
     ],
@@ -8870,9 +8812,11 @@
     }
   },
   {
-    "reason": "Job queue manager for async PDD command execution via subprocesses.",
+    "reason": "Job queue manager for async PDD command execution with real-time budget enforcement.",
     "description": "Async job queue manager that executes PDD commands as subprocesses with concurrency control (semaphore), real-time output streaming, and robust cancellation (SIGTERM/SIGKILL). Surfaces architecture-conformance failures (markers 'Architecture conformance error for ' or '=== architecture conformance failure ===') in job.error with the structured block, 'Reproduce locally:' line, and '--- env ---' fingerprint instead of the generic 'Sync operation failed' so the GitHub App can show missing symbols and a repro command.",
-    "dependencies": [],
+    "dependencies": [
+      "server/models_python.prompt"
+    ],
     "priority": 220,
     "filename": "server/jobs_python.prompt",
     "filepath": "pdd/server/jobs.py",
@@ -8919,8 +8863,14 @@
             "name": "JobManager.shutdown",
             "signature": "async () -> None",
             "returns": "None"
+          },
+          {
+            "name": "JobManager.update_budget",
+            "signature": "async (job_id: str, budget_config: BudgetConfig) -> bool",
+            "returns": "bool"
           }
-        ]
+        ],
+        "classes": []
       }
     }
   },
@@ -9031,6 +8981,82 @@
             "name": "set_quiet_logging",
             "signature": "()",
             "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Defines Pydantic models for the PDD server API, including budget updates.",
+    "description": "Defines Pydantic models for the PDD server API, including budget updates.",
+    "dependencies": [],
+    "priority": 50,
+    "filename": "server/models_python.prompt",
+    "filepath": "pdd/server/models.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "classes": [
+          {
+            "name": "BudgetUpdate",
+            "fields": [
+              "total_cap: Optional[float]",
+              "node_budget: Optional[float]",
+              "max_total_cap: Optional[float]"
+            ]
+          }
+        ],
+        "functions": []
+      }
+    }
+  },
+  {
+    "reason": "Provides REST API endpoints for PDD command execution with reactive budget control.",
+    "description": "Provides REST API endpoints for PDD command execution with reactive budget control.",
+    "dependencies": [
+      "server/models_python.prompt"
+    ],
+    "priority": 50,
+    "filename": "server/routes/commands_python.prompt",
+    "filepath": "pdd/server/routes/commands.py",
+    "tags": [
+      "agentic",
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "api",
+      "api": {
+        "endpoints": [
+          {
+            "method": "POST",
+            "path": "/commands/execute",
+            "description": "Submit command, returns JobHandle immediately"
+          },
+          {
+            "method": "GET",
+            "path": "/commands/jobs/{job_id}",
+            "description": "Get job status/result"
+          },
+          {
+            "method": "PATCH",
+            "path": "/commands/jobs/{job_id}/budget",
+            "description": "Update budget cap for a running job"
+          },
+          {
+            "method": "POST",
+            "path": "/commands/jobs/{job_id}/cancel",
+            "description": "Cancel running job"
+          },
+          {
+            "method": "GET",
+            "path": "/commands/history",
+            "description": "Paginated job history"
           }
         ]
       }

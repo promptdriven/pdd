@@ -41,6 +41,7 @@ except ImportError:
         return None
 
 from .models import JobStatus
+from ..agentic_common import BudgetConfig
 
 
 # Maximum time (seconds) a subprocess job may run before being killed
@@ -338,6 +339,7 @@ class Job:
     result: Optional[Any] = None
     error: Optional[str] = None
     cost: float = 0.0
+    budget_config: BudgetConfig = field(default_factory=BudgetConfig)
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
@@ -355,6 +357,11 @@ class Job:
             "result": self.result,
             "error": self.error,
             "cost": self.cost,
+            "budget_config": {
+                "total_cap": self.budget_config.total_cap,
+                "node_budget": self.budget_config.node_budget,
+                "max_total_cap": self.budget_config.max_total_cap,
+            },
             "created_at": self.created_at.isoformat(),
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "completed_at": self.completed_at.isoformat() if self.completed_at else None,

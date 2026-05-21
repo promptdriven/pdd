@@ -75,6 +75,7 @@ Adopting a PDD approach offers numerous advantages, particularly when contrasted
 *   **Cost Savings (LLM Usage)**:
     *   **Token Efficiency**: PDD workflows, being more structured and modular (using examples as interfaces), can be more deterministic and token-efficient compared to the potentially verbose interactions of purely agentic/chat-based coding assistants.
     *   **Batch Processing API Discounts**: PDD is inherently suited to batch-mode generation. Developers can define prompts, launch the generation process, and return later. LLM providers often offer significant discounts (e.g., 50% off) for batch processing APIs compared to the more expensive interactive APIs required by constantly supervised tools.
+    *   **Reactive Spend Governance**: For autonomous workflows (e.g., via the GitHub App), PDD provides real-time budget enforcement. Users can set and adjust budget caps directly through issue comments during an active run. The system monitors cumulative spend and automatically terminates execution if a cap is reached, ensuring predictable and controlled spend.
 
 ### Batch vs. Interactive Workflow Timelines
 

@@ -99,6 +99,14 @@ class TokenMatch:
         return True
 
 
+@dataclass
+class BudgetConfig:
+    """Budget configuration for agentic workflows."""
+    total_cap: Optional[float] = None
+    node_budget: Optional[float] = 80.0
+    max_total_cap: Optional[float] = 400.0
+
+
 def detect_control_token(
     output: Optional[str],
     token: str,
@@ -3507,43 +3515,67 @@ def _extract_step_report(text: Optional[str]) -> Optional[str]:
 extract_step_report = _extract_step_report
 
 
+def parse_budget_from_comments(comments: List[Dict[str, Any]]) -> BudgetConfig:
+    """Scans issue comments for /pdd budget commands to update configuration.
+
+    Parses:
+      /pdd budget N        (updates total_cap)
+      /pdd budget node N   (updates node_budget)
+      /pdd budget max N    (updates max_total_cap)
+
+    Later comments override earlier ones. Values are parsed as floats.
+    """
+    config = BudgetConfig()
+    
+    # Regex patterns for budget commands
+    # /pdd budget [node|max] N
+    budget_re = re.compile(r"/pdd\s+budget\s+(node|max)?\s*(\d+(\.\d+)?)", re.IGNORECASE)
+
+    for comment in comments:
+        body = comment.get("body", "")
+        if not body:
+            continue
+            
+        for match in budget_re.finditer(body):
+            kind = (match.group(1) or "").lower()
+            try:
+                value = float(match.group(2))
+            except (ValueError, TypeError):
+                continue
+
+            if kind == "node":
+                config.node_budget = value
+            elif kind == "max":
+                config.max_total_cap = value
+            else:
+                # Bare /pdd budget N
+                config.total_cap = value
+                # Requirement: /pdd budget N also acts as an alias for /pdd budget max N 
+                # when the command is pdd-issue. Since we don't have the command here,
+                # we'll set both and let the orchestrator/startup-comment logic decide.
+                config.max_total_cap = value
+
+    return config
+
+
 def normalize_step_comments_state(raw: Any) -> Set[int]:
     """Coerce a persisted ``state["step_comments"]`` value into ``Set[int]``.
 
-    Accepts every shape that has ever been persisted:
+    Accepts:
 
     * ``None`` / missing key            -> empty set.
     * ``list`` / ``tuple`` of ints      -> set of those ints.
     * ``set`` / ``frozenset``           -> defensive copy of int members.
-    * Legacy bug-orchestrator dict, e.g.
-      ``{"1": {"posted": True}, "2": {"failed_posted": True}}``
-      -> set of int step numbers whose ``posted`` *or* ``failed_posted`` flag
-      is truthy. Pending shapes (``fallback_pending`` / ``failed_pending``)
-      are skipped so the orchestrator retries them on resume.
     * Malformed or unexpected inputs    -> empty set (never raises).
 
-    ``bool`` is rejected even though it's an ``int`` subclass — the legacy
-    dict shape uses booleans as flag values, not step numbers. ``float`` is
+    ``bool`` is rejected even though it's an ``int`` subclass. ``float`` is
     rejected too — orchestrators with fractional steps must project them
     through a composite-key helper before storing.
     """
     if raw is None:
         return set()
-    if isinstance(raw, dict):
-        out: Set[int] = set()
-        for key, value in raw.items():
-            try:
-                step = int(key)
-            except (TypeError, ValueError):
-                continue
-            if isinstance(value, dict):
-                if value.get("posted") is True or value.get("failed_posted") is True:
-                    out.add(step)
-            elif value is True:
-                out.add(step)
-        return out
     if isinstance(raw, (list, tuple, set, frozenset)):
-        out = set()
+        out: Set[int] = set()
         for item in raw:
             if isinstance(item, bool):
                 continue
@@ -3850,3 +3882,237 @@ def post_final_comment(
     except Exception as e:
         console.print(f"[yellow]Warning: Failed to post final comment: {e}[/yellow]")
         return False
+
+
+def post_startup_comment(
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    command: str,
+    budget_config: BudgetConfig,
+    cwd: Path,
+    job_id: Optional[str] = None,
+    requester: Optional[str] = None,
+) -> bool:
+    """Posts a startup comment to the GitHub issue.
+
+    For pdd-issue, shows node budget, max total cap, and effective formula.
+    For others, shows "Budget cap: none" unless total_cap is explicitly set.
+    """
+    if not _find_cli_binary("gh"):
+        return False
+
+    title = "Autonomous Solving Started!" if command == "pdd-issue" else "PDD is starting..."
+    
+    body_lines = [f"## {title}\n"]
+    
+    if command == "pdd-issue":
+        node_budget = budget_config.node_budget or 80.0
+        max_total = budget_config.max_total_cap or 400.0
+        body_lines.append(f"**Budget cap:** min(${node_budget:.2f} x node count, ${max_total:.2f})")
+        body_lines.append(f"- Per-node budget: ${node_budget:.2f}")
+        body_lines.append(f"- Max total cap: ${max_total:.2f}")
+    else:
+        if budget_config.total_cap is not None:
+            body_lines.append(f"**Budget cap:** ${budget_config.total_cap:.2f}")
+        else:
+            body_lines.append("**Budget cap:** none")
+
+    if job_id:
+        body_lines.append(f"**Job ID:** `{job_id}`")
+    if requester:
+        body_lines.append(f"**Requester:** @{requester}")
+
+    body_lines.append("\n---\n*Posted by PDD orchestrator (trusted credentials).*")
+    final_body = "\n".join(body_lines)
+
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "comment", str(issue_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", final_body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception as e:
+        console.print(f"[yellow]Warning: Failed to post startup comment: {e}[/yellow]")
+        return False
+
+
+_PARSE_CHANGED_FILES_TERMINATORS = (
+    "FILES_CREATED",
+    "FILES_MODIFIED",
+    "ARCHITECTURE_FILES_MODIFIED",
+    "ASSOCIATED_DOCS_MODIFIED",
+    "ASSOCIATED_DOCS_CONFLICTS",
+    "ASSOCIATED_DOCS_UNCHANGED",
+    "DIRECT_EDITS",
+    "MANUAL_REVIEW",
+    "ORCHESTRATOR_POSTCHECK_WARNINGS",
+    "DOC_SYNC_SILENT_DROPS",
+    "DOC_SYNC_BUCKET_OVERLAPS",
+    "STOP_CONDITION",
+)
+
+
+def _find_marker_start(line: str, prefix: str) -> Optional[int]:
+    """Return the index just after ``prefix:`` in ``line`` if it appears at a
+    word boundary, else None. Word boundary means the character before
+    ``prefix`` is not alphanumeric/underscore — this prevents ``MY_FILES_MODIFIED:``
+    from matching ``FILES_MODIFIED:``.
+    """
+    idx = line.find(prefix)
+    while idx != -1:
+        if idx == 0 or not (line[idx - 1].isalnum() or line[idx - 1] == "_"):
+            return idx + len(prefix)
+        idx = line.find(prefix, idx + 1)
+    return None
+
+
+def _truncate_at_inline_terminator(
+    text: str, terminators: Sequence[str], skip_prefix: str
+) -> str:
+    """Trim ``text`` at the first inline occurrence of any terminator marker,
+    skipping ``skip_prefix`` (the marker we're currently inside, so a repeat
+    of our own marker still terminates but our entry-point doesn't).
+    """
+    earliest: Optional[int] = None
+    for term in terminators:
+        term_prefix = f"{term}:"
+        end_after = _find_marker_start(text, term_prefix)
+        if end_after is None:
+            continue
+        # _find_marker_start returns the index AFTER the colon; the marker
+        # itself starts at end_after - len(term_prefix).
+        marker_start = end_after - len(term_prefix)
+        if earliest is None or marker_start < earliest:
+            earliest = marker_start
+    if earliest is None:
+        return text
+    return text[:earliest].rstrip()
+
+
+def _extract_marker_paths(marker: str, output: str) -> List[str]:
+    """Walk lines after ``marker:`` until blank or another known marker.
+
+    Multi-line payloads are supported (LLMs wrap long lists across lines).
+    The marker is also detected when it appears mid-line (e.g.
+    ``Implementation done. FILES_MODIFIED: a.py, b.py``); in that case the
+    section starts at the marker and ends at the line break, matching the
+    behavior of the prior single-line regex parser.
+    """
+    prefix = f"{marker}:"
+    other_terminators = tuple(
+        t for t in _PARSE_CHANGED_FILES_TERMINATORS if t != marker
+    )
+    lines = output.splitlines()
+    payload_lines: List[str] = []
+    in_section = False
+    for line in lines:
+        lstrip = line.lstrip()
+        if not in_section:
+            start_idx = _find_marker_start(line, prefix)
+            if start_idx is None:
+                continue
+            in_section = True
+            # When the marker started inline (mid-line), the remainder of
+            # the line may also contain another marker (e.g.
+            # ``Done. FILES_MODIFIED: a.py DIRECT_EDITS: b.md``). Truncate
+            # at the next inline terminator so we don't swallow the next
+            # section's tag/value as a path.
+            first = _truncate_at_inline_terminator(
+                line[start_idx:], other_terminators, prefix
+            ).strip()
+            if first:
+                payload_lines.append(first)
+            continue
+        stripped = line.strip()
+        if not stripped:
+            break
+        # Preserve any prefix text before an inline terminator on a
+        # continuation line. ``b.py ARCHITECTURE_FILES_MODIFIED: arch.json``
+        # contributes ``b.py`` to FILES_MODIFIED's payload, then ends the
+        # section — losing ``b.py`` would silently drop a real file from
+        # downstream Step 10 doc discovery.
+        truncated = _truncate_at_inline_terminator(
+            line, other_terminators, prefix
+        )
+        if truncated != line:
+            if truncated.strip():
+                payload_lines.append(truncated)
+            break
+        payload_lines.append(line)
+
+    entries: List[str] = []
+    for raw_line in payload_lines:
+        s = raw_line.strip()
+        # Strip leading bullets per line so "- README.md" yields "README.md".
+        while s and s[0] in "-*•":
+            s = s[1:].lstrip()
+        for part in s.split(","):
+            piece = part.strip()
+            # Re-strip bullets per entry so a single inline list like
+            # ``- a.md, - b.md, • c.md`` normalizes each comma-piece.
+            while piece and piece[0] in "-*•":
+                piece = piece[1:].lstrip()
+            # Strip surrounding markdown emphasis / code ticks so
+            # ``**README.md**`` and ```README.md``` both normalize cleanly.
+            piece = piece.strip("*`").strip()
+            if piece:
+                entries.append(piece)
+    return entries
+
+
+def _verify_doc_sync_contract(
+    discovered_docs: List[str],
+    step10_output: str,
+) -> Tuple[List[str], List[str], List[str], List[str], List[str]]:
+    """Enforce the associated-document contract after Step 10.
+
+    The contract: every doc in *discovered_docs* (from Step 10's pre-call to
+    ``discover_associated_documents``) must appear in Step 10's output under
+    EXACTLY ONE of:
+      - ``ASSOCIATED_DOCS_MODIFIED:``  — LLM edited the doc
+      - ``ASSOCIATED_DOCS_CONFLICTS:`` — LLM flagged it for manual review
+      - ``ASSOCIATED_DOCS_UNCHANGED:`` — LLM determined it was already consistent
+
+    Returns:
+        Tuple of (modified, conflicted, unchanged, silently_dropped, overlapping).
+    """
+    if not discovered_docs:
+        return [], [], [], [], []
+
+    modified = _extract_marker_paths("ASSOCIATED_DOCS_MODIFIED", step10_output)
+    conflicted = _extract_marker_paths("ASSOCIATED_DOCS_CONFLICTS", step10_output)
+    unchanged = _extract_marker_paths("ASSOCIATED_DOCS_UNCHANGED", step10_output)
+
+    def _normalize(p: str) -> str:
+        # Normalize backslashes to forward slashes BEFORE pathlib so a
+        # windows-style 'docs\\foo.md' matches a posix 'docs/foo.md'.
+        return Path(p.replace("\\", "/")).as_posix()
+
+    mod_norm = {_normalize(p) for p in modified}
+    conf_norm = {_normalize(p) for p in conflicted}
+    unch_norm = {_normalize(p) for p in unchanged}
+    handled: Set[str] = mod_norm | conf_norm | unch_norm
+
+    silently_dropped = [
+        d for d in discovered_docs
+        if _normalize(d) not in handled
+    ]
+
+    # A doc is in overlap if its normalized form appears in 2+ of the three
+    # buckets. Preserves the discovered-list ordering for deterministic output.
+    overlapping = [
+        d for d in discovered_docs
+        if sum(
+            1 for bucket in (mod_norm, conf_norm, unch_norm)
+            if _normalize(d) in bucket
+        ) >= 2
+    ]
+
+    return modified, conflicted, unchanged, silently_dropped, overlapping

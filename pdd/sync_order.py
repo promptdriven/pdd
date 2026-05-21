@@ -14,6 +14,7 @@ from collections import deque, defaultdict
 from rich.console import Console
 
 from pdd.construct_paths import _is_known_language
+from pdd.path_resolution import find_project_root_from_path
 
 # Initialize rich console
 console = Console()
@@ -67,8 +68,13 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
         # be reported as ``fallback.md`` here while the preprocessor
         # actually resolves it as ``docs/source.md`` — and the scope
         # guard's allowlist would diverge from the real include graph.
+        #
+        # FIX (Issue #1120): require the tag to start at the beginning of
+        # a line (allowing whitespace) to avoid matching literal text in
+        # requirements descriptions or comments.
         single_matches = re.findall(
-            r'<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>', content, re.DOTALL
+            r'^[ \t]*<include(?:\s+([^>]*?))?(?<!/)>(.*?)</include>', 
+            content, re.MULTILINE | re.DOTALL
         )
         for attrs, body in single_matches:
             path_value: Optional[str] = None
@@ -85,7 +91,7 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
 
         # Self-closing form: extract the ``path="..."`` attribute value.
         self_closing_matches = re.findall(
-            r'<include\s+([^>]*?)\s*/>', content, re.DOTALL
+            r'^[ \t]*<include\s+([^>]*?)\s*/>', content, re.MULTILINE | re.DOTALL
         )
         for attrs in self_closing_matches:
             path_match = re.search(
@@ -97,8 +103,8 @@ def extract_includes_from_file(file_path: Path) -> Set[str]:
                     includes.add(stripped)
 
         many_matches = re.findall(
-            r'<include-many(?:\s+[^>]*?)?>(.*?)</include-many>',
-            content, re.DOTALL,
+            r'^[ \t]*<include-many(?:\s+[^>]*?)?>(.*?)</include-many>',
+            content, re.MULTILINE | re.DOTALL,
         )
         for m in many_matches:
             # Mirror pdd.preprocess.process_include_many_tags: split on
@@ -460,10 +466,52 @@ def discover_associated_documents(
     results: List[str] = []
     seen: Set[str] = set()
 
-    def _add(path: str) -> None:
-        if path and path not in seen:
-            seen.add(path)
-            results.append(path)
+    # Determine project root for path normalization
+    project_root_str = find_project_root_from_path(str(prompts_dir))
+    project_root = Path(project_root_str) if project_root_str else None
+
+    def _normalize(path_str: str, base_dir: Path) -> Optional[str]:
+        """Normalize include path to repo-relative POSIX string."""
+        p = Path(path_str)
+        
+        # 1. Resolve to an absolute path that exists
+        resolved: Optional[Path] = None
+        if p.is_absolute():
+            if p.exists():
+                resolved = p
+        else:
+            # Try relative to prompt's directory first, then prompts_dir (legacy),
+            # then project root (standard).
+            candidates = [base_dir / p, prompts_dir / p]
+            if project_root:
+                candidates.append(project_root / p)
+            
+            for cand in candidates:
+                if cand.exists():
+                    resolved = cand
+                    break
+            
+            # Fallback: if it doesn't exist, just use the string as-is
+            # (might be a placeholder or a file that will be created).
+            if not resolved:
+                return path_str.replace("\\", "/")
+
+        # 2. Make it relative to project root if possible
+        if resolved and project_root:
+            try:
+                # Use as_posix() for consistent / separators in architecture.json
+                return resolved.resolve().relative_to(project_root.resolve()).as_posix()
+            except ValueError:
+                # Not under project root, use absolute POSIX path
+                return resolved.resolve().as_posix()
+        
+        return path_str.replace("\\", "/")
+
+    def _add(path: str, base_dir: Path) -> None:
+        normalized = _normalize(path, base_dir)
+        if normalized and normalized not in seen:
+            seen.add(normalized)
+            results.append(normalized)
 
     # Phase 1: direct includes from each modified prompt
     for prompt_path in modified_prompts:
@@ -472,7 +520,7 @@ def discover_associated_documents(
             continue
         for include_path in extract_includes_from_file(prompt_path):
             if _is_document_include(include_path):
-                _add(include_path)
+                _add(include_path, prompt_path.parent)
 
     # Phase 2: BFS traversal via architecture.json for transitive dependents
     if architecture_path is not None and architecture_path.exists():
@@ -580,7 +628,7 @@ def discover_associated_documents(
                 if entry_prompt.exists():
                     for include_path in extract_includes_from_file(entry_prompt):
                         if _is_document_include(include_path):
-                            _add(include_path)
+                            _add(include_path, entry_prompt.parent)
 
             frontier = next_frontier
             depth += 1
