@@ -633,6 +633,28 @@ class TestLlmAmbiguityReview:
 class TestApplyWriteback:
     """pdd prompt lint --ambiguity --apply <file>"""
 
+    @pytest.fixture(autouse=True)
+    def _mock_llm_passes(self):
+        """Prevent all LLM passes from making real API calls."""
+        guidance_stub = {
+            "path": "",
+            "summary": "ok",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "formalization_candidates": [],
+            "error": "",
+        }
+        with patch(
+            "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
+            return_value=guidance_stub,
+        ), patch(
+            "pdd.prompt_lint_pipeline.run_llm_formalize_pass",
+            return_value={"bundle": None},
+        ):
+            yield
+
     def test_apply_without_llm_writes_placeholder_only_if_suggestion_present(
         self, runner, tmp_path
     ):
@@ -734,7 +756,9 @@ class TestApplyWriteback:
             catch_exceptions=False,
         )
         data = json.loads(result.output)
-        assert isinstance(data, list)
+        # JSON output is either a list (legacy) or a dict with a "results" key
+        results = data if isinstance(data, list) else data.get("results", data)
+        assert isinstance(results, list)
 
     def test_without_apply_file_is_never_modified(self, runner, tmp_path):
         prompt = tmp_path / "ro.prompt"
