@@ -1251,36 +1251,57 @@ def _heal_update(drift: DriftInfo, env: Dict[str, str], skip_set: Set[str]) -> O
         drift.prompt_path = str(candidate)
         prompt_path = drift.prompt_path
 
+    # Issue #1106 Gap 2: the lazy block above only fail-closes when
+    # `drift.prompt_path` was initially None. If it was set on `drift`
+    # BEFORE this heal ran but the file is missing on disk after the
+    # `pdd update` subprocess (typo, deleted, renamed by update, language
+    # detection mismatch), the previous code's `if prompt_exists:` guard
+    # further down silently skipped `_run_metadata_sync_safe` AND still
+    # fell through to the follow-up `pdd example` — masking metadata
+    # failure as a successful heal. Pull that gate up here so the missing
+    # case mirrors the lazy-unresolvable case: explicit hard failure, no
+    # metadata sync, no follow-up example.
+    try:
+        prompt_exists_post_update = Path(str(prompt_path)).exists()
+    except Exception:
+        prompt_exists_post_update = False
+    if not prompt_exists_post_update:
+        console.print(
+            f"[red]heal failed for {drift.basename}: prompt_path "
+            f"{prompt_path} set but missing on disk post-update[/red]"
+        )
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = (
+            "prompt_path set but missing on disk post-update"
+        )
+        return False
+
     # Gates.
     if not _enforce_prompt_churn_gate(drift):
         return False
     if not _enforce_structural_invariants(drift):
         return False
 
-    # Snapshot + metadata orchestrator (only when prompt file exists on disk).
-    snapshot: Optional[Dict[str, Optional[bytes]]] = None
-    try:
-        prompt_exists = Path(str(prompt_path)).exists()
-    except Exception:
-        prompt_exists = False
-    if prompt_exists:
-        snapshot = _snapshot_metadata_state_for(drift)
-        meta_ok = _run_metadata_sync_safe(str(prompt_path), str(code_path) if code_path else None)
-        if not meta_ok:
-            try:
-                _revert_prompt_file(drift)
-            except PromptRevertError:
-                raise
-            if snapshot is not None:
-                _restore_metadata_state_for(snapshot)
-            # Metadata finalization is a hard requirement (Issue #1006): a
-            # successful auto-heal commit must include the updated fingerprint,
-            # so this failure must surface distinctly from advisory subprocess
-            # failures and fail the run loudly in every mode.
-            drift.metadata_finalization_failed = True
-            drift.metadata_finalization_error = "metadata sync returned false"
-            return False
-        drift.metadata_finalized = True
+    # Snapshot + metadata orchestrator. Prompt-exists was verified above, so
+    # the previous `if prompt_exists:` guard is now unconditional — keep the
+    # snapshot/revert flow inline.
+    snapshot = _snapshot_metadata_state_for(drift)
+    meta_ok = _run_metadata_sync_safe(str(prompt_path), str(code_path) if code_path else None)
+    if not meta_ok:
+        try:
+            _revert_prompt_file(drift)
+        except PromptRevertError:
+            raise
+        if snapshot is not None:
+            _restore_metadata_state_for(snapshot)
+        # Metadata finalization is a hard requirement (Issue #1006): a
+        # successful auto-heal commit must include the updated fingerprint,
+        # so this failure must surface distinctly from advisory subprocess
+        # failures and fail the run loudly in every mode.
+        drift.metadata_finalization_failed = True
+        drift.metadata_finalization_error = "metadata sync returned false"
+        return False
+    drift.metadata_finalized = True
 
     # Optional follow-up: skip when module bypassed via env.
     if drift.basename in skip_set:
