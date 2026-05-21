@@ -2298,6 +2298,14 @@ def _run_agentic_checkup_orchestrator_inner(
                         in push_message
                         or "Failed to refresh PR branch before retrying push"
                         in push_message
+                        # Codex round-2 Finding 2: _rebase_onto_updated_
+                        # pr_head emits this prefix when the pre-rebase
+                        # ``git reset --hard <fixer_sha>`` fails. The
+                        # reset only runs in the remote-advance recovery
+                        # path, so a refetch-confirmed advance still
+                        # qualifies for the bounded restart.
+                        or "Failed to reset to original fixer commit before rebase"
+                        in push_message
                         or (
                             push_message.startswith(
                                 "Failed to push fixes to PR branch:"
@@ -2560,6 +2568,27 @@ def run_agentic_checkup_orchestrator(
             cumulative_cost += restart.cost_so_far
             last_model = restart.model
             refresh_history.append((restart.old_sha, restart.new_sha))
+            # Codex round-2 Finding 1: belt-and-suspenders. The restart
+            # exception already proves the head advanced; don't depend
+            # on the next inner's _fetch_pr_metadata to re-prove it via
+            # the SHA identity guard. A flaky refetch returning the old
+            # SHA would otherwise let the inner reuse stale step
+            # outputs. Clear cached workflow state outright so the next
+            # iteration sets up a fresh worktree from the latest head.
+            # The sidecar at .pdd/checkup-pr-{N}/pr_head_refreshes lives
+            # outside workflow state, so the refresh counter survives.
+            try:
+                clear_workflow_state(
+                    cwd=cwd,
+                    issue_number=issue_number,
+                    workflow_type="checkup",
+                    state_dir=_get_state_dir(cwd),
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    use_github_state=use_github_state,
+                )
+            except Exception:  # noqa: BLE001 — best-effort
+                pass
             if refresh_count >= MAX_PR_HEAD_REFRESHES:
                 history_lines = ", ".join(
                     f"{old[:8]}->{new[:8]}" for old, new in refresh_history
