@@ -605,6 +605,38 @@ class TestChangedFilesTracking:
         assert "Do not use stale origin/main" in result
         assert "feature.py" not in result
 
+    def test_format_pr_changed_files_uses_api_fallback_when_base_fetch_fails(
+        self, tmp_path
+    ):
+        """A failed git base refresh should still keep PR-scoped files if API data exists."""
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {
+                "base_ref": "main",
+                "base_ref_fetch_error": "network unreachable",
+                "api_changed_files": (
+                    "- ADDED: feature.py\n"
+                    "- RENAMED: old_name.py -> new_name.py"
+                ),
+            },
+        )
+
+        assert result.startswith("Source: GitHub PR files API")
+        assert "- ADDED: feature.py" in result
+        assert "- RENAMED: old_name.py -> new_name.py" in result
+        assert "origin/main" not in result
+
+    def test_format_pr_changed_files_uses_api_fallback_when_base_metadata_missing(
+        self, tmp_path
+    ):
+        """Failed PR metadata should still use PR files API data when present."""
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"api_changed_files": "- MODIFIED: src/feature.py"},
+        )
+
+        assert result == "Source: GitHub PR files API\n- MODIFIED: src/feature.py"
+
     def test_format_pr_changed_files_missing_pr_metadata_is_unavailable(self, tmp_path):
         """PR mode with failed metadata fetch must not use conventional fallbacks."""
         self._init_git_repo(tmp_path, initial_branch="main")

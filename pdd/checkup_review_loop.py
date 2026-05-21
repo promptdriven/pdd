@@ -3812,7 +3812,55 @@ def _summary_from_output(output: str) -> str:
     return text.splitlines()[0][:500]
 
 
-def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
+def _format_pr_api_changed_files(output: str) -> str:
+    """Format ``gh api pulls/{n}/files --jq ...`` rows for prompt context."""
+    lines: List[str] = []
+    for raw_line in (output or "").splitlines():
+        parts = raw_line.split("\t")
+        if len(parts) < 2:
+            continue
+        status = parts[0].strip()
+        filename = parts[1].strip()
+        previous_filename = parts[2].strip() if len(parts) > 2 else ""
+        if not status or not filename:
+            continue
+
+        status_label = status.upper()
+        if status.lower() == "renamed" and previous_filename:
+            path = f"{previous_filename} -> {filename}"
+        else:
+            path = filename
+        lines.append(f"- {status_label}: {path}")
+    return "\n".join(lines)
+
+
+def _fetch_pr_api_changed_files(owner: str, repo: str, pr_number: int) -> Tuple[str, str]:
+    """Return prompt-ready changed files from GitHub's PR files API."""
+    success, output = _run_gh_command(
+        [
+            "api",
+            "--paginate",
+            f"repos/{owner}/{repo}/pulls/{pr_number}/files?per_page=100",
+            "--jq",
+            '.[] | [.status, .filename, (.previous_filename // "")] | @tsv',
+        ]
+    )
+    if not success:
+        return "", _summary_from_output(output) or "gh api failed"
+
+    changed_files = _format_pr_api_changed_files(output)
+    if not changed_files:
+        return "", "GitHub PR files API returned no changed files"
+    return changed_files, ""
+
+
+def _fetch_pr_metadata(
+    owner: str,
+    repo: str,
+    pr_number: int,
+    *,
+    include_changed_files: bool = False,
+) -> Dict[str, str]:
     success, output = _run_gh_command(["api", f"repos/{owner}/{repo}/pulls/{pr_number}"])
     if not success:
         return {}
@@ -3823,7 +3871,7 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
     head = data.get("head") or {}
     head_repo = head.get("repo") or {}
     base = data.get("base") or {}
-    return {
+    metadata = {
         "head_ref": str(head.get("ref") or ""),
         "head_owner": str((head_repo.get("owner") or {}).get("login") or ""),
         "head_repo": str(head_repo.get("name") or ""),
@@ -3836,6 +3884,13 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
         # advanced after the verifier cleared an earlier SHA.
         "head_sha": str(head.get("sha") or ""),
     }
+    if include_changed_files:
+        changed_files, error = _fetch_pr_api_changed_files(owner, repo, pr_number)
+        if changed_files:
+            metadata["api_changed_files"] = changed_files
+        elif error:
+            metadata["api_changed_files_error"] = error
+    return metadata
 
 
 def _git_rev_parse_head(worktree: Path) -> str:

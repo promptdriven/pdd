@@ -352,7 +352,7 @@ def _fetch_pr_metadata(owner: str, repo: str, pr_number: int) -> Dict[str, str]:
         _fetch_pr_metadata as fetch,
     )
 
-    return fetch(owner, repo, pr_number)
+    return fetch(owner, repo, pr_number, include_changed_files=True)
 
 
 def _commit_and_push_if_changed(
@@ -810,6 +810,16 @@ def _format_pr_changed_files_for_prompt(
 ) -> str:
     """Return a concise merge-base changed-file summary for PR-mode prompts."""
     base_candidates: List[str] = []
+    api_changed_files = (
+        str((pr_metadata or {}).get("api_changed_files") or "").strip()
+        if pr_metadata is not None
+        else ""
+    )
+    api_fallback = (
+        "Source: GitHub PR files API\n" + api_changed_files
+        if api_changed_files
+        else ""
+    )
     if pr_metadata is not None:
         base_ref = str(pr_metadata.get("base_ref") or "").strip()
         if base_ref:
@@ -817,6 +827,8 @@ def _format_pr_changed_files_for_prompt(
             if base_local_ref:
                 base_candidates.append(base_local_ref)
             else:
+                if api_fallback:
+                    return api_fallback
                 fetch_error = str(pr_metadata.get("base_ref_fetch_error") or "").strip()
                 reason = f" Fetch error: {fetch_error}" if fetch_error else ""
                 return (
@@ -826,6 +838,8 @@ def _format_pr_changed_files_for_prompt(
                     "tests conservatively or refresh the PR base ref."
                 )
         else:
+            if api_fallback:
+                return api_fallback
             return (
                 "PR changed files unavailable: PR base metadata is missing. "
                 "Do not use stale origin/main; run targeted tests conservatively "
@@ -889,6 +903,9 @@ def _format_pr_changed_files_for_prompt(
         if lines:
             return "Base: " + base + "\n" + "\n".join(lines)
         return f"Base: {base}\nNo changed files found against this base."
+
+    if api_fallback:
+        return api_fallback
 
     tried = ", ".join(seen_bases) if seen_bases else "none"
     return (

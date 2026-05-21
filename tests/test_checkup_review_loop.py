@@ -192,6 +192,78 @@ class TestCheckupReviewLoopCli:
         assert "--review-only requires --review-loop" in result.output
 
 
+class TestPrMetadataFetch:
+    def test_fetch_pr_metadata_can_include_api_changed_files(
+        self, monkeypatch: Any
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        calls: List[List[str]] = []
+
+        def fake_run_gh_command(args: List[str]) -> Tuple[bool, str]:
+            calls.append(args)
+            if args == ["api", "repos/o/r/pulls/1"]:
+                return True, json.dumps(
+                    {
+                        "head": {
+                            "ref": "feature",
+                            "sha": "a" * 40,
+                            "repo": {
+                                "name": "r",
+                                "clone_url": "https://github.com/o/r.git",
+                                "owner": {"login": "o"},
+                            },
+                        },
+                        "base": {"ref": "main"},
+                    }
+                )
+            if "files?per_page=100" in args[2]:
+                return (
+                    True,
+                    "modified\tpdd/a.py\t\n"
+                    "renamed\tpdd/new.py\tpdd/old.py\n"
+                    "removed\tpdd/deleted.py\t\n",
+                )
+            raise AssertionError(f"unexpected gh args: {args}")
+
+        monkeypatch.setattr(mod, "_run_gh_command", fake_run_gh_command)
+
+        metadata = mod._fetch_pr_metadata("o", "r", 1, include_changed_files=True)
+
+        assert metadata["head_ref"] == "feature"
+        assert metadata["base_ref"] == "main"
+        assert metadata["api_changed_files"] == (
+            "- MODIFIED: pdd/a.py\n"
+            "- RENAMED: pdd/old.py -> pdd/new.py\n"
+            "- REMOVED: pdd/deleted.py"
+        )
+        assert any("--paginate" in call for call in calls)
+
+    def test_fetch_pr_metadata_does_not_fetch_files_by_default(
+        self, monkeypatch: Any
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        calls: List[List[str]] = []
+
+        def fake_run_gh_command(args: List[str]) -> Tuple[bool, str]:
+            calls.append(args)
+            return True, json.dumps(
+                {
+                    "head": {"ref": "feature", "repo": {}, "sha": "a" * 40},
+                    "base": {"ref": "main"},
+                }
+            )
+
+        monkeypatch.setattr(mod, "_run_gh_command", fake_run_gh_command)
+
+        metadata = mod._fetch_pr_metadata("o", "r", 1)
+
+        assert metadata["base_ref"] == "main"
+        assert "api_changed_files" not in metadata
+        assert calls == [["api", "repos/o/r/pulls/1"]]
+
+
 class TestCheckupReviewLoopRuntime:
     def _patch_io(self, monkeypatch: Any, tmp_path: Path) -> None:
         import pdd.checkup_review_loop as mod
