@@ -3976,3 +3976,77 @@ class TestPrHeadAdvanceAutoRerun:
             f"Counter file should hold the consumed-restart count (=2); "
             f"got {on_disk!r}"
         )
+
+    def test_refresh_counter_resumes_from_pre_seeded_value(
+        self, tmp_path: Path
+    ) -> None:
+        """Codex round-1 Finding 3: a Ctrl-C + manual rerun must NOT get
+        a fresh budget. Pre-seed the sidecar at "1" and force exactly
+        ONE head advance (one fewer than would normally exhaust the
+        budget). If the wrapper ignored disk on entry it would treat
+        this as a first restart and succeed on the second attempt; the
+        correct behavior is exhaustion (it picks up at 1, this restart
+        bumps the counter to 2 == ``MAX_PR_HEAD_REFRESHES``, so the
+        next restart returns failure)."""
+        counter_path = self._refresh_counter_path(tmp_path, 200)
+        counter_path.parent.mkdir(parents=True, exist_ok=True)
+        counter_path.write_text("1", encoding="utf-8")
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # iter 1: entry=A, ckptA=B -> restart (budget bumped 1 -> 2).
+        # iter 2: entry=B, ckptA=C -> restart attempt fails the budget
+        #         check (refresh_count already == MAX_PR_HEAD_REFRESHES).
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 ckptA -> restart
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
+            _pr_metadata("cccccccc33333333"),  # iter 2 ckptA -> exhausted
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="cccccccc33333333",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is False, (
+            "Pre-seeded counter=1 + one restart must exhaust the budget; "
+            f"got success message: {msg!r}"
+        )
+        assert "max_pr_head_refreshes=2" in msg, msg
+        # Push must NOT have run — every iteration's restart fired
+        # before the push block.
+        push_mock.assert_not_called()

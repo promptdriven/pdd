@@ -457,6 +457,21 @@ def _commit_and_push_if_changed(
     return commit_and_push(worktree, pr_metadata, message)
 
 
+def _is_remote_advanced_push_error(error: str) -> bool:
+    """Lazy wrapper around the shared remote-advanced push-error detector.
+
+    Re-exported at module scope so the orchestrator's Checkpoint B can
+    recognize the generic ``Failed to push fixes to PR branch: <stderr>``
+    surface — which is what the push helper returns once its internal
+    3-attempt retry loop exhausts on remote-advance.
+    """
+    from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
+        _is_remote_advanced_push_error as detector,
+    )
+
+    return detector(error)
+
+
 def _git_changed_files(worktree: Path) -> List[str]:
     """Lazy wrapper around the review-loop changed-files helper.
 
@@ -2265,15 +2280,30 @@ def _run_agentic_checkup_orchestrator_inner(
                     # because we couldn't rebase onto an updated remote
                     # head. Only consume budget after a fresh refetch
                     # confirms the head actually moved — generic auth /
-                    # network errors must not trigger a rerun. The
-                    # classification is rebase-message-specific because
-                    # that's the failure mode #1116 targets.
+                    # network errors must not trigger a rerun.
+                    #
+                    # Codex round-1 Finding 1: also match the generic
+                    # ``Failed to push fixes to PR branch: <stderr>``
+                    # surface that ``_commit_and_push_if_changed`` returns
+                    # once its internal 3-attempt retry loop exhausts on
+                    # remote-advance. Without the
+                    # ``_is_remote_advanced_push_error`` co-trigger, a
+                    # legitimate auth/network failure with the same
+                    # prefix would falsely restart, so the embedded git
+                    # stderr must carry recognized markers (fetch-first /
+                    # non-fast-forward / etc.).
                     # ------------------------------------------------------
                     if not no_fix and (
                         "Failed to rebase fixes onto updated PR branch"
                         in push_message
                         or "Failed to refresh PR branch before retrying push"
                         in push_message
+                        or (
+                            push_message.startswith(
+                                "Failed to push fixes to PR branch:"
+                            )
+                            and _is_remote_advanced_push_error(push_message)
+                        )
                     ):
                         try:
                             fresh_meta_b = _fetch_pr_metadata(
@@ -2328,6 +2358,46 @@ def _run_agentic_checkup_orchestrator_inner(
                         abort_cost,
                         abort_model,
                     )
+                # ------------------------------------------------------
+                # Codex round-1 Finding 2 — Checkpoint C: a no-change
+                # push outcome means we never actually touched the PR
+                # branch. The head could have advanced between
+                # Checkpoint A's refetch and now, and neither
+                # Checkpoint B (only fires on push failure) nor the
+                # post-push reverify (only fires on rebase-success
+                # marker) covers this gap. Refetch one more time
+                # before publishing the Step 7 verdict; restart if
+                # the head moved so we don't post a stale verdict as
+                # fresh.
+                # ------------------------------------------------------
+                if push_message in (
+                    "No changes to push.",
+                    "No eligible changes to push.",
+                ):
+                    try:
+                        fresh_meta_c = _fetch_pr_metadata(
+                            pr_owner, pr_repo, pr_number
+                        )
+                    except Exception:  # noqa: BLE001
+                        fresh_meta_c = {}
+                    fresh_head_sha_c = str(
+                        (fresh_meta_c or {}).get("head_sha", "") or ""
+                    )
+                    if (
+                        fresh_head_sha_c
+                        and current_pr_head_sha
+                        and fresh_head_sha_c != current_pr_head_sha
+                    ):
+                        raise _PRHeadAdvancedRestart(
+                            old_sha=current_pr_head_sha,
+                            new_sha=fresh_head_sha_c,
+                            reason=(
+                                "No-change push completed but PR head "
+                                "advanced before final report"
+                            ),
+                            cost_so_far=total_cost,
+                            model=last_model_used,
+                        )
                 pending_post_suffix = _post_pr_mode_final_report(
                     step_outputs.get("7", step7_output)
                 )
