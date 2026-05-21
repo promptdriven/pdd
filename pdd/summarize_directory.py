@@ -7,7 +7,7 @@ import csv
 import os
 import subprocess
 import json
-from typing import Optional, List, Dict, Tuple, Callable
+from typing import Any, Optional, List, Dict, Tuple, Callable
 from pydantic import BaseModel, Field
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
@@ -562,8 +562,11 @@ def _process_single_file_logic(
         # its fallback history to the command-level attempted_models list
         # — otherwise the data we promised in cost.csv gets silently
         # dropped for the exact failure mode users most want to investigate.
-        err_attempts = getattr(e, "attempted_models", None)
-        if isinstance(err_attempts, list):
+        # The local `if` narrows pylint's type analysis even though the
+        # `Any` from getattr defeats type narrowing on its own.
+        err_attempts_raw = getattr(e, "attempted_models", None)
+        if isinstance(err_attempts_raw, list):
+            err_attempts: List[Any] = err_attempts_raw
             attempted_models = [str(m) for m in err_attempts]
 
     return cost, model_name, attempted_models

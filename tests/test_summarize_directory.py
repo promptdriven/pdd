@@ -2054,11 +2054,14 @@ class TestMaxWorkers:
 
         def fake_llm_invoke(**kwargs):
             content = kwargs.get('input_json', {}).get('file_contents', '')
-            # Delay highest-content files MORE so completion order is
-            # REVERSE of submission order — the F5 bug would surface as
-            # model_name being the lowest-idx file's model (which
-            # finishes last).
-            _time.sleep(0.05 * (3 - len(content.replace('.py', '').replace('f', ''))))
+            # Each file's content is its own filename "fN.py", so the
+            # embedded digit tells us its submission idx. Sleep LONGER
+            # for LOWER digits so completion order is the REVERSE of
+            # submission order. If the F5 bug surfaces (completion-
+            # order tracking), model_name will be the LOWEST-idx
+            # worker's model instead of the highest.
+            digit = next((int(c) for c in content if c.isdigit()), 0)
+            _time.sleep(0.05 * (2 - digit))
             return {
                 'result': FileSummary(
                     file_summary="s", key_exports=[], dependencies=[]
