@@ -321,14 +321,15 @@ def compute_sccs(graph: Dict[str, List[str]]) -> List[List[str]]:
             present as a key (mirrors ``topological_sort``).
 
     Returns:
-        SCCs ordered such that earlier SCCs depend on later ones (reverse
-        topological order of the condensation — sinks first, sources last;
-        this is the natural output order of Tarjan's algorithm). Within
-        each SCC, node names are sorted alphabetically for determinism.
-        Trivial SCCs (single node with no self-loop) are returned as
-        single-element lists. A self-loop on a node is its own SCC
-        (one-element list) — callers can distinguish it from a non-self-loop
-        singleton by inspecting ``graph[node]``.
+        SCCs in deps-first order: with the input convention that
+        ``graph[A] == [B]`` means *A depends on B*, an SCC's external
+        dependencies are emitted before the SCC itself. This is Tarjan's
+        natural emission order (the reverse of a depender-first topological
+        sort of the condensation). Within each SCC, node names are sorted
+        alphabetically for determinism. Trivial SCCs (single node with no
+        self-loop) are returned as single-element lists. A self-loop on a
+        node is its own SCC (one-element list) — callers can distinguish
+        it from a non-self-loop singleton by inspecting ``graph[node]``.
 
     Implementation: iterative Tarjan's algorithm, so deep cycle chains do
     not blow the Python recursion limit.
