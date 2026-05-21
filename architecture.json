@@ -7711,7 +7711,8 @@
             "sideEffects": [
               "Reads local git refs and diff output",
               "Uses pr_metadata['api_changed_files'] as an authoritative fallback when the refreshed PR base ref is unavailable",
-              "Keeps the API fallback bounded so very large PRs do not bloat Step 5/7 prompts"
+              "Keeps the API fallback bounded so very large PRs do not bloat Step 5/7 prompts",
+              "Writes pr_metadata['api_changed_files_full'] to .pdd/checkup-context/pr-changed-files-api.txt when present"
             ]
           },
           {
@@ -7787,7 +7788,8 @@
             "sideEffects": [
               "Reads pull request metadata through GitHub CLI",
               "Includes prompt-ready GitHub PR files API changed-file lines for degraded PR-scoped test context",
-              "Bounds API fallback changed-file context with PR_API_CHANGED_FILES_MAX_LINES and PR_API_CHANGED_FILES_MAX_CHARS"
+              "Bounds API fallback changed-file context with PR_API_CHANGED_FILES_MAX_LINES and PR_API_CHANGED_FILES_MAX_CHARS",
+              "Preserves the complete API changed-file list as api_changed_files_full when the prompt preview is truncated"
             ]
           },
           {

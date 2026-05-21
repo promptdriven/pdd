@@ -637,6 +637,36 @@ class TestChangedFilesTracking:
 
         assert result == "Source: GitHub PR files API\n- MODIFIED: src/feature.py"
 
+    def test_format_pr_changed_files_writes_full_api_fallback_artifact(
+        self, tmp_path
+    ):
+        """A truncated API preview should point agents at the full local file list."""
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {
+                "base_ref": "main",
+                "base_ref_fetch_error": "network unreachable",
+                "api_changed_files": (
+                    "- MODIFIED: pdd/file_0.py\n"
+                    "NOTE: GitHub PR files API list truncated; showing 1 of 2 files."
+                ),
+                "api_changed_files_full": (
+                    "- MODIFIED: pdd/file_0.py\n"
+                    "- MODIFIED: pdd/file_1.py"
+                ),
+            },
+        )
+
+        artifact = tmp_path / ".pdd" / "checkup-context" / "pr-changed-files-api.txt"
+        assert (
+            "Full API changed-file list artifact: "
+            ".pdd/checkup-context/pr-changed-files-api.txt"
+        ) in result
+        assert artifact.read_text(encoding="utf-8") == (
+            "- MODIFIED: pdd/file_0.py\n"
+            "- MODIFIED: pdd/file_1.py\n"
+        )
+
     def test_format_pr_changed_files_missing_pr_metadata_is_unavailable(self, tmp_path):
         """PR mode with failed metadata fetch must not use conventional fallbacks."""
         self._init_git_repo(tmp_path, initial_branch="main")

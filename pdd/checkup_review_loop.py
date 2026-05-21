@@ -3857,7 +3857,11 @@ def _format_pr_api_changed_files(
     return "\n".join(lines)
 
 
-def _fetch_pr_api_changed_files(owner: str, repo: str, pr_number: int) -> Tuple[str, str]:
+def _fetch_pr_api_changed_files(
+    owner: str,
+    repo: str,
+    pr_number: int,
+) -> Tuple[str, str, str]:
     """Return prompt-ready changed files from GitHub's PR files API."""
     success, output = _run_gh_command(
         [
@@ -3869,12 +3873,17 @@ def _fetch_pr_api_changed_files(owner: str, repo: str, pr_number: int) -> Tuple[
         ]
     )
     if not success:
-        return "", _summary_from_output(output) or "gh api failed"
+        return "", "", _summary_from_output(output) or "gh api failed"
 
     changed_files = _format_pr_api_changed_files(output)
+    full_changed_files = _format_pr_api_changed_files(
+        output,
+        max_lines=10**9,
+        max_chars=10**9,
+    )
     if not changed_files:
-        return "", "GitHub PR files API returned no changed files"
-    return changed_files, ""
+        return "", "", "GitHub PR files API returned no changed files"
+    return changed_files, full_changed_files, ""
 
 
 def _fetch_pr_metadata(
@@ -3908,9 +3917,13 @@ def _fetch_pr_metadata(
         "head_sha": str(head.get("sha") or ""),
     }
     if include_changed_files:
-        changed_files, error = _fetch_pr_api_changed_files(owner, repo, pr_number)
+        changed_files, full_changed_files, error = _fetch_pr_api_changed_files(
+            owner, repo, pr_number
+        )
         if changed_files:
             metadata["api_changed_files"] = changed_files
+            if full_changed_files and full_changed_files != changed_files:
+                metadata["api_changed_files_full"] = full_changed_files
         elif error:
             metadata["api_changed_files_error"] = error
     return metadata
@@ -5086,7 +5099,10 @@ def _git_has_staged_changes(worktree: Path) -> bool:
 
 def _is_untracked_pdd_meta_artifact(path: str) -> bool:
     rel = path.replace(os.sep, "/")
-    return rel.startswith(".pdd/meta/") and rel.endswith(".json")
+    return (
+        rel.startswith(".pdd/checkup-context/")
+        or (rel.startswith(".pdd/meta/") and rel.endswith(".json"))
+    )
 
 
 def _artifacts_dir(cwd: Path, issue_number: int, pr_number: int) -> Path:

@@ -76,6 +76,8 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 2. **Re-run tests appropriate for the mode**:
    - In issue mode, re-run the full discovered suite: unit, integration, and e2e tests, including any new regression/e2e tests from Steps 6a-6c.
    - In PR mode, re-run the PR-scoped tests tied to `<pr_changed_files>`, plus any regression/e2e tests created in Steps 6a-6c, and any targeted build or contract tests needed to verify issue alignment.
+   - If PR mode is true and `<pr_changed_files>` says PR changed files are unavailable, do not broaden into a timeout-prone full-suite run on a large repository. Re-run only cheap build/static checks, regression/e2e tests created in Steps 6a-6c, and any small tests clearly tied to the issue/prior failures; report that concrete PR scope could not be established and do not claim full-suite or complete PR coverage.
+   - If `<pr_changed_files>` includes a full API changed-file list artifact path, read that local file before selecting PR-scoped verification tests; the inline list may be a bounded preview.
    - In PR mode, run the full suite only if it is expected to fit within this step's budget. If it is too large, report the exact full-suite command as not run due to time budget and do not claim full-suite coverage.
    - Capture the full output for every command you do run.
 

@@ -265,6 +265,35 @@ class TestPrMetadataFetch:
         )
         assert any("--paginate" in call for call in calls)
 
+    def test_fetch_pr_metadata_keeps_full_api_changed_files_when_preview_truncates(
+        self, monkeypatch: Any
+    ) -> None:
+        import pdd.checkup_review_loop as mod
+
+        file_rows = "\n".join(
+            f"modified\tpdd/file_{idx}.py\t" for idx in range(305)
+        )
+
+        def fake_run_gh_command(args: List[str]) -> Tuple[bool, str]:
+            if args == ["api", "repos/o/r/pulls/1"]:
+                return True, json.dumps(
+                    {
+                        "head": {"ref": "feature", "repo": {}, "sha": "a" * 40},
+                        "base": {"ref": "main"},
+                    }
+                )
+            if "files?per_page=100" in args[2]:
+                return True, file_rows
+            raise AssertionError(f"unexpected gh args: {args}")
+
+        monkeypatch.setattr(mod, "_run_gh_command", fake_run_gh_command)
+
+        metadata = mod._fetch_pr_metadata("o", "r", 1, include_changed_files=True)
+
+        assert "showing 300 of 305 files" in metadata["api_changed_files"]
+        assert "pdd/file_304.py" not in metadata["api_changed_files"]
+        assert "pdd/file_304.py" in metadata["api_changed_files_full"]
+
     def test_fetch_pr_metadata_does_not_fetch_files_by_default(
         self, monkeypatch: Any
     ) -> None:
@@ -288,6 +317,13 @@ class TestPrMetadataFetch:
         assert metadata["base_ref"] == "main"
         assert "api_changed_files" not in metadata
         assert calls == [["api", "repos/o/r/pulls/1"]]
+
+    def test_checkup_context_artifact_is_not_staged_for_bot_push(self) -> None:
+        import pdd.checkup_review_loop as mod
+
+        assert mod._is_untracked_pdd_meta_artifact(
+            ".pdd/checkup-context/pr-changed-files-api.txt"
+        )
 
 
 class TestCheckupReviewLoopRuntime:

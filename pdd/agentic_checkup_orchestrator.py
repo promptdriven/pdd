@@ -815,8 +815,26 @@ def _format_pr_changed_files_for_prompt(
         if pr_metadata is not None
         else ""
     )
+    api_changed_files_full = (
+        str((pr_metadata or {}).get("api_changed_files_full") or "").strip()
+        if pr_metadata is not None
+        else ""
+    )
+    artifact_note = ""
+    if api_changed_files_full:
+        artifact_rel = Path(".pdd") / "checkup-context" / "pr-changed-files-api.txt"
+        try:
+            artifact_path = worktree / artifact_rel
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            artifact_path.write_text(api_changed_files_full + "\n", encoding="utf-8")
+            artifact_note = (
+                "\nFull API changed-file list artifact: "
+                f"{artifact_rel.as_posix()}"
+            )
+        except OSError:
+            artifact_note = "\nFull API changed-file list artifact: unavailable"
     api_fallback = (
-        "Source: GitHub PR files API\n" + api_changed_files
+        "Source: GitHub PR files API\n" + api_changed_files + artifact_note
         if api_changed_files
         else ""
     )

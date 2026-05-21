@@ -56,6 +56,8 @@ If this is iteration 2 or later, previous fixes have already been applied — ch
 2. **Run the right tests for this mode** and capture output:
    - If `PR-verification mode` is `false`, run the full discovered test suite: unit tests, integration tests, and end-to-end tests.
    - If `PR-verification mode` is `true`, first run the mandatory PR-scoped tests tied to `<pr_changed_files>`: direct tests for changed modules, adjacent tests, and tests that mention the changed module names. Expand beyond that only when project metadata or previous step output shows broader risk.
+   - If PR mode is true and `<pr_changed_files>` says PR changed files are unavailable, do not broaden into a timeout-prone full-suite run on a large repository. Run only cheap discovery/static checks and any small, clearly relevant tests inferred from the issue and prior step output; report that concrete PR scope could not be established and include the exact full-suite command as not run due to missing PR scope/time budget.
+   - If `<pr_changed_files>` includes a full API changed-file list artifact path, read that local file before selecting PR-scoped tests; the inline list may be a bounded preview.
    - In PR mode, run the full suite only if it is expected to fit within this step's budget. If it is too large, report the exact full-suite command as **not run due to time budget** and do not claim full-suite coverage.
 
 3. **Collect and categorize failures**:
