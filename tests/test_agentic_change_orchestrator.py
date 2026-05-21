@@ -5604,3 +5604,719 @@ class TestTrustedStepCommentPosting:
             "Failed Step 12 should not have posted a fallback comment "
             f"or burned composite key 112. Saw: {step_nums}"
         )
+
+
+# =============================================================================
+# Issue #1123 — Step 9 scope guard
+#
+# Step 9 of `pdd change` is supposed to modify ONLY prompts/docs and the
+# Direct Edit Candidates explicitly listed in Step 6. The LLM does not
+# reliably honor this. These tests pin down:
+#   * the allowlist parsers,
+#   * the allowlist builder,
+#   * the scope-guard hook over a REAL git worktree,
+#   * the orchestrator wiring (mock_dependencies + real worktree).
+# =============================================================================
+
+import textwrap as _textwrap
+
+from pdd.agentic_change_orchestrator import (
+    _parse_step6_devunit_prompts,
+    _parse_step6_dependency_prompts,
+    _parse_step6_integration_prompts,
+    _parse_step6_frontend_prompts,
+    _parse_step5_doc_paths,
+    _build_step9_allowlist,
+    _enforce_step9_scope,
+)
+
+
+def _scope_git_env() -> dict:
+    return {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
+
+
+def _scope_git_init(repo: Path, files: dict) -> None:
+    repo.mkdir(parents=True, exist_ok=True)
+    env = _scope_git_env()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.email", "t@t"],
+        check=True, capture_output=True, env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "config", "user.name", "Test"],
+        check=True, capture_output=True, env=env,
+    )
+    for rel, content in files.items():
+        target = repo / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content)
+    subprocess.run(
+        ["git", "-C", str(repo), "add", "-A"],
+        check=True, capture_output=True, env=env,
+    )
+    subprocess.run(
+        ["git", "-C", str(repo), "commit", "-m", "initial"],
+        check=True, capture_output=True, env=env,
+    )
+
+
+# Sample fixtures -------------------------------------------------------------
+
+_STEP6_SAMPLE = _textwrap.dedent("""
+## Step 6: Dev Units Identified
+
+**Status:** Found 3 dev units
+
+### Dev Units to MODIFY
+| Prompt | Code | Example | Test |
+|--------|------|---------|------|
+| `prompts/foo_python.prompt` | `pdd/foo.py` | `context/foo_example.py` | `tests/test_foo.py` |
+| `prompts/bar_python.prompt` | `pdd/bar.py` | `context/bar_example.py` | `tests/test_bar.py` |
+
+*(Use actual paths from project structure above)*
+
+### Dev Units to CREATE
+| Prompt | Code | Example | Test |
+|--------|------|---------|------|
+| `prompts/baz_python.prompt` | `pdd/baz.py` | `context/baz_example.py` | `tests/test_baz.py` |
+| `prompts/xxx_{lang}.prompt` | `{source_dir}/xxx.{ext}` | `{example_dir}/xxx_example.{ext}` | `{test_dir}/test_xxx.{ext}` |
+
+*(Use actual paths from project structure above)*
+
+### Dependencies (may need interface updates)
+- `prompts/qux_python.prompt` - upstream interface change
+- `pdd/legacy.py` - unrelated code file (ignore)
+
+### Integration Points Discovered
+
+| Integration Point | Reason for Update | Prompt File |
+|-------------------|-------------------|-------------|
+| `pdd/cli_main.py` | register new command | `prompts/cli_main_python.prompt` |
+| `pdd/registry.py` | add module | manual update needed |
+
+**Search performed:**
+- grep ...
+
+### Frontend Dev Units (Cross-Layer)
+
+| Frontend File | Prompt File | Action |
+|---------------|-------------|--------|
+| `frontend/src/App.tsx` | `prompts/frontend/app_TypescriptReact.prompt` | MODIFY prompt |
+| `frontend/src/Other.tsx` | None | Direct Edit |
+
+**Search performed:**
+- grep ...
+
+### Direct Edit Candidates (No Prompt)
+
+| File | Edit Type | Markers Found |
+|------|-----------|---------------|
+| `frontend/src/Other.tsx` | uncomment | TODO |
+| `scripts/run.sh` | remove placeholder | coming soon |
+""").strip()
+
+
+_STEP5_SAMPLE = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+**Status:** Documentation Updates Required
+
+### Files to Update
+
+#### `README.md`
+**Section:** features
+**Change:** add bullet
+**Draft content:**
+```
+- new feature
+```
+
+#### `docs/usage.md`
+**Change:** update
+**Draft content:**
+```
+text
+```
+
+### Files to Create
+- `docs/new_guide.md` - tutorial
+- `docs/another.rst` - reference
+
+### Associated Documents
+
+#### `docs/api_reference.md`
+**Discovered via:** `prompts/foo_python.prompt`
+**Section:** request
+**Change:** update
+**Draft content:**
+```
+text
+```
+
+### Conflicts
+
+#### `docs/conflicted.md` — overlapping authority — review section X
+
+### No Changes Needed
+
+#### `docs/unrelated.md`
+- not relevant
+""").strip()
+
+
+# 1-6: Parser tests -----------------------------------------------------------
+
+
+def test_parse_step6_devunit_prompts_extracts_prompt_column_only():
+    result = _parse_step6_devunit_prompts(_STEP6_SAMPLE)
+    assert "prompts/foo_python.prompt" in result
+    assert "prompts/bar_python.prompt" in result
+    assert "prompts/baz_python.prompt" in result
+    # Code, example, test columns must never leak in.
+    assert "pdd/foo.py" not in result
+    assert "context/foo_example.py" not in result
+    assert "tests/test_foo.py" not in result
+
+
+def test_parse_step6_devunit_prompts_ignores_placeholder_template():
+    result = _parse_step6_devunit_prompts(_STEP6_SAMPLE)
+    # Template placeholder row must be skipped.
+    assert not any("{lang}" in p for p in result)
+    assert "prompts/xxx_{lang}.prompt" not in result
+
+
+def test_parse_step6_dependency_prompts():
+    result = _parse_step6_dependency_prompts(_STEP6_SAMPLE)
+    assert "prompts/qux_python.prompt" in result
+    # Non-prompt entries must be ignored.
+    assert "pdd/legacy.py" not in result
+
+
+def test_parse_step6_integration_prompts_skips_manual_update_needed():
+    result = _parse_step6_integration_prompts(_STEP6_SAMPLE)
+    assert "prompts/cli_main_python.prompt" in result
+    # "manual update needed" cells must be skipped.
+    assert not any("manual" in p.lower() for p in result)
+
+
+def test_parse_step6_frontend_prompts_skips_none():
+    result = _parse_step6_frontend_prompts(_STEP6_SAMPLE)
+    assert "prompts/frontend/app_TypescriptReact.prompt" in result
+    assert "None" not in result
+    assert not any("none" == p.strip().lower() for p in result)
+
+
+def test_parse_step5_doc_paths_includes_update_create_associated_excludes_conflicts():
+    result = _parse_step5_doc_paths(_STEP5_SAMPLE)
+    # Update list
+    assert "README.md" in result
+    assert "docs/usage.md" in result
+    # Create list
+    assert "docs/new_guide.md" in result
+    assert "docs/another.rst" in result
+    # Associated documents
+    assert "docs/api_reference.md" in result
+    # Conflicts and No Changes Needed must be excluded.
+    assert "docs/conflicted.md" not in result
+    assert "docs/unrelated.md" not in result
+
+
+# 7-11: Allowlist builder tests ----------------------------------------------
+
+
+def test_build_step9_allowlist_includes_step6_prompts_step5_docs_direct_edits(tmp_path):
+    allowed_files, allowed_dirs = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    assert allowed_dirs == set()
+    expected = {
+        "prompts/foo_python.prompt",
+        "prompts/bar_python.prompt",
+        "prompts/baz_python.prompt",
+        "prompts/qux_python.prompt",
+        "prompts/cli_main_python.prompt",
+        "prompts/frontend/app_TypescriptReact.prompt",
+        "README.md",
+        "docs/usage.md",
+        "docs/new_guide.md",
+        "docs/another.rst",
+        "docs/api_reference.md",
+        # Direct edit candidates from Step 6.
+        "frontend/src/Other.tsx",
+        "scripts/run.sh",
+    }
+    resolved_expected = {(tmp_path / rel).resolve() for rel in expected}
+    assert resolved_expected.issubset(allowed_files)
+
+
+def test_build_step9_allowlist_excludes_step6_code_example_test_columns(tmp_path):
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    forbidden = {
+        "pdd/foo.py",
+        "pdd/bar.py",
+        "pdd/baz.py",
+        "context/foo_example.py",
+        "context/bar_example.py",
+        "context/baz_example.py",
+        "tests/test_foo.py",
+        "tests/test_bar.py",
+        "tests/test_baz.py",
+    }
+    resolved_forbidden = {(tmp_path / rel).resolve() for rel in forbidden}
+    assert resolved_forbidden.isdisjoint(allowed_files)
+
+
+def test_build_step9_allowlist_includes_preflight_healed_prompts_and_meta(tmp_path):
+    healed = ["prompts/healed_python.prompt"]
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, healed
+    )
+    healed_abs = (tmp_path / "prompts/healed_python.prompt").resolve()
+    meta_abs = (tmp_path / ".pdd/meta/healed_python.json").resolve()
+    assert healed_abs in allowed_files
+    assert meta_abs in allowed_files
+    # Unrelated prompts get NO meta-file allowance.
+    unrelated_meta = (tmp_path / ".pdd/meta/unrelated.json").resolve()
+    assert unrelated_meta not in allowed_files
+
+
+def test_build_step9_allowlist_excludes_step5_conflicts(tmp_path):
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    conflicted = (tmp_path / "docs/conflicted.md").resolve()
+    unrelated = (tmp_path / "docs/unrelated.md").resolve()
+    assert conflicted not in allowed_files
+    assert unrelated not in allowed_files
+
+
+def test_build_step9_allowlist_excludes_architecture_json(tmp_path):
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, []
+    )
+    arch = (tmp_path / "architecture.json").resolve()
+    nested_arch = (tmp_path / "extensions/foo/architecture.json").resolve()
+    assert arch not in allowed_files
+    assert nested_arch not in allowed_files
+
+
+# 12-21: Scope-guard tests over a REAL git worktree --------------------------
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_untracked_examples_dir(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "prompts/foo_python.prompt": "p",
+        "README.md": "r",
+    })
+    # Step 9 dropped an untracked file under examples/.
+    (repo / "examples").mkdir(parents=True, exist_ok=True)
+    (repo / "examples" / "leak.py").write_text("nope")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "examples/leak.py" in reverted
+    assert not (repo / "examples" / "leak.py").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_untracked_tests_dir(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "prompts/foo_python.prompt": "p",
+    })
+    (repo / "tests").mkdir(parents=True, exist_ok=True)
+    (repo / "tests" / "leak.py").write_text("nope")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "tests/leak.py" in reverted
+    assert not (repo / "tests" / "leak.py").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_untracked_unrelated_prompt(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    # An untracked prompt that Step 6 never listed.
+    (repo / "prompts" / "backend").mkdir(parents=True, exist_ok=True)
+    (repo / "prompts" / "backend" / "unrelated_python.prompt").write_text("nope")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "prompts/backend/unrelated_python.prompt" in reverted
+    assert not (repo / "prompts" / "backend" / "unrelated_python.prompt").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_tracked_architecture_json_modification(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 9 modified architecture.json — out of scope.
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert "architecture.json" in reverted
+    # Must be restored to the committed content.
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_in_scope_prompt_modification(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "original"})
+    # Step 6 lists `prompts/foo_python.prompt` — in scope.
+    (repo / "prompts" / "foo_python.prompt").write_text("modified by step 9")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "prompts" / "foo_python.prompt").read_text() == "modified by step 9"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_direct_edit_candidate(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "frontend/src/Other.tsx": "// TODO\n",
+    })
+    (repo / "frontend" / "src" / "Other.tsx").write_text("// done\n")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": ["frontend/src/Other.tsx"]},
+        state={},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "frontend" / "src" / "Other.tsx").read_text() == "// done\n"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_associated_document(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"docs/api_reference.md": "original"})
+    # Step 5 lists docs/api_reference.md as an Associated Document — in scope.
+    (repo / "docs" / "api_reference.md").write_text("updated by step 9")
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "docs" / "api_reference.md").read_text() == "updated by step 9"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_healed_prompt_and_meta(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "prompts/healed_python.prompt": "old",
+        ".pdd/meta/healed_python.json": "{}",
+    })
+    (repo / "prompts" / "healed_python.prompt").write_text("rewritten")
+    (repo / ".pdd" / "meta" / "healed_python.json").write_text('{"hash": "abc"}')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/healed_python.prompt"]},
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (repo / "prompts" / "healed_python.prompt").read_text() == "rewritten"
+    assert (repo / ".pdd" / "meta" / "healed_python.json").read_text() == '{"hash": "abc"}'
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_no_op_on_clean_worktree(tmp_path):
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+    assert reverted == []
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_returns_empty_when_worktree_missing(tmp_path):
+    missing = tmp_path / "does_not_exist"
+    reverted = _enforce_step9_scope(
+        missing,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        quiet=True,
+    )
+    assert reverted == []
+
+
+# 22-24: Orchestrator integration tests --------------------------------------
+
+
+def _make_real_worktree_for_step9(tmp_path, init_files=None):
+    """Set up the cwd + worktree expected by the orchestrator's step9 flow.
+
+    The orchestrator computes ``worktree_path = git_root /
+    .pdd/worktrees/change-issue-{N}``. We pre-create that as a real git repo
+    so subprocess.run (NOT mocked here for the worktree subprocess calls) can
+    operate on it. The orchestrator's own ``_setup_worktree`` is mocked to
+    return our pre-built worktree.
+    """
+    repo = tmp_path / "repo"
+    files = {"prompts/foo_python.prompt": "p"}
+    if init_files:
+        files.update(init_files)
+    _scope_git_init(repo, files)
+
+    worktree = tmp_path / "wt"
+    _scope_git_init(worktree, files)
+    return repo, worktree
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_stops_workflow(temp_cwd):
+    """Step 9 drops a file under tests/. Guard reverts, workflow stops."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl") as _mlt, \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)) as _mls, \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state") as _mcs, \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True) as _mpc, \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None) as _mcp, \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)) as _msw, \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])) as _mpdh, \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Simulate the LLM dropping an out-of-scope file inside the
+                # worktree, then claiming success.
+                (worktree / "tests").mkdir(parents=True, exist_ok=True)
+                (worktree / "tests" / "leak.py").write_text("nope")
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1123,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "Scope violation" in msg
+    # Guard removed the leak.
+    assert not (worktree / "tests" / "leak.py").exists()
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_scope_violation_marks_failed_in_state(temp_cwd):
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                (worktree / "examples").mkdir(parents=True, exist_ok=True)
+                (worktree / "examples" / "leak.py").write_text("nope")
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, _msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1124,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert mock_save.called
+    saved_state = mock_save.call_args[0][3]
+    assert saved_state["step_outputs"]["9"].startswith("FAILED: SCOPE_VIOLATION")
+    # last_completed_step must NOT advance to 9.
+    assert saved_state["last_completed_step"] < 9
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_no_violations_proceeds_normally(temp_cwd):
+    """Step 9 only touches allowlisted files → workflow continues past Step 9."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Touch only allowlisted prompt.
+                (worktree / "prompts" / "foo_python.prompt").write_text(
+                    "rewritten by step 9"
+                )
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            if label == "step10":
+                return (True, "ARCHITECTURE_FILES_MODIFIED: architecture.json",
+                        0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/o/r/pull/9",
+                        0.2, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        # Step 10 will try to read architecture.json via _scope_*; tolerate
+        # absence by giving it one in the worktree.
+        (worktree / "architecture.json").write_text('{"modules": []}\n')
+
+        success, msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1125,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    # Workflow proceeds past Step 9 — at minimum step10 must have been called.
+    labels_called = [c.kwargs.get("label", "") for c in mock_run.call_args_list]
+    assert "step10" in labels_called, (
+        "Workflow did not proceed past Step 9; labels seen: %r" % labels_called
+    )
+    # And the message should NOT report a scope violation.
+    assert "Scope violation" not in msg
+
