@@ -1705,23 +1705,23 @@ def test_llm_invoke_accumulates_attempted_models_across_calls_in_ctx_obj(
     )
 
 
-def test_llm_invoke_terminal_failure_rewinds_ctx_obj_attempted_models(
+def test_llm_invoke_terminal_failure_preserves_attempts_in_ctx_obj(
     mock_load_models, mock_set_llm_cache,
 ):
-    """F7 regression (PR #1056 4th-round review).
+    """F14 regression (PR #1056 7th-round review) — SUPERSEDES round-4 F7.
 
-    When `llm_invoke` exhausts all candidate models and raises the terminal
-    `RuntimeError`, it must rewind `ctx.obj['attempted_models']` to the
-    state it was in immediately before this call. Callers that wrap
-    `llm_invoke` in `try/except` and recover with a different model (e.g.
-    `auto_include` falling back to `summary_model` when the final
-    `auto_include_LLM` call fails terminally) would otherwise be left with
-    this call's failed attempts trailing `ctx.obj['attempted_models']`,
-    breaking the documented "list ends with the model column" invariant.
+    Issue #897 wants `attempted_models` to record "models that were
+    attempted and then abandoned." Rounds 4-6 added a rewind on terminal
+    failure to defend a since-relaxed "ends with model column" invariant;
+    round 7 surfaced that the rewind silently drops the very rows users
+    asked for when an outer caller (e.g. `auto_include` catching the
+    final auto_include_LLM error) recovers with a different model. Round
+    7 removes the rewind entirely.
 
-    The failed attempts must still be retrievable from the raised
-    exception's `attempted_models` attribute for any caller that wants
-    them explicitly.
+    Contract now: terminal RuntimeError must LEAVE the failed attempts on
+    `ctx.obj['attempted_models']` (appended to whatever prior history
+    existed) AND attach the per-call attempts to the exception so worker
+    threads that can't see ctx.obj still recover them via getattr.
     """
     import click
     mock_request = MagicMock(spec=httpx.Request)
@@ -1742,7 +1742,7 @@ def test_llm_invoke_terminal_failure_rewinds_ctx_obj_attempted_models(
                    side_effect=openai.APIConnectionError(
                        message="terminal failure",
                        request=mock_request,
-                   )) as mock_completion:
+                   )):
             try:
                 llm_invoke(
                     prompt="some prompt",
@@ -1756,39 +1756,47 @@ def test_llm_invoke_terminal_failure_rewinds_ctx_obj_attempted_models(
     assert raised_exception is not None, (
         "llm_invoke must raise RuntimeError when all candidates are exhausted"
     )
-    assert ctx.obj.get('attempted_models') == prior_attempts, (
-        f"Terminal failure must rewind ctx.obj['attempted_models'] to its "
-        f"pre-call state. Expected {prior_attempts!r}, got "
-        f"{ctx.obj.get('attempted_models')!r}"
+    published = ctx.obj.get('attempted_models')
+    assert isinstance(published, list), (
+        f"ctx.obj['attempted_models'] should remain a list after terminal "
+        f"failure, got {published!r}"
     )
-    # The failed attempts remain on the exception attribute so callers that
-    # explicitly want them can opt in.
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must be preserved at the head of the audit log. "
+        f"Expected prefix {prior_attempts!r}, got {published!r}"
+    )
+    assert len(published) > len(prior_attempts), (
+        f"Failed attempts from this call must remain appended to ctx.obj — "
+        f"that's the whole point of `attempted_models` per issue #897. "
+        f"Got {published!r}"
+    )
+    # The failed attempts are also attached to the exception for worker
+    # threads (Click context is thread-local; workers can't read ctx.obj).
     exc_attempts = getattr(raised_exception, "attempted_models", None)
     assert isinstance(exc_attempts, list) and len(exc_attempts) > 0, (
         f"Failed attempts must remain on the exception's attempted_models "
-        f"attribute (callers like summarize_directory workers rely on this "
-        f"to surface terminal failures). Got: {exc_attempts!r}"
+        f"attribute for worker-thread recovery. Got: {exc_attempts!r}"
     )
 
 
-def test_llm_invoke_insufficient_credits_rewinds_ctx_obj(
+def test_llm_invoke_insufficient_credits_preserves_cloud_attempt_in_ctx_obj(
     mock_load_models, mock_set_llm_cache,
 ):
-    """F10 regression (PR #1056 5th-round review).
+    """F14/F15 regression (PR #1056 7th-round review) — SUPERSEDES F10.
 
-    `_llm_invoke_cloud` raises `InsufficientCreditsError` for HTTP 402.
-    Before the fix, the `except InsufficientCreditsError: raise` branch
-    re-raised without rewinding `ctx.obj['attempted_models']`. The
-    cloud placeholder recorded BEFORE the cloud request stayed on
-    ctx.obj. If a caller (e.g. `auto_include`) catches the credit
-    error and recovers with a different model, the stale `cloud:...`
-    entry trails ctx.obj['attempted_models'] and breaks the "ends with
-    model column" invariant.
+    Round 5 added a rewind on `InsufficientCreditsError` re-raise to
+    defend the since-relaxed "ends with model column" invariant. Round 7
+    surfaced that the rewind silently deletes the cloud attempt the user
+    explicitly wants to see ("models that were attempted and then
+    abandoned" per issue #897). With invariant relaxed, the rewind has
+    no purpose and is removed.
 
-    The fix routes both the terminal-RuntimeError path AND the
-    InsufficientCreditsError re-raise through a single
-    `_rewind_ctx_attempts_to_snapshot()` helper. Verifying both paths
-    catches future re-raises that forget to call it.
+    Contract now: `InsufficientCreditsError` LEAVES the cloud placeholder
+    on `ctx.obj['attempted_models']` so a caller that recovers (e.g.
+    `auto_include` returning `summary_model`) still has the audit trail
+    of the cloud attempt. The exception also carries the attempts as an
+    attribute for worker-thread recovery (parity with terminal
+    RuntimeError).
 
     NOTE: Use `pdd.llm_invoke` references dynamically (not the top-of-
     file `from ... import ...` aliases) because an earlier test
@@ -1796,7 +1804,7 @@ def test_llm_invoke_insufficient_credits_rewinds_ctx_obj(
     the module. After reload, the file-scope aliases become stale —
     the `except InsufficientCreditsError:` inside the reloaded
     llm_invoke checks against the NEW class, so an OLD-class instance
-    sails right past it and the rewind never runs.
+    sails right past it.
     """
     import click
     import pdd.llm_invoke as _llm_mod
@@ -1824,38 +1832,39 @@ def test_llm_invoke_insufficient_credits_rewinds_ctx_obj(
     assert isinstance(raised, _llm_mod.InsufficientCreditsError), (
         "llm_invoke must propagate InsufficientCreditsError so callers know"
     )
-    assert ctx.obj.get('attempted_models') == prior_attempts, (
-        f"InsufficientCreditsError must rewind ctx.obj['attempted_models'] "
-        f"to its pre-call state — otherwise the cloud placeholder leaks. "
-        f"Expected {prior_attempts!r}, got {ctx.obj.get('attempted_models')!r}"
+    published = ctx.obj.get('attempted_models') or []
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must remain at the head of the audit log. "
+        f"Got: {published!r}"
+    )
+    assert len(published) > len(prior_attempts), (
+        f"Cloud placeholder must remain in ctx.obj after credit error so "
+        f"recovered callers can record the abandoned attempt. Got: "
+        f"{published!r}"
+    )
+    assert any('cloud' in str(m) for m in published[len(prior_attempts):]), (
+        f"Appended entries should include the cloud placeholder. Got: "
+        f"{published!r}"
     )
 
 
-def test_llm_invoke_model_loading_failure_rewinds_ctx_obj(
+def test_llm_invoke_model_loading_failure_preserves_cloud_attempt_and_attaches(
     mock_set_llm_cache,
 ):
-    """F13 regression (PR #1056 6th-round review).
+    """F15 regression (PR #1056 7th-round review) — SUPERSEDES round-6 F13.
 
-    The structural rewind contract: ANY raise out of llm_invoke (after
-    the snapshot) must rewind ctx.obj['attempted_models']. Round-5 fixed
-    a specific subset (terminal RuntimeError, InsufficientCreditsError)
-    by calling _rewind explicitly at those raise sites. But the model
-    loading/selection raise at pdd/llm_invoke.py:3182 didn't have its
-    own rewind call — and the cloud path records a
-    `cloud:<DEFAULT_BASE_MODEL>` placeholder BEFORE the request (so a
-    cloud-fallback-then-local-load-failure sequence leaves the
-    placeholder stranded on ctx.obj).
+    Round 6 added a try/finally rewind to clear ctx.obj on bare-raise
+    paths. Round 7 surfaced that the rewind drops audit-log data the
+    user explicitly wants; the rewind is now removed entirely.
 
-    To actually exercise the bug we need: use_cloud=True → cloud raises
-    a RECOVERABLE error (CloudFallbackError) so we fall through to
-    local → _load_model_data raises FileNotFoundError → exception
-    propagates. Without the structural try/finally fix, the cloud
-    placeholder stays in ctx.obj.
-
-    Round-6 fixes this structurally by wrapping the llm_invoke body in
-    try/finally — every uncaught exception rewinds automatically.
-    Future bare raises added inside the body are covered by the same
-    finally without remembering to add a rewind call site.
+    What MUST remain true: when cloud fails recoverably (CloudFallbackError
+    falls through to local) and then `_load_model_data` raises, the
+    cloud placeholder recorded before the cloud request stays on
+    ctx.obj — the recovered caller can still see "PDD tried cloud
+    first" in the cost.csv audit log. Additionally, the raised
+    exception now carries `attempted_models` as an attribute so worker
+    threads (which can't read ctx.obj) recover the same history via
+    getattr.
     """
     import click
     import pdd.llm_invoke as _llm_mod
@@ -1890,14 +1899,23 @@ def test_llm_invoke_model_loading_failure_rewinds_ctx_obj(
     assert isinstance(raised, FileNotFoundError), (
         "Model-loading failure must propagate FileNotFoundError"
     )
-    assert ctx.obj.get('attempted_models') == prior_attempts, (
-        f"Model-loading failure after cloud fallback must rewind "
-        f"ctx.obj['attempted_models'] to its pre-call state via the "
-        f"structural try/finally. Without it, the cloud:<base_model> "
-        f"placeholder recorded before _llm_invoke_cloud was called trails "
-        f"attempted_models for any recovered caller. "
-        f"Expected {prior_attempts!r}, got "
-        f"{ctx.obj.get('attempted_models')!r}"
+    published = ctx.obj.get('attempted_models') or []
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must remain at head of audit log. Got: {published!r}"
+    )
+    assert any('cloud' in str(m) for m in published[len(prior_attempts):]), (
+        f"Cloud placeholder must remain visible in ctx.obj after the "
+        f"cloud-fallback-then-load-failure sequence so a recovered caller "
+        f"can audit the cloud attempt. Got: {published!r}"
+    )
+    # Worker-thread recovery channel: the raised exception carries the
+    # attempts as an attribute, parity with terminal RuntimeError and
+    # InsufficientCreditsError.
+    exc_attempts = getattr(raised, "attempted_models", None)
+    assert isinstance(exc_attempts, list) and len(exc_attempts) > 0, (
+        f"Model-loading raise must attach attempted_models to the "
+        f"exception (F15) so worker threads can recover via getattr. "
+        f"Got: {exc_attempts!r}"
     )
 
 
@@ -1954,14 +1972,15 @@ def test_llm_invoke_insufficient_credits_attaches_attempts_to_exception(
     )
 
 
-def test_llm_invoke_terminal_failure_pops_ctx_obj_when_no_prior_key(
+def test_llm_invoke_terminal_failure_populates_ctx_obj_when_no_prior_key(
     mock_load_models, mock_set_llm_cache,
 ):
-    """F7 companion: when the `attempted_models` KEY did not exist on
-    ctx.obj before the failing `llm_invoke` call, the rewind must pop
-    the key entirely rather than leave behind an empty list. A leftover
-    empty list would mask the "no attempts yet" state from any subsequent
-    caller that checks `'attempted_models' in ctx.obj`.
+    """When the `attempted_models` KEY did not exist on ctx.obj before
+    the failing `llm_invoke` call, the failure path must POPULATE the
+    key with this call's attempts — not leave it absent. The audit log
+    is the whole point of the feature; a missing key after a failed
+    call would be the same data loss as the round-6 rewind we backed
+    out.
     """
     import click
     mock_request = MagicMock(spec=httpx.Request)
@@ -1989,9 +2008,77 @@ def test_llm_invoke_terminal_failure_pops_ctx_obj_when_no_prior_key(
                     temperature=0.0,
                 )
 
-    assert 'attempted_models' not in ctx.obj, (
-        f"Terminal failure with no prior key must pop the key, not leave "
-        f"an empty list. Got ctx.obj: {ctx.obj!r}"
+    published = ctx.obj.get('attempted_models')
+    assert isinstance(published, list) and len(published) > 0, (
+        f"Terminal failure with no prior key must populate ctx.obj with "
+        f"this call's attempts so the audit log reaches track_cost. "
+        f"Got ctx.obj: {ctx.obj!r}"
+    )
+
+
+def test_failed_substep_attempts_visible_to_recovered_caller(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F14 contract pin (PR #1056 7th-round review).
+
+    The round-7 deletion of the rewind machinery is justified by issue
+    #897's intent: `attempted_models` is an audit log of "models that
+    were attempted and then abandoned." Concretely, this means a caller
+    pattern like `auto_include` — which catches a final auto_include_LLM
+    terminal failure and recovers by returning `summary_model` — must
+    leave the failed selector-stage attempts visible to the outer
+    `track_cost`, even though the `model` column will end up being the
+    summary model. This test simulates that pattern directly.
+
+    If a round-8 ever reintroduces a rewind under any name, this test
+    should fail loudly.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    # Simulate `summarize_directory` having already pushed its
+    # successful summary-stage attempts onto ctx.obj before the failing
+    # selector-stage call runs.
+    summary_attempts = ['summarize-fallback-1', 'summary-success']
+    cmd = click.Command(name="auto_include_LLM_caller")
+    ctx = click.Context(cmd, obj={'attempted_models': list(summary_attempts)})
+
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="selector-stage exhausted",
+                       request=mock_request,
+                   )):
+            # Outer caller behaves like auto_include: catches the
+            # terminal failure and recovers with summary_model. We just
+            # want the audit-log entries to survive that recovery.
+            try:
+                llm_invoke(
+                    prompt="selector prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+            except RuntimeError:
+                pass  # Recovered.
+
+    published = ctx.obj.get('attempted_models') or []
+    # Summary attempts must still be present at the head.
+    assert published[:len(summary_attempts)] == summary_attempts, (
+        f"Earlier successful summary-stage attempts must remain at the "
+        f"head of the audit log. Got: {published!r}"
+    )
+    # Failed selector-stage attempts must be appended afterward.
+    assert len(published) > len(summary_attempts), (
+        f"Failed selector-stage attempts were dropped from ctx.obj — "
+        f"that's the round-7 regression (rewind reintroduced). Audit "
+        f"log: {published!r}"
     )
 
 

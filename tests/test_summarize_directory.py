@@ -2189,32 +2189,31 @@ class TestMaxWorkers:
             f"failed candidate. Got {returned_model!r}; published list: "
             f"{published}"
         )
-        # Failed attempts STILL surface in the audit log; just not in
-        # the model column.
-        for failed_cand in ('fail-A', 'fail-B'):
-            assert failed_cand in published, (
-                f"Terminal failure's attempts must still surface in "
-                f"attempted_models; missing {failed_cand!r}. "
-                f"Published: {published}"
-            )
+        # Note: the audit-log property (failed attempts visible in
+        # attempted_models) is delivered by real llm_invoke's incremental
+        # publish, which this test bypasses by mocking llm_invoke at the
+        # summarize_directory boundary. Tests in test_llm_invoke.py
+        # (test_llm_invoke_terminal_failure_preserves_attempts_in_ctx_obj)
+        # exercise that path with real llm_invoke.
 
-    def test_single_thread_terminal_failure_publishes_attempts(
+    def test_helper_recovers_attempts_from_terminal_exception_attribute(
         self, tmp_path, mock_load_prompt_template
     ):
-        """F8 regression (PR #1056 5th-round review).
+        """F6 contract pin (PR #1056 7th-round revision of round-5 F8).
 
-        When `summarize_directory(max_workers=1)` runs a file whose
-        `llm_invoke` exhausts all candidates, the helper's `except` block
-        catches the RuntimeError and records an error CSV row, but
-        `llm_invoke` already rewound its contribution from
-        `ctx.obj['attempted_models']` (F7). The single-thread caller was
-        previously discarding the helper's recovered attempts via
-        `cost, model, _attempted = _process_file(...)`, silently dropping
-        the failed file's fallback history.
+        The helper `_process_single_file_logic` must continue to recover
+        `getattr(exc, "attempted_models", None)` from a worker-thread
+        llm_invoke terminal failure — this is the only recovery channel
+        for workers, since Click context is thread-local. The threaded
+        path in summarize_directory then collects and publishes those
+        attempts to the main thread's ctx.obj.
 
-        After the fix: the single-thread caller detects the terminal-
-        failure signature (`model == "cached"` AND `attempted` non-empty)
-        and re-publishes the recovered attempts to ctx.obj.
+        Note: round-7 removed the single-thread re-publish that round-5
+        F8 added, because llm_invoke no longer rewinds on failure — its
+        incremental publish lands attempts on ctx.obj naturally in
+        single-thread mode (verified by
+        test_llm_invoke_terminal_failure_preserves_attempts_in_ctx_obj).
+        This test now covers the threaded recovery path.
         """
         import click
 
@@ -2232,16 +2231,17 @@ class TestMaxWorkers:
                     directory_path=str(tmp_path / "*.py"),
                     strength=0.5,
                     temperature=0.0,
-                    max_workers=1,
+                    max_workers=2,  # Threaded: worker uses getattr to
+                                    # recover attempts from exception;
+                                    # main thread publishes them to
+                                    # ctx.obj via _append_attempts...
                 )
                 published = ctx.obj.get('attempted_models') or []
 
-        # The single-thread caller must re-publish the recovered attempts
-        # because llm_invoke's terminal-failure rewind removed them from
-        # ctx.obj before the helper caught the exception.
         assert published == ['fail-1', 'fail-2', 'fail-3'], (
-            f"Single-thread terminal failure must re-publish the helper's "
-            f"recovered attempts to ctx.obj['attempted_models']. Expected "
+            f"Threaded worker terminal failure: helper must recover "
+            f"attempts from exception attribute, threaded path must "
+            f"publish them to main thread's ctx.obj. Expected "
             f"['fail-1', 'fail-2', 'fail-3'], got: {published}"
         )
 

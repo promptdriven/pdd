@@ -264,15 +264,16 @@ def summarize_directory(
 
     def _append_attempts_to_ctx_obj(attempts: List[str]) -> None:
         """Append a list of model attempts to the main thread's Click
-        context's `attempted_models` list, creating it if necessary. Used
-        in two places:
-          - The threaded path, where worker threads cannot publish through
-            llm_invoke's native `click.get_current_context()` channel
-            (Click context is thread-local).
-          - The single-thread path, when llm_invoke fails terminally and
-            its rewind removes its own attempts from ctx.obj; we then
-            re-publish the helper's recovered attempts so they survive
-            into the cost.csv row.
+        context's `attempted_models` list, creating it if necessary.
+
+        Used only by the threaded path: worker threads cannot publish via
+        llm_invoke's native `click.get_current_context()` channel (Click
+        context is thread-local), so we collect per-worker attempts and
+        publish them from the main thread after workers complete. The
+        single-thread path doesn't need this helper because llm_invoke is
+        called from the main thread, where its incremental publish lands
+        attempts on ctx.obj as they happen (including failed substeps —
+        llm_invoke no longer rewinds on failure).
         """
         if not attempts:
             return
@@ -371,19 +372,10 @@ def summarize_directory(
     elif progress_callback:
         for i, file_path in enumerate(files):
             progress_callback(i + 1, total_files)
-            cost, model, file_attempts = _process_file(i, file_path)
+            cost, model, _file_attempts = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
-            elif file_attempts:
-                # Terminal failure recovered inside helper; llm_invoke
-                # rewound its contribution from ctx.obj on the way out,
-                # so re-publish the recovered history here to preserve
-                # this file's fallback record in cost.csv. We do NOT bump
-                # last_model_name here — the CSV `model` column should
-                # name the model that produced output, not a failed
-                # candidate; the attempts still surface in attempted_models.
-                _append_attempts_to_ctx_obj(file_attempts)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
     elif verbose:
@@ -397,23 +389,19 @@ def summarize_directory(
         ) as progress:
             task = progress.add_task("[cyan]Processing files...", total=len(files))
             for i, file_path in enumerate(files):
-                cost, model, file_attempts = _process_file(i, file_path)
+                cost, model, _file_attempts = _process_file(i, file_path)
                 total_cost += cost
                 if model != "cached":
                     last_model_name = model
-                elif file_attempts:
-                    _append_attempts_to_ctx_obj(file_attempts)
                 if csv_path:
                     _flush_csv_to_disk(results_data, csv_path)
                 progress.advance(task)
     else:
         for i, file_path in enumerate(files):
-            cost, model, file_attempts = _process_file(i, file_path)
+            cost, model, _file_attempts = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
-            elif file_attempts:
-                _append_attempts_to_ctx_obj(file_attempts)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
 

@@ -227,27 +227,26 @@
       PDD_FORCE, github_copilot OAuth token missing), or fails with a fallback-eligible error
       (SchemaValidationError, ContextWindowExceededError, recoverable API errors).
     - Include `attempted_models` (a copy of the list) in the returned dictionary on success.
-    - On terminal RuntimeError (all candidates exhausted), attach the list to the exception as an
-      `attempted_models` attribute via `setattr(exc, "attempted_models", list(attempted_models))`
-      so callers can still surface the full history on failure. Apply the same `setattr` pattern
-      on the cloud `InsufficientCreditsError` re-raise — worker threads (Click context is
-      thread-local) rely on this attribute as their only recovery channel for failed-substep
-      attempts. Callers that explicitly want the failed attempts can read them off the
-      exception's `attempted_models` attribute.
-    - **Centralize the ctx.obj rewind via try/finally**, not via per-raise-site calls. Wrap the
-      body of `llm_invoke` (from right after `_record_attempt` is defined down through the
-      terminal `raise terminal_error from last_exception`) in a single `try:` block, set
-      `_succeeded = False` immediately before the `try:`, and set `_succeeded = True`
-      inline at every successful return (cloud success return, Responses-API local return,
-      regular LiteLLM local return). The `finally:` calls
-      `_rewind_ctx_attempts_to_snapshot()` whenever `_succeeded` is still False. This makes
-      "any raise out of the body rewinds ctx.obj" a structural invariant rather than a
-      checklist of remembered call sites — `InsufficientCreditsError`, terminal RuntimeError,
-      model-loading FileNotFoundError/ValueError/RuntimeError, validation ValueErrors, and
-      any future bare `raise` added inside the body all get rewind automatically. Round 5
-      patched scattered rewind sites and round 6 still found a bare-`raise` path
-      (`_load_model_data` failure after cloud fallback) — the structural finally eliminates
-      that whole bug class.
+    - On every exception path that raises after `_record_attempt` has run at least once,
+      attach the per-call attempt list to the raised exception via
+      `setattr(exc, "attempted_models", list(attempted_models))`. This includes the
+      terminal `RuntimeError` (all candidates exhausted), the cloud `InsufficientCreditsError`
+      re-raise, and the model-loading/selection re-raise
+      (`_load_model_data` / `_select_model_candidates` FileNotFoundError, ValueError,
+      RuntimeError). Worker threads (Click context is thread-local; workers cannot read
+      ctx.obj) rely on this attribute as their only recovery channel; main-thread callers
+      can also read it for explicit recovery logic.
+    - Do NOT rewind `ctx.obj['attempted_models']` on failure. `attempted_models` is a
+      chronological audit log of every model the command tried — issue #897 frames it
+      explicitly as "models that were attempted and then abandoned." Rewinding would silently
+      drop the exact rows users opened the feature to investigate (e.g. `auto_include`
+      catching a final auto_include_LLM failure and recovering with `summary_model`: the
+      failed selector-stage attempts must remain visible in `attempted_models` even though
+      the `model` column shows the recovered model). The `model` column names the success
+      identity; `attempted_models` is the record of what was tried — they may legitimately
+      differ. Earlier rewind designs (PR #1056 rounds 4-6) defended an "ends with model
+      column" invariant that has since been relaxed in the README; do not re-introduce
+      rewind machinery without re-arguing that invariant.
     - Publish progress to the Click context for non-LLM consumers (e.g. `track_cost`):
       attempt to read `click.get_current_context(silent=True)`; if a context is returned and
       `ctx.obj` is a dict (initialize an empty dict on `ctx.obj` only if `ctx.obj is None`,
@@ -259,11 +258,7 @@
       tracked CLI command (e.g. `pdd generate` invoking generation followed by postprocess);
       overwriting with just `list(attempted_models)` would hide an earlier call's fallback in
       the cost CSV. When no Click context exists (library usage, tests), this is a silent
-      no-op — never raise from the context publication step. Also record, at snapshot time,
-      a separate flag for whether the `attempted_models` KEY existed on `ctx.obj` (not merely
-      whether the value was a list) — the terminal-failure rewind described above uses this
-      flag to either restore the prior list or pop the key entirely, so a recovered caller
-      sees ctx.obj in exactly the state it had before this call.
+      no-op — never raise from the context publication step.
 
 % Cloud Execution:
     - Define three cloud-related exceptions:
