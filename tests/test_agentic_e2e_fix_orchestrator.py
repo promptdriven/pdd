@@ -10058,6 +10058,234 @@ class TestTrustedStepCommentPosting:
             "none carried 10010 in their state['step_comments']."
         )
 
+    def test_step11_persists_on_success_fall_through_resume_path(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Regression for Greg's PR review (round 4 — resume hole).
+
+        On the SUCCESS_FALL_THROUGH resume path, the cached Step 9 output
+        already says ``ALL_TESTS_PASS``, the orchestrator marks
+        ``success = True`` BEFORE the outer ``while`` loop, and the inner
+        ``for step_num in range(1, 10)`` loop never runs. That loop is
+        the only place that initializes the inner-loop ``state_data``
+        dict, so any post-loop reference to it would raise
+        ``UnboundLocalError`` (and the broad try/except around the post
+        would swallow the failure as a "post_step_comment_once failed"
+        warning, leaving the composite key unpersisted).
+
+        Assert that even on this resume path, the post-loop Step 11
+        trusted-comment save still calls ``save_workflow_state`` with
+        ``state["step_comments"]`` containing key ``10011`` before any
+        CI-failure return.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"<step_report>{label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        # Resumed state representing "Step 9 already declared
+        # ALL_TESTS_PASS in the prior run". The resume code path checks
+        # ``last_completed_step == 9`` AND the cached Step 9 output
+        # contains a success token, then marks the run as a
+        # SUCCESS_FALL_THROUGH (the post-loop Step 11 / Step 10 path).
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_url": "https://github.com/owner/repo/issues/1",
+            "issue_number": 1,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: CODE_BUG in module.py",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "Step 7 output",
+                "8": "Step 8 output",
+                "9": "ALL_TESTS_PASS — verification succeeded",
+            },
+            "total_cost": 0.5,
+            "model_used": "gpt-4",
+            "changed_files": ["src/module.py"],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            # step_comments empty so the post-loop save MUST add 10011
+            # for this assertion to pass.
+            "step_comments": [],
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        # Set resume=True (default) and force the resume code path by
+        # making load_workflow_state return the cached "Step 9 success"
+        # state.
+
+        def _add_key(**kwargs):
+            kwargs["posted_steps"].add(kwargs["step_num"])
+            return True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup",
+            return_value=(0.0, ["module.py"]),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(False, "Required CI checks failed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=_add_key,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            return_value=None,
+        ) as mock_save:
+            success, _, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        # CI failure must propagate as success=False.
+        assert success is False
+        # And the Step 11 key MUST appear in at least one save_workflow_state
+        # call's state dict — that is the round-4 invariant Greg flagged.
+        step11_persisted = any(
+            10011 in (
+                call.args[3] if len(call.args) > 3 else call.kwargs.get("state", {})
+            ).get("step_comments", [])
+            for call in mock_save.call_args_list
+        )
+        assert step11_persisted, (
+            "Step 11 cleanup trusted post must persist step_comments on the "
+            "SUCCESS_FALL_THROUGH resume path even though the inner loop "
+            "never ran. save_workflow_state was called "
+            f"{mock_save.call_count} times but none carried 10011 in their "
+            "state['step_comments']. If this fails on a pre-fix build, the "
+            "post is being silently dropped by an UnboundLocalError swallowed "
+            "in the post-step try/except."
+        )
+
+    def test_step10_persists_on_success_fall_through_resume_path(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Same round-4 regression as above, but for the Step 10 CI post
+        on a SUCCESS_FALL_THROUGH resume path. The inner loop never runs,
+        but Step 10's trusted post must still persist its composite key
+        (``10010``) to saved state before any final-checkup-failure
+        return.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"<step_report>{label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+
+        resumed_state = {
+            "workflow": "e2e_fix",
+            "issue_url": "https://github.com/owner/repo/issues/1",
+            "issue_number": 1,
+            "current_cycle": 1,
+            "last_completed_step": 9,
+            "step_outputs": {
+                "1": "Step 1 output",
+                "2": "Step 2 output",
+                "3": "Root cause: CODE_BUG in module.py",
+                "4": "Step 4 output",
+                "5": "Step 5 output",
+                "6": "Step 6 output",
+                "7": "Step 7 output",
+                "8": "Step 8 output",
+                "9": "ALL_TESTS_PASS — verification succeeded",
+            },
+            "total_cost": 0.5,
+            "model_used": "gpt-4",
+            "changed_files": ["src/module.py"],
+            "dev_unit_states": {},
+            "skipped_steps": {},
+            "step_comments": [],
+            "initial_file_hashes": {"src/module.py": "originalhash"},
+            "initial_sha": "deadbeef",
+            "last_saved_at": "2026-01-01T00:00:00",
+        }
+
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        def _add_key(**kwargs):
+            kwargs["posted_steps"].add(kwargs["step_num"])
+            return True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator.load_workflow_state",
+            return_value=(resumed_state, None),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._commit_and_push",
+            return_value=(True, "ok"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            return_value="aaaaaaaa",
+            create=True,
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(False, "checkup failed", 0.0, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            side_effect=_add_key,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.save_workflow_state",
+            return_value=None,
+        ) as mock_save:
+            success, _, _, _, _ = run_agentic_e2e_fix_orchestrator(
+                **e2e_fix_default_args
+            )
+
+        assert success is False
+        step10_persisted = any(
+            10010 in (
+                call.args[3] if len(call.args) > 3 else call.kwargs.get("state", {})
+            ).get("step_comments", [])
+            for call in mock_save.call_args_list
+        )
+        assert step10_persisted, (
+            "Step 10 CI trusted post must persist step_comments on the "
+            "SUCCESS_FALL_THROUGH resume path. save_workflow_state was "
+            f"called {mock_save.call_count} times but none carried 10010 "
+            "in their state['step_comments']."
+        )
+
 
 class TestFinalCheckupForwardsCwd:
     def test_run_final_checkup_passes_cwd_to_run_agentic_checkup(self, tmp_path):

@@ -1963,6 +1963,73 @@ def _run_step11_code_cleanup(
     return total_cost, changed_files
 
 
+def _build_post_loop_state(
+    *,
+    workflow_name: str,
+    issue_url: str,
+    issue_number: int,
+    current_cycle: int,
+    last_completed_step: int,
+    step_outputs: Dict[str, str],
+    dev_unit_states: Dict[str, Any],
+    skipped_steps: Dict[int, str],
+    total_cost: float,
+    model_used: str,
+    changed_files: List[str],
+    github_comment_id: Optional[int],
+    step_comments_set: Set[int],
+    initial_file_hashes: Optional[Dict[str, Optional[str]]],
+    initial_sha: Optional[str],
+) -> Dict[str, Any]:
+    """Build a workflow-state dict from function-scope locals only.
+
+    The orchestrator's main ``state_data`` dict is first assigned inside the
+    inner ``for step_num in range(1, 10)`` loop. The
+    SUCCESS_FALL_THROUGH / resume-terminal-success resume paths skip that
+    loop entirely (Step 9 already declared success on the prior run, so
+    control flows directly into the post-loop cleanup + CI sites). On
+    those paths, any reference to the inner-loop ``state_data`` raises
+    ``UnboundLocalError`` and the broad ``try/except`` around the
+    post-loop Step 10/11 trusted-comment saves swallows it as a
+    ``post_step_comment_once failed`` warning, leaving the composite key
+    unpersisted. A later resume would then re-post the same Step 10/11
+    visible comment.
+
+    This helper assembles the same shape as the inner-loop save using
+    only locals that are unconditionally initialized at function entry
+    (``step_outputs``, ``step_comments_set``, ``changed_files``, etc.) so
+    the post-loop saves work identically on the linear-execution path,
+    the SUCCESS_FALL_THROUGH resume path, and the
+    resume-terminal-success path.
+
+    Snapshot fields (``initial_file_hashes``, ``initial_sha``) accept
+    ``None`` so callers can pass through the resume-time restored values
+    without normalizing first.
+    """
+    return {
+        "workflow": workflow_name,
+        "issue_url": issue_url,
+        "issue_number": issue_number,
+        "current_cycle": current_cycle,
+        "last_completed_step": last_completed_step,
+        "step_outputs": dict(step_outputs),
+        "dev_unit_states": dict(dev_unit_states),
+        "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+        "total_cost": total_cost,
+        "model_used": model_used,
+        "changed_files": list(changed_files) if changed_files else [],
+        "last_saved_at": datetime.now().isoformat(),
+        "github_comment_id": github_comment_id,
+        "step_comments": sorted(step_comments_set),
+        "initial_file_hashes": (
+            dict(initial_file_hashes)
+            if isinstance(initial_file_hashes, dict)
+            else None
+        ),
+        "initial_sha": initial_sha if isinstance(initial_sha, str) else None,
+    }
+
+
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -3167,20 +3234,40 @@ def run_agentic_e2e_fix_orchestrator(
                         posted_steps=step_comments_set,
                         cwd=cwd,
                     )
-                    # Round-3 of Greg's review (idempotency requirement):
+                    # Round-3/4 of Greg's review (idempotency across resume):
                     # persist `step_comments` *immediately* after the post so
                     # the composite key (`current_cycle * 10000 + 11`)
                     # survives the failure-return paths below — specifically
                     # the `ci_success=False` branch which returns without
-                    # touching workflow state. Without this save, a later
-                    # resume would rehydrate `step_comments_set` from disk,
-                    # miss the post, and emit a duplicate Step 11 comment.
-                    state_data["step_comments"] = sorted(step_comments_set)
-                    state_data["total_cost"] = total_cost
-                    state_data["changed_files"] = list(changed_files)
-                    state_data["last_saved_at"] = datetime.now().isoformat()
+                    # touching workflow state.
+                    #
+                    # Round-4 fix: do NOT mutate the inner-loop `state_data`
+                    # local — on the SUCCESS_FALL_THROUGH / resume-terminal-
+                    # success paths the inner `for step_num in range(1, 10)`
+                    # loop never runs, so `state_data` is never assigned in
+                    # this invocation and the mutation would raise
+                    # `UnboundLocalError` inside the broad try/except. Build
+                    # a fresh post-loop state dict from function-scope
+                    # locals so the save works on every entry path.
                     save_workflow_state(
-                        cwd, issue_number, workflow_name, state_data,
+                        cwd, issue_number, workflow_name,
+                        _build_post_loop_state(
+                            workflow_name=workflow_name,
+                            issue_url=issue_url,
+                            issue_number=issue_number,
+                            current_cycle=current_cycle,
+                            last_completed_step=last_completed_step,
+                            step_outputs=step_outputs,
+                            dev_unit_states=dev_unit_states,
+                            skipped_steps=skipped_steps,
+                            total_cost=total_cost,
+                            model_used=model_used,
+                            changed_files=changed_files,
+                            github_comment_id=github_comment_id,
+                            step_comments_set=step_comments_set,
+                            initial_file_hashes=initial_file_hashes,
+                            initial_sha=initial_sha,
+                        ),
                         state_dir, repo_owner, repo_name,
                         use_github_state, github_comment_id,
                     )
@@ -3233,23 +3320,40 @@ def run_agentic_e2e_fix_orchestrator(
                         posted_steps=step_comments_set,
                         cwd=cwd,
                     )
-                    # Round-3 of Greg's review (idempotency requirement):
+                    # Round-3/4 of Greg's review (idempotency across resume):
                     # persist `step_comments` *immediately* after the post so
                     # the composite key (`current_cycle * 10000 + 10`)
                     # survives the failure-return path below — specifically
                     # when `_run_final_checkup_on_pr` returns
                     # `checkup_success=False` and the orchestrator returns
-                    # without clearing or saving state. Without this save, a
-                    # later resume would rehydrate `step_comments_set` from
-                    # disk, miss the post, and emit a duplicate Step 10
-                    # comment (and likely a duplicate Step 11 as well, since
-                    # the cleanup helper also runs again on resume).
-                    state_data["step_comments"] = sorted(step_comments_set)
-                    state_data["total_cost"] = total_cost
-                    state_data["changed_files"] = list(changed_files)
-                    state_data["last_saved_at"] = datetime.now().isoformat()
+                    # without clearing or saving state.
+                    #
+                    # Round-4 fix: do NOT mutate the inner-loop `state_data`
+                    # local — on the SUCCESS_FALL_THROUGH / resume-terminal-
+                    # success paths the inner step loop never runs, so
+                    # `state_data` is never assigned and the mutation would
+                    # raise UnboundLocalError. Build a fresh post-loop state
+                    # dict from function-scope locals so the save works on
+                    # every entry path.
                     save_workflow_state(
-                        cwd, issue_number, workflow_name, state_data,
+                        cwd, issue_number, workflow_name,
+                        _build_post_loop_state(
+                            workflow_name=workflow_name,
+                            issue_url=issue_url,
+                            issue_number=issue_number,
+                            current_cycle=current_cycle,
+                            last_completed_step=last_completed_step,
+                            step_outputs=step_outputs,
+                            dev_unit_states=dev_unit_states,
+                            skipped_steps=skipped_steps,
+                            total_cost=total_cost,
+                            model_used=model_used,
+                            changed_files=changed_files,
+                            github_comment_id=github_comment_id,
+                            step_comments_set=step_comments_set,
+                            initial_file_hashes=initial_file_hashes,
+                            initial_sha=initial_sha,
+                        ),
                         state_dir, repo_owner, repo_name,
                         use_github_state, github_comment_id,
                     )
