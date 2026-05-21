@@ -67,15 +67,17 @@ def _extract_markdown_section(text: str, heading: str) -> str:
     return match.group(1).strip() if match else ""
 
 # ---------------------------------------------------------------------------
-# Rule ID patterns (mirrors contract_check.py)
+# Rule ID patterns (shared with contract_check via contract_ir)
 # ---------------------------------------------------------------------------
+
+from .contract_ir import (  # noqa: E402  (regex aliases co-located with parsers)
+    COVERAGE_REF_RE as _COVERAGE_REF_RE,
+    CROSS_MODULE_REF_RE as _CROSS_MODULE_REF_RE,
+    rule_ids_from_covers as _rule_ids_from_covers,
+)
 
 _EXPLICIT_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
 _SEQ_ID_RE = re.compile(r"^(\d+)[.):\s]")
-_COVERAGE_REF_RE = re.compile(r"\b(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
-_CROSS_MODULE_REF_RE = re.compile(
-    r"([\w./\-]+\.prompt)#(R-?\d+|RULE-?\d+)\b", re.IGNORECASE
-)
 _WAIVER_ID_RE = re.compile(r"^(W-?\d+):", re.IGNORECASE)
 _WAIVER_REF_RE = re.compile(r"\bWAIVED\s+(W-?\d+)\b", re.IGNORECASE)
 _STORY_PROMPTS_META_RE = re.compile(
@@ -206,31 +208,6 @@ def _story_links_prompt(story_text: str, prompt_name: str) -> bool:
         p.lower() == prompt_base or p.lower().endswith("/" + prompt_base)
         for p in listed
     )
-
-
-def _rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
-    """
-    Extract rule IDs referenced in a ## Covers block for a given prompt.
-
-    Handles both formats:
-      - R1: description                       (single-prompt)
-      - prompts/foo.prompt#R3: description    (cross-module)
-    """
-    ids: set[str] = set()
-    for line in covers_text.splitlines():
-        stripped = line.strip().lstrip("-* ")
-        if not stripped:
-            continue
-        # Cross-module: prompt.prompt#R3
-        for cross_match in _CROSS_MODULE_REF_RE.finditer(stripped):
-            ref_file = cross_match.group(1).rsplit("/", 1)[-1]
-            if ref_file.lower() == prompt_name.lower():
-                ids.add(cross_match.group(2).upper())
-        if not _CROSS_MODULE_REF_RE.search(stripped):
-            # Single-prompt format — any R<N> reference counts
-            for ref_match in _COVERAGE_REF_RE.finditer(stripped):
-                ids.add(ref_match.group(1).upper())
-    return ids
 
 
 def scan_story_evidence(

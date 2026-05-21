@@ -31,9 +31,88 @@ _MODAL_PATTERN = re.compile(
 _EXPLICIT_ID_RE = re.compile(r"^(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
 _CANDIDATE_ID_RE = re.compile(r"^([A-Z]{1,5}[-_]\w+)\b", re.IGNORECASE)
 _SEQ_ID_RE = re.compile(r"^(\d+)[.):\s]")
-_COVERAGE_REF_RE = re.compile(r"\b(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+COVERAGE_REF_RE = re.compile(r"\b(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
+CROSS_MODULE_REF_RE = re.compile(
+    r"([\w./\-]+\.prompt)#(R-?\d+|RULE-?\d+)\b", re.IGNORECASE
+)
+_COVERAGE_REF_RE = COVERAGE_REF_RE  # backward-compat alias for internal callers
+_CROSS_MODULE_REF_RE = CROSS_MODULE_REF_RE
 _WAIVER_ID_RE = re.compile(r"^(W-?\d+):", re.IGNORECASE)
 _WAIVER_REF_RE = re.compile(r"\bWAIVED\s+(W-?\d+)\b", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class CoversRef:
+    """One rule reference parsed from a ## Covers line.
+
+    Attributes
+    ----------
+    rule_id:
+        Canonical uppercase rule ID (e.g. ``"R1"``, ``"R-001"``).
+    prompt_filename:
+        Basename of the prompt the reference scopes to, or ``None`` for
+        single-prompt format (``- R1: …``).
+    line:
+        Verbatim source line the reference was parsed from (post lstrip).
+    """
+
+    rule_id: str
+    prompt_filename: Optional[str]
+    line: str
+
+
+def iter_covers_refs(covers_text: str) -> list["CoversRef"]:
+    """Yield every rule reference in a ``## Covers`` block.
+
+    Handles both formats from the prompting guide:
+
+      Single-prompt:    - R1: rule name
+      Cross-module:     - prompts/foo.prompt#R3: rule name
+
+    Refs are emitted in source order so callers can stream warnings per line.
+    """
+    refs: list[CoversRef] = []
+    for raw in covers_text.splitlines():
+        stripped = raw.strip().lstrip("-* ").strip()
+        if not stripped:
+            continue
+        cross_matches = list(CROSS_MODULE_REF_RE.finditer(stripped))
+        if cross_matches:
+            for cross in cross_matches:
+                refs.append(
+                    CoversRef(
+                        rule_id=cross.group(2).upper(),
+                        prompt_filename=cross.group(1).rsplit("/", 1)[-1],
+                        line=stripped,
+                    )
+                )
+            continue
+        for match in COVERAGE_REF_RE.finditer(stripped):
+            refs.append(
+                CoversRef(
+                    rule_id=match.group(1).upper(),
+                    prompt_filename=None,
+                    line=stripped,
+                )
+            )
+    return refs
+
+
+def rule_ids_from_covers(covers_text: str, prompt_name: str) -> set[str]:
+    """Return rule IDs from ``## Covers`` scoped to ``prompt_name``.
+
+    For cross-module lines, only the matching prompt's IDs are returned;
+    for single-prompt lines, all rule IDs are returned (the caller is
+    responsible for linking the story to a prompt via metadata).
+    """
+    ids: set[str] = set()
+    target = prompt_name.lower()
+    for ref in iter_covers_refs(covers_text):
+        if ref.prompt_filename is None:
+            ids.add(ref.rule_id)
+        elif ref.prompt_filename.lower() == target:
+            ids.add(ref.rule_id)
+    return ids
 
 _XML_SECTION_RE = re.compile(
     r"<(?P<tag>[a-z_][a-z0-9_]*)>(?P<body>.*?)</(?P=tag)>",

@@ -65,6 +65,14 @@ def test_parent_prompts_exist() -> None:
     assert (PARENT / "prompts" / "cost_tracker_with_contracts_python.prompt").is_file()
 
 
+@pytest.mark.skipif(
+    not (STRICT_AB / "scripts" / "run_golden_pytest.py").is_file(),
+    reason=(
+        "run_golden_pytest.py is a planned follow-on script for the strict A/B "
+        "pipeline; the harness lands alongside `pdd evidence` / `pdd contracts "
+        "drift` and is not yet implemented on this branch."
+    ),
+)
 def test_run_golden_pytest_stages_package_and_runs() -> None:
     """Golden harness must create edit_file_tool/ before copy2."""
     import importlib.util

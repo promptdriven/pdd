@@ -58,8 +58,14 @@ _MODAL_PATTERN = re.compile(
 )
 
 # ---------------------------------------------------------------------------
-# Rule ID patterns
+# Rule ID patterns (shared with coverage_contracts via contract_ir)
 # ---------------------------------------------------------------------------
+
+from .contract_ir import (  # noqa: E402  (regex aliases co-located with parsers)
+    COVERAGE_REF_RE as _COVERAGE_REF_RE,
+    CROSS_MODULE_REF_RE as _CROSS_MODULE_REF_RE,
+    iter_covers_refs,
+)
 
 # Canonical explicit IDs (both R1 and R-001 forms supported):
 #   R1  R-1  R-001  RULE1  RULE-001
@@ -70,14 +76,6 @@ _CANDIDATE_ID_RE = re.compile(r"^([A-Z]{1,5}[-_]\w+)\b", re.IGNORECASE)
 
 # Sequential number prefix:  1.  2)  3:
 _SEQ_ID_RE = re.compile(r"^(\d+)[.):\s]")
-
-# Coverage / story reference — matches R1, R-1, R-001, RULE1, etc.
-_COVERAGE_REF_RE = re.compile(r"\b(R-?\d+|RULE-?\d+)\b", re.IGNORECASE)
-
-# Cross-module story Covers:  prompts/foo.prompt#R3  or  foo.prompt#R-001
-_CROSS_MODULE_REF_RE = re.compile(
-    r"([\w./\-]+\.prompt)#(R-?\d+|RULE-?\d+)\b", re.IGNORECASE
-)
 
 # Waiver ID: W1  W-1  W01
 _WAIVER_ID_RE = re.compile(r"^(W-?\d+):", re.IGNORECASE)
@@ -555,69 +553,56 @@ def _check_story_covers(
     issues: list[ContractIssue] = []
     sections = _extract_sections(story_text)
     covers_text = sections.get("covers", "")
-    if not covers_text:
+    if not covers_text or linked_prompt_rules is None:
         return issues
 
-    for line in covers_text.splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-
-        if linked_prompt_rules is None:
-            continue
-
-        # Cross-module format: prompts/foo.prompt#R3
-        cross_matches = list(_CROSS_MODULE_REF_RE.finditer(stripped))
-        if cross_matches:
-            for cross_match in cross_matches:
-                prompt_file = cross_match.group(1).rsplit("/", 1)[-1]  # basename
-                ref_id = cross_match.group(2).upper()
-                prompt_ids = linked_prompt_rules.get(prompt_file, set())
-                if not prompt_ids:
-                    # Try matching any prompt in the map
-                    prompt_ids = next(
-                        (ids for k, ids in linked_prompt_rules.items()
-                         if k.endswith(prompt_file)),
-                        set(),
-                    )
-                if prompt_ids and ref_id not in prompt_ids:
-                    issues.append(ContractIssue(
-                        level="warn",
-                        code="UNKNOWN_STORY_REF",
-                        rule_id=ref_id,
-                        section="covers",
-                        line=stripped,
-                        message=(
-                            f'Story ## Covers references rule ID "{ref_id}" in '
-                            f'"{prompt_file}" which was not found in that prompt\'s '
-                            f"<contract_rules>."
-                        ),
-                        suggestion=(
-                            f"Add rule {ref_id} to {prompt_file}'s <contract_rules>, "
-                            f"or remove this ## Covers entry."
-                        ),
-                    ))
+    for ref in iter_covers_refs(covers_text):
+        if ref.prompt_filename is not None:
+            prompt_file = ref.prompt_filename
+            prompt_ids = linked_prompt_rules.get(prompt_file, set())
+            if not prompt_ids:
+                prompt_ids = next(
+                    (ids for k, ids in linked_prompt_rules.items()
+                     if k.endswith(prompt_file)),
+                    set(),
+                )
+            if prompt_ids and ref.rule_id not in prompt_ids:
+                issues.append(ContractIssue(
+                    level="warn",
+                    code="UNKNOWN_STORY_REF",
+                    rule_id=ref.rule_id,
+                    section="covers",
+                    line=ref.line,
+                    message=(
+                        f'Story ## Covers references rule ID "{ref.rule_id}" in '
+                        f'"{prompt_file}" which was not found in that prompt\'s '
+                        f"<contract_rules>."
+                    ),
+                    suggestion=(
+                        f"Add rule {ref.rule_id} to {prompt_file}'s <contract_rules>, "
+                        f"or remove this ## Covers entry."
+                    ),
+                ))
         else:
-            # Single-prompt format: - R1: rule name
-            for ref_match in _COVERAGE_REF_RE.finditer(stripped):
-                ref_id = ref_match.group(1).upper()
-                found_in_any = any(ref_id in ids for ids in linked_prompt_rules.values())
-                if not found_in_any:
-                    issues.append(ContractIssue(
-                        level="warn",
-                        code="UNKNOWN_STORY_REF",
-                        rule_id=ref_id,
-                        section="covers",
-                        line=stripped,
-                        message=(
-                            f'Story ## Covers references rule ID "{ref_id}" which was '
-                            f"not found in any linked prompt's <contract_rules>."
-                        ),
-                        suggestion=(
-                            f"Add rule {ref_id} to the linked prompt's <contract_rules>, "
-                            f"or remove this ## Covers entry."
-                        ),
-                    ))
+            found_in_any = any(
+                ref.rule_id in ids for ids in linked_prompt_rules.values()
+            )
+            if not found_in_any:
+                issues.append(ContractIssue(
+                    level="warn",
+                    code="UNKNOWN_STORY_REF",
+                    rule_id=ref.rule_id,
+                    section="covers",
+                    line=ref.line,
+                    message=(
+                        f'Story ## Covers references rule ID "{ref.rule_id}" which was '
+                        f"not found in any linked prompt's <contract_rules>."
+                    ),
+                    suggestion=(
+                        f"Add rule {ref.rule_id} to the linked prompt's <contract_rules>, "
+                        f"or remove this ## Covers entry."
+                    ),
+                ))
 
     return issues
 

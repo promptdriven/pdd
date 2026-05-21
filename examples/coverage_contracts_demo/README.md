@@ -42,3 +42,17 @@ Coverage and compilation answer different questions:
 
 - `pdd coverage --contracts` shows whether rules have story/test/waiver evidence.
 - `pdd contracts compile` shows whether rules can become machine-readable IR.
+
+## Legacy-safe behavior
+
+`prompts/legacy_utility_python.prompt` is intentionally a **non-contract prompt**
+(no `<contract_rules>` section). It exists to confirm that the contracts
+commands degrade gracefully on legacy prompts:
+
+```bash
+pdd coverage --contracts --json \
+  examples/coverage_contracts_demo/prompts/legacy_utility_python.prompt
+```
+
+Expected output: `has_contract_rules: false`, zero rule rows, exit 0. Use this
+to verify upgrades to coverage tooling don't regress mixed repositories.

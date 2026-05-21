@@ -65,21 +65,39 @@ The qrcode_sandwich example demonstrates how PDD can be used to generate code th
 - Leveraging ControlNet QR conditioning in a generated Python script
 - Iterating with PDD to refine parameters and results
 
+### Coverage contracts demo
+[`coverage_contracts_demo/`](coverage_contracts_demo/) — minimal `pdd coverage --contracts`
+walkthrough on a small refund prompt with checked / story-only / test-only /
+unchecked / waived / failed statuses. Also includes a legacy non-contract prompt
+to verify coverage degrades gracefully.
+
 ### Prompt lint + contracts workflow
 [`prompt_lint_contract_workflow/`](prompt_lint_contract_workflow/) — same `foo_work`
 handler as the contract E2E demo, packaged as a **decomposed command playbook**
-(`guidance/`, `run_phase1.sh`) instead of `demo.sh` orchestration.
+(per-phase `reports/phase1_*.json` snapshots). A bundled `run_phase1.sh` and
+`guidance/` notes are planned follow-on work; see the demo's README for the
+manual command sequence.
 
-### Cost tracker strict A/B pipeline
-[`cost_tracker_strict_ab/`](cost_tracker_strict_ab/) — controlled Experiment A (deterministic
-gate/evidence/drift) and Experiment B (clarify sandwich with `reports/ab_live.json`).
+### Cost tracker strict A/B pipeline (WIP)
+[`cost_tracker_strict_ab/`](cost_tracker_strict_ab/) — authoring artifacts for a
+planned controlled A/B demo. The deterministic Experiment A driver, golden pytest
+harness, and `--live-ab` demo wrapper depend on `pdd evidence` / `pdd gate` /
+`pdd contracts drift`, which are not yet on this branch. The directory ships
+captured `reports/` snapshots as regression fixtures; see its README.
 
 ### Contract commands E2E (cost_tracker)
 [`contract_commands_cost_tracker_e2e_demo/`](contract_commands_cost_tracker_e2e_demo/) —
-exercises `pdd gate`, `pdd evidence emit/validate`, `pdd contracts drift`, and
-`pdd contracts author` on the verbatim
+runs the deterministic contract pipeline (`pdd prompt lint`, `pdd contracts
+check`, `pdd contracts compile`, `pdd coverage --contracts`) on a baseline vs.
+contracts-enriched copy of
 [`cost_tracker_utility_Python.prompt`](template_example/prompts/cost_tracker_utility_Python.prompt)
-from template_example (deterministic CI; optional `--live` author).
+from template_example. CI: `pytest tests/test_contract_commands_cost_tracker_e2e_demo.py`.
+
+### Prompt lint + contracts E2E demo
+[`prompt_lint_contract_e2e_demo/`](prompt_lint_contract_e2e_demo/) — companion
+end-to-end demo for the `foo_work` handler used by the workflow example above;
+wraps everything in a single `demo.sh` and shows the vague -> formalized
+contrast in one run.
 
 More examples will be added to this directory as they are developed.
 

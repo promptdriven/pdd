@@ -209,9 +209,13 @@ class TestLlmFlag:
             "formalization_notes": [],
             "error": "",
         }
+        formalize_result: dict = {"bundle": None}
         with patch(
             "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
             return_value=guidance,
+        ), patch(
+            "pdd.prompt_lint_pipeline.run_llm_formalize_pass",
+            return_value=formalize_result,
         ):
             yield
 
@@ -247,9 +251,13 @@ class TestLlmFlag:
             runner, "--ambiguity", str(FIXTURES / "clean.prompt")
         )
         data = json.loads(result.output)
-        entries = data["results"] if isinstance(data, dict) else data
-        all_issues = [i for entry in entries for i in entry["issues"]]
-        assert any(i["term"] == "graceful" for i in all_issues)
+        # LLM ambiguity issues appear in guidance[*].ambiguities, not results[*].issues
+        assert isinstance(data, dict), f"expected dict, got {type(data)}"
+        guidances = data.get("guidance", [])
+        all_ambiguities = [a for g in guidances for a in g.get("ambiguities", [])]
+        assert any(a.get("term") == "graceful" for a in all_ambiguities), (
+            f"expected 'graceful' in guidance ambiguities; got guidance={guidances}"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -268,9 +276,13 @@ class TestPromptLintCoach:
             "formalization_notes": [],
             "error": "",
         }
+        formalize_result: dict = {"bundle": None}
         with patch(
             "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
             return_value=guidance,
+        ), patch(
+            "pdd.prompt_lint_pipeline.run_llm_formalize_pass",
+            return_value=formalize_result,
         ):
             yield
 
@@ -451,9 +463,13 @@ class TestPromptLintClarify:
             "formalization_notes": [],
             "error": "",
         }
+        formalize_result: dict = {"bundle": None}
         with patch(
             "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
             return_value=guidance,
+        ), patch(
+            "pdd.prompt_lint_pipeline.run_llm_formalize_pass",
+            return_value=formalize_result,
         ):
             yield
 
@@ -678,9 +694,13 @@ class TestLlmOutputFormat:
             "formalization_notes": [],
             "error": "",
         }
+        formalize_result: dict = {"bundle": None}
         with patch(
             "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
             return_value=guidance,
+        ), patch(
+            "pdd.prompt_lint_pipeline.run_llm_formalize_pass",
+            return_value=formalize_result,
         ):
             yield
 
@@ -774,15 +794,19 @@ class TestLlmOutputFormat:
             str(FIXTURES / "upload_handler_python.prompt"),
         )
         data = json.loads(result.output)
-        entries = data["results"] if isinstance(data, dict) else data
-        all_issues = [i for entry in entries for i in entry["issues"]]
-        dup_issues = [i for i in all_issues if i["term"] == "duplicate upload"]
-        assert dup_issues
+        assert isinstance(data, dict), f"expected dict, got {type(data)}"
+        # LLM ambiguity issues appear in guidance[*].ambiguities, not results[*].issues
+        guidances = data.get("guidance", [])
+        all_ambiguities = [a for g in guidances for a in g.get("ambiguities", [])]
+        dup_issues = [a for a in all_ambiguities if a.get("term") == "duplicate upload"]
+        assert dup_issues, (
+            f"Expected 'duplicate upload' in guidance ambiguities; "
+            f"got guidance={[list(g.keys()) for g in guidances]}"
+        )
         assert dup_issues[0]["interpretations"] == [
             "Same filename", "Same file hash", "Same tenant + hash"
         ]
-        assert "normalized file hash" in dup_issues[0]["suggestion"] or \
-               "hash" in dup_issues[0]["suggestion"]
+        assert "hash" in dup_issues[0]["suggestion"]
 
     @patch("pdd.prompt_lint_pipeline.run_llm_ambiguity_pass")
     def test_issue_without_interpretations_renders_no_block(self, mock_llm, runner):
@@ -803,6 +827,26 @@ class TestLlmOutputFormat:
 
 class TestAmbiguityFlag:
     """--ambiguity enables the LLM authoring workflow on top of deterministic lint."""
+
+    @pytest.fixture(autouse=True)
+    def _mock_llm_passes(self):
+        guidance_stub = {
+            "path": "",
+            "summary": "",
+            "vocabulary_suggestions": [],
+            "rule_rewrites": [],
+            "acceptance_criteria_improvements": [],
+            "formalization_notes": [],
+            "error": "",
+        }
+        with patch(
+            "pdd.prompt_lint_pipeline.run_llm_guidance_pass",
+            return_value=guidance_stub,
+        ), patch(
+            "pdd.prompt_lint_pipeline.run_llm_formalize_pass",
+            return_value={"bundle": None},
+        ):
+            yield
 
     def test_without_ambiguity_runs_deterministic_only(self, runner, tmp_path):
         prompt = tmp_path / "outcome.prompt"
