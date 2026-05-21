@@ -1884,7 +1884,7 @@ class TestTrustedStepCommentPosting:
         mock_run, _, _, _ = mock_dependencies
         mock_run.return_value = (
             True,
-            "<step_report>step report body</step_report>\nAll Issues Fixed",
+            f"<step_report>step report body</step_report>\n{ALL_ISSUES_FIXED}",
             0.1,
             "gpt-4",
         )
@@ -1906,7 +1906,7 @@ class TestTrustedStepCommentPosting:
         self, mock_dependencies, default_args
     ):
         mock_run, _, _, _ = mock_dependencies
-        mock_run.return_value = (True, "Step output. All Issues Fixed", 0.1, "gpt-4")
+        mock_run.return_value = (True, f"Step output. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         with patch(
             "pdd.agentic_checkup_orchestrator.post_step_comment_once",
@@ -1926,7 +1926,7 @@ class TestTrustedStepCommentPosting:
         mock_run, _, _, _ = mock_dependencies
         mock_run.return_value = (
             True,
-            "<step_report>some report</step_report>\nAll Issues Fixed",
+            f"<step_report>some report</step_report>\n{ALL_ISSUES_FIXED}",
             0.1,
             "gpt-4",
         )
