@@ -1,0 +1,77 @@
+--- prompt (pre-clarify)
++++ prompt (post-clarify)
+@@ -78,4 +78,72 @@
+ Implementation assumptions (explicit)
+ - Assume token pricing values can be embedded as constants based on commonly published Anthropic Claude pricing for the supported families; if exact numbers are uncertain, structure the code so updating constants is straightforward and centralized, and clearly label the constants as “USD per 1M tokens”.
+ - Assume upstream code (core/cache manager) will provide accurate `input_tokens`, `output_tokens`, `cache_write_tokens`, and `cache_read_tokens` extracted from Anthropic API responses; this module does not parse API responses.
+-</prompt>
+\ No newline at end of file
++</prompt>
++
++<vocabulary>
++- invalid: token count that is not an int (bool excluded) or is < 0; model that is not a non-empty str
++- unknown model: a normalized (stripped, lowercased) model string for which no family key in MODEL_PRICING is a prefix of, or substring of, the model string
++- prefix/family matching: select the MODEL_PRICING family key with the longest value such that normalized_model.startswith(key) or key in normalized_model; ties broken by longer key
++- best match: the longest family key in MODEL_PRICING for which normalized_model.startswith(key) or key in normalized_model
++- supported families: exactly the keys {claude-3-7-sonnet, claude-3-5-sonnet, claude-3-5-haiku, claude-3-opus, claude-3-sonnet, claude-3-haiku}
++- expected value: assert math.isclose(actual, expected, rel_tol=1e-9, abs_tol=1e-12)
++- large token counts: any non-negative int up to 10^12; arithmetic uses float and need not guard against overflow below that bound
++</vocabulary>
++
++<contract_rules>
++R1 - Public API signature
++When the module is imported, it MUST expose a callable `calculate_cost(model: str, input_tokens: int, output_tokens: int, cache_write_tokens: int = 0, cache_read_tokens: int = 0) -> float` and MUST NOT expose mutable module-level state other than the pricing constants.
++R2 - Input validation
++When any of input_tokens, output_tokens, cache_write_tokens, cache_read_tokens is not an int (excluding bool) or is < 0, calculate_cost MUST raise ValueError and MUST NOT return a value. When model is not a non-empty str after strip(), calculate_cost MUST raise ValueError.
++R3 - Cost formula
++When a model resolves to family f with input_rate=Pi/1_000_000 and output_rate=Po/1_000_000, calculate_cost MUST return input_tokens*Pi/1e6 + output_tokens*Po/1e6 + cache_write_tokens*Pi/1e6*1.25 + cache_read_tokens*Pi/1e6*0.10, with no rounding applied.
++R4 - Unknown model handling
++When no key k in MODEL_PRICING satisfies normalized_model.startswith(k), calculate_cost MUST raise ValueError whose message includes the input model string and the sorted list of supported family keys.
++R5 - Purity
++When calculate_cost is invoked, it MUST NOT perform I/O, MUST NOT read environment variables, and MUST NOT mutate any module-level object. Repeated calls with identical arguments MUST return bitwise-equal float results.
++</contract_rules>
++
++<acceptance_tests>
++- R3: Given model='claude-3-5-haiku-20241022' with input_per_mtok=0.80 and output_per_mtok=4.00, input_tokens=1_000_000, output_tokens=0, cache_write_tokens=0, cache_read_tokens=0, when calculate_cost is called, then it returns exactly 0.80 (float).
++- R2: Given input_tokens=-1, when calculate_cost('claude-3-opus', -1, 0) is called, then it raises ValueError with message matching r'input_tokens must be a non-negative int'.
++- R4: Given model='gpt-4o', when calculate_cost('gpt-4o', 1, 1) is called, then it raises ValueError whose message contains 'gpt-4o' and each supported family key.
++- R3: Given model='claude-3-7-sonnet-20250219', when calculate_cost is invoked, then it resolves to family 'claude-3-7-sonnet' and returns the same value as calculate_cost('claude-3-7-sonnet', ...).
++- R2: Given input_tokens=True, when calculate_cost('claude-3-haiku', True, 0) is called, then it raises ValueError.
++</acceptance_tests>
++
++<formalization>
++R2:
++  target: smt
++  variables:
++    input_tokens: Int
++    raised: Bool
++  assume: true
++  predicate: input_tokens < 0 => raised == true
++  violation: input_tokens < 0 && raised == false
++  # linked_test: R2: pytest parametrized over [-1,-100] asserts pytest.raises(ValueError)
++
++R3:
++  target: smt
++  variables:
++    input_tokens: Int
++    output_tokens: Int
++    cw: Int
++    cr: Int
++    Pi: Real
++    Po: Real
++    cost: Real
++  assume: input_tokens >= 0 && output_tokens >= 0 && cw >= 0 && cr >= 0 && Pi >= 0 && Po >= 0
++  predicate: cost == (input_tokens*Pi + output_tokens*Po + cw*Pi*1.25 + cr*Pi*0.10) / 1000000
++  violation: cost != (input_tokens*Pi + output_tokens*Po + cw*Pi*1.25 + cr*Pi*0.10) / 1000000
++  # linked_test: R3: pytest computes expected via the formula and asserts math.isclose(calculate_cost(...), expected, rel_tol=1e-12)
++
++R4:
++  target: smt
++  variables:
++    matched: Bool
++    raised: Bool
++  assume: true
++  predicate: matched == false => raised == true
++  violation: matched == false && raised == false
++  # linked_test: R4: pytest asserts ValueError for model='gpt-4o' and checks message contains supported family keys
++</formalization>

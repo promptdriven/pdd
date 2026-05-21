@@ -1,0 +1,97 @@
+% You are an expert Python engineer implementing deterministic contract coverage analysis for PDD.
+% The generated module is pdd/coverage_contracts.py.
+% This module supports the CLI command `pdd coverage --contracts`.
+% It runs after `pdd contracts check` and `pdd contracts compile` and requires no LLM.
+
+<requirements>
+- Build a rule-to-evidence map for `.prompt` files that contain `<contract_rules>`.
+- Do not call an LLM. All analysis is static and deterministic.
+- Accept three evidence sources: user stories (story__*.md), test files (test_*.py), and formalization blocks.
+- Scan story files recursively from stories_dir; only include stories whose <!-- pdd-story-prompts: --> metadata lists the prompt filename.
+- Scan test files recursively from tests_dir using AST and regex heuristics to find explicit rule ID references.
+- Classify every contract rule into one of: checked, story-only, test-only, unchecked, waived, failed, or formal-only.
+- Return a CoverageResult per prompt and a list[CoverageResult] for directory targets.
+- Support cross-module rule references in the format `other_prompt.prompt#R3`.
+- Apply waivers declared in the prompt's <waivers> block; a waived rule always takes precedence.
+- Support strict mode: MUST and MUST NOT rules with no executable test coverage are an error.
+- Prompts without <contract_rules> are legacy-safe and return an empty result with no error.
+- Expose the public API: `build_coverage(path, stories_dir, tests_dir, *, strict) -> CoverageResult`
+  and `build_coverage_directory(directory, stories_dir, tests_dir, *, strict) -> list[CoverageResult]`.
+</requirements>
+
+<contract_rules>
+R1 - Legacy-safe prompts
+When a prompt has no <contract_rules> section,
+the module MUST return a CoverageResult with has_contract_rules=False and empty rules and MUST NOT raise an exception.
+
+R2 - Story linking
+When a story__*.md file lacks a <!-- pdd-story-prompts: --> metadata comment,
+the module MUST NOT count that story as evidence for any prompt.
+
+R3 - Story cover extraction
+When a linked story has a ## Covers section containing a rule reference such as R1 or prompt.prompt#R1,
+the module MUST add that story filename to the evidence for the referenced rule.
+
+R4 - Test evidence heuristic
+When a test function name matches `test_R<N>_*` (case-insensitive), or a comment `# R<N>:` or `# covers R<N>` appears within 2 lines of a test function, or the docstring first line references R<N>,
+the module MUST add that test function name to the evidence for R<N>.
+
+R5 - Waiver precedence
+When a rule has an active waiver from the prompt's <waivers> block or an explicit WAIVED W<N> entry in <coverage>,
+the module MUST classify that rule as `waived` regardless of story or test evidence.
+
+R6 - Failed evidence
+When a linked story or test file has a validation failure (e.g. missing ## Acceptance Criteria, or a syntax error in a test that references the rule),
+the module MUST classify that rule as `failed` and include the failure description.
+
+R7 - Classification priority
+When classifying a rule, the module MUST apply: waived > failed > checked > story-only > test-only > formal-only > unchecked.
+
+R8 - Checked status
+When a rule has at least one linked story and at least one test reference,
+the module MUST classify it as `checked`.
+
+R9 - Strict mode
+When strict=True and a MUST or MUST NOT rule is unchecked or story-only,
+`build_coverage` MUST set result.error to indicate the coverage gap.
+
+R10 - Directory scan
+When a directory is scanned, the module MUST return one CoverageResult per *.prompt file
+and MUST skip *_LLM.prompt files.
+
+R11 - Formal evidence
+When a prompt's <formalization> block targets a rule (e.g. `rule_id: R1`),
+the module MUST include that as formal evidence and classify the rule as `formal-only`
+if no story or test evidence is present.
+</contract_rules>
+
+<vocabulary>
+- coverage matrix: a per-prompt report mapping each contract rule to the evidence (stories, tests, formal) that covers it
+- checked: a rule covered by both at least one user story and at least one executable test
+- story-only: a rule covered by a linked story but no executable test
+- test-only: a rule referenced by a test but not by any linked story
+- unchecked: a rule with no story, test, or formal evidence
+- waived: a rule explicitly waived in the prompt's <waivers> section; its coverage is approved by record
+- failed: a rule whose coverage evidence is invalid (e.g. story missing Acceptance Criteria, test syntax error)
+- formal-only: a rule with a <formalization> block but no story or test evidence
+- pdd-story-prompts metadata: an HTML comment (`<!-- pdd-story-prompts: foo_python.prompt -->`) that links a story to one or more prompt files
+- cross-module rule reference: a rule reference in the form `other_prompt.prompt#R3`, scoping the rule to a different prompt file
+- strict mode: treats unchecked MUST/MUST NOT rules as errors rather than warnings
+</vocabulary>
+
+<acceptance_tests>
+- `pytest tests/test_coverage_contracts.py tests/commands/test_coverage.py -q` MUST pass.
+- `pdd coverage --contracts prompts/foo_python.prompt` MUST return a coverage table with one row per rule.
+- A prompt with no <contract_rules> MUST return has_contract_rules=False with no error.
+- A story with no <!-- pdd-story-prompts --> comment MUST NOT contribute evidence to any rule.
+- A story linking to the target prompt with `## Covers` containing `R1` MUST add story evidence for R1.
+- A test function named `test_R2_happy_path` MUST add test evidence for R2.
+- A rule with WAIVED W1 in the <coverage> section MUST be classified as `waived` regardless of story/test evidence.
+- A rule with both story and test evidence MUST be classified as `checked`.
+- A rule with only story evidence MUST be classified as `story-only`.
+- A rule with only test evidence MUST be classified as `test-only`.
+- A rule with neither story, test, nor formal evidence MUST be classified as `unchecked`.
+- In strict mode, an unchecked MUST rule MUST cause result.error to be set.
+- `pdd coverage --contracts --json prompts/` MUST emit a JSON array of CoverageResult dicts.
+- A directory scan MUST skip files named *_LLM.prompt.
+</acceptance_tests>

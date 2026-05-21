@@ -1,0 +1,12 @@
+<contract_rules>
+R1 MUST reject invalid refunds.
+</contract_rules>
+
+<vocabulary>
+- invalid: amount_cents <= 0
+</vocabulary>
+
+<formalization>
+R1:
+  target: smt
+</formalization>

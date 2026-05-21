@@ -1,0 +1,78 @@
+write a python module `foo_work` in `src/foo_work.py` that implements an idempotent
+request handler with JWT authorization, active-user checks, and a 24-hour idempotency
+store. Use only the Python standard library.
+
+% E2E fixture: complex handler logic + deliberately vague contract language.
+% Suitable for pdd generate / pdd test AND for pdd prompt lint / pdd contracts.
+% Pair with user_stories/story__foo_codegen.md for coverage --contracts.
+
+<contract_rules>
+R1: The handler must return a valid response when the caller is an active user and the request is not a duplicate.
+R2: Duplicate requests must be rejected gracefully and must not corrupt stored state.
+R3: Only authorized callers may invoke the handler; unauthorized access should fail safely.
+R4: Inactive users must not receive a successful outcome.
+R5: Bad payloads should be handled appropriately without breaking other keys.
+R6: Audit logging must occur when uploads look valid and the outcome is successful.
+</contract_rules>
+
+<requirements>
+Behavior (implement all of this in code):
+
+1. Authorization
+   - Read `Authorization: Bearer <jwt>`; reject missing, malformed, expired, or wrong-scope tokens before any idempotency write.
+   - JWT payload must include `exp` (unix seconds, must be in the future) and `scope` containing `foo:invoke`.
+   - Decode payload only (base64url); do not verify signatures in this demo.
+
+2. Idempotency
+   - Require header `X-Idempotency-Key` (non-empty string).
+   - Maintain an in-process store keyed by idempotency key with TTL 24 hours from first acceptance.
+   - First seen key within TTL: record `{request_id, recorded_at}` then return HTTP 200.
+   - Duplicate key within TTL: return HTTP 409 with JSON `{"reason": "duplicate", "original_request_id": "<stored>"}` and do not add a second record.
+
+3. Active user
+   - `UserProfile.last_login_at` and `RequestContext.request_received_at` are timezone-aware datetimes.
+   - Caller is active when `(request_received_at - last_login_at).days <= 5`.
+
+4. Request body
+   - Optional JSON body with fields `amount_cents` (int) and `note` (str).
+   - Malformed JSON → HTTP 400, no store mutation.
+   - If `amount_cents` is present and `<= 0` → HTTP 422.
+
+5. Successful response shape (HTTP 200)
+   - JSON `{"result": "ok", "request_id": "<uuid4>", "amount_cents": <int|null>}`.
+   - If audit logging fails after a successful store write, still return 200 but add `"audit_failed": true`.
+
+6. Concurrency
+   - Two concurrent requests with the same idempotency key must not both return 200 (per-key `threading.Lock` or equivalent check-then-set).
+
+7. Audit
+   - On HTTP 200 only, append one line to an in-memory list `AUDIT_LOG` with caller id from JWT `sub`, request_id, and amount_cents when supplied.
+   - Log upload attempts for audit when appropriate (see acceptance tests).
+
+Processing order (do not reorder): auth → idempotency key → active user → duplicate check → body validation → store write → audit → response.
+</requirements>
+
+<acceptance_tests>
+- Active users with a fresh idempotency key receive success (HTTP 200 with result and request_id).
+- Duplicate idempotency keys within a reasonable recent window are handled gracefully (one 200, replays 409).
+- Unauthorized callers are blocked (HTTP 401).
+- Inactive users do not get a successful outcome (HTTP 403).
+- Concurrent duplicate race: parallel same-key requests yield exactly one 200 and one 409.
+- Invalid JSON returns 400 without corrupting stored state for other keys.
+</acceptance_tests>
+
+<deliverables>
+Implement `src/foo_work.py` with these public symbols:
+
+- `@dataclass class RequestContext`: fields `authorization`, `idempotency_key`, `request_received_at`, `body_bytes`
+- `@dataclass class UserProfile`: fields `user_id`, `last_login_at`
+- `@dataclass class HandlerResult`: fields `status_code: int`, `body: dict`
+- `class IdempotencyStore`: methods `has(key) -> bool`, `record(key, request_id) -> None`, `get_request_id(key) -> str | None`, plus TTL eviction on read/write
+- `def parse_bearer_jwt(authorization: str | None) -> tuple[bool, dict | None, str | None]`  # ok, claims, error
+- `def is_active_user(user: UserProfile, at: datetime) -> bool`
+- `def handle_request(ctx: RequestContext, user: UserProfile, store: IdempotencyStore) -> HandlerResult`
+
+Module-level `AUDIT_LOG: list[str]` for audit lines.
+
+Do not generate tests, CLI, or extra files in this step.
+</deliverables>

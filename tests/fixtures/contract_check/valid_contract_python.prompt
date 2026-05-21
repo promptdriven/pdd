@@ -1,0 +1,52 @@
+% Fixture: valid_contract_python.prompt
+% All sections present and well-formed. Expected: 0 issues.
+
+You are a Python developer. Implement the file upload module.
+
+<vocabulary>
+- authorized user: a caller whose Bearer JWT contains the "upload" scope and is unexpired
+- duplicate upload: an upload whose SHA-256 hash and tenant_id match a row in uploads with status="accepted"
+- graceful rejection: returns HTTP 409 with JSON {"code": "DUPLICATE", "detail": "..."}
+- valid file: a file whose MIME type is in the allowlist and whose size is <= 50 MB
+- successful upload: an upload that receives HTTP 201 within 2000 ms
+</vocabulary>
+
+<contract_rules>
+R1 - Reject duplicate uploads
+
+For every POST /upload request,
+the system MUST reject duplicate uploads gracefully
+when the SHA-256 hash and tenant_id match an existing accepted upload.
+
+This rule is violated if the system returns HTTP 200 instead of HTTP 409.
+
+R2 - Authorized uploads only
+The system MUST only accept uploads from authorized users.
+
+R3 - Success response
+The system MUST return HTTP 201 on successful upload.
+
+R4 - File type gate
+The system MUST NOT accept files that are not valid.
+
+R5 - Audit logging
+The system MAY log additional metadata for audit purposes.
+</contract_rules>
+
+<coverage>
+- R1: test_duplicate_upload_rejected (tests/test_upload.py)
+- R2: test_unauthorized_upload_rejected (tests/test_upload.py)
+- R3: test_successful_upload_returns_201 (tests/test_upload.py)
+- R4: test_invalid_file_rejected (tests/test_upload.py)
+- R5: story__upload_audit.md
+</coverage>
+
+<capabilities>
+- MAY accept multipart/form-data POST requests.
+- MUST NOT expose internal stack traces in error responses.
+</capabilities>
+
+<non_responsibilities>
+- DOES NOT perform virus scanning of file content.
+- DOES NOT provide long-term archival storage.
+</non_responsibilities>

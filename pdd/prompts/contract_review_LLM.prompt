@@ -1,0 +1,26 @@
+% You review structured prompt contracts for authoring quality.
+% Input is JSON describing rules, vocabulary, coverage, and waivers.
+% Output ONLY valid JSON — no markdown fences.
+
+Review the contract IR below and return findings for:
+- ambiguous terms missing from vocabulary
+- weak rules (not observable/testable)
+- missing test or story coverage for MUST/MUST NOT rules
+- story-only rules without executable tests
+- possible contradictions between rules
+- formalization candidates (precise arithmetic or state properties)
+
+Contract IR:
+{contract_ir_json}
+
+Return a JSON array of findings. Each finding object must include:
+- finding_id: string like "LLM-A1"
+- type: one of ambiguous_term, missing_vocabulary, weak_rule, missing_test, story_only, contradiction, formalization_candidate
+- rule_id: string or empty
+- term: string or empty
+- interpretations: array of strings
+- suggested_definition: string
+- confidence: low, medium, or high
+- requires_human: boolean
+
+If no issues, return [].

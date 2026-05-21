@@ -1,0 +1,94 @@
+{
+  "schema": "pdd.ab_report.v1",
+  "experiment": "cost_tracker_clarify_sandwich",
+  "experiment_question": "Did LLM clarify improve downstream generation/test outcomes (single pinned live run; not universal codegen proof)?",
+  "controls": {
+    "generate_output": "src/edit_file_tool/cost_tracker_utility.py",
+    "pdd_version": "0.0.218.dev460",
+    "model_default": "your-model",
+    "preflight_model": "fireworks_ai/accounts/fireworks/models/kimi-k2p6",
+    "golden_test": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/tests/test_cost_tracker_reference.py"
+  },
+  "layers": {
+    "prompt": "lint, clarify, compile, coverage on work prompt",
+    "codegen_primary": "shared golden tests vs src snapshots",
+    "codegen_secondary": "LLM-generated test files + py_compile + pytest",
+    "process": "evidence emit/validate, contracts drift"
+  },
+  "prompt": {
+    "pre_clarify_sha256": "eff383950da7bea635a73a679de3a184f7ad7c58191ba1fc7b18549ec481e6e6",
+    "post_clarify_sha256": "cbe3dd9c23deb6cb9ca5149e5d51ca7ddf66cd513baab26a85d04a41821410d2"
+  },
+  "lint": {
+    "warn_before": 0,
+    "warn_after": 0
+  },
+  "clarify": {
+    "ambiguity_count": 7,
+    "formalization_rejected_count": 0
+  },
+  "contracts": {
+    "compile_errors_after": 1,
+    "rule_count_after": 5,
+    "unchecked_after": 1,
+    "unchecked_before": 0,
+    "checked_before": 0,
+    "checked_after": 0,
+    "total_rules_after": 5,
+    "coverage_measurable": true
+  },
+  "before": {
+    "generate_bytes": 12931,
+    "test_bytes": 13441,
+    "py_compile_ok": true,
+    "golden_pytest": {
+      "passed": 0,
+      "failed": 1,
+      "exit_ok": false
+    },
+    "generated_pytest": {
+      "passed": 61,
+      "failed": 0,
+      "exit_ok": true
+    },
+    "contract_markers_missing": 0
+  },
+  "after": {
+    "generate_bytes": 12153,
+    "test_bytes": 12116,
+    "py_compile_ok": true,
+    "golden_pytest": {
+      "passed": 0,
+      "failed": 1,
+      "exit_ok": false
+    },
+    "generated_pytest": {
+      "passed": 62,
+      "failed": 0,
+      "exit_ok": true
+    },
+    "contract_markers_missing": 1
+  },
+  "evidence": {
+    "pre": "reports/evidence_pre_clarify.json",
+    "post": "reports/evidence_post_clarify.json"
+  },
+  "drift": {
+    "has_drift": true,
+    "finding_count": 0
+  },
+  "diffs": {
+    "prompt_hunks": 1,
+    "src_hunks": 4,
+    "tests_hunks": 1
+  },
+  "verdict": {
+    "spec_instrumented": false,
+    "prompt_improved": false,
+    "contract_linkage_improved": false,
+    "behavioral_regression": false,
+    "behavioral_exercised": true,
+    "partial_e2e": false,
+    "behavioral_claim_strength": "single_live_run"
+  }
+}

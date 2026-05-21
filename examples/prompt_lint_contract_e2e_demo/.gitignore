@@ -1,0 +1,8 @@
+reports/
+.pdd/
+.venv/
+__pycache__/
+*.pyc
+prompts/foo_work_python.prompt
+src/
+tests/

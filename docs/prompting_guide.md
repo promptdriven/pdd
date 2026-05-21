@@ -687,13 +687,23 @@ The exact log message wording is not important.
 
 For non-trivial modules, maintain a lightweight coverage map from contract rules to stories, tests, and waivers. The purpose is not bureaucracy. The purpose is to make missing evidence visible.
 
-Today, `<coverage>` is a PDD authoring convention, not a special preprocessor directive. It is visible to the model and useful for review, generation, and validation prompts. Tooling may later parse this section, but do not assume PDD enforces coverage automatically unless your project adds a checker.
+`<coverage>` is a PDD authoring convention, not a special preprocessor directive. It is visible to the model and useful for review, generation, and validation prompts. `pdd coverage --contracts` parses `<contract_rules>`, story `## Covers` sections, conservative test rule-ID references, `<coverage>`, and `<waivers>` to build an inspectable rule-to-evidence matrix.
+
+Run the checker locally or in CI:
+
+```bash
+pdd coverage --contracts prompts/refund_payment_python.prompt
+pdd coverage --contracts --json prompts/
+```
+
+The command is legacy-safe: prompts without `<contract_rules>` report `no contract coverage data` rather than failing. Rules are reported as `checked`, `story-only`, `test-only`, `unchecked`, `waived`, or `failed`. `failed` is deterministic v1 validation failure, such as a linked story covering a rule without `## Acceptance Criteria`, or a syntax-invalid `test_*.py` file that explicitly references the rule ID.
 
 Coverage source of truth:
 
 - Story files are the primary place to declare `## Covers`.
 - The prompt's `<coverage>` section is an optional summary for non-trivial modules.
 - If both exist, keep them synchronized during prompt review.
+- Test names/comments may reference rule IDs explicitly, for example `test_R3_no_provider_call_invalid`; this is a conservative heuristic, not semantic test analysis.
 
 ```xml
 <coverage>
@@ -720,6 +730,54 @@ R6: WAIVED W1
 ```
 
 Unchecked rules are allowed during development, but they should be visible. Production-critical modules should not merge with unchecked high-risk MUST/MUST NOT rules unless there is an explicit waiver.
+
+### Contract Compilation
+
+Coverage answers whether a rule has evidence. Contract compilation answers
+whether a rule is structured enough to become machine-readable.
+
+Use `pdd contracts compile` after lint/check/coverage:
+
+```bash
+pdd prompt lint --strict prompts/refund_payment_python.prompt
+pdd contracts check prompts/refund_payment_python.prompt
+pdd coverage --contracts prompts/refund_payment_python.prompt
+pdd contracts compile --json prompts/refund_payment_python.prompt
+```
+
+The compiler produces `pdd.contract_ir.v1`, a JSON-safe intermediate
+representation containing rule IDs, titles, `When ...` conditions, modal verbs,
+observable obligations, and raw rule text.
+
+Rules compile best when written in this shape:
+
+```text
+R1 - Reject duplicate refund
+When a request has the same tenant ID and idempotency key as an accepted refund,
+the service MUST return HTTP 409 and MUST NOT write a new refund record.
+```
+
+The v1 compiler recognizes observable obligations such as:
+
+- `MUST return HTTP 409`
+- `MUST return a JSON object`
+- `MUST write one upload record`
+- `MUST NOT write a new record`
+- `MUST NOT call provider_client`
+- `MUST emit refund.accepted`
+- `MUST raise ValueError`
+
+Compile errors are deterministic:
+
+- `UNSTABLE_RULE_ID`: the rule lacks an explicit ID such as `R1`
+- `MISSING_CONDITION`: the rule lacks a parseable `When ...` condition
+- `NO_OBSERVABLE_OBLIGATION`: the rule lacks a recognized observable outcome
+
+`pdd contracts compile` is not a proof engine by itself. It creates the IR that
+future verification adapters can consume to generate property tests, runtime
+assertions, API checks, or formal models. During authoring, use
+`pdd prompt lint --ambiguity prompts/<module>_<language>.prompt` for LLM guidance on
+rewriting vague rules into compile-friendly contracts.
 
 Structured waivers are easier to review and expire:
 

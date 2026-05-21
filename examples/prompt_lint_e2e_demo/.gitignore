@@ -1,0 +1,6 @@
+.venv/
+reports/
+.pdd/
+__pycache__/
+*.pyc
+prompts/find_verification_errors_work_LLM.prompt

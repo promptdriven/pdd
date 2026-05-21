@@ -1,0 +1,47 @@
+% Fixture: payment_api_issues_python.prompt
+% Realistic payment API contract with multiple combined defects:
+%   - VAGUE_TERM: "valid", "successful", "reasonable" (no vocabulary)
+%   - MISSING_MODAL: R4 has no modal verb
+%   - DUPLICATE_ID: R2 appears twice
+%   - UNCOVERED_MUST_NOT: R5 MUST NOT has no coverage entry
+% Expected: errors for DUPLICATE_ID, MISSING_MODAL; warns for VAGUE_TERM, UNCOVERED_MUST_NOT
+
+You are a Python developer. Implement the payment processing module.
+
+<contract_rules>
+R1 - Idempotency guard
+
+For every POST /charges request,
+the system MUST reject duplicate charges
+when the idempotency_key matches an existing charge within 24 hours.
+
+R2 - Merchant check
+The system MUST only accept requests with a valid API key.
+
+R2 - Payment validation
+The system MUST reject requests with an invalid payment method.
+
+R3 - Success response
+The system MUST return a successful response on capture.
+
+R4 - Fraud gate
+The system reject suspicious transactions automatically.
+
+R5 - Raw card data
+The system MUST NOT store raw card numbers in any database or log.
+
+R6 - Error format
+For every rejected request,
+the system MUST return a reasonable error response within a reasonable time.
+</contract_rules>
+
+<coverage>
+- R1: test_idempotency (tests/test_payment.py)
+- R3: test_success (tests/test_payment.py)
+- R6: test_error_shape (tests/test_payment.py)
+</coverage>
+
+<capabilities>
+- MAY accept async charge processing.
+- MUST NOT expose internal stack traces.
+</capabilities>

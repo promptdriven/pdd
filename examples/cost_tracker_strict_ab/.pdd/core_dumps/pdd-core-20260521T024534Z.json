@@ -1,0 +1,115 @@
+{
+  "schema_version": 2,
+  "pdd_version": "0.0.218.dev460",
+  "timestamp_utc": "20260521T024534Z",
+  "argv": [
+    "--quiet",
+    "--force",
+    "test",
+    "--manual",
+    "prompts/cost_tracker_work_python.prompt",
+    "src/edit_file_tool/cost_tracker_utility.py",
+    "--output",
+    "tests/test_cost_tracker_work_after.py"
+  ],
+  "cwd": "/Users/yifeitao/Desktop/pdd/examples/cost_tracker_strict_ab",
+  "platform": {
+    "system": "Darwin",
+    "release": "24.6.0",
+    "version": "Darwin Kernel Version 24.6.0: Wed Nov  5 21:33:59 PST 2025; root:xnu-11417.140.69.705.2~1/RELEASE_ARM64_T8112",
+    "python": "3.13.5 (main, Jun 11 2025, 15:36:57) [Clang 17.0.0 (clang-1700.0.13.3)]"
+  },
+  "global_options": {
+    "force": true,
+    "strength": null,
+    "temperature": null,
+    "time": 0.25,
+    "verbose": false,
+    "quiet": true,
+    "local": false,
+    "context": null,
+    "output_cost": null,
+    "review_examples": false
+  },
+  "invoked_subcommands": [
+    "test"
+  ],
+  "total_cost": 0.31984290000000004,
+  "steps": [
+    {
+      "step": 1,
+      "command": "test",
+      "cost": 0.31984290000000004,
+      "model": "claude-opus-4-7"
+    }
+  ],
+  "errors": [],
+  "environment": {
+    "VIRTUAL_ENV": "/Users/yifeitao/Desktop/pdd/.venv",
+    "PDD_VERSION": "0.0.218.dev460",
+    "PATH": "/Users/yifeitao/Desktop/pdd/.venv/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/homebrew/bin:/opt/homebrew/sbin:/Library/Frameworks/Python.framework/Versions/3.11/bin:/usr/local/bin:/System/Cryptexes/App/usr/bin:/usr/bin:/bin:/usr/sbin:/sbin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin:/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin:/Library/Apple/usr/bin:/Library/TeX/texbin:/usr/local/go/bin:/Users/yifeitao/.antigravity-ide/antigravity-ide/bin:/Users/yifeitao/.antigravity/antigravity/bin:/Users/yifeitao/bin:/Users/yifeitao/.local/bin:/Users/yifeitao/.nvm/versions/node/v18.20.8/bin:/Users/yifeitao/.codeium/windsurf/bin:/opt/anaconda3/bin:/opt/anaconda3/condabin:/Users/yifeitao/.cursor/extensions/vscjava.vscode-java-debug-0.59.0-universal/bundled/scripts/noConfigScripts:/Users/yifeitao/.cursor/extensions/ms-python.debugpy-2026.6.0-darwin-arm64/bundled/scripts/noConfigScripts",
+    "PDD_SKIP_UPDATE_CHECK": "1",
+    "PDD_MODEL_DEFAULT": "your-model",
+    "PDD_ALLOW_DUPLICATE_RUN": "1",
+    "PDD_QUIET": "1",
+    "PDD_PATH": "/Users/yifeitao/Desktop/pdd/pdd",
+    "PDD_FORCE": "1",
+    "PDD_ENV": "prod"
+  },
+  "file_contents": {
+    ".pdd/meta/cost_tracker_work_python.json": "{\n  \"pdd_version\": \"0.0.218.dev460\",\n  \"timestamp\": \"2026-05-21T02:43:28.368506+00:00\",\n  \"command\": \"generate\",\n  \"prompt_hash\": \"cbe3dd9c23deb6cb9ca5149e5d51ca7ddf66cd513baab26a85d04a41821410d2\",\n  \"code_hash\": null,\n  \"example_hash\": null,\n  \"test_hash\": null,\n  \"test_files\": {\n    \"test_cost_tracker_work_before.py\": \"645ba353e4135d5c5069ffdb877776da54715093a04e9bb01775b0fbe23ba33b\"\n  },\n  \"include_deps\": {}\n}",
+    "tests/test_cost_tracker_work_after.py": "\n\n# pdd:sys.path-preamble\nimport sys\nfrom pathlib import Path\n\n# Add project root and src/ so ``import foo_work`` works when code lives under src/\nproject_root = Path(__file__).resolve().parents[1]\nsys.path.insert(0, str(project_root))\n_src_dir = project_root / \"src\"\nif _src_dir.is_dir() and str(_src_dir) not in sys.path:\n    sys.path.insert(0, str(_src_dir))\n\nimport sys\nfrom pathlib import Path\n\n# This allows testing local changes without installing the package\n\nimport sys\nimport math\nfrom pathlib import Path\n\nimport pytest\n\nROOT = Path(__file__).resolve().parent\nSRC = ROOT / \"src\"\n\nfrom edit_file_tool.cost_tracker_utility import (  # noqa: E402\n    calculate_cost,\n    calculate_cost_breakdown,\n    MODEL_PRICING,\n)\n\n\n# ---------------------------------------------------------------------------\n# R3: Cost formula correctness\n# ---------------------------------------------------------------------------\ndef _expected_cost(model_family, ti, to, tcw, tcr):\n    rates = MODEL_PRICING[model_family]\n    ir = rates[\"input_per_mtok\"] / 1_000_000.0\n    or_ = rates[\"output_per_mtok\"] / 1_000_000.0\n    return ti * ir + to * or_ + tcw * ir * 1.25 + tcr * ir * 0.10\n\n\ndef test_zero_tokens_returns_zero():\n    assert calculate_cost(\"claude-3-opus\", 0, 0, 0, 0) == 0.0\n\n\ndef test_simple_input_only_haiku_one_million():\n    # 1M input tokens at $0.80 per 1M -> $0.80\n    cost = calculate_cost(\"claude-3-5-haiku-20241022\", input_tokens=1_000_000, output_tokens=0)\n    expected = MODEL_PRICING[\"claude-3-5-haiku\"][\"input_per_mtok\"]\n    assert math.isclose(cost, expected, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_simple_output_only_opus_one_million():\n    cost = calculate_cost(\"claude-3-opus\", input_tokens=0, output_tokens=1_000_000)\n    expected = MODEL_PRICING[\"claude-3-opus\"][\"output_per_mtok\"]\n    assert math.isclose(cost, expected, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_cache_write_uses_125_percent_of_input_rate():\n    # Pure cache write: cost = tokens * input_rate * 1.25\n    cost = calculate_cost(\"claude-3-haiku\", 0, 0, cache_write_tokens=1_000_000)\n    expected = MODEL_PRICING[\"claude-3-haiku\"][\"input_per_mtok\"] * 1.25\n    assert math.isclose(cost, expected, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_cache_read_uses_10_percent_of_input_rate():\n    cost = calculate_cost(\"claude-3-haiku\", 0, 0, cache_read_tokens=1_000_000)\n    expected = MODEL_PRICING[\"claude-3-haiku\"][\"input_per_mtok\"] * 0.10\n    assert math.isclose(cost, expected, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_combined_components_match_formula():\n    cost = calculate_cost(\n        \"claude-3-5-sonnet\",\n        input_tokens=12345,\n        output_tokens=6789,\n        cache_write_tokens=345,\n        cache_read_tokens=678,\n    )\n    expected = _expected_cost(\"claude-3-5-sonnet\", 12345, 6789, 345, 678)\n    assert math.isclose(cost, expected, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_return_type_is_float():\n    result = calculate_cost(\"claude-3-opus\", 10, 5)\n    assert isinstance(result, float)\n\n\n# ---------------------------------------------------------------------------\n# Model family resolution (versioned strings, vendor prefixes, dot notation)\n# ---------------------------------------------------------------------------\ndef test_versioned_model_resolves_same_as_family():\n    v1 = calculate_cost(\"claude-3-7-sonnet-20250219\", 100, 50, 10, 5)\n    v2 = calculate_cost(\"claude-3-7-sonnet\", 100, 50, 10, 5)\n    assert v1 == v2\n\n\ndef test_dot_notation_resolves_to_family():\n    v_dot = calculate_cost(\"claude-3.5-sonnet\", 100, 50)\n    v_dash = calculate_cost(\"claude-3-5-sonnet\", 100, 50)\n    assert v_dot == v_dash\n\n\ndef test_vendor_prefix_slash_resolves():\n    v = calculate_cost(\"anthropic/claude-3-5-haiku-20241022\", 100, 50)\n    expected = calculate_cost(\"claude-3-5-haiku\", 100, 50)\n    assert v == expected\n\n\ndef test_vendor_prefix_colon_resolves():\n    v = calculate_cost(\"anthropic:claude-3-opus-20240229\", 100, 50)\n    expected = calculate_cost(\"claude-3-opus\", 100, 50)\n    assert v == expected\n\n\ndef test_longest_match_distinguishes_3_5_sonnet_from_3_sonnet():\n    # claude-3-5-sonnet and claude-3-sonnet have different keys but share substring\n    # Pricing might be the same; what matters is no ambiguity error and identical to family\n    v = calculate_cost(\"claude-3-5-sonnet-20240620\", 1000, 0)\n    expected = MODEL_PRICING[\"claude-3-5-sonnet\"][\"input_per_mtok\"] * 1000 / 1_000_000.0\n    assert math.isclose(v, expected, rel_tol=1e-12, abs_tol=1e-15)\n\n\n@pytest.mark.parametrize(\"family\", list(MODEL_PRICING.keys()))\ndef test_all_supported_families_resolve(family):\n    cost = calculate_cost(family, 100, 50)\n    assert cost > 0\n    assert isinstance(cost, float)\n\n\ndef test_case_insensitive_resolution():\n    v_upper = calculate_cost(\"CLAUDE-3-OPUS\", 100, 50)\n    v_lower = calculate_cost(\"claude-3-opus\", 100, 50)\n    assert v_upper == v_lower\n\n\ndef test_whitespace_stripped():\n    v = calculate_cost(\"  claude-3-haiku  \", 100, 50)\n    expected = calculate_cost(\"claude-3-haiku\", 100, 50)\n    assert v == expected\n\n\n# ---------------------------------------------------------------------------\n# R2: Input validation\n# ---------------------------------------------------------------------------\n@pytest.mark.parametrize(\"bad_value\", [-1, -100, -1_000_000])\ndef test_negative_input_tokens_raises(bad_value):\n    with pytest.raises(ValueError, match=\"input_tokens\"):\n        calculate_cost(\"claude-3-opus\", bad_value, 0)\n\n\n@pytest.mark.parametrize(\"bad_value\", [-1, -100])\ndef test_negative_output_tokens_raises(bad_value):\n    with pytest.raises(ValueError, match=\"output_tokens\"):\n        calculate_cost(\"claude-3-opus\", 0, bad_value)\n\n\ndef test_negative_cache_write_tokens_raises():\n    with pytest.raises(ValueError, match=\"cache_write_tokens\"):\n        calculate_cost(\"claude-3-opus\", 0, 0, cache_write_tokens=-1)\n\n\ndef test_negative_cache_read_tokens_raises():\n    with pytest.raises(ValueError, match=\"cache_read_tokens\"):\n        calculate_cost(\"claude-3-opus\", 0, 0, cache_read_tokens=-1)\n\n\n@pytest.mark.parametrize(\"bad_value\", [1.5, 2.0, \"100\", None, [1], {\"a\": 1}])\ndef test_non_int_tokens_raise(bad_value):\n    with pytest.raises(ValueError):\n        calculate_cost(\"claude-3-haiku\", bad_value, 0)\n\n\ndef test_bool_input_tokens_raises():\n    with pytest.raises(ValueError):\n        calculate_cost(\"claude-3-haiku\", True, 0)\n\n\ndef test_bool_output_tokens_raises():\n    with pytest.raises(ValueError):\n        calculate_cost(\"claude-3-haiku\", 0, False)\n\n\ndef test_bool_cache_write_tokens_raises():\n    with pytest.raises(ValueError):\n        calculate_cost(\"claude-3-haiku\", 0, 0, cache_write_tokens=True)\n\n\n# ---------------------------------------------------------------------------\n# R2 / model validation: empty / non-string model\n# ---------------------------------------------------------------------------\n@pytest.mark.parametrize(\"bad_model\", [\"\", \"   \", \"\\t\\n\", None, 123, 1.5, [], {}])\ndef test_invalid_model_raises_value_error(bad_model):\n    with pytest.raises(ValueError):\n        calculate_cost(bad_model, 1, 1)\n\n\n# ---------------------------------------------------------------------------\n# R4: Unknown model handling\n# ---------------------------------------------------------------------------\ndef test_unknown_model_raises_with_model_name_in_message():\n    with pytest.raises(ValueError) as excinfo:\n        calculate_cost(\"gpt-4o\", 10, 5)\n    assert \"gpt-4o\" in str(excinfo.value)\n\n\ndef test_unknown_model_message_lists_supported_families():\n    with pytest.raises(ValueError) as excinfo:\n        calculate_cost(\"gpt-4o\", 10, 5)\n    msg = str(excinfo.value)\n    for family in MODEL_PRICING.keys():\n        assert family in msg, f\"Expected supported family {family!r} in error message\"\n\n\n@pytest.mark.parametrize(\"bad_model\", [\"gpt-4o\", \"llama-3\", \"mistral-large\", \"claude-2\", \"claude\"])\ndef test_clearly_unknown_models_raise(bad_model):\n    with pytest.raises(ValueError):\n        calculate_cost(bad_model, 1, 1)\n\n\n# ---------------------------------------------------------------------------\n# R5: Purity / determinism\n# ---------------------------------------------------------------------------\ndef test_determinism_identical_args_return_equal_results():\n    a = calculate_cost(\"claude-3-opus\", 1234, 567, 89, 12)\n    b = calculate_cost(\"claude-3-opus\", 1234, 567, 89, 12)\n    assert a == b\n\n\ndef test_no_mutation_of_pricing_table():\n    snapshot = {k: dict(v) for k, v in MODEL_PRICING.items()}\n    _ = calculate_cost(\"claude-3-opus\", 100, 200, 50, 25)\n    _ = calculate_cost(\"claude-3-haiku\", 1, 2, 3, 4)\n    after = {k: dict(v) for k, v in MODEL_PRICING.items()}\n    assert snapshot == after\n\n\n# ---------------------------------------------------------------------------\n# calculate_cost_breakdown\n# ---------------------------------------------------------------------------\ndef test_breakdown_total_matches_calculate_cost():\n    bd = calculate_cost_breakdown(\n        \"claude-3-5-sonnet\",\n        input_tokens=3000, output_tokens=1500, cache_write_tokens=200,\n    )\n    total = calculate_cost(\n        \"claude-3-5-sonnet\",\n        input_tokens=3000, output_tokens=1500, cache_write_tokens=200,\n    )\n    assert math.isclose(bd[\"total_cost\"], total, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_breakdown_contains_all_expected_keys():\n    bd = calculate_cost_breakdown(\"claude-3-opus\", 10, 10, 10, 10)\n    for key in (\"input_cost\", \"output_cost\", \"cache_write_cost\",\n                \"cache_read_cost\", \"total_cost\"):\n        assert key in bd\n        assert isinstance(bd[key], float)\n\n\ndef test_breakdown_components_sum_to_total():\n    bd = calculate_cost_breakdown(\"claude-3-7-sonnet\", 1000, 500, 100, 50)\n    component_sum = (bd[\"input_cost\"] + bd[\"output_cost\"]\n                     + bd[\"cache_write_cost\"] + bd[\"cache_read_cost\"])\n    assert math.isclose(bd[\"total_cost\"], component_sum, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_breakdown_zero_when_tokens_zero():\n    bd = calculate_cost_breakdown(\"claude-3-haiku\", 0, 0, 0, 0)\n    assert bd[\"total_cost\"] == 0.0\n    assert bd[\"input_cost\"] == 0.0\n    assert bd[\"output_cost\"] == 0.0\n    assert bd[\"cache_write_cost\"] == 0.0\n    assert bd[\"cache_read_cost\"] == 0.0\n\n\ndef test_breakdown_validates_inputs():\n    with pytest.raises(ValueError):\n        calculate_cost_breakdown(\"claude-3-opus\", -1, 0)\n    with pytest.raises(ValueError):\n        calculate_cost_breakdown(\"unknown-model\", 0, 0)\n\n\n# ---------------------------------------------------------------------------\n# Edge cases: large counts, default cache args\n# ---------------------------------------------------------------------------\ndef test_large_token_counts_do_not_overflow_and_match_formula():\n    ti = 10**9\n    to = 10**9\n    cost = calculate_cost(\"claude-3-5-sonnet\", ti, to)\n    expected = _expected_cost(\"claude-3-5-sonnet\", ti, to, 0, 0)\n    assert math.isclose(cost, expected, rel_tol=1e-12, abs_tol=1e-9)\n    assert math.isfinite(cost)\n\n\ndef test_cache_tokens_without_standard_tokens():\n    cost = calculate_cost(\"claude-3-opus\", 0, 0,\n                          cache_write_tokens=500, cache_read_tokens=1000)\n    expected = _expected_cost(\"claude-3-opus\", 0, 0, 500, 1000)\n    assert math.isclose(cost, expected, rel_tol=1e-12, abs_tol=1e-15)\n\n\ndef test_default_cache_args_equal_explicit_zero():\n    a = calculate_cost(\"claude-3-opus\", 100, 50)\n    b = calculate_cost(\"claude-3-opus\", 100, 50, 0, 0)\n    assert a == b\n\n\n# ---------------------------------------------------------------------------\n# Optional: Z3-based formal property (cost non-negativity)\n# ---------------------------------------------------------------------------\ndef test_cost_formula_non_negative_z3():\n    z3 = pytest.importorskip(\"z3\")\n    ti = z3.Int(\"ti\")\n    to = z3.Int(\"to\")\n    cw = z3.Int(\"cw\")\n    cr = z3.Int(\"cr\")\n    Pi = z3.Real(\"Pi\")\n    Po = z3.Real(\"Po\")\n\n    solver = z3.Solver()\n    solver.add(ti >= 0, to >= 0, cw >= 0, cr >= 0, Pi >= 0, Po >= 0)\n\n    cost = (ti * Pi + to * Po\n            + cw * Pi * z3.RealVal(\"1.25\")\n            + cr * Pi * z3.RealVal(\"0.10\")) / z3.RealVal(1_000_000)\n\n    solver.add(cost < 0)\n    assert solver.check() == z3.unsat",
+    ".pdd/meta/cost_tracker_work_python_sync.log": "{\"timestamp\": \"2026-05-20T19:39:30.761292\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 57.92702269554138, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T19:40:32.457441\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 141.52629566192627, \"actual_cost\": 0.32067560000000006, \"model\": \"claude-opus-4-7\", \"error\": null}\n{\"timestamp\": \"2026-05-20T19:43:15.958535\", \"operation\": \"generate\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 12.381079196929932, \"actual_cost\": 0.0, \"model\": \"unknown\", \"error\": null}\n{\"timestamp\": \"2026-05-20T19:43:31.722527\", \"operation\": \"test\", \"reason\": \"Manual invocation via CLI\", \"invocation_mode\": \"manual\", \"estimated_cost\": 0.0, \"confidence\": 0.0, \"decision_type\": \"unknown\", \"success\": true, \"duration\": 123.27453088760376, \"actual_cost\": 0.31984290000000004, \"model\": \"claude-opus-4-7\", \"error\": null}\n"
+  },
+  "terminal_output": "=== STDOUT ===\nCloud Success\n",
+  "sync_steps": [
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 57.92702269554138,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/cost_tracker_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.32067560000000006,
+      "model": "claude-opus-4-7",
+      "duration": 141.52629566192627,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/cost_tracker_work_python_sync.log"
+    },
+    {
+      "operation": "generate",
+      "success": true,
+      "cost": 0.0,
+      "model": "unknown",
+      "duration": 12.381079196929932,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/cost_tracker_work_python_sync.log"
+    },
+    {
+      "operation": "test",
+      "success": true,
+      "cost": 0.31984290000000004,
+      "model": "claude-opus-4-7",
+      "duration": 123.27453088760376,
+      "reason": "Manual invocation via CLI",
+      "error": null,
+      "failure_summary": null,
+      "test_output_excerpt": null,
+      "source_log": ".pdd/meta/cost_tracker_work_python_sync.log"
+    }
+  ]
+}

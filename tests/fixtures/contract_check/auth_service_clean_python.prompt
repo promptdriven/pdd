@@ -1,0 +1,84 @@
+% Fixture: auth_service_clean_python.prompt
+% Realistic auth service contract with waivers — zero issues expected.
+
+You are a Python developer. Implement the authentication service.
+
+<vocabulary>
+- active session: a session whose expires_at timestamp is in the future and whose revoked field is false
+- trusted device: a device whose device_id is present in the trusted_devices table for the given user_id
+- brute-force attempt: five or more failed login attempts for the same username within a 10-minute sliding window
+- valid credentials: a username that exists in the users table and a bcrypt-verified password hash match
+- authorized scope: a scope string that is present in the scopes column for the requesting client in the oauth_clients table
+</vocabulary>
+
+<contract_rules>
+R1 - Credential validation
+
+For every POST /login request,
+the system MUST reject requests that do not supply valid credentials.
+
+This rule is violated if a user with an incorrect password receives a session token.
+
+R2 - Brute-force protection
+
+For every POST /login request,
+the system MUST lock the account for 15 minutes after a brute-force attempt.
+
+This rule is violated if a sixth login attempt within 10 minutes is not rejected with HTTP 429.
+
+R3 - Session expiry
+
+For every API request that requires authentication,
+the system MUST reject requests that do not carry an active session.
+
+This rule is violated if an expired token receives a non-401 response.
+
+R4 - Scope enforcement
+
+For every API request,
+the system MUST NOT grant access to resources outside the authorized scope.
+
+This rule is violated if a token with scope="read" can write to any resource.
+
+R5 - Trusted device fast-path
+
+For every POST /login from a trusted device,
+the system MAY skip the second-factor challenge.
+
+R6 - Audit trail
+
+For every login event (success or failure),
+the system MUST emit a structured audit log entry to the audit stream.
+</contract_rules>
+
+<coverage>
+- R1: test_invalid_credentials_rejected (tests/test_auth.py)
+- R2: test_brute_force_lockout (tests/test_auth.py)
+- R3: test_expired_session_rejected (tests/test_auth.py)
+- R4: test_scope_enforcement (tests/test_auth.py)
+- R4: WAIVED W1
+- R5: story__auth_flow.md
+- R6: test_audit_log_emitted (tests/test_auth.py)
+</coverage>
+
+<waivers>
+W1:
+  Rule: R4
+  Status: temporary
+  Reason: Read-only admin dashboard endpoints exempt pending access-control overhaul in Q3.
+  Approved by: security-team
+  Expires: 2026-12-31
+  Follow-up: Implement fine-grained scope checks (issue #712).
+</waivers>
+
+<capabilities>
+- MUST NOT store plaintext passwords.
+- MUST NOT return password hashes in any API response.
+- MAY cache session validation results in Redis for up to 30 seconds.
+- SHOULD rotate session tokens after privilege escalation.
+</capabilities>
+
+<non_responsibilities>
+- DOES NOT handle OAuth 2.0 client registration.
+- DOES NOT enforce multi-tenant user namespace isolation (handled by the API gateway).
+</non_responsibilities>

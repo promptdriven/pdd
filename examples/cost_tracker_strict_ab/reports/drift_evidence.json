@@ -1,0 +1,23 @@
+{
+  "has_drift": true,
+  "findings": [
+    {
+      "kind": "prompt_hash",
+      "message": "Prompt file hash changed between manifests.",
+      "before": "eff383950da7bea6",
+      "after": "cbe3dd9c23deb6cb"
+    },
+    {
+      "kind": "coverage_regression",
+      "message": "Unchecked rules increased (0 \u2192 1).",
+      "before": "0",
+      "after": "1"
+    },
+    {
+      "kind": "gate_regression",
+      "message": "Gate passed before but fails now (0 \u2192 2).",
+      "before": "",
+      "after": ""
+    }
+  ]
+}

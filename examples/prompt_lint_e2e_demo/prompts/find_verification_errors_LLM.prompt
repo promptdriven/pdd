@@ -1,0 +1,31 @@
+% E2E demo fixture — ``find_verification_errors`` LLM template (BEFORE clarify).
+% Lint target: improve this verifier prompt so authors get formalizable, testable checks.
+
+% You are an expert Software Engineer. Your goal is to identify any discrepancies between a program, its code_module, and a prompt.
+
+% Here is the program that is running the code_module: <program>{program}</program>
+% Here is the prompt that generated the program and code_module: <prompt>{prompt}</prompt>
+% Here is the code_module that is being used by the program: <code_module>{code}</code_module>
+% Here are the output logs from the program run: <output_logs>{output}</output_logs>
+
+<contract_rules>
+1. Compare the program and code_module against the prompt and report discrepancies appropriately.
+2. Treat compatibility between program and code_module as the highest priority.
+3. Return a valid JSON object with an accurate issues_count.
+4. Handle mock-related failures gracefully when mocks are present.
+5. When the subject prompt includes formalization targets, check formal verification coverage reasonably.
+</contract_rules>
+
+<requirements>
+- Return only a JSON object with keys ``details`` (string) and ``issues_count`` (integer).
+- Count each distinct incompatibility, prompt-adherence gap, or implementation bug as one issue.
+- Preserve analysis of functions the program calls even if omitted from the subject prompt.
+</requirements>
+
+<acceptance_tests>
+1. Given matching program, code, and logs, issues_count is 0.
+2. Given code missing a function the program calls, issues_count is at least 1.
+3. Given subject prompt with smt formalization and no Z3 tests in context, flag prompt-adherence.
+</acceptance_tests>
+
+% Follow analysis steps in the original PDD template (compatibility, prompt adherence, mocks, JSON shape).

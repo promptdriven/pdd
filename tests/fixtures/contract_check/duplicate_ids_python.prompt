@@ -1,0 +1,13 @@
+% Fixture: duplicate_ids_python.prompt
+% R1 appears twice. Expected: DUPLICATE_ID error.
+
+<vocabulary>
+- authorized user: a caller whose JWT is unexpired and has the upload scope
+</vocabulary>
+
+<contract_rules>
+R1: The system MUST only accept uploads from authorized users.
+R2: The system MUST return HTTP 201 on successful upload.
+R1: The system MUST log all upload attempts.
+R3: The system MUST NOT process requests without authentication.
+</contract_rules>

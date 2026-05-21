@@ -1,0 +1,252 @@
+{
+  "schema": "pdd.evidence.manifest.v1",
+  "generated_at": "2026-05-21T02:54:48.254232+00:00",
+  "pdd_version": "0.0.218.dev460",
+  "prompt": {
+    "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_with_contracts_python.prompt",
+    "sha256": "07b16c8b485db2ca4e87d9e5c3a7c24eae42914685fd92c8b54b9fd611091453"
+  },
+  "lint": {
+    "error_count": 0,
+    "warn_count": 1,
+    "issues_by_code": {
+      "VAGUE_TERM_UNDEFINED": 1
+    }
+  },
+  "contracts_check": {
+    "exit_code": 1,
+    "error_count": 0,
+    "warn_count": 4,
+    "results": [
+      {
+        "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_with_contracts_python.prompt",
+        "warn_count": 4,
+        "error_count": 0,
+        "issues": [
+          {
+            "level": "warn",
+            "code": "MISSING_MODAL",
+            "rule_id": "R1",
+            "section": "contract_rules",
+            "line": "R1: `calculate_cost` must validate token counts (integers >= 0) and non-empty model; invalid inputs raise `ValueError`.",
+            "message": "Rule [R1] has no modal verb (MUST / MUST NOT / MAY / SHOULD / DOES NOT).",
+            "term": "",
+            "suggestion": "Add a modal verb: \"The system MUST \u2026\" or \"The service MUST NOT \u2026\".",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "MISSING_MODAL",
+            "rule_id": "R2",
+            "section": "contract_rules",
+            "line": "R2: Known Claude model families must resolve via prefix/substring matching; unknown models raise `ValueError` listing supported families.",
+            "message": "Rule [R2] has no modal verb (MUST / MUST NOT / MAY / SHOULD / DOES NOT).",
+            "term": "",
+            "suggestion": "Add a modal verb: \"The system MUST \u2026\" or \"The service MUST NOT \u2026\".",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "MISSING_MODAL",
+            "rule_id": "R3",
+            "section": "contract_rules",
+            "line": "R3: Cache write tokens are charged at 1.25\u00d7 the standard input rate; cache read tokens at 0.10\u00d7 the standard input rate.",
+            "message": "Rule [R3] has no modal verb (MUST / MUST NOT / MAY / SHOULD / DOES NOT).",
+            "term": "",
+            "suggestion": "Add a modal verb: \"The system MUST \u2026\" or \"The service MUST NOT \u2026\".",
+            "interpretations": []
+          },
+          {
+            "level": "warn",
+            "code": "VAGUE_TERM",
+            "rule_id": "",
+            "section": "contract_rules",
+            "line": "R1: `calculate_cost` must validate token counts (integers >= 0) and non-empty model; invalid inputs raise `ValueError`.",
+            "message": "Vague term \"invalid\" used in <contract_rules> without a <vocabulary> definition.",
+            "term": "invalid",
+            "suggestion": "invalid: <add a precise, observable definition here>",
+            "interpretations": []
+          }
+        ]
+      },
+      {
+        "path": "user_stories/story__cost_tracker.md",
+        "warn_count": 0,
+        "error_count": 0,
+        "issues": []
+      }
+    ]
+  },
+  "contracts_compile": {
+    "exit_code": 2,
+    "results": [
+      {
+        "version": "pdd.contract_ir.v1",
+        "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_with_contracts_python.prompt",
+        "has_contract_rules": true,
+        "rule_count": 3,
+        "error_count": 6,
+        "rules": [
+          {
+            "id": "R1",
+            "title": "`calculate_cost` must validate token counts (integers >= 0) and non-empty model; invalid inputs raise `ValueError`.",
+            "modal": "",
+            "condition": "",
+            "obligations": [],
+            "raw": "R1: `calculate_cost` must validate token counts (integers >= 0) and non-empty model; invalid inputs raise `ValueError`."
+          },
+          {
+            "id": "R2",
+            "title": "Known Claude model families must resolve via prefix/substring matching; unknown models raise `ValueError` listing supported families.",
+            "modal": "",
+            "condition": "",
+            "obligations": [],
+            "raw": "R2: Known Claude model families must resolve via prefix/substring matching; unknown models raise `ValueError` listing supported families."
+          },
+          {
+            "id": "R3",
+            "title": "Cache write tokens are charged at 1.25\u00d7 the standard input rate; cache read tokens at 0.10\u00d7 the standard input rate.",
+            "modal": "",
+            "condition": "",
+            "obligations": [],
+            "raw": "R3: Cache write tokens are charged at 1.25\u00d7 the standard input rate; cache read tokens at 0.10\u00d7 the standard input rate."
+          }
+        ],
+        "compile_errors": [
+          {
+            "code": "MISSING_CONDITION",
+            "rule_id": "R1",
+            "message": "Rule must state a parseable condition using \"When ...\".",
+            "line": "R1: `calculate_cost` must validate token counts (integers >= 0) and non-empty model; invalid inputs raise `ValueError`."
+          },
+          {
+            "code": "NO_OBSERVABLE_OBLIGATION",
+            "rule_id": "R1",
+            "message": "Rule must contain at least one parseable observable obligation, such as MUST return HTTP 409 or MUST NOT write a record.",
+            "line": "R1: `calculate_cost` must validate token counts (integers >= 0) and non-empty model; invalid inputs raise `ValueError`."
+          },
+          {
+            "code": "MISSING_CONDITION",
+            "rule_id": "R2",
+            "message": "Rule must state a parseable condition using \"When ...\".",
+            "line": "R2: Known Claude model families must resolve via prefix/substring matching; unknown models raise `ValueError` listing supported families."
+          },
+          {
+            "code": "NO_OBSERVABLE_OBLIGATION",
+            "rule_id": "R2",
+            "message": "Rule must contain at least one parseable observable obligation, such as MUST return HTTP 409 or MUST NOT write a record.",
+            "line": "R2: Known Claude model families must resolve via prefix/substring matching; unknown models raise `ValueError` listing supported families."
+          },
+          {
+            "code": "MISSING_CONDITION",
+            "rule_id": "R3",
+            "message": "Rule must state a parseable condition using \"When ...\".",
+            "line": "R3: Cache write tokens are charged at 1.25\u00d7 the standard input rate; cache read tokens at 0.10\u00d7 the standard input rate."
+          },
+          {
+            "code": "NO_OBSERVABLE_OBLIGATION",
+            "rule_id": "R3",
+            "message": "Rule must contain at least one parseable observable obligation, such as MUST return HTTP 409 or MUST NOT write a record.",
+            "line": "R3: Cache write tokens are charged at 1.25\u00d7 the standard input rate; cache read tokens at 0.10\u00d7 the standard input rate."
+          }
+        ]
+      }
+    ]
+  },
+  "coverage": {
+    "results": [
+      {
+        "path": "/Users/yifeitao/Desktop/pdd/examples/contract_commands_cost_tracker_e2e_demo/prompts/cost_tracker_with_contracts_python.prompt",
+        "has_contract_rules": true,
+        "error": null,
+        "rules": [
+          {
+            "rule_id": "R1",
+            "status": "test-only",
+            "stories": [],
+            "tests": [
+              "test_R1_negative_tokens_raise"
+            ],
+            "formal": [],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": []
+          },
+          {
+            "rule_id": "R2",
+            "status": "test-only",
+            "stories": [],
+            "tests": [
+              "test_R2_unknown_model_raises"
+            ],
+            "formal": [],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": []
+          },
+          {
+            "rule_id": "R3",
+            "status": "test-only",
+            "stories": [],
+            "tests": [
+              "test_haiku_one_million_input_tokens_matches_input_rate",
+              "test_R3_cache_write_increases_cost"
+            ],
+            "formal": [],
+            "waiver": null,
+            "failures": [],
+            "notes": [],
+            "story_details": []
+          }
+        ],
+        "summary": {
+          "total": 3,
+          "checked": 0,
+          "story_only": 0,
+          "test_only": 3,
+          "unchecked": 0,
+          "waived": 0,
+          "failed": 0,
+          "formal_only": 0,
+          "needs_human": 0
+        }
+      }
+    ]
+  },
+  "gate": {
+    "exit_code": 2,
+    "stages": [
+      {
+        "name": "prompt_lint",
+        "exit_code": 1,
+        "error_count": 0,
+        "warn_count": 1,
+        "detail": ""
+      },
+      {
+        "name": "contracts_check",
+        "exit_code": 1,
+        "error_count": 0,
+        "warn_count": 4,
+        "detail": ""
+      },
+      {
+        "name": "contracts_compile",
+        "exit_code": 2,
+        "error_count": 6,
+        "warn_count": 0,
+        "detail": "1 file(s)"
+      },
+      {
+        "name": "coverage_contracts",
+        "exit_code": 0,
+        "error_count": 0,
+        "warn_count": 0,
+        "detail": "unchecked=0"
+      }
+    ]
+  },
+  "use_cloud": true
+}
