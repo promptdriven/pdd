@@ -1938,12 +1938,33 @@
       "python"
     ],
     "interface": {
-      "type": "module",
-      "module": {
-        "functions": [
+      "type": "cli",
+      "cli": {
+        "commands": [
+          {
+            "name": "is_git_repository",
+            "signature": "(path: Optional[str] = None) -> bool"
+          },
+          {
+            "name": "get_git_content_at_ref",
+            "signature": "(file_path: str, git_ref: str = 'HEAD') -> Optional[str]"
+          },
+          {
+            "name": "get_file_git_status",
+            "signature": "(file_path: str) -> str"
+          },
+          {
+            "name": "git_add_files",
+            "signature": "(file_paths: List[str], verbose: bool = False) -> bool"
+          },
           {
             "name": "code_generator_main",
-            "signature": "(prompt_path: str, *, language: Optional[str] = None, output: Optional[str] = None, examples_dir: Optional[str] = None, tests_dir: Optional[str] = None, force: bool = False, incremental: bool = False, original_prompt_file: Optional[str] = None, strength: float = 0.5, temperature: float = 0.0, time_budget: float = 0.2, verbose: bool = False, quiet: bool = False, context_config: Optional[Dict[str, str]] = None, context_override: Optional[str] = None, confirm_callback: Optional[Callable[[str, str], bool]] = None) -> Tuple[str, bool, float, str]"
+            "signature": "(ctx: click.Context, prompt_file: str, output: Optional[str], original_prompt_file_path: Optional[str], force_incremental_flag: bool, env_vars: Optional[Dict[str, str]] = None, unit_test_file: Optional[str] = None, exclude_tests: bool = False, language: Optional[str] = None, output_from_config: bool = False) -> Tuple[str, bool, float, str]"
+          },
+          {
+            "name": "ArchitectureConformanceError",
+            "signature": "(prompt_name: str, output_path: str, architecture_entry: Dict[str, Any], expected_symbols: List[str], found_symbols: List[str], missing_symbols: List[str], message: Optional[str] = None, total_cost: float = 0.0, model_name: str = 'unknown', repair_directive: Optional[str] = None)",
+            "returns": "ArchitectureConformanceError"
           }
         ]
       }
@@ -9897,7 +9918,7 @@
     "dependencies": [],
     "priority": 320,
     "filename": "resurface_check_Python.prompt",
-    "filepath": "pdd/resurface_check.py",
+    "filepath": "extensions/recruiting/resurface_check.py",
     "tags": [
       "module",
       "python"
