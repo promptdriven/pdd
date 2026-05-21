@@ -237,6 +237,15 @@
       model (e.g. `auto_include` falling back to `summary_model` when the final
       `auto_include_LLM` call fails terminally). Callers that explicitly want the failed
       attempts can still read them off the exception's `attempted_models` attribute.
+    - The rewind contract above applies to **every** code path that `raise`s after
+      `_record_attempt` has run at least once — not just the terminal-RuntimeError path. This
+      includes the cloud `InsufficientCreditsError` re-raise (the cloud placeholder is
+      recorded BEFORE the cloud request, so it sits on `ctx.obj` when the credit error
+      bubbles up). Centralize the rewind in a nested `_rewind_ctx_attempts_to_snapshot()`
+      helper and call it from every such `raise` site so a future re-raise added to
+      `llm_invoke` cannot silently break the invariant. Document this at the snapshot site
+      with an explicit comment listing the existing rewind call sites and instructing future
+      maintainers to add to that list.
     - Publish progress to the Click context for non-LLM consumers (e.g. `track_cost`):
       attempt to read `click.get_current_context(silent=True)`; if a context is returned and
       `ctx.obj` is a dict (initialize an empty dict on `ctx.obj` only if `ctx.obj is None`,

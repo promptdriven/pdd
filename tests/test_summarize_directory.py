@@ -2123,6 +2123,126 @@ class TestMaxWorkers:
                 f"history; missing {failed_cand!r}. Published: {published}"
             )
 
+    def test_max_workers_failed_highest_idx_worker_aligns_invariant(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F9 regression (PR #1056 5th-round review).
+
+        When the highest-submission-index worker fails terminally and a
+        lower-index worker succeeded, the F5 logic (track
+        `last_summarized_idx` only on `model != "cached"`) returned the
+        earlier successful model — but flattened `attempted_models` ended
+        with the failed worker's last candidate. model_name disagreed
+        with attempted_models[-1].
+
+        After the fix: returned model_name equals attempted_models[-1]
+        unconditionally (set from `flattened[-1]` after sort), even
+        when that tail entry is a failed candidate. Semantically odd
+        but consistent with the invariant that downstream callers
+        (e.g. auto_include returning summary_model on recovery) rely on.
+        """
+        import click
+        import threading as _threading
+
+        (tmp_path / "a.py").write_text("a-content")
+        (tmp_path / "b.py").write_text("b-content")
+
+        # Use the submission counter to drive failure on the LAST-submitted
+        # file regardless of filesystem ordering. summarize_directory submits
+        # files in the order returned by its globbing helper, which is not
+        # guaranteed sorted across platforms.
+        call_counter = {'n': 0, 'total': 2}
+        counter_lock = _threading.Lock()
+
+        def fake_llm_invoke(**kwargs):
+            with counter_lock:
+                my_idx = call_counter['n']
+                call_counter['n'] += 1
+            if my_idx == call_counter['total'] - 1:
+                err = RuntimeError("All candidates exhausted")
+                setattr(err, "attempted_models", ['fail-A', 'fail-B'])
+                raise err
+            return {
+                'result': FileSummary(
+                    file_summary="s", key_exports=[], dependencies=[]
+                ),
+                'cost': 0.01,
+                'model_name': f'success-{my_idx}',
+                'attempted_models': [f'success-{my_idx}'],
+            }
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                _, _, returned_model = summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=1,  # Force submission-order processing so
+                                    # the "last-submitted file fails" rule
+                                    # is unambiguous. (The threaded path is
+                                    # covered by the test above.)
+                )
+                tail = ctx.obj['attempted_models'][-1]
+
+        assert returned_model == tail, (
+            f"When the highest-idx worker fails terminally, model_name "
+            f"must still equal attempted_models[-1]. Got model_name="
+            f"{returned_model!r}, tail={tail!r}, full list="
+            f"{ctx.obj['attempted_models']}"
+        )
+        assert returned_model == 'fail-B', (
+            f"Expected returned model_name to be the highest-idx worker's "
+            f"last failed candidate ('fail-B'), got {returned_model!r}"
+        )
+
+    def test_single_thread_terminal_failure_publishes_attempts(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F8 regression (PR #1056 5th-round review).
+
+        When `summarize_directory(max_workers=1)` runs a file whose
+        `llm_invoke` exhausts all candidates, the helper's `except` block
+        catches the RuntimeError and records an error CSV row, but
+        `llm_invoke` already rewound its contribution from
+        `ctx.obj['attempted_models']` (F7). The single-thread caller was
+        previously discarding the helper's recovered attempts via
+        `cost, model, _attempted = _process_file(...)`, silently dropping
+        the failed file's fallback history.
+
+        After the fix: the single-thread caller detects the terminal-
+        failure signature (`model == "cached"` AND `attempted` non-empty)
+        and re-publishes the recovered attempts to ctx.obj.
+        """
+        import click
+
+        (tmp_path / "doomed.py").write_text("doomed-content")
+
+        def fake_llm_invoke(**kwargs):
+            err = RuntimeError("All candidates exhausted")
+            setattr(err, "attempted_models", ['fail-1', 'fail-2', 'fail-3'])
+            raise err
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=1,
+                )
+                published = ctx.obj.get('attempted_models') or []
+
+        # The single-thread caller must re-publish the recovered attempts
+        # because llm_invoke's terminal-failure rewind removed them from
+        # ctx.obj before the helper caught the exception.
+        assert published == ['fail-1', 'fail-2', 'fail-3'], (
+            f"Single-thread terminal failure must re-publish the helper's "
+            f"recovered attempts to ctx.obj['attempted_models']. Expected "
+            f"['fail-1', 'fail-2', 'fail-3'], got: {published}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Real-LLM: Multi-directory CSV accumulation and cache (requires API key)

@@ -3037,6 +3037,35 @@ def llm_invoke(
         except Exception:
             pass
 
+    def _rewind_ctx_attempts_to_snapshot() -> None:
+        """Restore ctx.obj['attempted_models'] to its pre-call snapshot.
+
+        IMPORTANT: any new re-raise path inside `llm_invoke` (i.e. any code
+        path that exits with `raise` AFTER `_record_attempt` has run at least
+        once) MUST call this helper before raising. Otherwise the failed
+        call's attempts trail `ctx.obj['attempted_models']` for any caller
+        that catches the exception and recovers — silently violating the
+        documented "list ends with the model column" invariant.
+
+        Existing call sites: terminal candidate-exhaustion failure and the
+        cloud `InsufficientCreditsError` re-raise. New paths should add
+        themselves to this list and grep should find them.
+        """
+        try:
+            import click as _click_rewind  # local import; keep llm_invoke usable without click
+            ctx_rewind = _click_rewind.get_current_context(silent=True)
+        except Exception:
+            return
+        if ctx_rewind is None or not isinstance(ctx_rewind.obj, dict):
+            return
+        try:
+            if _had_prior_ctx_attempts_key:
+                ctx_rewind.obj['attempted_models'] = list(_prior_ctx_attempts)
+            else:
+                ctx_rewind.obj.pop('attempted_models', None)
+        except Exception:
+            pass
+
     def _record_attempt(model_label: str) -> None:
         """Append a model attempt and publish to Click context."""
         attempted_models.append(model_label)
@@ -3092,8 +3121,16 @@ def llm_invoke(
             )
             # Continue to local execution below
         except InsufficientCreditsError:
-            # Re-raise credit errors - user needs to know
+            # Re-raise credit errors - user needs to know.
+            # The cloud placeholder was already recorded via _record_attempt
+            # before the cloud request, so it's currently sitting on
+            # ctx.obj['attempted_models']. If a caller catches this credit
+            # error and recovers with a different model (e.g. auto_include
+            # falling back to summary_model), the placeholder would trail
+            # the per-command history. Rewind the snapshot so the invariant
+            # holds for the recovered call.
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
+            _rewind_ctx_attempts_to_snapshot()
             raise
         except CloudInvocationError as e:
             # Non-recoverable cloud error - notify and fall back
@@ -4586,28 +4623,11 @@ def llm_invoke(
         failure_reason="all_candidate_models_failed",
         last_error_type=type(last_exception).__name__ if last_exception else None,
     )
-    # Rewind ctx.obj['attempted_models'] to the snapshot we took at the
-    # start of the call. A caller that wraps llm_invoke in try/except and
-    # recovers with a different model (e.g. `auto_include` falling back to
-    # `summary_model` when the final auto_include_LLM call fails terminally)
-    # would otherwise be left with this call's failed attempts trailing
-    # ctx.obj['attempted_models'], breaking the documented invariant that
-    # the list ends with the model column. Attempts remain available on
-    # the raised exception via the `attempted_models` attribute below for
-    # callers (e.g. worker threads) that want to preserve them explicitly.
-    try:
-        import click as _click_for_rewind  # local import; keep llm_invoke usable without click
-        _ctx_for_rewind = _click_for_rewind.get_current_context(silent=True)
-        if (
-            _ctx_for_rewind is not None
-            and isinstance(_ctx_for_rewind.obj, dict)
-        ):
-            if _had_prior_ctx_attempts_key:
-                _ctx_for_rewind.obj['attempted_models'] = list(_prior_ctx_attempts)
-            else:
-                _ctx_for_rewind.obj.pop('attempted_models', None)
-    except Exception:
-        pass
+    # Rewind ctx.obj['attempted_models'] to the snapshot taken at the start
+    # of this call. Attempts remain available on the raised exception via
+    # the `attempted_models` attribute below for callers (e.g. worker
+    # threads) that want to preserve them explicitly.
+    _rewind_ctx_attempts_to_snapshot()
 
     terminal_error = RuntimeError(error_message)
     try:

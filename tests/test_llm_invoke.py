@@ -1771,6 +1771,66 @@ def test_llm_invoke_terminal_failure_rewinds_ctx_obj_attempted_models(
     )
 
 
+def test_llm_invoke_insufficient_credits_rewinds_ctx_obj(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F10 regression (PR #1056 5th-round review).
+
+    `_llm_invoke_cloud` raises `InsufficientCreditsError` for HTTP 402.
+    Before the fix, the `except InsufficientCreditsError: raise` branch
+    re-raised without rewinding `ctx.obj['attempted_models']`. The
+    cloud placeholder recorded BEFORE the cloud request stayed on
+    ctx.obj. If a caller (e.g. `auto_include`) catches the credit
+    error and recovers with a different model, the stale `cloud:...`
+    entry trails ctx.obj['attempted_models'] and breaks the "ends with
+    model column" invariant.
+
+    The fix routes both the terminal-RuntimeError path AND the
+    InsufficientCreditsError re-raise through a single
+    `_rewind_ctx_attempts_to_snapshot()` helper. Verifying both paths
+    catches future re-raises that forget to call it.
+
+    NOTE: Use `pdd.llm_invoke` references dynamically (not the top-of-
+    file `from ... import ...` aliases) because an earlier test
+    (`test_llm_invoke_csv_path_hierarchy`) calls `importlib.reload` on
+    the module. After reload, the file-scope aliases become stale —
+    the `except InsufficientCreditsError:` inside the reloaded
+    llm_invoke checks against the NEW class, so an OLD-class instance
+    sails right past it and the rewind never runs.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="caller_using_cloud")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.InsufficientCreditsError("HTTP 402 from cloud"),
+        ):
+            try:
+                _llm_mod.llm_invoke(
+                    prompt="hi",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                    use_cloud=True,
+                )
+            except _llm_mod.InsufficientCreditsError as exc:
+                raised = exc
+
+    assert isinstance(raised, _llm_mod.InsufficientCreditsError), (
+        "llm_invoke must propagate InsufficientCreditsError so callers know"
+    )
+    assert ctx.obj.get('attempted_models') == prior_attempts, (
+        f"InsufficientCreditsError must rewind ctx.obj['attempted_models'] "
+        f"to its pre-call state — otherwise the cloud placeholder leaks. "
+        f"Expected {prior_attempts!r}, got {ctx.obj.get('attempted_models')!r}"
+    )
+
+
 def test_llm_invoke_terminal_failure_pops_ctx_obj_when_no_prior_key(
     mock_load_models, mock_set_llm_cache,
 ):

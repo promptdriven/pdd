@@ -262,6 +262,39 @@ def summarize_directory(
             results_data
         )
 
+    def _append_attempts_to_ctx_obj(attempts: List[str]) -> None:
+        """Append a list of model attempts to the main thread's Click
+        context's `attempted_models` list, creating it if necessary. Used
+        in two places:
+          - The threaded path, where worker threads cannot publish through
+            llm_invoke's native `click.get_current_context()` channel
+            (Click context is thread-local).
+          - The single-thread path, when llm_invoke fails terminally and
+            its rewind removes its own attempts from ctx.obj; we then
+            re-publish the helper's recovered attempts so they survive
+            into the cost.csv row.
+        """
+        if not attempts:
+            return
+        try:
+            import click as _click_for_publish
+            click_ctx = _click_for_publish.get_current_context(silent=True)
+        except Exception:
+            return
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                existing = click_ctx.obj.get('attempted_models')
+                if isinstance(existing, list):
+                    click_ctx.obj['attempted_models'] = existing + list(attempts)
+                else:
+                    click_ctx.obj['attempted_models'] = list(attempts)
+        except Exception:
+            pass
+
     if max_workers > 1:
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -274,13 +307,6 @@ def summarize_directory(
         # finish, then publish the flattened chronological history to the
         # main thread's Click context for track_cost to read.
         worker_attempts: List[Tuple[int, List[str]]] = []
-        # Track the highest-submission-idx worker that actually summarized a
-        # file (model != "cached") so `last_model_name` reflects the model
-        # from the same worker whose attempts terminate the sorted history
-        # below. Using completion order would let model_name disagree with
-        # `attempted_models[-1]` whenever a lower-idx file finishes after a
-        # higher-idx one.
-        last_summarized_idx = -1
 
         def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str, Optional[Dict[str, str]], List[str]]:
             """Thread-safe wrapper that returns index for ordering."""
@@ -309,13 +335,6 @@ def summarize_directory(
                 idx, cost, model, result_row, attempted = future.result()
                 with cost_lock:
                     total_cost += cost
-                    # Update last_model_name only when this worker has a
-                    # strictly higher submission index than any previously
-                    # seen — that keeps it in lockstep with the tail of the
-                    # submission-index-sorted attempted_models list.
-                    if model != "cached" and idx > last_summarized_idx:
-                        last_model_name = model
-                        last_summarized_idx = idx
                     if result_row:
                         results_data.append(result_row)
                     if csv_path:
@@ -329,36 +348,32 @@ def summarize_directory(
         # Publish aggregated worker attempts to the main thread's Click
         # context. Order by submission index so the chronological list reads
         # in file-submission order (inter-worker ordering is otherwise
-        # ambiguous because as_completed returns in completion order).
+        # ambiguous because as_completed returns in completion order). Pin
+        # `last_model_name` to flattened[-1] so the returned model_name
+        # equals ctx.obj['attempted_models'][-1], including the edge case
+        # where the highest-submission-idx worker failed terminally (its
+        # final failed candidate becomes the tail entry).
         if worker_attempts:
             worker_attempts.sort(key=lambda item: item[0])
             flattened: List[str] = []
             for _idx, models in worker_attempts:
                 flattened.extend(models)
-            try:
-                import click as _click
-                click_ctx = _click.get_current_context(silent=True)
-            except Exception:
-                click_ctx = None
-            if click_ctx is not None:
-                try:
-                    if click_ctx.obj is None:
-                        click_ctx.obj = {}
-                    if isinstance(click_ctx.obj, dict):
-                        existing = click_ctx.obj.get('attempted_models')
-                        if isinstance(existing, list):
-                            click_ctx.obj['attempted_models'] = existing + flattened
-                        else:
-                            click_ctx.obj['attempted_models'] = flattened
-                except Exception:
-                    pass
+            if flattened:
+                last_model_name = flattened[-1]
+            _append_attempts_to_ctx_obj(flattened)
     elif progress_callback:
         for i, file_path in enumerate(files):
             progress_callback(i + 1, total_files)
-            cost, model, _attempted = _process_file(i, file_path)
+            cost, model, file_attempts = _process_file(i, file_path)
             total_cost += cost
-            if model != "cached":
-                last_model_name = model
+            if file_attempts:
+                last_model_name = file_attempts[-1]
+                if model == "cached":
+                    # Terminal failure recovered inside helper; llm_invoke
+                    # rewound its contribution from ctx.obj on the way out,
+                    # so re-publish the recovered history here to preserve
+                    # this file's fallback record in cost.csv.
+                    _append_attempts_to_ctx_obj(file_attempts)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
     elif verbose:
@@ -372,19 +387,23 @@ def summarize_directory(
         ) as progress:
             task = progress.add_task("[cyan]Processing files...", total=len(files))
             for i, file_path in enumerate(files):
-                cost, model, _attempted = _process_file(i, file_path)
+                cost, model, file_attempts = _process_file(i, file_path)
                 total_cost += cost
-                if model != "cached":
-                    last_model_name = model
+                if file_attempts:
+                    last_model_name = file_attempts[-1]
+                    if model == "cached":
+                        _append_attempts_to_ctx_obj(file_attempts)
                 if csv_path:
                     _flush_csv_to_disk(results_data, csv_path)
                 progress.advance(task)
     else:
         for i, file_path in enumerate(files):
-            cost, model, _attempted = _process_file(i, file_path)
+            cost, model, file_attempts = _process_file(i, file_path)
             total_cost += cost
-            if model != "cached":
-                last_model_name = model
+            if file_attempts:
+                last_model_name = file_attempts[-1]
+                if model == "cached":
+                    _append_attempts_to_ctx_obj(file_attempts)
             if csv_path:
                 _flush_csv_to_disk(results_data, csv_path)
 
