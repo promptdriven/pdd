@@ -84,6 +84,40 @@ def _truncate_text(text: str, limit_chars: int) -> str:
     return text[:limit_chars] + f"\n... (truncated, {len(text)} total chars)"
 
 
+def _compose_sync_summary(
+    *,
+    success: bool,
+    operations_completed: List[str],
+    skipped_operations: List[str],
+    errors: List[str],
+) -> str:
+    """Compose a truthful, scoped summary line for the sync result.
+
+    - No-op success: "No sync operations required; selected target is already synchronized."
+    - Success with work: "Completed: <ops>" (and "; skipped: <ops>" when applicable)
+    - Failure: "Step <first> failed: <reason>" using the first error.
+    The selected-target scoping comes from the caller (sync_main renders this per language).
+    """
+    if not success:
+        first_err = next((e for e in errors if e), "")
+        if first_err:
+            return f"Sync failed: {first_err}"
+        return "Sync failed."
+
+    completed = [op for op in (operations_completed or []) if op]
+    skipped = [op for op in (skipped_operations or []) if op]
+
+    if not completed and not skipped:
+        return "No sync operations required; selected target is already synchronized."
+
+    parts: List[str] = []
+    if completed:
+        parts.append(f"Completed: {', '.join(completed)}")
+    if skipped:
+        parts.append(f"skipped: {', '.join(skipped)}")
+    return "; ".join(parts)
+
+
 def _run_fix_operation_test_subprocess(*args: Any, **kwargs: Any) -> Any:
     """subprocess.run for fix-phase test capture; separate symbol so tests can patch reliably."""
     return subprocess.run(*args, **kwargs)
@@ -1971,6 +2005,7 @@ def sync_orchestration(
             return {
                 "success": False,
                 "error": f"Failed to construct paths: {str(e)}",
+                "summary": f"Failed to construct paths: {str(e)}",
                 "operations_completed": [],
                 "errors": [f"Path construction failed: {str(e)}"]
             }
@@ -3401,7 +3436,13 @@ def sync_orchestration(
             'total_time': time.time() - start_time,
             'final_state': {p: {'exists': f.exists(), 'path': str(f)} for p, f in pdd_files.items() if p != 'test_files'},
             'errors': errors,
-            'error': "; ".join(errors) if errors else None,  # Add this line
+            'error': "; ".join(errors) if errors else None,
+            'summary': _compose_sync_summary(
+                success=not errors,
+                operations_completed=operations_completed,
+                skipped_operations=skipped_operations,
+                errors=errors,
+            ),
             'model_name': last_model_name,
         }
 
@@ -3468,10 +3509,11 @@ def sync_orchestration(
             "total_cost": current_cost_ref[0],
             "model_name": "",
             "error": "Sync process interrupted or returned no result.",
+            "summary": "Sync interrupted: app exited without result.",
             "operations_completed": [],
             "errors": ["App exited without result"]
         }
-    
+
     return result
 
 if __name__ == '__main__':

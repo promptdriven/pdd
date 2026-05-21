@@ -1,19 +1,5 @@
 <pdd-reason>CLI entry point for the unified sync workflow, handling both single-module and global project-wide synchronization.</pdd-reason>
 
-<pdd-interface>
-{
-  "type": "cli",
-  "cli": {
-    "commands": [
-      {
-        "name": "sync_main",
-        "signature": "(ctx, prompt_file: Optional[str] = None, *, target_coverage: float = 90.0, language: Optional[str] = None, prompts_dir: str = 'prompts', code_dir: str = 'src', examples_dir: str = 'examples', tests_dir: str = 'tests', max_attempts: int = 3, budget: Optional[float] = None, skip_verify: bool = False, skip_tests: bool = False, dry_run: bool = False, force: bool = False, one_session: bool = False, target_coverage_global: Optional[float] = None, local: bool = False, timeout_adder: float = 0.0)"
-      }
-    ]
-  }
-}
-</pdd-interface>
-
 <pdd-dependency>core/cloud_python.prompt</pdd-dependency>
 <pdd-dependency>code_generator_main_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_sync_runner_python.prompt</pdd-dependency>

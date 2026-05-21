@@ -10,6 +10,7 @@ from ..agentic_checkup import run_agentic_checkup
 from ..agentic_sync import _is_github_issue_url
 from ..track_cost import track_cost
 from ..core.errors import handle_error
+from ..core.utils import echo_model_line
 
 
 @click.command("checkup")
@@ -427,7 +428,7 @@ def checkup(
             click.echo(f"Status: {status}")
             click.echo(f"Message: {message}")
             click.echo(f"Cost: ${cost:.4f}")
-            click.echo(f"Model: {model}")
+            echo_model_line(model)
 
         if not success:
             raise click.exceptions.Exit(1)

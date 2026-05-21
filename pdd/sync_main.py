@@ -1227,7 +1227,11 @@ def sync_main(
         for lang, result in aggregated_results["results_by_language"].items():
             status = "[green]Success[/green]" if result.get("success") else "[red]Failed[/red]"
             cost_str = f"${result.get('total_cost', 0.0):.4f}"
-            details = result.get("summary") or result.get("error", "No details.")
+            details = (
+                result.get("summary")
+                or result.get("error")
+                or "No details."
+            )
             final_table.add_row(lang, status, cost_str, str(details))
 
         rprint(final_table)
