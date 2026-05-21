@@ -5717,12 +5717,12 @@ _STEP6_SAMPLE = _textwrap.dedent("""
 - grep ...
 
 ### Direct Edit Candidates (No Prompt)
-
 | File | Edit Type | Markers Found |
 |------|-----------|---------------|
 | `frontend/src/Other.tsx` | uncomment | TODO |
 | `scripts/run.sh` | remove placeholder | coming soon |
-""").strip()
+
+""")
 
 
 _STEP5_SAMPLE = _textwrap.dedent("""
@@ -5770,7 +5770,8 @@ text
 
 #### `docs/unrelated.md`
 - not relevant
-""").strip()
+
+""")
 
 
 # 1-6: Parser tests -----------------------------------------------------------
@@ -6123,7 +6124,12 @@ def _make_real_worktree_for_step9(tmp_path, init_files=None):
     return our pre-built worktree.
     """
     repo = tmp_path / "repo"
-    files = {"prompts/foo_python.prompt": "p"}
+    files = {
+        "prompts/foo_python.prompt": "p",
+        # architecture.json is tracked from the start so step 10 sees a real
+        # file to work with. (Its modification is forbidden in Step 9.)
+        "architecture.json": '{"modules": []}\n',
+    }
     if init_files:
         files.update(init_files)
     _scope_git_init(repo, files)
@@ -6295,10 +6301,6 @@ def test_orchestrator_step9_no_violations_proceeds_normally(temp_cwd):
             return (True, f"out {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
-
-        # Step 10 will try to read architecture.json via _scope_*; tolerate
-        # absence by giving it one in the worktree.
-        (worktree / "architecture.json").write_text('{"modules": []}\n')
 
         success, msg, _cost, _model, _files = run_agentic_change_orchestrator(
             issue_url="http://url",

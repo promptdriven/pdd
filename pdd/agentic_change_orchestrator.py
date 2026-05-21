@@ -748,6 +748,276 @@ def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
                         candidates.append(file_path)
     return candidates
 
+def _extract_section(text: str, heading: str, level: int = 3) -> str:
+    """Return the body of a Markdown section, bounded by the next same-or-higher
+    level heading. Empty string if not found.
+
+    `level` is the number of `#` characters in the section heading.
+    """
+    hashes = "#" * level
+    # Stop at the next heading of the same level or any higher level (fewer #).
+    # We approximate "higher level" by matching `#{1..level}` followed by space.
+    stop = rf"(?=^#{{1,{level}}} )"
+    pattern = rf"^{re.escape(hashes)} {re.escape(heading)}\s*\n(.*?)(?:{stop}|\Z)"
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+    return match.group(1) if match else ""
+
+
+def _parse_md_table_column(section: str, column_index: int) -> List[str]:
+    """Extract the ``column_index``-th column (1-based) from every body row of
+    the first markdown table found in *section*.
+
+    Skips the header and separator rows, drops empty/placeholder cells.
+    """
+    values: List[str] = []
+    in_table = False
+    saw_separator = False
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("|"):
+            if in_table:
+                break  # table ended
+            continue
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        # Separator row: all cells match the dash pattern.
+        if all(re.fullmatch(r":?-{3,}:?", c) for c in cells if c):
+            saw_separator = True
+            in_table = True
+            continue
+        if not in_table:
+            # First line is the header; flag and continue.
+            in_table = True
+            continue
+        if not saw_separator:
+            continue
+        if column_index - 1 >= len(cells):
+            continue
+        cell = cells[column_index - 1].strip().strip("`").strip()
+        if cell:
+            values.append(cell)
+    return values
+
+
+def _parse_step6_devunit_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from Step 6 'Dev Units to MODIFY' / 'CREATE' tables.
+
+    Returns only the first column (Prompt). Code, Example, and Test columns are
+    forbidden Step 9 targets and never returned. Placeholder rows containing
+    `{...}` literals are skipped.
+    """
+    prompts: List[str] = []
+    for heading in ("Dev Units to MODIFY", "Dev Units to CREATE"):
+        section = _extract_section(step6_output, heading, level=3)
+        if not section:
+            continue
+        for cell in _parse_md_table_column(section, column_index=1):
+            if "{" in cell or "}" in cell:
+                continue
+            if cell.endswith(".prompt"):
+                prompts.append(cell)
+    return prompts
+
+
+def _parse_step6_dependency_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from Step 6's 'Dependencies' bullet list.
+
+    Format: `` - `path` - reason ``. Non-prompt entries are ignored.
+    """
+    section = _extract_section(step6_output, "Dependencies (may need interface updates)", level=3)
+    if not section:
+        return []
+    prompts: List[str] = []
+    for raw_line in section.splitlines():
+        line = raw_line.strip()
+        if not line.startswith("-"):
+            continue
+        # Strip leading dash, take the first backticked token if present.
+        body = line.lstrip("-").strip()
+        match = re.match(r"`([^`]+)`", body)
+        candidate = match.group(1).strip() if match else body.split(" - ", 1)[0].strip()
+        candidate = candidate.strip("`").strip()
+        if candidate.endswith(".prompt") and "{" not in candidate:
+            prompts.append(candidate)
+    return prompts
+
+
+def _parse_step6_integration_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from the 3rd column of Step 6's Integration Points table.
+
+    Cells that are empty or say 'manual update needed' are skipped.
+    """
+    section = _extract_section(step6_output, "Integration Points Discovered", level=3)
+    if not section:
+        return []
+    prompts: List[str] = []
+    for cell in _parse_md_table_column(section, column_index=3):
+        lower = cell.lower()
+        if not cell or "manual" in lower:
+            continue
+        if cell.endswith(".prompt") and "{" not in cell:
+            prompts.append(cell)
+    return prompts
+
+
+def _parse_step6_frontend_prompts(step6_output: str) -> List[str]:
+    """Extract prompt paths from the 2nd column of Step 6's Frontend Dev Units table.
+
+    Cells that say 'None' (case-insensitive) are skipped.
+    """
+    section = _extract_section(step6_output, "Frontend Dev Units (Cross-Layer)", level=3)
+    if not section:
+        return []
+    prompts: List[str] = []
+    for cell in _parse_md_table_column(section, column_index=2):
+        if not cell or cell.strip().lower() == "none":
+            continue
+        if cell.endswith(".prompt") and "{" not in cell:
+            prompts.append(cell)
+    return prompts
+
+
+def _parse_step5_doc_paths(step5_output: str) -> List[str]:
+    """Extract documentation file paths from Step 5 output.
+
+    Includes paths under `### Files to Update`, `### Files to Create`, and
+    `### Associated Documents`. Excludes `### Conflicts` and
+    `### No Changes Needed`. Only `.md`, `.rst`, `.txt` paths are returned.
+    """
+    docs: List[str] = []
+    # Files to Update + Associated Documents: `#### path` headers.
+    for heading in ("Files to Update", "Associated Documents"):
+        section = _extract_section(step5_output, heading, level=3)
+        if not section:
+            continue
+        for match in re.finditer(r"^####\s+`?([^`\n]+?)`?\s*$", section, re.MULTILINE):
+            candidate = match.group(1).strip()
+            if candidate.endswith((".md", ".rst", ".txt")):
+                docs.append(candidate)
+    # Files to Create: `- path - purpose` bullets.
+    create_section = _extract_section(step5_output, "Files to Create", level=3)
+    if create_section:
+        for raw_line in create_section.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("-"):
+                continue
+            body = line.lstrip("-").strip()
+            # Path is the first backticked or whitespace-separated token.
+            match = re.match(r"`([^`]+)`", body)
+            candidate = match.group(1).strip() if match else body.split(" - ", 1)[0].strip()
+            candidate = candidate.strip("`").strip()
+            if candidate.endswith((".md", ".rst", ".txt")):
+                docs.append(candidate)
+    return docs
+
+
+def _build_step9_allowlist(
+    worktree_path: Path,
+    step5_output: str,
+    step6_output: str,
+    healed_prompt_paths: Sequence[str],
+) -> Tuple[Set[Path], Set[str]]:
+    """Build the (allowed_files, allowed_dirs) pair for the Step 9 scope guard.
+
+    Allowed files (resolved absolute paths under *worktree_path*):
+      * Step 6 dev-unit prompts (MODIFY + CREATE + dependencies + integration + frontend)
+      * Step 6 Direct Edit Candidates
+      * Step 5 doc paths (Update + Create + Associated; excludes Conflicts)
+      * Preflight-healed prompts plus their `.pdd/meta/<basename>.json` companions
+
+    No directory prefixes are returned — paths only, exact match.
+    """
+    worktree_root = worktree_path.resolve()
+
+    def _resolve(rel: str) -> Path:
+        candidate = Path(rel)
+        if candidate.is_absolute():
+            return candidate.resolve()
+        return (worktree_root / candidate).resolve()
+
+    allowed_files: Set[Path] = set()
+    seen_rel: Set[str] = set()
+
+    def _add(rel: str) -> None:
+        normalized = rel.replace("\\", "/").strip().strip("`").strip()
+        if not normalized or normalized in seen_rel:
+            return
+        # Hard exclusions — these never enter the allowlist regardless of source.
+        if normalized.endswith("architecture.json"):
+            return
+        seen_rel.add(normalized)
+        allowed_files.add(_resolve(normalized))
+
+    for path in _parse_step6_devunit_prompts(step6_output):
+        _add(path)
+    for path in _parse_step6_dependency_prompts(step6_output):
+        _add(path)
+    for path in _parse_step6_integration_prompts(step6_output):
+        _add(path)
+    for path in _parse_step6_frontend_prompts(step6_output):
+        _add(path)
+    for path in _parse_direct_edit_candidates(step6_output):
+        _add(path)
+    for path in _parse_step5_doc_paths(step5_output):
+        _add(path)
+
+    for raw in healed_prompt_paths or []:
+        prompt_str = str(raw).replace("\\", "/").strip()
+        if not prompt_str.endswith(".prompt"):
+            continue
+        # Resolve healed prompt against the worktree if it's relative.
+        prompt_path = Path(prompt_str)
+        if prompt_path.is_absolute():
+            allowed_files.add(prompt_path.resolve())
+            basename = prompt_path.name
+        else:
+            allowed_files.add((worktree_root / prompt_path).resolve())
+            basename = prompt_path.name
+        # Companion meta JSON: .pdd/meta/<basename-without-suffix>.json.
+        meta_stem = basename[: -len(".prompt")] if basename.endswith(".prompt") else basename
+        meta_rel = f".pdd/meta/{meta_stem}.json"
+        allowed_files.add((worktree_root / meta_rel).resolve())
+
+    return allowed_files, set()
+
+
+def _enforce_step9_scope(
+    worktree_path: Path,
+    context: Dict[str, Any],
+    state: Dict[str, Any],
+    quiet: bool = False,
+) -> List[str]:
+    """Revert any Step 9 file change that is not in the allowlist.
+
+    Returns the list of reverted relative paths (POSIX strings). Returns ``[]``
+    when the worktree is missing or git is unavailable — never raises.
+    """
+    if not worktree_path or not worktree_path.exists():
+        return []
+    # The helper relies on `git status` succeeding. If the path is not a git
+    # working tree (no `.git` dir or worktree gitlink file present), the
+    # guard is a no-op rather than a spurious failure.
+    if not (worktree_path / ".git").exists():
+        return []
+    try:
+        from pdd.agentic_common_worktree import revert_out_of_scope_changes_with_dirs
+    except Exception:
+        return []
+
+    step5_output = context.get("step5_output", "") or ""
+    step6_output = context.get("step6_output", "") or ""
+    healed = state.get("preflight_healed_prompt_paths", []) or []
+    allowed_files, allowed_dirs = _build_step9_allowlist(
+        worktree_path, step5_output, step6_output, healed
+    )
+    try:
+        reverted_paths = revert_out_of_scope_changes_with_dirs(
+            worktree_path, allowed_dirs, allowed_files
+        )
+    except Exception:
+        return []
+    return [Path(p).as_posix() for p in reverted_paths]
+
+
 def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Optional[List[str]] = None) -> List[str]:
     """
     Detect actual file changes in worktree using git status.
@@ -1759,6 +2029,54 @@ def run_agentic_change_orchestrator(
                 console.print(f"[blue]Found {len(direct_edit_candidates)} direct edit candidate(s)[/blue]")
 
         if step_num == 9:
+            # Scope guard (issue #1123): revert any file change outside the
+            # Step 5/6 allowlist. Step 9 is supposed to touch only prompts,
+            # docs, and explicitly-listed Direct Edit Candidates. The LLM
+            # does not reliably honor this; the guard enforces it.
+            scope_reverted: List[str] = []
+            if worktree_path:
+                scope_reverted = _enforce_step9_scope(
+                    worktree_path=worktree_path,
+                    context=context,
+                    state=state,
+                    quiet=quiet,
+                )
+            if scope_reverted:
+                violation_block = (
+                    "SCOPE_VIOLATION:\n"
+                    + "\n".join(f"- {p}" for p in scope_reverted)
+                    + "\n\nThis indicates the Step 9 agent attempted edits outside "
+                    "the issue's contract. Review and refine the issue, then resume."
+                )
+                step_output = step_output.rstrip() + "\n\n" + violation_block
+                if not quiet:
+                    console.print(
+                        f"[red]Step 9 scope violation: reverted "
+                        f"{len(scope_reverted)} file(s) outside allowlist[/red]"
+                    )
+                    for path in scope_reverted:
+                        console.print(f"  [red]- {escape(path)}[/red]")
+                post_step_comment(
+                    repo_owner=repo_owner, repo_name=repo_name,
+                    issue_number=issue_number, step_num=step_num,
+                    total_steps=13, description=description,
+                    output=step_output, cwd=cwd,
+                )
+                state["step_outputs"][str(step_num)] = f"FAILED: SCOPE_VIOLATION\n{step_output}"
+                # Do NOT advance last_completed_step — same pattern as the
+                # "no file changes" fallback below.
+                state["step_comments"] = sorted(step_comments_set)
+                save_workflow_state(
+                    cwd, issue_number, "change", state, state_dir,
+                    repo_owner, repo_name, use_github_state, github_comment_id,
+                )
+                return (
+                    False,
+                    f"Stopped at step 9: Scope violation — agent modified "
+                    f"{len(scope_reverted)} file(s) outside allowlist",
+                    total_cost, model_used, [],
+                )
+
             extracted_files = _parse_changed_files(step_output)
             if not extracted_files and worktree_path:
                 # Fallback: check worktree for actual file changes
