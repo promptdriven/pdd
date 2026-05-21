@@ -730,22 +730,29 @@ def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
     Parse Step 6 output for 'Direct Edit Candidates' table.
     Extract file paths from the first column of each row.
     Returns empty list if no table found.
+
+    Tolerates optional italic descriptions or blank lines between the
+    `### Direct Edit Candidates...` heading and the markdown table (this
+    matches the actual `agentic_change_step6_devunits_LLM.prompt` template
+    which emits a `*Files that need scoped...*` line plus a blank line).
     """
-    candidates = []
-    # Look for the Direct Edit Candidates table section
-    # Format: | file_path | edit_type | markers |
-    table_pattern = r"### Direct Edit Candidates[^\n]*\n\|[^\n]+\n\|[-\s|]+\n((?:\|[^\n]+\n)*)"
-    table_match = re.search(table_pattern, step6_output, re.IGNORECASE)
-    if table_match:
-        rows = table_match.group(1).strip().split("\n")
-        for row in rows:
-            if row.strip().startswith("|"):
-                # Extract first column (file path)
-                cols = [c.strip() for c in row.split("|")]
-                if len(cols) >= 2 and cols[1]:  # cols[0] is empty due to leading |
-                    file_path = cols[1].strip().strip("`")
-                    if file_path and not file_path.startswith("-"):
-                        candidates.append(file_path)
+    section_pattern = (
+        r"### Direct Edit Candidates[^\n]*\n"
+        r"(?:[^|#\n][^\n]*\n|\s*\n)*"  # optional non-table, non-heading lines
+        r"\|[^\n]+\n\|[-\s|]+\n((?:\|[^\n]+(?:\n|$))*)"
+    )
+    table_match = re.search(section_pattern, step6_output, re.IGNORECASE)
+    if not table_match:
+        return []
+    candidates: List[str] = []
+    for row in table_match.group(1).splitlines():
+        if not row.strip().startswith("|"):
+            continue
+        cols = [c.strip() for c in row.split("|")]
+        if len(cols) >= 2 and cols[1]:  # cols[0] is empty due to leading |
+            file_path = cols[1].strip().strip("`")
+            if file_path and not file_path.startswith("-"):
+                candidates.append(file_path)
     return candidates
 
 def _extract_section(text: str, heading: str, level: int = 3) -> str:

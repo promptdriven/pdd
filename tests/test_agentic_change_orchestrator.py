@@ -5717,6 +5717,8 @@ _STEP6_SAMPLE = _textwrap.dedent("""
 - grep ...
 
 ### Direct Edit Candidates (No Prompt)
+*Files that need scoped direct edits because no corresponding prompt exists*
+
 | File | Edit Type | Markers Found |
 |------|-----------|---------------|
 | `frontend/src/Other.tsx` | uncomment | TODO |
@@ -5752,6 +5754,7 @@ text
 - `docs/another.rst` - reference
 
 ### Associated Documents
+*(Documents reachable from the modified prompts' `<include>` graph, depth ≤ 3.)*
 
 #### `docs/api_reference.md`
 **Discovered via:** `prompts/foo_python.prompt`
@@ -5763,13 +5766,12 @@ text
 ```
 
 ### Conflicts
+*(Documents whose edits Step 5 cannot resolve automatically.)*
 
-#### `docs/conflicted.md` — overlapping authority — review section X
+- `docs/conflicted.md` — overlapping authority — review section X
 
 ### No Changes Needed
-
-#### `docs/unrelated.md`
-- not relevant
+- `docs/unrelated.md` - not relevant
 
 """)
 
@@ -5814,6 +5816,29 @@ def test_parse_step6_frontend_prompts_skips_none():
     assert "prompts/frontend/app_TypescriptReact.prompt" in result
     assert "None" not in result
     assert not any("none" == p.strip().lower() for p in result)
+
+
+def test_parse_direct_edit_candidates_handles_real_template_format():
+    """Regression: the Step 6 prompt template emits the table after an italic
+    line and a blank line. Earlier the regex required `|` to follow the
+    heading on the very next line, which silently returned [] on real
+    outputs — breaking the scope guard's contract that Direct Edit
+    Candidates are in scope.
+    """
+    sample = _textwrap.dedent("""
+        ### Direct Edit Candidates (No Prompt)
+        *Files that need scoped direct edits because no corresponding prompt exists*
+
+        | File | Edit Type | Markers Found |
+        |------|-----------|---------------|
+        | `frontend/src/Foo.tsx` | uncomment | TODO |
+        | `scripts/launch.sh` | remove placeholder | coming soon |
+
+    """)
+    assert _parse_direct_edit_candidates(sample) == [
+        "frontend/src/Foo.tsx",
+        "scripts/launch.sh",
+    ]
 
 
 def test_parse_step5_doc_paths_includes_update_create_associated_excludes_conflicts():
