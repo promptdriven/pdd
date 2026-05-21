@@ -77,6 +77,7 @@ ALL_SEVERITIES = {"blocker", "critical", "medium", "low", "nit", "info"}
 DEFAULT_REVIEWER = "codex"
 DEFAULT_FIXER = "claude"
 DEFAULT_REVIEWERS = ("codex", "claude")
+MAX_PR_HEAD_REFRESHES = 2
 EXTERNAL_STATUS_FINDING_MARKERS: Tuple[str, ...] = (
     "action required",
     "action_required",
@@ -601,7 +602,21 @@ class FixResult:
     push_status: Optional[str] = None
     local_fixer_commit_sha: Optional[str] = None
     pushed_head_sha: Optional[str] = None
+    rebase_conflicted: bool = False
     round_number: int = 0
+
+
+class ReviewResultError(Exception):
+    """Base for errors that return a valid report rather than crashing."""
+
+
+class PRHeadAdvancedError(Exception):
+    """Raised when the PR head advances during review; triggers a full rerun."""
+
+    def __init__(self, old_sha: str, new_sha: str):
+        self.old_sha = old_sha
+        self.new_sha = new_sha
+        super().__init__(f"PR head advanced: {old_sha} -> {new_sha}")
 
 
 @dataclass
@@ -745,6 +760,8 @@ class ReviewLoopState:
     # → missing on stale head) would erase the only signal that the
     # re-fetch was attempted.
     final_refetch_attempted: bool = False
+    # ``pr_head_refreshes_count``: autonomous rerun counter. (Issue #1116)
+    pr_head_refreshes_count: int = 0
 
     @property
     def findings(self) -> List[ReviewFinding]:
@@ -779,118 +796,83 @@ def run_checkup_review_loop(
         )
         return True, _render_final_report(context, state, roles), 0.0, "unknown"
 
-    reviewer_status = {reviewer: "missing"}
-    if not config.review_only:
-        reviewer_status[fixer] = "fixer"
-    state = ReviewLoopState(
-        reviewer_status=reviewer_status,
-        active_reviewer=reviewer,
-        original_reviewer=reviewer,
-    )
-    deadline = time.monotonic() + (config.max_minutes * 60.0)
-    worktree, setup_error = _setup_pr_worktree(
-        cwd,
-        context.pr_owner,
-        context.pr_repo,
-        context.pr_number,
-        quiet,
-        resume_existing=False,
-    )
-
-    artifacts_dir = _artifacts_dir(cwd, context.issue_number, context.pr_number)
-    artifacts_dir.mkdir(parents=True, exist_ok=True)
-
-    if worktree is None:
-        state.stop_reason = f"Failed to set up PR worktree: {setup_error}"
-        state.reviewer_status[reviewer] = "failed"
-        report = _finalize(context, state, roles, artifacts_dir)
-        _post_review_loop_report(context, report, use_github_state)
-        return True, report, state.total_cost, state.last_model
-
-    pr_metadata = (
-        {}
-        if config.review_only
-        else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
-    )
-    # Capture the SHA the reviewer will actually see in the worktree.
-    # This is the comparison target for the R-V5 re-fetch when a
-    # reviewer path returns ``clean`` without ever invoking a fixer
-    # (initial reviewer clean, fallback reviewer clean, review-only
-    # clean) — the verifier never gets to pin ``state.verified_head_sha``
-    # on those paths, so without a reviewed SHA the final report cannot
-    # prove the remote head still matches what was reviewed
-    # (issue #1088). Read it directly from the worktree via
-    # ``git rev-parse HEAD`` rather than from ``pr_metadata``: the
-    # metadata fetch runs after ``_setup_pr_worktree`` and can return a
-    # newer remote SHA than what the reviewer actually inspects if the
-    # PR advances between checkout and that lookup. If the worktree
-    # rev-parse fails we fail closed (``None``) so ``_finalize`` cannot
-    # render ``fresh-final-review: clean`` against a SHA we never
-    # observed.
-    state.reviewed_head_sha = _git_rev_parse_head(worktree) or None
-    if not quiet:
-        mode_label = "review-only" if config.review_only else "review-loop"
-        console.print(
-            f"[bold]Running {mode_label} for PR #{context.pr_number} with "
-            f"reviewer={reviewer}"
-            f"{'' if config.review_only else f', fixer={fixer}'}[/bold]"
-        )
-
-    pending_findings: Optional[List[ReviewFinding]] = None
-    fallback_used = False
-    for round_number in range(1, config.max_rounds + 1):
-        if _budget_exhausted(config, state, deadline):
-            _mark_budget_exhausted(config, state, deadline)
-            break
-
-        if not quiet:
-            console.print(
-                f"[bold cyan]--- Review Loop Round {round_number}/{config.max_rounds} ---"
-                "[/bold cyan]"
+    pr_head_refreshes_count = 0
+    while True:
+        try:
+            reviewer_status = {reviewer: "missing"}
+            if not config.review_only:
+                reviewer_status[fixer] = "fixer"
+            state = ReviewLoopState(
+                reviewer_status=reviewer_status,
+                active_reviewer=reviewer,
+                original_reviewer=reviewer,
+                pr_head_refreshes_count=pr_head_refreshes_count,
+            )
+            deadline = time.monotonic() + (config.max_minutes * 60.0)
+            worktree, setup_error = _setup_pr_worktree(
+                cwd,
+                context.pr_owner,
+                context.pr_repo,
+                context.pr_number,
+                quiet,
+                resume_existing=False,
             )
 
-        if pending_findings is None:
-            review = _run_review(
-                reviewer=reviewer,
-                context=context,
-                worktree=worktree,
-                round_number=round_number,
-                state=state,
-                config=config,
-                verbose=verbose,
-                quiet=quiet,
-                artifacts_dir=artifacts_dir,
-                pr_metadata=pr_metadata,
-                deadline=deadline,
+            artifacts_dir = _artifacts_dir(cwd, context.issue_number, context.pr_number)
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+            if worktree is None:
+                state.stop_reason = f"Failed to set up PR worktree: {setup_error}"
+                state.reviewer_status[reviewer] = "failed"
+                report = _finalize(context, state, roles, artifacts_dir, config)
+                _post_review_loop_report(context, report, use_github_state)
+                return True, report, state.total_cost, state.last_model
+
+            pr_metadata = (
+                {}
+                if config.review_only
+                else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
             )
-            _record_review(state, review)
-            _mark_non_required_findings_advisory(state, config)
-            _write_dedup_snapshot(artifacts_dir, round_number, state)
-            if _budget_exhausted(config, state, deadline):
-                _mark_budget_exhausted(config, state, deadline)
-                break
-            if review.status in HARD_NOT_CLEAN_STATES:
-                fallback_candidates = _normalize_reviewers(
-                    [config.reviewer_fallback] if config.reviewer_fallback else []
+            # Capture the SHA the reviewer will actually see in the worktree.
+            # This is the comparison target for the R-V5 re-fetch when a
+            # reviewer path returns ``clean`` without ever invoking a fixer
+            # (initial reviewer clean, fallback reviewer clean, review-only
+            # clean) — the verifier never gets to pin ``state.verified_head_sha``
+            # on those paths, so without a reviewed SHA the final report cannot
+            # prove the remote head still matches what was reviewed
+            # (issue #1088). Read it directly from the worktree via
+            # ``git rev-parse HEAD`` rather than from ``pr_metadata``: the
+            # metadata fetch runs after ``_setup_pr_worktree`` and can return a
+            # newer remote SHA than what the reviewer actually inspects if the
+            # PR advances between checkout and that lookup. If the worktree
+            # rev-parse fails we fail closed (``None``) so ``_finalize`` cannot
+            # render ``fresh-final-review: clean`` against a SHA we never
+            # observed.
+            state.reviewed_head_sha = _git_rev_parse_head(worktree) or None
+            if not quiet:
+                mode_label = "review-only" if config.review_only else "review-loop"
+                console.print(
+                    f"[bold]Running {mode_label} for PR #{context.pr_number} with "
+                    f"reviewer={reviewer}"
+                    f"{'' if config.review_only else f', fixer={fixer}'}[/bold]"
                 )
-                fallback = fallback_candidates[0] if fallback_candidates else None
-                # ``state.active_fixer`` may already point at a role
-                # promoted earlier by the fixer-fallback path. Reusing that
-                # same role here as the reviewer-fallback would collapse
-                # reviewer/fixer role independence — the loop would have
-                # the fixer review its own changes — so exclude it from the
-                # reviewer-fallback candidate set the same way ``fixer``
-                # itself is excluded.
-                if (
-                    not fallback_used
-                    and fallback
-                    and fallback != fixer
-                    and fallback != reviewer
-                    and (state.active_fixer is None or fallback != state.active_fixer)
-                ):
-                    fallback_used = True
-                    fallback_review = _run_review(
-                        reviewer=fallback,
+
+            pending_findings: Optional[List[ReviewFinding]] = None
+            fallback_used = False
+            for round_number in range(1, config.max_rounds + 1):
+                if _budget_exhausted(config, state, deadline):
+                    _mark_budget_exhausted(config, state, deadline)
+                    break
+
+                if not quiet:
+                    console.print(
+                        f"[bold cyan]--- Review Loop Round {round_number}/{config.max_rounds} ---"
+                        "[/bold cyan]"
+                    )
+
+                if pending_findings is None:
+                    review = _run_review(
+                        reviewer=reviewer,
                         context=context,
                         worktree=worktree,
                         round_number=round_number,
@@ -902,240 +884,279 @@ def run_checkup_review_loop(
                         pr_metadata=pr_metadata,
                         deadline=deadline,
                     )
-                    _record_review(state, fallback_review)
+                    _record_review(state, review)
                     _mark_non_required_findings_advisory(state, config)
                     _write_dedup_snapshot(artifacts_dir, round_number, state)
                     if _budget_exhausted(config, state, deadline):
                         _mark_budget_exhausted(config, state, deadline)
                         break
-                    if fallback not in roles:
-                        roles.append(fallback)
-                    if fallback_review.status in HARD_NOT_CLEAN_STATES:
-                        state.stop_reason = (
-                            f"Reviewer fallback {fallback} could not complete: "
-                            f"{fallback_review.status}."
+                    if review.status in HARD_NOT_CLEAN_STATES:
+                        fallback_candidates = _normalize_reviewers(
+                            [config.reviewer_fallback] if config.reviewer_fallback else []
                         )
-                        break
-                    review = fallback_review
-                    reviewer = fallback
-                    state.active_reviewer = fallback
-                else:
-                    fallback_result = None
-                    if not fallback_used:
-                        fallback_result = _maybe_run_fallback_reviewer(
-                            primary_reviewer=reviewer,
-                            primary_status=review.status,
-                            fixer=fixer,
-                            context=context,
-                            worktree=worktree,
-                            round_number=round_number,
-                            state=state,
-                            config=config,
-                            verbose=verbose,
-                            quiet=quiet,
-                            artifacts_dir=artifacts_dir,
-                            pr_metadata=pr_metadata,
-                            deadline=deadline,
-                        )
-                    if fallback_result is not None:
-                        fallback_used = True
-                        _mark_non_required_findings_advisory(state, config)
-                        _write_dedup_snapshot(artifacts_dir, round_number, state)
-                        if _budget_exhausted(config, state, deadline):
-                            _mark_budget_exhausted(config, state, deadline)
-                            break
-                        state.active_reviewer = fallback_result.reviewer
-                        if fallback_result.status == "clean":
-                            state.fresh_final_status = "clean"
-                            state.stop_reason = (
-                                f"Primary reviewer {reviewer} unavailable "
-                                f"({review.status}); secondary reviewer {fixer} "
-                                "clean (fallback)."
+                        fallback = fallback_candidates[0] if fallback_candidates else None
+                        # ``state.active_fixer`` may already point at a role
+                        # promoted earlier by the fixer-fallback path. Reusing that
+                        # same role here as the reviewer-fallback would collapse
+                        # reviewer/fixer role independence — the loop would have
+                        # the fixer review its own changes — so exclude it from the
+                        # reviewer-fallback candidate set the same way ``fixer``
+                        # itself is excluded.
+                        if (
+                            not fallback_used
+                            and fallback
+                            and fallback != fixer
+                            and fallback != reviewer
+                            and (state.active_fixer is None or fallback != state.active_fixer)
+                        ):
+                            fallback_used = True
+                            fallback_review = _run_review(
+                                reviewer=fallback,
+                                context=context,
+                                worktree=worktree,
+                                round_number=round_number,
+                                state=state,
+                                config=config,
+                                verbose=verbose,
+                                quiet=quiet,
+                                artifacts_dir=artifacts_dir,
+                                pr_metadata=pr_metadata,
+                                deadline=deadline,
                             )
+                            _record_review(state, fallback_review)
+                            _mark_non_required_findings_advisory(state, config)
+                            _write_dedup_snapshot(artifacts_dir, round_number, state)
+                            if _budget_exhausted(config, state, deadline):
+                                _mark_budget_exhausted(config, state, deadline)
+                                break
+                            if fallback not in roles:
+                                roles.append(fallback)
+                            if fallback_review.status in HARD_NOT_CLEAN_STATES:
+                                state.stop_reason = (
+                                    f"Reviewer fallback {fallback} could not complete: "
+                                    f"{fallback_review.status}."
+                                )
+                                break
+                            review = fallback_review
+                            reviewer = fallback
+                            state.active_reviewer = fallback
+                        else:
+                            fallback_result = None
+                            if not fallback_used:
+                                fallback_result = _maybe_run_fallback_reviewer(
+                                    primary_reviewer=reviewer,
+                                    primary_status=review.status,
+                                    fixer=fixer,
+                                    context=context,
+                                    worktree=worktree,
+                                    round_number=round_number,
+                                    state=state,
+                                    config=config,
+                                    verbose=verbose,
+                                    quiet=quiet,
+                                    artifacts_dir=artifacts_dir,
+                                    pr_metadata=pr_metadata,
+                                    deadline=deadline,
+                                )
+                            if fallback_result is not None:
+                                fallback_used = True
+                                _mark_non_required_findings_advisory(state, config)
+                                _write_dedup_snapshot(artifacts_dir, round_number, state)
+                                if _budget_exhausted(config, state, deadline):
+                                    _mark_budget_exhausted(config, state, deadline)
+                                    break
+                                state.active_reviewer = fallback_result.reviewer
+                                if fallback_result.status == "clean":
+                                    state.fresh_final_status = "clean"
+                                    state.stop_reason = (
+                                        f"Primary reviewer {reviewer} unavailable "
+                                        f"({review.status}); secondary reviewer {fixer} "
+                                        "clean (fallback)."
+                                    )
+                                    break
+                                if fallback_result.status == "findings":
+                                    state.stop_reason = (
+                                        f"Primary reviewer {reviewer} unavailable "
+                                        f"({review.status}); secondary reviewer {fixer} "
+                                        "reported findings (fallback)."
+                                    )
+                                    break
+                                state.stop_reason = (
+                                    f"Reviewer fallback {fixer} could not complete: "
+                                    f"{fallback_result.status}."
+                                )
+                                break
+                            if not state.stop_reason:
+                                state.stop_reason = (
+                                    f"Primary reviewer {reviewer} could not complete: "
+                                    f"{review.status}."
+                                )
                             break
-                        if fallback_result.status == "findings":
-                            state.stop_reason = (
-                                f"Primary reviewer {reviewer} unavailable "
-                                f"({review.status}); secondary reviewer {fixer} "
-                                "reported findings (fallback)."
-                            )
-                            break
+
+                fix_findings = _actionable_findings(state, review.findings)
+                if config.review_only:
+                    if fix_findings:
+                        state.reviewer_status[reviewer] = "findings"
                         state.stop_reason = (
-                            f"Reviewer fallback {fixer} could not complete: "
-                            f"{fallback_result.status}."
+                            "Review-only mode: primary reviewer reported findings."
                         )
-                        break
-                    if not state.stop_reason:
+                    else:
+                        _mark_reviewer_findings_fixed(state, reviewer)
+                        state.reviewer_status[reviewer] = "clean"
+                        state.fresh_final_status = "clean"
                         state.stop_reason = (
-                            f"Primary reviewer {reviewer} could not complete: "
-                            f"{review.status}."
+                            "Review-only mode: primary reviewer reported no findings."
                         )
                     break
-
-            fix_findings = _actionable_findings(state, review.findings)
-            if config.review_only:
-                if fix_findings:
-                    state.reviewer_status[reviewer] = "findings"
-                    state.stop_reason = (
-                        "Review-only mode: primary reviewer reported findings."
-                    )
-                else:
+                if not fix_findings:
                     _mark_reviewer_findings_fixed(state, reviewer)
                     state.reviewer_status[reviewer] = "clean"
-                    state.fresh_final_status = "clean"
-                    state.stop_reason = (
-                        "Review-only mode: primary reviewer reported no findings."
-                    )
-                break
-            if not fix_findings:
-                _mark_reviewer_findings_fixed(state, reviewer)
-                state.reviewer_status[reviewer] = "clean"
-                break
-        else:
-            fix_findings = _actionable_findings(state, pending_findings)
-            if not fix_findings:
-                state.reviewer_status[reviewer] = "clean"
-                break
+                    break
+            else:
+                fix_findings = _actionable_findings(state, pending_findings)
+                if not fix_findings:
+                    state.reviewer_status[reviewer] = "clean"
+                    break
 
-        state.reviewer_status[reviewer] = "findings"
-        # Capture the worktree HEAD BEFORE the primary fixer runs so the
-        # fallback path can reset back to it. ``git reset --hard HEAD``
-        # is insufficient when the failed primary already created a
-        # commit: HEAD has already advanced and the commit survives the
-        # reset, so the fallback's eventual push would carry the failed
-        # primary's work into the PR.
-        pre_fix_sha = subprocess.run(
-            ["git", "-C", str(worktree), "rev-parse", "HEAD"],
-            capture_output=True,
-            text=True,
-            check=False,
-        ).stdout.strip()
-        # Once ``fixer_fallback`` has succeeded in a prior round it
-        # takes over as the active fixer for the rest of the loop. The
-        # original primary is almost certainly still exhausted
-        # (credential-limit reset windows are hours-to-days) so re-running
-        # it just to consume another fallback invocation defeats the
-        # one-shot fallback contract.
-        active_fixer = state.active_fixer or fixer
-        fix = _run_fix(
-            fixer=active_fixer,
-            reviewer=reviewer,
-            findings=fix_findings,
-            context=context,
-            worktree=worktree,
-            round_number=round_number,
-            state=state,
-            config=config,
-            verbose=verbose,
-            quiet=quiet,
-            artifacts_dir=artifacts_dir,
-        )
-        # Verification trust boundary (issue #1088). Stamp the round
-        # and the bare fixer-subprocess outcome onto the result so the
-        # final report can render evidence without conflating "fixer
-        # subprocess returned success" with "fix landed on the PR head".
-        fix.round_number = round_number
-        fix.fixer_result = "attempted" if fix.success else "failed"
-        fix.push_status = "not_attempted"
-        state.fixes.append(fix)
-        # Issue #1088: rewrite the on-disk artifact so it tracks the
-        # in-memory ``FixResult`` even if a break path below exits before
-        # the canonical post-push rewrite.
-        _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
-        _record_fix_attempts(state, fix_findings, fix)
+                state.reviewer_status[reviewer] = "findings"
+                # Capture the worktree HEAD BEFORE the primary fixer runs so the
+                # fallback path can reset back to it. ``git reset --hard HEAD``
+                # is insufficient when the failed primary already created a
+                # commit: HEAD has already advanced and the commit survives the
+                # reset, so the fallback's eventual push would carry the failed
+                # primary's work into the PR.
+                pre_fix_sha = subprocess.run(
+                    ["git", "-C", str(worktree), "rev-parse", "HEAD"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                ).stdout.strip()
+                # Once ``fixer_fallback`` has succeeded in a prior round it
+                # takes over as the active fixer for the rest of the loop. The
+                # original primary is almost certainly still exhausted
+                # (credential-limit reset windows are hours-to-days) so re-running
+                # it just to consume another fallback invocation defeats the
+                # one-shot fallback contract.
+                active_fixer = state.active_fixer or fixer
+                fix = _run_fix(
+                    fixer=active_fixer,
+                    reviewer=reviewer,
+                    findings=fix_findings,
+                    context=context,
+                    worktree=worktree,
+                    round_number=round_number,
+                    state=state,
+                    config=config,
+                    verbose=verbose,
+                    quiet=quiet,
+                    artifacts_dir=artifacts_dir,
+                )
+                # Verification trust boundary (issue #1088). Stamp the round
+                # and the bare fixer-subprocess outcome onto the result so the
+                # final report can render evidence without conflating "fixer
+                # subprocess returned success" with "fix landed on the PR head".
+                fix.round_number = round_number
+                fix.fixer_result = "attempted" if fix.success else "failed"
+                fix.push_status = "not_attempted"
+                state.fixes.append(fix)
+                # Issue #1088: rewrite the on-disk artifact so it tracks the
+                # in-memory ``FixResult`` even if a break path below exits before
+                # the canonical post-push rewrite.
+                _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
+                _record_fix_attempts(state, fix_findings, fix)
 
-        if not fix.success:
-            # Reset the worktree before invoking the fallback fixer. The
-            # primary may have written partial edits (or even committed)
-            # before dead-stopping (e.g. on credential exhaustion);
-            # without this reset those untrusted edits would be picked
-            # up by ``_commit_and_push_if_changed`` alongside the
-            # fallback's edits, leaking failed primary work into the PR.
-            # Reset to the pre-fix SHA — not bare ``HEAD`` — so we undo
-            # commits the failed primary may have created (HEAD has
-            # advanced past them).
-            _capture = None if verbose else subprocess.DEVNULL
-            reset_target = pre_fix_sha or "HEAD"
-            subprocess.run(
-                ["git", "-C", str(worktree), "reset", "--hard", reset_target],
-                check=False,
-                stdout=_capture,
-                stderr=_capture,
-            )
-            subprocess.run(
-                ["git", "-C", str(worktree), "clean", "-fd"],
-                check=False,
-                stdout=_capture,
-                stderr=_capture,
-            )
-            fallback_fix = _maybe_run_fallback_fixer(
-                primary_fixer=fixer,
-                reviewer=reviewer,
-                findings=fix_findings,
-                context=context,
-                worktree=worktree,
-                round_number=round_number,
-                state=state,
-                config=config,
-                verbose=verbose,
-                quiet=quiet,
-                artifacts_dir=artifacts_dir,
-                deadline=deadline,
-            )
-            if fallback_fix is None or not fallback_fix.success:
-                # Record the failed fallback attempt in the audit trail
-                # before breaking. ``fallback_fix is None`` means the
-                # fallback never ran (budget/guard skip), so there is
-                # nothing to append; a non-None failure means the
-                # fallback executed and its result — summary, changed
-                # files, model — must remain visible in the final
-                # report and ``final-state.json``.
-                if fallback_fix is not None:
-                    fallback_fix.round_number = round_number
-                    fallback_fix.fixer_result = "failed"
-                    fallback_fix.push_status = "not_attempted"
-                    state.fixes.append(fallback_fix)
-                    # Issue #1088: rewrite the failed-fallback artifact
-                    # so its trust-boundary fields are not left null
-                    # when this break exits before the post-push rewrite.
-                    _rewrite_fix_artifact_from_state(
-                        artifacts_dir, fallback_fix, reviewer
+                if not fix.success:
+                    # Reset the worktree before invoking the fallback fixer. The
+                    # primary may have written partial edits (or even committed)
+                    # before dead-stopping (e.g. on credential exhaustion);
+                    # without this reset those untrusted edits would be picked
+                    # up by ``_commit_and_push_if_changed`` alongside the
+                    # fallback's edits, leaking failed primary work into the PR.
+                    # Reset to the pre-fix SHA — not bare ``HEAD`` — so we undo
+                    # commits the failed primary may have created (HEAD has
+                    # advanced past them).
+                    _capture = None if verbose else subprocess.DEVNULL
+                    reset_target = pre_fix_sha or "HEAD"
+                    subprocess.run(
+                        ["git", "-C", str(worktree), "reset", "--hard", reset_target],
+                        check=False,
+                        stdout=_capture,
+                        stderr=_capture,
                     )
-                # Preserve the existing stop_reason if the fallback path
-                # already wrote one (e.g. budget exhausted before fallback
-                # could run) — the operator-facing detail wins.
-                if not state.stop_reason:
-                    # Name the role that actually ran: ``active_fixer``
-                    # is the fallback once it has taken over from a prior
-                    # round, so a later-round failure should attribute
-                    # to it instead of the long-exhausted original.
-                    state.stop_reason = (
-                        f"Fixer {active_fixer} could not address {reviewer}'s findings"
-                        + (
-                            f" (fallback fixer {config.fixer_fallback} also failed)."
-                            if fallback_fix is not None
-                            else "."
-                        )
+                    subprocess.run(
+                        ["git", "-C", str(worktree), "clean", "-fd"],
+                        check=False,
+                        stdout=_capture,
+                        stderr=_capture,
                     )
-                break
-            # Fallback succeeded — it now drives the rest of this round.
-            # Both fixes stay in ``state.fixes`` so the audit trail records
-            # the primary attempt as well as the fallback's takeover.
-            fix = fallback_fix
-            fix.round_number = round_number
-            fix.fixer_result = "attempted"
-            fix.push_status = "not_attempted"
-            state.fixes.append(fix)
-            # Issue #1088: rewrite the fallback-takeover artifact so its
-            # trust-boundary fields track the in-memory ``FixResult`` if
-            # the prompt-source guard refuses the push below.
-            _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
-            # NOTE: we deliberately do NOT call ``_record_fix_attempts``
-            # again here. The primary attempt already incremented every
-            # finding's ``fix_attempts_by_key`` counter; a second bump
-            # would represent the SAME logical fix round as two attempts
-            # and would prematurely trip the oscillation/no-progress
-            # guards downstream.
+                    fallback_fix = _maybe_run_fallback_fixer(
+                        primary_fixer=fixer,
+                        reviewer=reviewer,
+                        findings=fix_findings,
+                        context=context,
+                        worktree=worktree,
+                        round_number=round_number,
+                        state=state,
+                        config=config,
+                        verbose=verbose,
+                        quiet=quiet,
+                        artifacts_dir=artifacts_dir,
+                        deadline=deadline,
+                    )
+                    if fallback_fix is None or not fallback_fix.success:
+                        # Record the failed fallback attempt in the audit trail
+                        # before breaking. ``fallback_fix is None`` means the
+                        # fallback never ran (budget/guard skip), so there is
+                        # nothing to append; a non-None failure means the
+                        # fallback executed and its result — summary, changed
+                        # files, model — must remain visible in the final
+                        # report and ``final-state.json``.
+                        if fallback_fix is not None:
+                            fallback_fix.round_number = round_number
+                            fallback_fix.fixer_result = "failed"
+                            fallback_fix.push_status = "not_attempted"
+                            state.fixes.append(fallback_fix)
+                            # Issue #1088: rewrite the failed-fallback artifact
+                            # so its trust-boundary fields are not left null
+                            # when this break exits before the post-push rewrite.
+                            _rewrite_fix_artifact_from_state(
+                                artifacts_dir, fallback_fix, reviewer
+                            )
+                        # Preserve the existing stop_reason if the fallback path
+                        # already wrote one (e.g. budget exhausted before fallback
+                        # could run) — the operator-facing detail wins.
+                        if not state.stop_reason:
+                            # Name the role that actually ran: ``active_fixer``
+                            # is the fallback once it has taken over from a prior
+                            # round, so a later-round failure should attribute
+                            # to it instead of the long-exhausted original.
+                            state.stop_reason = (
+                                f"Fixer {active_fixer} could not address {reviewer}'s findings"
+                                + (
+                                    f" (fallback fixer {config.fixer_fallback} also failed)."
+                                    if fallback_fix is not None
+                                    else "."
+                                )
+                            )
+                        break
+                    # Fallback succeeded — it now drives the rest of this round.
+                    # Both fixes stay in ``state.fixes`` so the audit trail records
+                    # the primary attempt as well as the fallback's takeover.
+                    fix = fallback_fix
+                    fix.round_number = round_number
+                    fix.fixer_result = "attempted"
+                    fix.push_status = "not_attempted"
+                    state.fixes.append(fix)
+                    # Issue #1088: rewrite the fallback-takeover artifact so its
+                    # trust-boundary fields track the in-memory ``FixResult`` if
+                    # the prompt-source guard refuses the push below.
+                    _rewrite_fix_artifact_from_state(artifacts_dir, fix, reviewer)
+                    # NOTE: we deliberately do NOT call ``_record_fix_attempts``
+                    # again here. The primary attempt already incremented every
+                    # finding's ``fix_attempts_by_key`` counter; a second bump
+                    # would represent the SAME logical fix round as two attempts
+                    # and would prematurely trip the oscillation/no-progress
+                    # guards downstream.
 
         # Issue #1063: deterministic prompt-source guard. The fixer can
         # produce a code-only patch on a prompt-owned module (e.g.
@@ -1167,261 +1188,270 @@ def run_checkup_review_loop(
         # three return paths. The analogous failed-push refusal path
         # (line ~1068) follows the same contract and is exercised by
         # ``test_failed_push_aborts_loop_without_running_verifier``.
-        guard_changed_files = _git_changed_files(worktree)
-        # Issue #1081: architecture-registry edit guard runs BEFORE the
-        # 10a prompt-source guard. 10a is per-entry against the
-        # pre-fixer HEAD registry, which a coordinated rename + prompt
-        # delete + ``architecture.json`` rewrite can step around. 10b
-        # closes that hole by detecting registry mutations themselves
-        # (added pair with no prompt on disk, removed pair with code
-        # still present, or any repoint). Cheaper on the common no-
-        # registry-edit path (short-circuits on the trigger check) and
-        # produces the more precise diagnostic for the #1081 attack
-        # shape; running it first surfaces the registry-mutation
-        # refusal rather than a downstream 10a refusal that fires on a
-        # partial symptom.
-        registry_guard_refusal = _check_architecture_registry_edit_guard(
-            worktree, guard_changed_files
-        )
-        if registry_guard_refusal:
-            _write_artifact(
-                artifacts_dir
-                / f"round-{round_number}-architecture-registry-guard-refusal.txt",
-                registry_guard_refusal + "\n",
-            )
-            state.stop_reason = registry_guard_refusal
-            break
-        guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
-        if guard_refusal:
-            _write_artifact(
-                artifacts_dir
-                / f"round-{round_number}-prompt-source-guard-refusal.txt",
-                guard_refusal + "\n",
-            )
-            state.stop_reason = guard_refusal
-            break
-
-        pushed, push_message = _commit_and_push_if_changed(
-            worktree,
-            pr_metadata,
-            f"fix: address {reviewer} review-loop findings",
-        )
-        # Verification trust boundary (issue #1088, R-V1/R-V2/R-V3):
-        # Capture local/remote SHAs and push status from observable
-        # git state — never from fixer prose.
-        post_push_head_sha = _git_rev_parse_head(worktree) if pushed else ""
-        push_msg_lower = (push_message or "").lower()
-        # ``_commit_and_push_if_changed`` returns ``(True, "No changes
-        # to push.")`` or ``(True, "No eligible changes to push.")``
-        # when the fixer left the worktree unchanged. In that shape no
-        # commit was created so the trust fields stay null and
-        # ``fixer_result`` downgrades to ``skipped``.
-        no_commit_pushed = pushed and (
-            "no changes to push" in push_msg_lower
-            or "no eligible changes" in push_msg_lower
-        )
-        if pushed and not no_commit_pushed:
-            fix.push_status = "pushed"
-            fix.local_fixer_commit_sha = post_push_head_sha or None
-            fix.pushed_head_sha = post_push_head_sha or None
-        elif no_commit_pushed:
-            fix.push_status = "not_attempted"
-            fix.fixer_result = "skipped"
-            fix.local_fixer_commit_sha = None
-            fix.pushed_head_sha = None
-        else:
-            fix.push_status = "push_failed"
-            fix.pushed_head_sha = None
-            # Capture local SHA when the commit was created locally but
-            # the push failed — useful for operator diagnostics.
-            local_after_failed_push = _git_rev_parse_head(worktree)
-            fix.local_fixer_commit_sha = (
-                local_after_failed_push
-                if local_after_failed_push and local_after_failed_push != pre_fix_sha
-                else None
-            )
-        # Issue #1088: rewrite the per-round fix ``findings.json``
-        # artifact now that the trust-boundary fields have been
-        # classified. The initial write in ``_run_fix`` rendered these
-        # as ``null``; this rewrite ensures the on-disk audit trail
-        # matches the prompt contract regardless of which break path
-        # the loop takes next.
-        _write_fix_artifact(
-            artifacts_dir,
-            f"round-{round_number}-fix-{fix.fixer}-for-{reviewer}",
-            summary=fix.summary,
-            changed_files=fix.changed_files,
-            success=fix.success,
-            dispositions=fix.dispositions,
-            rationales=fix.rationales,
-            round_number=fix.round_number,
-            fixer_result=fix.fixer_result,
-            push_status=fix.push_status,
-            local_fixer_commit_sha=fix.local_fixer_commit_sha,
-            pushed_head_sha=fix.pushed_head_sha,
-        )
-        if not pushed:
-            # Failed push aborts the loop. We deliberately do NOT run the
-            # verifier here — the local worktree contains a commit that the
-            # PR does not, so a verify pass would falsely report "fixed".
-            state.verification_status_by_round[round_number] = "skipped"
-            state.stop_reason = push_message
-            break
-
-        # Issue #1088 R-V1/R-V2: the verifier may only run when the fixer
-        # produced a commit that actually landed on the PR head. Two
-        # fail-open paths exist if we don't check the trust-boundary
-        # fields explicitly:
-        #   * ``no_commit_pushed`` — ``_commit_and_push_if_changed``
-        #     returned ``(True, "No changes to push.")`` because the
-        #     fixer left the worktree unchanged, so no SHA was pushed.
-        #   * pushed-but-no-SHA — ``_git_rev_parse_head`` returned ``""``
-        #     so we cannot prove which SHA the PR head points at.
-        # In both cases ``pushed`` is True, so the ``if not pushed`` guard
-        # above does not fire. Without this check the loop would invoke
-        # ``_run_review(... mode="verify")`` and a clean verify on the
-        # pre-fix head would then promote the findings to ``fixed``.
-        if fix.push_status != "pushed" or not fix.pushed_head_sha:
-            state.verification_status_by_round[round_number] = "skipped"
-            if fix.push_status == "not_attempted":
-                state.stop_reason = (
-                    f"Fixer {active_fixer} produced no commit to push "
-                    f"({push_message or 'no changes detected'}); "
-                    "verification skipped."
+                guard_changed_files = _git_changed_files(worktree)
+                # Issue #1081: architecture-registry edit guard runs BEFORE the
+                # 10a prompt-source guard. 10a is per-entry against the
+                # pre-fixer HEAD registry, which a coordinated rename + prompt
+                # delete + ``architecture.json`` rewrite can step around. 10b
+                # closes that hole by detecting registry mutations themselves
+                # (added pair with no prompt on disk, removed pair with code
+                # still present, or any repoint). Cheaper on the common no-
+                # registry-edit path (short-circuits on the trigger check) and
+                # produces the more precise diagnostic for the #1081 attack
+                # shape; running it first surfaces the registry-mutation
+                # refusal rather than a downstream 10a refusal that fires on a
+                # partial symptom.
+                registry_guard_refusal = _check_architecture_registry_edit_guard(
+                    worktree, guard_changed_files
                 )
-            else:
-                state.stop_reason = (
-                    f"Push reported success but pushed head SHA could "
-                    f"not be captured ({push_message or 'unknown'}); "
-                    "verification skipped."
+                if registry_guard_refusal:
+                    _write_artifact(
+                        artifacts_dir
+                        / f"round-{round_number}-architecture-registry-guard-refusal.txt",
+                        registry_guard_refusal + "\n",
+                    )
+                    state.stop_reason = registry_guard_refusal
+                    break
+                guard_refusal = _check_prompt_source_guard(worktree, guard_changed_files)
+                if guard_refusal:
+                    _write_artifact(
+                        artifacts_dir
+                        / f"round-{round_number}-prompt-source-guard-refusal.txt",
+                        guard_refusal + "\n",
+                    )
+                    state.stop_reason = guard_refusal
+                    break
+
+                pushed, push_message, pushed_head_sha, rebase_conflicted = _commit_and_push_if_changed(
+                    worktree,
+                    pr_metadata,
+                    f"fix: address {reviewer} review-loop findings",
                 )
-            break
-
-        if _budget_exhausted(config, state, deadline):
-            # R-V6: budget cap crossed after the fixer pushed but
-            # before the verifier ran. The fix has landed on the PR
-            # head but verification did not clear the SHA; the round
-            # entry stays ``"unverified"`` so the rendered report can
-            # mark the affected ``### Fixes Attempted`` bullet
-            # ``verification=unverified``.
-            if fix.push_status == "pushed":
-                state.verification_status_by_round.setdefault(
-                    round_number, "unverified"
+                # Verification trust boundary (issue #1088, R-V1/R-V2/R-V3):
+                # Capture local/remote SHAs and push status from observable
+                # git state — never from fixer prose.
+                fix.rebase_conflicted = rebase_conflicted
+                push_msg_lower = (push_message or "").lower()
+                # ``_commit_and_push_if_changed`` returns ``(True, "No changes
+                # to push.", None, False)`` or ``(True, "No eligible changes to push.", None, False)``
+                # when the fixer left the worktree unchanged. In that shape no
+                # commit was created so the trust fields stay null and
+                # ``fixer_result`` downgrades to ``skipped``.
+                no_commit_pushed = pushed and (
+                    "no changes to push" in push_msg_lower
+                    or "no eligible changes" in push_msg_lower
                 )
-            _mark_budget_exhausted(config, state, deadline)
-            break
+                if pushed and not no_commit_pushed:
+                    fix.push_status = "pushed"
+                    fix.local_fixer_commit_sha = pushed_head_sha or None
+                    fix.pushed_head_sha = pushed_head_sha or None
+                elif no_commit_pushed:
+                    fix.push_status = "not_attempted"
+                    fix.fixer_result = "skipped"
+                    fix.local_fixer_commit_sha = None
+                    fix.pushed_head_sha = None
+                else:
+                    fix.push_status = "push_failed"
+                    fix.pushed_head_sha = None
+                    # Capture local SHA when the commit was created locally but
+                    # the push failed — useful for operator diagnostics.
+                    local_after_failed_push = _git_rev_parse_head(worktree)
+                    fix.local_fixer_commit_sha = (
+                        local_after_failed_push
+                        if local_after_failed_push and local_after_failed_push != pre_fix_sha
+                        else None
+                    )
+                # Issue #1088: rewrite the per-round fix ``findings.json``
+                # artifact now that the trust-boundary fields have been
+                # classified. The initial write in ``_run_fix`` rendered these
+                # as ``null``; this rewrite ensures the on-disk audit trail
+                # matches the prompt contract regardless of which break path
+                # the loop takes next.
+                _write_fix_artifact(
+                    artifacts_dir,
+                    f"round-{round_number}-fix-{fix.fixer}-for-{reviewer}",
+                    summary=fix.summary,
+                    changed_files=fix.changed_files,
+                    success=fix.success,
+                    dispositions=fix.dispositions,
+                    rationales=fix.rationales,
+                    round_number=fix.round_number,
+                    fixer_result=fix.fixer_result,
+                    push_status=fix.push_status,
+                    local_fixer_commit_sha=fix.local_fixer_commit_sha,
+                    pushed_head_sha=fix.pushed_head_sha,
+                )
+                if not pushed:
+                    # Failed push aborts the loop. We deliberately do NOT run the
+                    # verifier here — the local worktree contains a commit that the
+                    # PR does not, so a verify pass would falsely report "fixed".
+                    state.verification_status_by_round[round_number] = "skipped"
+                    state.stop_reason = push_message
+                    break
 
-        verify = _run_review(
-            reviewer=reviewer,
-            context=context,
-            worktree=worktree,
-            round_number=round_number,
-            state=state,
-            config=config,
-            verbose=verbose,
-            quiet=quiet,
-            artifacts_dir=artifacts_dir,
-            mode="verify",
-            findings_to_verify=fix_findings,
-            fix_result=fix,
-            pr_metadata=pr_metadata,
-            deadline=deadline,
-        )
-        _record_review(state, verify)
-        _mark_non_required_findings_advisory(state, config)
-        _write_dedup_snapshot(artifacts_dir, round_number, state)
-        if verify.status in HARD_NOT_CLEAN_STATES:
-            # A failed/degraded verifier cannot confirm that fixes landed.
-            # Keep the findings open and stop with an unknown/not-ready report.
-            #
-            # NOTE: ``_maybe_run_fallback_reviewer`` is intentionally NOT
-            # invoked on the verify path. On the verify pass the fixer's
-            # role has just authored the changes being verified —
-            # promoting the fixer to act as verifier of its own work
-            # collapses the reviewer/fixer independence the loop exists
-            # to enforce. The round-start fallback does not have this
-            # problem because no fix has been applied yet. If a
-            # verifier-side outage becomes a recurring operational pain
-            # point, the right answer is a third independent role, not
-            # self-verification.
-            state.reviewer_status[reviewer] = verify.status
-            # R-V4: hard-not-clean verifier statuses leave
-            # ``state.verified_head_sha`` unchanged and the round entry
-            # is ``"unverified"``.
-            state.verification_status_by_round[round_number] = "unverified"
-            state.stop_reason = (
-                f"Primary reviewer {reviewer} could not verify fixes: "
-                f"{verify.status}."
-            )
-            break
+                # Issue #1088 R-V1/R-V2: the verifier may only run when the fixer
+                # produced a commit that actually landed on the PR head. Two
+                # fail-open paths exist if we don't check the trust-boundary
+                # fields explicitly:
+                #   * ``no_commit_pushed`` — ``_commit_and_push_if_changed``
+                #     returned ``(True, "No changes to push.")`` because the
+                #     fixer left the worktree unchanged, so no SHA was pushed.
+                #   * pushed-but-no-SHA — ``_git_rev_parse_head`` returned ``""``
+                #     so we cannot prove which SHA the PR head points at.
+                # In both cases ``pushed`` is True, so the ``if not pushed`` guard
+                # above does not fire. Without this check the loop would invoke
+                # ``_run_review(... mode="verify")`` and a clean verify on the
+                # pre-fix head would then promote the findings to ``fixed``.
+                if fix.push_status != "pushed" or not fix.pushed_head_sha:
+                    state.verification_status_by_round[round_number] = "skipped"
+                    if fix.push_status == "not_attempted":
+                        state.stop_reason = (
+                            f"Fixer {active_fixer} produced no commit to push "
+                            f"({push_message or 'no changes detected'}); "
+                            "verification skipped."
+                        )
+                    else:
+                        state.stop_reason = (
+                            f"Push reported success but pushed head SHA could "
+                            f"not be captured ({push_message or 'unknown'}); "
+                            "verification skipped."
+                        )
+                    break
 
-        verify_open_findings = _actionable_findings(state, verify.findings)
-        verify_open_keys = {finding.key for finding in verify_open_findings}
-        fixed_findings = [
-            finding for finding in fix_findings
-            if finding.key not in verify_open_keys
-        ]
-        _mark_findings_fixed(state, fixed_findings)
-        _record_reviewer_feedback(state, verify_open_findings, fix)
-        pending_findings = verify_open_findings
+                if _budget_exhausted(config, state, deadline):
+                    # R-V6: budget cap crossed after the fixer pushed but
+                    # before the verifier ran. The fix has landed on the PR
+                    # head but verification did not clear the SHA; the round
+                    # entry stays ``"unverified"`` so the rendered report can
+                    # mark the affected ``### Fixes Attempted`` bullet
+                    # ``verification=unverified``.
+                    if fix.push_status == "pushed":
+                        state.verification_status_by_round.setdefault(
+                            round_number, "unverified"
+                        )
+                    _mark_budget_exhausted(config, state, deadline)
+                    break
 
-        # Pin per-round verification status BEFORE any break path so
-        # findings marked ``fixed`` by ``_mark_findings_fixed`` above
-        # always have a matching ``verification_status_by_round`` entry
-        # and (on clean rounds) a pinned ``verified_head_sha``. Without
-        # this, budget exhaustion between ``_mark_findings_fixed`` and
-        # the clean/pending branches below leaves ``status='fixed'``
-        # findings with no corresponding round status — breaking the
-        # ``final-state.json`` trust-boundary audit trail.
-        if pending_findings:
-            # R-V4: a ``findings`` verifier result leaves
-            # ``state.verified_head_sha`` unchanged (verification did
-            # not clear the head).
-            state.verification_status_by_round[round_number] = "unverified"
-        else:
-            # R-V4: only ``clean`` advances ``verified_head_sha``. The
-            # SHA the verifier reviewed is, by construction, the SHA
-            # that was just pushed.
-            if fix.pushed_head_sha:
-                state.verified_head_sha = fix.pushed_head_sha
-            state.verification_status_by_round[round_number] = "verified"
+                verify = _run_review(
+                    reviewer=reviewer,
+                    context=context,
+                    worktree=worktree,
+                    round_number=round_number,
+                    state=state,
+                    config=config,
+                    verbose=verbose,
+                    quiet=quiet,
+                    artifacts_dir=artifacts_dir,
+                    mode="verify",
+                    findings_to_verify=fix_findings,
+                    fix_result=fix,
+                    pr_metadata=pr_metadata,
+                    deadline=deadline,
+                )
+                _record_review(state, verify)
+                _mark_non_required_findings_advisory(state, config)
+                _write_dedup_snapshot(artifacts_dir, round_number, state)
+                if verify.status in HARD_NOT_CLEAN_STATES:
+                    # A failed/degraded verifier cannot confirm that fixes landed.
+                    # Keep the findings open and stop with an unknown/not-ready report.
+                    #
+                    # NOTE: ``_maybe_run_fallback_reviewer`` is intentionally NOT
+                    # invoked on the verify path. On the verify pass the fixer's
+                    # role has just authored the changes being verified —
+                    # promoting the fixer to act as verifier of its own work
+                    # collapses the reviewer/fixer independence the loop exists
+                    # to enforce. The round-start fallback does not have this
+                    # problem because no fix has been applied yet. If a
+                    # verifier-side outage becomes a recurring operational pain
+                    # point, the right answer is a third independent role, not
+                    # self-verification.
+                    state.reviewer_status[reviewer] = verify.status
+                    # R-V4: hard-not-clean verifier statuses leave
+                    # ``state.verified_head_sha`` unchanged and the round entry
+                    # is ``"unverified"``.
+                    state.verification_status_by_round[round_number] = "unverified"
+                    state.stop_reason = (
+                        f"Primary reviewer {reviewer} could not verify fixes: "
+                        f"{verify.status}."
+                    )
+                    break
 
-        if _budget_exhausted(config, state, deadline):
-            _mark_budget_exhausted(config, state, deadline)
-            break
-        if pending_findings:
-            state.reviewer_status[reviewer] = "findings"
+                verify_open_findings = _actionable_findings(state, verify.findings)
+                verify_open_keys = {finding.key for finding in verify_open_findings}
+                fixed_findings = [
+                    finding for finding in fix_findings
+                    if finding.key not in verify_open_keys
+                ]
+                _mark_findings_fixed(state, fixed_findings)
+                _record_reviewer_feedback(state, verify_open_findings, fix)
+                pending_findings = verify_open_findings
+
+                # Pin per-round verification status BEFORE any break path so
+                # findings marked ``fixed`` by ``_mark_findings_fixed`` above
+                # always have a matching ``verification_status_by_round`` entry
+                # and (on clean rounds) a pinned ``verified_head_sha``. Without
+                # this, budget exhaustion between ``_mark_findings_fixed`` and
+                # the clean/pending branches below leaves ``status='fixed'``
+                # findings with no corresponding round status — breaking the
+                # ``final-state.json`` trust-boundary audit trail.
+                if pending_findings:
+                    # R-V4: a ``findings`` verifier result leaves
+                    # ``state.verified_head_sha`` unchanged (verification did
+                    # not clear the head).
+                    state.verification_status_by_round[round_number] = "unverified"
+                else:
+                    # R-V4: only ``clean`` advances ``verified_head_sha``. The
+                    # SHA the verifier reviewed is, by construction, the SHA
+                    # that was just pushed.
+                    if fix.pushed_head_sha:
+                        state.verified_head_sha = fix.pushed_head_sha
+                    state.verification_status_by_round[round_number] = "verified"
+
+                if _budget_exhausted(config, state, deadline):
+                    _mark_budget_exhausted(config, state, deadline)
+                    break
+                if pending_findings:
+                    state.reviewer_status[reviewer] = "findings"
+                    continue
+
+                state.reviewer_status[reviewer] = "clean"
+                state.fresh_final_status = "clean"
+                state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
+                break
+
+            if not state.stop_reason and state.reviewer_status.get(reviewer) == "clean":
+                state.fresh_final_status = "clean"
+                state.stop_reason = _clean_stop_reason(
+                    fresh_final=config.require_final_fresh_review
+                )
+
+            if not state.stop_reason and _budget_exhausted(config, state, deadline):
+                _mark_budget_exhausted(config, state, deadline)
+
+            if not state.stop_reason:
+                if pending_findings:
+                    for finding in pending_findings:
+                        stored = state.findings_by_key.get(finding.key)
+                        if stored is not None and stored.status == "fixed":
+                            stored.status = "open"
+                state.max_rounds_reached = True
+                state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
+
+            if state.fresh_final_status == "missing" and state.reviewer_status.get(reviewer) == "clean":
+                state.fresh_final_status = "clean"
+
+            report = _finalize(context, state, roles, artifacts_dir, config)
+            _post_review_loop_report(context, report, use_github_state)
+            return True, report, state.total_cost, state.last_model
+        except PRHeadAdvancedError as exc:
+            pr_head_refreshes_count += 1
+            if not quiet:
+                console.print(
+                    f"[bold yellow]PR head advanced ({exc.old_sha[:7]} -> "
+                    f"{exc.new_sha[:7]}). Performing Full rerun "
+                    f"({pr_head_refreshes_count}/{MAX_PR_HEAD_REFRESHES})...[/bold yellow]"
+                )
             continue
-
-        state.reviewer_status[reviewer] = "clean"
-        state.fresh_final_status = "clean"
-        state.stop_reason = _clean_stop_reason(fresh_final=config.require_final_fresh_review)
-        break
-
-    if not state.stop_reason and state.reviewer_status.get(reviewer) == "clean":
-        state.fresh_final_status = "clean"
-        state.stop_reason = _clean_stop_reason(
-            fresh_final=config.require_final_fresh_review
-        )
-
-    if not state.stop_reason and _budget_exhausted(config, state, deadline):
-        _mark_budget_exhausted(config, state, deadline)
-
-    if not state.stop_reason:
-        if pending_findings:
-            for finding in pending_findings:
-                stored = state.findings_by_key.get(finding.key)
-                if stored is not None and stored.status == "fixed":
-                    stored.status = "open"
-        state.max_rounds_reached = True
-        state.stop_reason = f"Max review rounds reached: {config.max_rounds}."
-
-    if state.fresh_final_status == "missing" and state.reviewer_status.get(reviewer) == "clean":
-        state.fresh_final_status = "clean"
-
-    report = _finalize(context, state, roles, artifacts_dir)
-    _post_review_loop_report(context, report, use_github_state)
-    return True, report, state.total_cost, state.last_model
 
 
 def parse_reviewers(value: str | Sequence[str] | None) -> Tuple[str, ...]:
@@ -3862,18 +3892,17 @@ def _commit_and_push_if_changed(
     worktree: Path,
     pr_metadata: Dict[str, str],
     message: str,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, Optional[str], bool]:
     """Commit any worktree changes with the bot identity and push to the PR head ref.
 
-    The actual push delegates to ``push_with_retry`` so that auth retries via
-    ``PDD_GH_TOKEN_FILE`` stay shared with the e2e fix orchestrator. The review
-    loop disables that helper's force-with-lease fallback because PR head refs
-    can be shared with humans and other automation; remote advancement is
-    handled by fetch/rebase/retry below.
+    Returns (pushed, message, pushed_head_sha, rebase_conflicted).
     """
+    pushed_head_sha: Optional[str] = None
+    rebase_conflicted = False
+
     changed = _git_changed_files(worktree)
     if not changed:
-        return True, "No changes to push."
+        return True, "No changes to push.", None, False
 
     stage_cmds: List[List[str]] = [["git", "add", "-u"]]
     untracked = [
@@ -3887,10 +3916,10 @@ def _commit_and_push_if_changed(
     for cmd in stage_cmds:
         result = subprocess.run(cmd, cwd=worktree, capture_output=True, text=True)
         if result.returncode != 0:
-            return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}"
+            return False, f"{' '.join(cmd)} failed: {result.stderr.strip()}", None, False
 
     if not _git_has_staged_changes(worktree):
-        return True, "No eligible changes to push."
+        return True, "No eligible changes to push.", None, False
 
     commit_cmd = [
         "git",
@@ -3904,42 +3933,23 @@ def _commit_and_push_if_changed(
     ]
     result = subprocess.run(commit_cmd, cwd=worktree, capture_output=True, text=True)
     if result.returncode != 0:
-        return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}"
+        return False, f"{' '.join(commit_cmd)} failed: {result.stderr.strip()}", None, False
 
     # Capture the fixer commit's SHA right after committing so every rebase
-    # retry below can reset to the same starting point. Without this, a first
-    # rebase that fast-forwards or drops the fixer commit as empty (because the
-    # fetched PR head already contains the patch) leaves HEAD on a remote
-    # commit; a second remote-advance retry's HEAD~1..HEAD range would then
-    # describe that remote commit instead of our fix, which can resurrect work
-    # a maintainer just force-pushed away.
-    fixer_sha_result = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=worktree,
-        capture_output=True,
-        text=True,
-    )
-    if fixer_sha_result.returncode != 0:
-        return False, (
-            "Failed to capture fixer commit SHA before push: "
-            f"{fixer_sha_result.stderr.strip() or fixer_sha_result.stdout.strip()}"
-        )
-    fixer_sha = fixer_sha_result.stdout.strip()
+    # retry below can reset to the same starting point.
+    fixer_sha = _git_rev_parse_head(worktree)
     if not fixer_sha:
-        return False, "Failed to capture fixer commit SHA before push: empty rev-parse output"
+        return False, "Failed to capture fixer commit SHA before push.", None, False
 
     clone_url = pr_metadata.get("clone_url", "")
     head_ref = pr_metadata.get("head_ref", "")
     head_owner = pr_metadata.get("head_owner", "")
     head_repo = pr_metadata.get("head_repo", "")
     if not clone_url or not head_ref or not head_owner or not head_repo:
-        return False, "Cannot push fixes: PR head repo/ref metadata is unavailable."
+        return False, "Cannot push fixes: PR head repo/ref metadata is unavailable.", None, False
 
     error = ""
     rebased_for_remote_advance = False
-    # Another checkup attempt, maintainer, or bot can push to the PR branch
-    # between our fetch/rebase and retry. Give that narrow race up to three
-    # attempts without ever falling back to force-push.
     for rebase_attempt in range(3):
         success, error = push_with_retry(
             worktree,
@@ -3951,16 +3961,21 @@ def _commit_and_push_if_changed(
             force_with_lease_on_non_fast_forward=False,
         )
         if success:
+            pushed_head_sha = _git_rev_parse_head(worktree)
             if rebased_for_remote_advance:
                 return (
                     True,
                     "Pushed fixes to PR branch after rebasing onto updated PR head.",
+                    pushed_head_sha,
+                    False,
                 )
-            return True, "Pushed fixes to PR branch."
+            return True, "Pushed fixes to PR branch.", pushed_head_sha, False
+
         if not _is_remote_advanced_push_error(error):
             break
         if rebase_attempt == 2:
             break
+
         rebased, rebase_message = _rebase_onto_updated_pr_head(
             worktree,
             clone_url=clone_url,
@@ -3970,13 +3985,14 @@ def _commit_and_push_if_changed(
             fixer_sha=fixer_sha,
         )
         if not rebased:
-            return False, rebase_message
+            if "conflict" in rebase_message.lower():
+                rebase_conflicted = True
+            return False, rebase_message, None, rebase_conflicted
+
         rebased_for_remote_advance = True
-    # git may echo the tokenized remote URL back from the push helper when the
-    # retry path used `https://x-access-token:...@github.com/...`. Scrub before
-    # surfacing so secrets cannot leak into operator-visible logs or reports.
+
     token = _github_token_from_env()
-    return False, f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}"
+    return False, f"Failed to push fixes to PR branch: {_redact_secret(error.strip(), token)}", None, False
 
 
 def _is_remote_advanced_push_error(error: str) -> bool:
@@ -5129,6 +5145,7 @@ def _finalize(
     state: ReviewLoopState,
     reviewers: Sequence[str],
     artifacts_dir: Path,
+    config: ReviewLoopConfig,
 ) -> str:
     """Render the final report, persist final-report.md and final-state.json."""
     # R-V5: re-fetch the current remote PR head SHA exactly once at the
@@ -5198,9 +5215,14 @@ def _finalize(
                         )
             elif remote_sha != compare_sha:
                 # The PR head advanced after the review/verify pass.
-                # Downgrade any otherwise-clean fresh-final to
-                # ``missing`` so downstream verdict adapters do not
-                # treat the stale verdict as ship-ready.
+                # If we haven't exhausted the autonomous rerun limit,
+                # raise to trigger a Full rerun. (Issue #1116)
+                if state.pr_head_refreshes_count < MAX_PR_HEAD_REFRESHES:
+                    raise PRHeadAdvancedError(compare_sha, remote_sha)
+
+                # Limit exhausted: Downgrade any otherwise-clean
+                # fresh-final to ``missing`` so downstream verdict
+                # adapters do not treat the stale verdict as ship-ready.
                 stale_head = True
                 if state.fresh_final_status == "clean":
                     state.fresh_final_status = "missing"
@@ -5213,18 +5235,23 @@ def _finalize(
                         # "advanced after verification" message so
                         # downstream parsers and the regression tests
                         # that grep for it keep working. Otherwise
-                        # explain that the reviewer's SHA is stale.
-                        if state.verified_head_sha:
+                        # explanation that the reviewer's SHA is stale.
+                        if config.review_only:
+                            state.stop_reason = (
+                                "PR head advanced during review-only verification. "
+                                "Cannot guarantee correctness of stale verification."
+                            )
+                        elif state.verified_head_sha:
                             state.stop_reason = (
                                 f"PR head advanced after verification "
                                 f"(verified={short_reviewed} remote={short_remote}); "
-                                "rerun the review loop."
+                                "max refreshes exhausted."
                             )
                         else:
                             state.stop_reason = (
                                 f"PR head advanced after review "
                                 f"(reviewed={short_reviewed} remote={short_remote}); "
-                                "rerun the review loop."
+                                "max refreshes exhausted."
                             )
         else:
             # Re-fetch failed or returned no head_sha. Per R-V5,

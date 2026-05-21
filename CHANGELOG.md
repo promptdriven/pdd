@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Feat
+
+- **checkup**: implement a PR-head freshness lease for `pdd checkup --pr` so the loop automatically reruns when the remote PR head advances mid-checkup. If the local fix can be cleanly rebased onto the new head, the loop keeps the rebased path and reruns the verifier; if a rebase conflict occurs or if in `--no-fix` mode the head is no longer fresh, the loop discards the stale worktree and cached state and performs a full rerun from the latest head, with a bounded retry limit of 2 full reruns (#1116).
+
 ### Fix
 
 - **checkup**: enforce a SHA-backed verification trust boundary in `pdd checkup --pr --review-loop` so unverified fixer attempts are never rendered as completed fixes. `FixResult` now carries `fixer_result`/`push_status`/`local_fixer_commit_sha`/`pushed_head_sha`, `ReviewLoopState` carries `verified_head_sha`/`remote_pr_head_sha`/`verification_status_by_round`, and the final report renders fixed-field `### Fixes Attempted` bullets plus header `verified-head-sha:` / `remote-pr-head-sha:` lines. Before promoting `fresh-final-review: clean` or `verification=verified`, the loop re-fetches the remote PR head and downgrades to `verification=unverified` on mismatch or budget exhaustion (#1088).

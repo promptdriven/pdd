@@ -1,66 +1,175 @@
+<pdd-reason>Multi-step orchestrator for pdd checkup with iterative fix-verify loop and PR-head freshness lease.</pdd-reason>
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {
+        "name": "run_agentic_checkup_orchestrator",
+        "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None) -> Tuple[bool, str, float, str]",
+        "returns": "Tuple[bool, str, float, str]"
+      },
+      {
+        "name": "_next_step",
+        "signature": "(current: Union[int, float]) -> Union[int, float]",
+        "returns": "Union[int, float]"
+      },
+      {
+        "name": "_step7_passed",
+        "signature": "(step7_output: str, pr_mode: bool) -> Tuple[bool, str]",
+        "returns": "Tuple[bool, str]"
+      },
+      {
+        "name": "_post_pr_mode_final_report",
+        "signature": "(final_step7_output: str) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "_refresh_pr_context_from_worktree",
+        "signature": "(context: Dict[str, str], worktree_path: Path) -> None",
+        "returns": "None"
+      },
+      {
+        "name": "_setup_worktree",
+        "signature": "(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool) -> Tuple[Optional[Path], Optional[str]]",
+        "returns": "Tuple[Optional[Path], Optional[str]]"
+      },
+      {
+        "name": "_setup_pr_worktree",
+        "signature": "(cwd: Path, pr_owner: str, pr_repo: str, pr_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]",
+        "returns": "Tuple[Optional[Path], Optional[str]]"
+      },
+      {
+        "name": "_fetch_pr_metadata",
+        "signature": "(owner: str, repo: str, pr_number: int) -> Dict[str, str]",
+        "returns": "Dict[str, str]"
+      },
+      {
+        "name": "_commit_and_push_if_changed",
+        "signature": "(worktree: Path, pr_metadata: Dict[str, str], message: str) -> Tuple[bool, str, Optional[str], bool]",
+        "returns": "Tuple[bool, str, Optional[str], bool]"
+      },
+      {
+        "name": "_git_changed_files",
+        "signature": "(worktree: Path) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "_git_rev_parse_head",
+        "signature": "(worktree: Path) -> str",
+        "returns": "str"
+      },
+      {
+        "name": "_check_prompt_source_guard",
+        "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "_check_architecture_registry_edit_guard",
+        "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]",
+        "returns": "Optional[str]"
+      },
+      {
+        "name": "_parse_changed_files",
+        "signature": "(output: str) -> List[str]",
+        "returns": "List[str]"
+      },
+      {
+        "name": "_build_state",
+        "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None, pr_head_refreshes_count: int = 0) -> Dict",
+        "returns": "Dict"
+      }
+    ]
+  }
+}
+</pdd-interface>
 <pdd-dependency>agentic_common_python.prompt</pdd-dependency>
 <pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
-1) This module acts as the multi-step agentic orchestrator for the `pdd checkup` command, responsible for managing an 8-step workflow that analyzes, fixes, and verifies software issues. It coordinates between LLM-based agents, local environment execution, and git state management, ensuring that changes are isolated in worktrees and that the workflow can be resumed gracefully after interruptions.
+% Note: This module and `checkup_review_loop_python.prompt` have a circular dependency. The implementation MUST use late imports (imports inside functions) to avoid circular import errors at runtime.
 
-2) Requirements:
-    1. Implement an 8-step workflow: 1. Discover, 2. Deps, 3. Build, 4. Interfaces, 5. Test, 6. Fix (split into 6.1 Fix, 6.2 Regression, 6.3 E2E), 7. Verify, and 8. Create PR.
-    2. Manage an iterative "Fix-Verify" loop for steps 3-7; if Step 7 does not contain the string "All Issues Fixed", the workflow should loop back to Step 3, up to a maximum of `MAX_FIX_VERIFY_ITERATIONS` (default 3). If the maximum is reached without that exact signal, return failure and do not push fixes or create/skip through a successful PR gate.
-    3. Ensure process isolation by creating and operating within a git worktree for all fix-related steps (Steps 6-8). The worktree must include both uncommitted changes and untracked files from the main repository.
-    4. Provide robust resume support by persisting the workflow state (last completed step, outputs, costs, worktree path, AND `mode` ∈ {"issue", "pr"}, AND `pr_number`, `pr_owner`, `pr_repo`, `pr_head_sha` when in PR mode) to a local `.pdd/checkup-state` directory and optionally to GitHub comments. When loading state, validate four identity axes before reuse: (a) `mode` matches the current invocation, (b) `pr_number` matches when both runs are PR-mode, (c) `pr_owner/pr_repo` matches when both are present, (d) `pr_head_sha` is non-empty on both the cached state and current PR metadata and the values are equal. ANY mismatch or missing PR head SHA discards the cached state and forces a fresh setup — the same `issue_number` can verify different PRs over time, and reusing a stale `.pdd/worktrees/checkup-pr-A` path during a verification of PR B silently runs all subsequent steps against the wrong code. When the saved worktree path is missing on resume, recreate it via the SAME helper that originally built it: `_setup_pr_worktree(...)` for PR mode (using saved `pr_owner/pr_repo/pr_number`), `_setup_worktree(...)` for issue mode. Calling the issue-mode helper on a PR-mode resume would silently rebuild from HEAD instead of the PR head.
-    5. Handle fractional steps (e.g., 6.1, 6.2) for internal logic and template loading, while mapping them to user-friendly labels (e.g., 6a, 6b) in the console output.
-    6. Support a `--no-fix` mode which runs analysis steps (1-5) and verification (7) linearly without creating worktrees or PRs.
-    7. Support a PR-verification mode (orchestrator parameters `pr_url`, `pr_owner`, `pr_repo`, `pr_number`). When `pr_mode` is true:
-       - Set up the worktree via `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet)` BEFORE Step 1 so all subsequent steps see the PR's code, not HEAD.
-       - IMMEDIATELY after `_setup_pr_worktree` (and again on resume after restoring the worktree path), call `_refresh_pr_context_from_worktree(context, worktree_path)` to overwrite `context["project_root"]`, `context["architecture_json"]`, and `context["pddrc_content"]` with values loaded from the PR worktree. `run_agentic_checkup` loaded these from the pre-worktree `cwd` and passed them into the orchestrator; without the refresh, prompts audit stale architecture/config and miss PR-introduced changes to architecture.json or `.pddrc` (round-5 Finding 3). The parent `cwd` itself stays unchanged — gh CLI auth and workflow-state persistence run against the original checkout.
-       - Resolve the PR's source repo via `pr_owner/pr_repo` (NOT a hardcoded `origin`): walk `git remote -v` looking for a remote whose URL matches `pr_owner/pr_repo`; if none, fetch via the explicit URL `https://github.com/{pr_owner}/{pr_repo}.git pull/{pr_number}/head:{branch_name}`. This is what makes fork-PR verification actually work — a clone of `myfork/repo` cannot fetch `pull/N/head` from `origin` when the PR lives on `upstream/repo`.
-       - In full fix mode (`no_fix=False`), run Steps 1-7 against the PR worktree. After the fix/verify loop, commit eligible generated changes with the bot identity and push them back to the PR head branch using PR metadata (`head.repo.clone_url`, `head.ref`, `head.repo.owner.login`, `head.repo.name`). Missing metadata or push failure is a hard failure because fixes must not remain silently local.
-       - Step 7 must not post GitHub comments in PR mode. The orchestrator owns posting the canonical PR/issue final report and MUST post it on every PR-mode terminal path (gate pass after push, gate fail, max-iteration exhaustion, registry/prompt-source guard refusals, push failure, post-push reverify abort, `--no-fix` gate pass/fail). `_post_pr_mode_final_report` returns a `status_suffix` string — empty when both posts succeeded, otherwise containing a pointer to `.pdd/checkup-pr-<n>/final-report.md`. Callers MUST append the suffix to whatever message they return so pdd-issue/pdd_cloud surfaces show the partial-post condition. The helper persists `step_outputs["pr_post_status"]` for state inspection. Comment-post failures MUST NOT flip the gate outcome — gh / network flakiness is independent of code-verification truth (round-5 Finding 4).
-       - Skip Step 8 entirely (the PR already exists; the job is to verify and improve it, not open another).
-    8. Implement per-step timeouts and error handling, including a mechanism to abort if agent providers fail consecutively.
-    9. **Trusted Step-Comment Flow**: The orchestrator owns visible per-step `## Step N/8:` comments on the GitHub issue, posted via `gh issue comment` with trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` themselves for successful step progress — they emit a single `<step_report>...</step_report>` block in their final response and the orchestrator extracts and posts it once.
-        - Import from `pdd.agentic_common`: `extract_step_report(step_output) -> Optional[str]`, `post_step_comment_once(*, repo_owner, repo_name, issue_number, step_num: int, body: str, posted_steps: Set[int], cwd) -> bool`, and `normalize_step_comments_state(raw) -> Set[int]`.
-        - **State shape**: `state["step_comments"]` persists as a sorted `List[int]` on disk; hydrate to `Set[int]` via `normalize_step_comments_state` on resume; persist back as a sorted list via `_build_state(..., step_comments=sorted(step_comments_set))` on every save (success, hard-stop, abort).
-        - **Composite-key encoding (REQUIRED — helper is `Set[int]`-typed)**: the checkup workflow has fractional steps (6.1, 6.2, 6.3) and an iterated fix-verify loop. Project each (step_num, iteration) tuple to a deterministic non-negative int via `iteration * 10000 + int(round(step_num * 10))`. Use `iteration=1` for non-iterative steps (1, 2, 8); pass the actual `fix_verify_iteration` for the loop-body steps (3, 4, 5, 6.1, 6.2, 6.3, 7).
-        - **Posting protocol** inside `_handle_step_result`: when `description` is provided AND the step succeeded, compute `report_body = extract_step_report(step_output)`; if `None`, use a short fallback body saying the step completed and raw output is retained in workflow state. Build `f"## Step {step_num}/8: {description}\n\n{report_body}"` and call `post_step_comment_once(...)` with the composite key. Any exception MUST be log-and-continue (never raise into the orchestrator loop).
-        - **PR-mode**: in PR-verification mode the trusted helper still posts to the GitHub *issue* thread (`post_step_comment_once` calls `gh issue comment`). It does NOT replace the Step 7 PR-thread comment routing (`gh pr comment`).
-        - **Relationship to legacy `post_step_comment`**: hard-stop / failure comments continue to flow through the legacy helper unchanged. `post_step_comment_once` is strictly additive — it covers the success-comment case that previously had no first-party posting path.
+% Goal
+Implement the multi-step agentic orchestrator for the `pdd checkup` command, responsible for managing an 8-step workflow that analyzes, fixes, and verifies software issues.
 
-3) Dependencies:
-    <agentic_common>
-        <include select="def:example_validate_cached_state,def:example_post_step_comment,def:example_post_pr_comment,def:example_github_state_helpers">context/agentic_common_example.py</include>
-    </agentic_common>
-    <load_prompt_template>
-        <include>context/load_prompt_template_example.py</include>
-    </load_prompt_template>
-    <preprocess>
-        <include>context/preprocess_example.py</include>
-    </preprocess>
-    <agentic_bug_orchestrator>
-        <include query="implementation of the multi-step orchestrator pipeline and error handling">context/agentic_bug_orchestrator_example.py</include>
-    </agentic_bug_orchestrator>
-    <pdd.agentic_e2e_fix_orchestrator>
-        <include query="iterative loop logic and mock external dependencies">context/agentic_e2e_fix_orchestrator_example.py</include>
-    </pdd.agentic_e2e_fix_orchestrator>
-    <utils.agentic_langtest>
-        <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
-    </utils.agentic_langtest>
+% Role & Scope
+Acts as the coordinator between LLM-based agents, local environment execution, and git state management, ensuring that changes are isolated in worktrees and that the workflow can be resumed gracefully after interruptions.
 
-4) Instructions:
-    1. Use `subprocess` for all git operations (worktree creation, branch management, diffing, and applying changes).
-    2. When setting up a worktree, ensure the environment is clean by removing stale directories or registered worktrees at the target path.
-    3. Implement `_copy_uncommitted_changes` to sync the worktree with the user's current working state (using `git diff HEAD` and `git ls-files --others`).
-    4. For each step, load the corresponding template (e.g., `agentic_checkup_step6_1_fix_LLM`), preprocess it to handle recursive variables, and execute via `run_agentic_task`.
-    5. Maintain a `context` dictionary that accumulates outputs from previous steps to provide full context to subsequent LLM calls.
-    6. In the iterative loop, track `previous_fixes` across iterations and inject them into the prompt context so the agent knows what has already been attempted.
-    7. Use `rich.console` for all user-facing status updates and progress bars.
+% Requirements
+1. Implement an 8-step workflow: 1. Discover, 2. Deps, 3. Build, 4. Interfaces, 5. Test, 6. Fix (split into 6.1 Fix, 6.2 Regression, 6.3 E2E), 7. Verify, and 8. Create PR.
+2. Manage an iterative "Fix-Verify" loop for steps 3-7; if Step 7 does not contain the string "All Issues Fixed", the workflow should loop back to Step 3, up to a maximum of `MAX_FIX_VERIFY_ITERATIONS` (default 3). If the maximum is reached without that exact signal, return failure and do not push fixes or create/skip through a successful PR gate.
+3. Ensure process isolation by creating and operating within a git worktree for all fix-related steps (Steps 6-8). The worktree must include both uncommitted changes and untracked files from the main repository.
+4. Provide robust resume support by persisting the workflow state (last completed step, outputs, costs, worktree path, AND `mode` ∈ {"issue", "pr"}, AND `pr_number`, `pr_owner`, `pr_repo`, `pr_head_sha`, `pr_head_refreshes_count` when in PR mode) to a local `.pdd/checkup-state` directory and optionally to GitHub comments. When loading state, validate four identity axes before reuse: (a) `mode` matches the current invocation, (b) `pr_number` matches when both runs are PR-mode, (c) `pr_owner/pr_repo` matches when both are present, (d) `pr_head_sha` is non-empty on both the cached state and current PR metadata and the values are equal. ANY mismatch or missing PR head SHA discards the cached state and forces a fresh setup — the same `issue_number` can verify different PRs over time, and reusing a stale `.pdd/worktrees/checkup-pr-A` path during a verification of PR B silently runs all subsequent steps against the wrong code. When the saved worktree path is missing on resume, recreate it via the SAME helper that originally built it: `_setup_pr_worktree(...)` for PR mode (using saved `pr_owner/pr_repo/pr_number`), `_setup_worktree(...)` for issue mode. Calling the issue-mode helper on a PR-mode resume would silently rebuild from HEAD instead of the PR head.
+5. Handle fractional steps (e.g., 6.1, 6.2) for internal logic and template loading, while mapping them to user-friendly labels (e.g., 6a, 6b) in the console output.
+6. Support a `--no-fix` mode which runs analysis steps (1-5) and verification (7) linearly without creating worktrees or PRs.
+7. Support a PR-verification mode (orchestrator parameters `pr_url`, `pr_owner`, `pr_repo`, `pr_number`). When `pr_mode` is true:
+   - Set up the worktree via `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet)` BEFORE Step 1 so all subsequent steps see the PR's code, not HEAD.
+   - IMMEDIATELY after `_setup_pr_worktree` (and again on resume after restoring the worktree path), call `_refresh_pr_context_from_worktree(context, worktree_path)` to overwrite `context["project_root"]`, `context["architecture_json"]`, and `context["pddrc_content"]` with values loaded from the PR worktree. `run_agentic_checkup` loaded these from the pre-worktree `cwd` and passed them into the orchestrator; without the refresh, prompts audit stale architecture/config and miss PR-introduced changes to architecture.json or `.pddrc` (round-5 Finding 3). The parent `cwd` itself stays unchanged — gh CLI auth and workflow-state persistence run against the original checkout.
+   - Resolve the PR's source repo via `pr_owner/pr_repo` (NOT a hardcoded `origin`): walk `git remote -v` looking for a remote whose URL matches `pr_owner/pr_repo`; if none, fetch via the explicit URL `https://github.com/{pr_owner}/{pr_repo}.git pull/{pr_number}/head:{branch_name}`. This is what makes fork-PR verification actually work — a clone of `myfork/repo` cannot fetch `pull/N/head` from `origin` when the PR lives on `upstream/repo`.
+   - In full fix mode (`no_fix=False`), run Steps 1-7 against the PR worktree. After the fix/verify loop, commit eligible generated changes with the bot identity and push them back to the PR head branch using PR metadata (`head.repo.clone_url`, `head.ref`, `head.repo.owner.login`, `head.repo.name`). Missing metadata or push failure is a hard failure because fixes must not remain silently local.
+   - **PR-head freshness lease**: Capture the PR head SHA at the start of the PR-verification mode (stored as `current_pr_head_sha`). Before Step 7 (Verification) and before the final push/no-push completion, refetch the current remote PR head SHA.
+     - If the PR head has advanced:
+       - Before Step 7: Discard the stale worktree and cached step outputs, rebuild from the latest PR head, and perform a **Full rerun**. No fixer commit exists to rebase at this point.
+       - During final push (after Step 7 passes):
+         - Cheap path: if `_commit_and_push_if_changed` (or its rebase logic) can cleanly rebase the local fixer commit onto the new head, keep that path and rerun Step 7 on the rebased tree. On Step 7 success, update `verified_head_sha` to the new head SHA.
+         - Full rerun: if the rebase conflicts or the local result cannot be safely reconciled, perform a **Full rerun** as above.
+     - Bounded full rerun retry: limit this full workflow rerun behavior to `MAX_PR_HEAD_REFRESHES = 2` reruns (distinct from the push/rebase retry budget). If the PR continues to change faster than the checkup can finish after the limit is exhausted, report a clear failure mentioning the observed SHAs.
+     - `--no-fix` mode: before reporting a clean verification-only result, refetch the PR head. If the verified SHA is no longer the PR head, rerun the full workflow (this rerun counts against the `MAX_PR_HEAD_REFRESHES` budget). If the limit is exhausted, fail closed with the canonical error message: "PR head advanced during --no-fix verification. Cannot guarantee correctness of stale verification."
+   - Step 7 must not post GitHub comments in PR mode. The orchestrator owns posting the canonical PR/issue final report and MUST post it on every PR-mode terminal path (gate pass after push, gate fail, max-iteration exhaustion, registry/prompt-source guard refusals, push failure, post-push reverify abort, `--no-fix` gate pass/fail). The report body MUST include `verified-head-sha: <sha>`, `remote-pr-head-sha: <sha>`, `issue_aligned: true|false`, `fresh-final-review: <status>`, and `active-reviewer: pdd-bot` markers (using "none" or "unknown" if missing) to align with `checkup_review_loop` requirements for cloud compatibility. `_post_pr_mode_final_report` returns a `status_suffix` string — empty when both posts succeeded, otherwise containing a pointer to `.pdd/checkup-pr-<n>/final-report.md`. Callers MUST append the suffix to whatever message they return so pdd-issue/pdd_cloud surfaces show the partial-post condition. The helper persists `step_outputs["pr_post_status"]` for state inspection. Comment-post failures MUST NOT flip the gate outcome — gh / network flakiness is independent of code-verification truth (round-5 Finding 4).
+   - Skip Step 8 entirely (the PR already exists; the job is to verify and improve it, not open another).
+8. Implement per-step timeouts and error handling, including a mechanism to abort if agent providers fail consecutively.
+9. **Trusted Step-Comment Flow**: The orchestrator owns visible per-step `## Step N/8:` comments on the GitHub issue, posted via `gh issue comment` with trusted PDD credentials. Step prompts MUST NOT call `gh issue comment` themselves for successful step progress — they emit a single `<step_report>...</step_report>` block in their final response and the orchestrator extracts and posts it once.
+    - Import from `pdd.agentic_common`: `extract_step_report(step_output) -> Optional[str]`, `post_step_comment_once(*, repo_owner, repo_name, issue_number, step_num: int, body: str, posted_steps: Set[int], cwd) -> bool`, and `normalize_step_comments_state(raw) -> Set[int]`.
+    - **State shape**: `state["step_comments"]` persists as a sorted `List[int]` on disk; hydrate to `Set[int]` via `normalize_step_comments_state` on resume; persist back as a sorted list via `_build_state(..., step_comments=sorted(step_comments_set))` on every save (success, hard-stop, abort).
+    - **Composite-key encoding (REQUIRED — helper is `Set[int]`-typed)**: the checkup workflow has fractional steps (6.1, 6.2, 6.3) and an iterated fix-verify loop. Project each (step_num, iteration) tuple to a deterministic non-negative int via `iteration * 10000 + int(round(step_num * 10))`. Use `iteration=1` for non-iterative steps (1, 2, 8); pass the actual `fix_verify_iteration` for the loop-body steps (3, 4, 5, 6.1, 6.2, 6.3, 7).
+    - **Posting protocol** inside `_handle_step_result`: when `description` is provided AND the step succeeded, compute `report_body = extract_step_report(step_output)`; if `None`, use a short fallback body saying the step completed and raw output is retained in workflow state. Build `f"## Step {step_num}/8: {description}\n\n{report_body}"` and call `post_step_comment_once(...)` with the composite key. Any exception MUST be log-and-continue (never raise into the orchestrator loop).
+    - **PR-mode**: in PR-verification mode the trusted helper still posts to the GitHub *issue* thread (`post_step_comment_once` calls `gh issue comment`). It does NOT replace the Step 7 PR-thread comment routing (`gh pr comment`).
+    - **Relationship to legacy `post_step_comment`**: hard-stop / failure comments continue to flow through the legacy helper unchanged. `post_step_comment_once` is strictly additive — it covers the success-comment case that previously had no first-party posting path.
+<include>context/commit_and_push_if_changed_rule.prompt</include>
 
-5) Deliverable:
-    - A Python module `agentic_checkup_orchestrator.py` containing the main entry point function `run_agentic_checkup_orchestrator`.
-    - Internal helper functions for git worktree management:
-      - `_setup_worktree` — issue-mode worktree at `.pdd/worktrees/checkup-issue-{N}` checked out from HEAD, with uncommitted/untracked files copied in.
-      - `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False)` — PR-mode worktree at `.pdd/worktrees/checkup-pr-{N}` checked out at the PR's head branch, NO uncommitted-file copy (the PR's state must be authoritative). Remote resolution as described in Requirement 7.
-      - `_refresh_pr_context_from_worktree(context, worktree_path)` — module-level helper. Re-loads architecture.json and `.pddrc` from `worktree_path` (lazy-imports `_load_architecture_json` from `agentic_sync` and `_load_pddrc_content` from `agentic_checkup` to avoid an import cycle), JSON-encodes the architecture, brace-escapes both via `_escape_format_braces`, and writes them back into `context["architecture_json"]` and `context["pddrc_content"]`. Also overwrites `context["project_root"]` with `str(_find_project_root(worktree_path))`. When the worktree lacks either file, canonical "missing" sentinels overwrite caller values — stale parent-checkout content must not leak through.
-      - `_copy_uncommitted_changes` (issue-mode only).
-    - State persistence (`_build_state`) including a top-level `mode: "issue"|"pr"` field for resume validation.
-    - Logic to handle the transition between linear steps and the iterative loop, plus the PR-mode early branches: in fix-capable PR mode, run the loop on the PR worktree, push generated fixes back to the same PR branch, then skip Step 8; populate `pr_mode/pr_url/pr_owner/pr_repo/pr_number` keys in the per-step `context` dict so step prompts (notably Step 7) can render PR-aware verdicts without posting pre-push comments. The orchestrator owns posting the canonical PR/issue final report via `_post_pr_mode_final_report(final_step7_output) -> str`. The helper returns a `status_suffix` ("" on success). Call it on EVERY PR-mode terminal path (gate pass after push, gate fail, max-iteration exhaustion, registry/prompt-source guard refusals, push failure, post-push reverify abort, `--no-fix` gate pass, `--no-fix` gate fail). On post failure, the helper persists `step_outputs["pr_post_status"]`, writes the body to `.pdd/checkup-pr-<n>/final-report.md`, and returns a non-empty suffix; callers MUST append that suffix to their returned message. The gate outcome itself is NEVER flipped by a post failure — code-verification truth and comment-posting flakiness must remain decoupled.
+% Dependencies
+<agentic_common>
+    <include select="def:example_validate_cached_state,def:example_post_step_comment,def:example_post_pr_comment,def:example_github_state_helpers">context/agentic_common_example.py</include>
+</agentic_common>
+<load_prompt_template>
+    <include>context/load_prompt_template_example.py</include>
+</load_prompt_template>
+<preprocess>
+    <include>context/preprocess_example.py</include>
+</preprocess>
+<agentic_bug_orchestrator>
+    <include query="implementation of the multi-step orchestrator pipeline and error handling">context/agentic_bug_orchestrator_example.py</include>
+</agentic_bug_orchestrator>
+<pdd.agentic_e2e_fix_orchestrator>
+    <include query="iterative loop logic and mock external dependencies">context/agentic_e2e_fix_orchestrator_example.py</include>
+</pdd.agentic_e2e_fix_orchestrator>
+<utils.agentic_langtest>
+    <include select="def:default_verify_cmd_for,def:missing_tool_hints">context/agentic_langtest_example.py</include>
+</utils.agentic_langtest>
+
+% Instructions
+1. Use `subprocess` for all git operations (worktree creation, branch management, diffing, and applying changes).
+2. When setting up a worktree, ensure the environment is clean by removing stale directories or registered worktrees at the target path.
+3. Implement `_copy_uncommitted_changes` to sync the worktree with the user's current working state (using `git diff HEAD` and `git ls-files --others`).
+4. For each step, load the corresponding template (e.g., `agentic_checkup_step6_1_fix_LLM`), preprocess it to handle recursive variables, and execute via `run_agentic_task`.
+5. Maintain a `context` dictionary that accumulates outputs from previous steps to provide full context to subsequent LLM calls.
+6. In the iterative loop, track `previous_fixes` across iterations and inject them into the prompt context so the agent knows what has already been attempted.
+7. Use `rich.console` for all user-facing status updates and progress bars.
+
+% Deliverables
+- A Python module `agentic_checkup_orchestrator.py` containing the main entry point function `run_agentic_checkup_orchestrator`.
+- Internal helper functions:
+  - `_next_step` — computes the next workflow step (handles fractional steps).
+  - `_step7_passed` — parses Step 7 output for the "All Issues Fixed" signal.
+  - `_post_pr_mode_final_report` — posts the canonical PR/issue final report.
+  - `_refresh_pr_context_from_worktree(context, worktree_path)` — module-level helper. Re-loads architecture.json and `.pddrc` from `worktree_path` (lazy-imports `_load_architecture_json` from `agentic_sync` and `_load_pddrc_content` from `agentic_checkup` to avoid an import cycle), JSON-encodes the architecture, brace-escapes both via `_escape_format_braces`, and writes them back into `context["architecture_json"]` and `context["pddrc_content"]`. Also overwrites `context["project_root"]` with `str(_find_project_root(worktree_path))`.
+  - `_setup_worktree` — issue-mode worktree at `.pdd/worktrees/checkup-issue-{N}` checked out from HEAD, with uncommitted/untracked files copied in.
+  - `_setup_pr_worktree(cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False)` — PR-mode worktree at `.pdd/worktrees/checkup-pr-{N}` checked out at the PR's head branch, NO uncommitted-file copy.
+  - `_fetch_pr_metadata` — fetches PR head branch and repository metadata.
+  - `_commit_and_push_if_changed` — commits and pushes changes to the PR head with rebase-on-failure.
+  - `_git_changed_files` / `_git_rev_parse_head` — git state helpers.
+  - `_check_prompt_source_guard` / `_check_architecture_registry_edit_guard` — PDD drift guards.
+  - `_parse_changed_files` — helper to parse git status output.
+  - `_build_state` — constructs the serializable workflow state including a top-level `mode: "issue"|"pr"` field.
+  - `_copy_uncommitted_changes` (issue-mode only).
+- Logic to handle the transition between linear steps and the iterative loop, plus the PR-mode early branches.
+

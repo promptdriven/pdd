@@ -56,6 +56,17 @@ CHECKUP_STEP_TIMEOUTS: Dict[Union[int, float], float] = {
     8: 340.0,    # Create PR
 }
 
+MAX_PR_HEAD_REFRESHES = 2
+
+
+class PRHeadAdvancedError(Exception):
+    """Raised when the remote PR head advanced during checkup."""
+
+    def __init__(self, old_sha: str, new_sha: str):
+        super().__init__(f"PR head advanced: {old_sha} -> {new_sha}")
+        self.old_sha = old_sha
+        self.new_sha = new_sha
+
 TOTAL_STEPS = 8
 
 # Ordered list of all steps (including fractional sub-steps).
@@ -292,7 +303,7 @@ def _commit_and_push_if_changed(
     worktree: Path,
     pr_metadata: Dict[str, str],
     message: str,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, Optional[str], bool]:
     """Lazy wrapper around the shared PR-head commit/push helper."""
     from .checkup_review_loop import (  # pylint: disable=import-outside-toplevel
         _commit_and_push_if_changed as commit_and_push,
@@ -806,1136 +817,1244 @@ def run_agentic_checkup_orchestrator(
     if not quiet:
         console.print(f"[bold]Running checkup for issue #{issue_number}: \"{issue_title}\"[/bold]")
 
-    # Context accumulation — grows across steps.
-    context: Dict[str, str] = {
-        "issue_url": issue_url,
-        "issue_content": issue_content,
-        "repo_owner": repo_owner,
-        "repo_name": repo_name,
-        "issue_number": str(issue_number),
-        "issue_title": issue_title,
-        "architecture_json": architecture_json,
-        "pddrc_content": pddrc_content,
-        "project_root": str(cwd),
-        "no_fix": "true" if no_fix else "false",
-        # PR-mode signals (empty strings when not in PR mode so .format()
-        # substitution never KeyErrors on a prompt that references them).
-        "pr_mode": "true" if pr_mode else "false",
-        "pr_url": pr_url or "",
-        "pr_owner": pr_owner or "",
-        "pr_repo": pr_repo or "",
-        "pr_number": str(pr_number) if pr_number is not None else "",
-        "pr_push_output": "",
-    }
-
-    total_cost = 0.0
-    last_model_used = "unknown"
-    changed_files: List[str] = []
-    current_cwd = cwd
-    worktree_path: Optional[Path] = None
-    github_comment_id: Optional[int] = None
-
-    # Resume: load existing state if available.
-    state_dir = _get_state_dir(cwd)
-    state, loaded_gh_id = load_workflow_state(
-        cwd=cwd,
-        issue_number=issue_number,
-        workflow_type="checkup",
-        state_dir=state_dir,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        use_github_state=use_github_state,
-    )
-
-    step_outputs: Dict[str, str] = {}
-    last_completed_step = 0
-    fix_verify_iteration = 0
-    previous_fixes = ""
-
-    # Round-5 Finding 4: accumulates a suffix when the canonical PR-mode
-    # final report could not be posted to GitHub. The gate outcome stays
-    # source-of-truth — gh / network flakiness must not flip a clean
-    # code-verification — but the suffix is appended to the returned
-    # ``message`` on success paths so consumers (pdd-issue, pdd_cloud)
-    # see the partial-post condition.
-    pending_post_suffix: str = ""
-
-    # PR head SHA observed for the CURRENT invocation. Captured once via
-    # ``_fetch_pr_metadata`` when entering PR mode so the resume path can
-    # invalidate cached step outputs whose verification ran against a
-    # different (older) head. Empty/None when metadata is unavailable —
-    # callers degrade gracefully rather than block.
-    current_pr_head_sha: str = ""
-    if pr_mode:
-        assert pr_owner is not None and pr_repo is not None and pr_number is not None
+    pr_head_refreshes_count = 0
+    while True:
         try:
-            metadata_for_guard = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
-        except Exception:  # noqa: BLE001 — metadata is best-effort
-            metadata_for_guard = {}
-        current_pr_head_sha = str(metadata_for_guard.get("head_sha", "") or "")
+            # Context accumulation — grows across steps.
+            context: Dict[str, str] = {
+                "issue_url": issue_url,
+                "issue_content": issue_content,
+                "repo_owner": repo_owner,
+                "repo_name": repo_name,
+                "issue_number": str(issue_number),
+                "issue_title": issue_title,
+                "architecture_json": architecture_json,
+                "pddrc_content": pddrc_content,
+                "project_root": str(cwd),
+                "no_fix": "true" if no_fix else "false",
+                # PR-mode signals (empty strings when not in PR mode so .format()
+                # substitution never KeyErrors on a prompt that references them).
+                "pr_mode": "true" if pr_mode else "false",
+                "pr_url": pr_url or "",
+                "pr_owner": pr_owner or "",
+                "pr_repo": pr_repo or "",
+                "pr_number": str(pr_number) if pr_number is not None else "",
+                "pr_push_output": "",
+            }
 
-    if state is not None:
-        # State-identity guard. A state from a prior run on the same
-        # issue_number must match the current invocation across FOUR
-        # axes before reuse:
-        #   (a) mode (issue vs pr) — different worktree paths
-        #   (b) pr_number — same issue can verify different PRs over time
-        #   (c) pr_owner/pr_repo — fork-PR identity (same pr_number could
-        #       refer to different upstream/fork combos)
-        #   (d) pr_head_sha — the PR branch can advance between runs
-        #       (maintainer push, auto-heal, etc.). Cached step outputs
-        #       describing build/test/verify results from the OLD SHA
-        #       would otherwise be silently replayed against new code
-        #       (codex round-1 blocker #1).
-        # Any mismatch carries stale step outputs and a stale
-        # `.pdd/worktrees/checkup-pr-A` path into a verification of PR B,
-        # silently running all subsequent steps against the wrong code.
-        cached_mode = state.get("mode", "issue")
-        current_mode = "pr" if pr_mode else "issue"
-        identity_mismatch_reasons: list[str] = []
-        if cached_mode != current_mode:
-            identity_mismatch_reasons.append(
-                f"mode (cached={cached_mode}, current={current_mode})"
-            )
-        if current_mode == "pr":
-            cached_pr_number = state.get("pr_number")
-            if cached_pr_number != pr_number:
-                identity_mismatch_reasons.append(
-                    f"pr_number (cached={cached_pr_number}, current={pr_number})"
-                )
-            cached_pr_owner = state.get("pr_owner")
-            cached_pr_repo = state.get("pr_repo")
-            if (
-                cached_pr_owner is not None
-                and cached_pr_repo is not None
-                and (cached_pr_owner, cached_pr_repo) != (pr_owner, pr_repo)
-            ):
-                identity_mismatch_reasons.append(
-                    f"pr_repo "
-                    f"(cached={cached_pr_owner}/{cached_pr_repo}, "
-                    f"current={pr_owner}/{pr_repo})"
-                )
-            # Head-SHA invalidation — FAIL CLOSED (codex round-2
-            # follow-through). Reuse cached PR step outputs ONLY when both
-            # the cached and current ``pr_head_sha`` are non-empty AND
-            # equal. Every other combination — missing cached SHA (state
-            # predates this axis), missing current SHA (metadata fetch
-            # unavailable), or different non-empty SHAs — discards cache.
-            #
-            # Fail-open is the bug the SHA axis was added to prevent:
-            # silently replaying step outputs verified against an unknown
-            # or older PR head against new code. A first-PR-run with
-            # cached state predating this field also gets re-verified
-            # rather than reused; since the field isn't released yet, the
-            # one-time cost is acceptable to preserve "if you can't prove
-            # it's the same code, don't trust the verification".
-            cached_pr_head_sha = state.get("pr_head_sha") or ""
-            if not (
-                cached_pr_head_sha
-                and current_pr_head_sha
-                and cached_pr_head_sha == current_pr_head_sha
-            ):
-                identity_mismatch_reasons.append(
-                    f"pr_head_sha "
-                    f"(cached={cached_pr_head_sha[:8] or '<empty>'}, "
-                    f"current={current_pr_head_sha[:8] or '<empty>'})"
-                )
-        if identity_mismatch_reasons:
-            if not quiet:
-                console.print(
-                    f"[yellow]State identity mismatch — discarding cached "
-                    f"state to avoid running in the wrong worktree. "
-                    f"Reasons: {'; '.join(identity_mismatch_reasons)}[/yellow]"
-                )
-            state = None
+            total_cost = 0.0
+            last_model_used = "unknown"
+            changed_files: List[str] = []
+            current_cwd = cwd
+            worktree_path: Optional[Path] = None
+            github_comment_id: Optional[int] = None
 
-    if state is not None:
-        last_completed_step = state.get("last_completed_step", 0)
-        cached_outputs = state.get("step_outputs", {})
-
-        # Validate cached state — find actual last successful step.
-        if cached_outputs:
-            actual_last_success: Union[int, float] = 0
-            for sn in STEP_ORDER:
-                # Fractional steps use "_" in state keys: 6.1 -> "6_1"
-                state_key = str(sn).replace(".", "_")
-                output_val = cached_outputs.get(state_key, "")
-                if not output_val:
-                    break
-                if output_val.startswith("FAILED:"):
-                    break
-                actual_last_success = sn
-            if actual_last_success < last_completed_step:
-                if not quiet:
-                    console.print(
-                        f"[yellow]State validation: correcting last_completed_step "
-                        f"from {last_completed_step} to {actual_last_success} "
-                        f"(found FAILED steps in cache)[/yellow]"
-                    )
-                last_completed_step = actual_last_success
-
-        resume_start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
-        if not quiet:
-            console.print(
-                f"[yellow]Resuming from step {resume_start_step} "
-                f"(through step {last_completed_step} cached)[/yellow]"
-            )
-
-        total_cost = state.get("total_cost", 0.0)
-        last_model_used = state.get("model_used", "unknown")
-        step_outputs = state.get("step_outputs", {})
-        changed_files = state.get("changed_files", [])
-        github_comment_id = loaded_gh_id
-        fix_verify_iteration = state.get("fix_verify_iteration", 0)
-        previous_fixes = state.get("previous_fixes", "")
-
-        # Restore worktree path from state
-        wt_path_str = state.get("worktree_path")
-        if wt_path_str:
-            worktree_path = Path(wt_path_str)
-            if worktree_path.exists():
-                current_cwd = worktree_path
-            else:
-                # Recreate worktree with existing branch — use the right
-                # setup helper for the mode. PR-mode worktrees check out
-                # the PR's head ref via _setup_pr_worktree; reusing
-                # _setup_worktree here would silently re-create a fresh
-                # issue-mode worktree from HEAD instead of the PR's code,
-                # so all subsequent verification steps would run against
-                # the wrong tree.
-                if pr_mode:
-                    assert pr_number is not None and pr_owner is not None and pr_repo is not None
-                    wt_path, err = _setup_pr_worktree(
-                        cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=True
-                    )
-                else:
-                    wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
-                if err:
-                    return False, f"Failed to recreate worktree on resume: {err}", total_cost, last_model_used
-                worktree_path = wt_path
-                current_cwd = worktree_path
-            context["worktree_path"] = str(worktree_path)
-            # Round-5 Finding 3: refresh project context on resume too.
-            # The state dict does not persist architecture_json/pddrc/
-            # project_root; on resume the caller-supplied (pre-worktree)
-            # values land in ``context`` and post-resume steps would
-            # otherwise audit stale architecture/config.
-            if pr_mode:
-                _refresh_pr_context_from_worktree(context, worktree_path)
-
-        # Restore context from cached step outputs.
-        # State keys use underscores (e.g. "6_1"); context keys follow suit.
-        for step_key, output in step_outputs.items():
-            context[f"step{step_key}_output"] = output
-
-        # Restore files_to_stage if available
-        if changed_files:
-            context["files_to_stage"] = ", ".join(changed_files)
-
-    if state is None:
-        step_comments_set: Set[int] = set()
-    else:
-        step_comments_set = normalize_step_comments_state(state.get("step_comments"))
-
-    # Step definitions (step 6 split into 6.1/6.2/6.3 sub-steps).
-    steps: List[Tuple[Union[int, float], str, str]] = [
-        (1,   "discover",         "Discovering project structure and tech stack"),
-        (2,   "deps",             "Auditing dependencies"),
-        (3,   "build",            "Running build/compile checks"),
-        (4,   "interfaces",       "Checking cross-module interfaces"),
-        (5,   "test",             "Running tests"),
-        (6.1, "fix",              "Fixing discovered issues"),
-        (6.2, "regression_tests", "Writing regression tests"),
-        (6.3, "e2e_tests",       "Writing e2e/integration tests"),
-        (7,   "verify",           "Verifying fixes and generating report"),
-        (8,   "create_pr",        "Creating pull request"),
-    ]
-    step_map: Dict[Union[int, float], Tuple[str, str]] = {
-        s[0]: (s[1], s[2]) for s in steps
-    }
-
-    # Display mapping for fractional steps (user-facing console).
-    _display_step: Dict[float, str] = {6.1: "6a", 6.2: "6b", 6.3: "6c"}
-
-    start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
-    last_completed_step_to_save = last_completed_step
-    consecutive_provider_failures = 0
-
-    # ---- Helper closures for state management ----
-
-    def _save_state() -> None:
-        """Persist current workflow state."""
-        nonlocal github_comment_id
-        new_state = _build_state(
-            issue_number, issue_url, last_completed_step_to_save,
-            step_outputs, total_cost, last_model_used, github_comment_id,
-            changed_files, worktree_path,
-            fix_verify_iteration=fix_verify_iteration,
-            previous_fixes=previous_fixes,
-            mode="pr" if pr_mode else "issue",
-            pr_number=pr_number,
-            pr_owner=pr_owner,
-            pr_repo=pr_repo,
-            pr_head_sha=current_pr_head_sha if pr_mode else None,
-            step_comments=sorted(step_comments_set),
-        )
-        github_comment_id = save_workflow_state(
-            cwd=cwd, issue_number=issue_number, workflow_type="checkup",
-            state=new_state, state_dir=state_dir,
-            repo_owner=repo_owner, repo_name=repo_name,
-            use_github_state=use_github_state,
-            github_comment_id=github_comment_id,
-        )
-
-    def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
-        """Project (step_num, iteration) -> deterministic non-negative int.
-
-        Encoding ``iteration * 10000 + int(round(step_num * 10))`` handles
-        fractional steps (6.1 -> 61) and the iterated fix-verify loop.
-        """
-        return iteration * 10000 + int(round(float(step_num) * 10))
-
-    def _maybe_post_step_comment(
-        step_num: Union[int, float],
-        description: str,
-        step_output: str,
-        iteration: int = 1,
-    ) -> None:
-        """Post a trusted per-step success comment; log-and-continue on error."""
-        try:
-            report_body = extract_step_report(step_output)
-            if not report_body:
-                report_body = (
-                    f"_Step {step_num} completed; no `<step_report>` block "
-                    "returned by agent. Raw output retained in workflow state._"
-                )
-            comment_body = (
-                f"## Step {step_num}/{TOTAL_STEPS}: {description}\n\n{report_body}"
-            )
-            post_step_comment_once(
+            # Resume: load existing state if available.
+            state_dir = _get_state_dir(cwd)
+            state, loaded_gh_id = load_workflow_state(
+                cwd=cwd,
+                issue_number=issue_number,
+                workflow_type="checkup",
+                state_dir=state_dir,
                 repo_owner=repo_owner,
                 repo_name=repo_name,
-                issue_number=issue_number,
-                step_num=_step_comment_key(step_num, iteration),
-                body=comment_body,
-                posted_steps=step_comments_set,
-                cwd=current_cwd,
+                use_github_state=use_github_state,
             )
-        except Exception as exc:  # pylint: disable=broad-except
-            console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
 
-    def _is_provider_failure(output: str) -> bool:
-        return "All agent providers failed" in output
+            step_outputs: Dict[str, str] = {}
+            last_completed_step = 0
+            fix_verify_iteration = 0
+            previous_fixes = ""
 
-    def _handle_step_result(
-        step_num: Union[int, float],
-        success: bool,
-        output: str,
-        cost: float,
-        model: str,
-        description: str = "",
-        iteration: int = 1,
-    ) -> Optional[Tuple[bool, str, float, str]]:
-        """Process a step result — update context, save state.
+            # Round-5 Finding 4: accumulates a suffix when the canonical PR-mode
+            # final report could not be posted to GitHub. The gate outcome stays
+            # source-of-truth — gh / network flakiness must not flip a clean
+            # code-verification — but the suffix is appended to the returned
+            # ``message`` on success paths so consumers (pdd-issue, pdd_cloud)
+            # see the partial-post condition.
+            pending_post_suffix: str = ""
 
-        Returns an abort tuple if consecutive provider failures are hit,
-        otherwise None.
-        """
-        nonlocal total_cost, last_model_used, last_completed_step_to_save
-        nonlocal consecutive_provider_failures
+            if state is not None:
+                pr_head_refreshes_count = state.get("pr_head_refreshes_count", 0)
 
-        total_cost += cost
-        last_model_used = model
+            # PR head SHA observed for the CURRENT invocation. Captured once via
+            # ``_fetch_pr_metadata`` when entering PR mode so the resume path can
+            # invalidate cached step outputs whose verification ran against a
+            # different (older) head. Empty/None when metadata is unavailable —
+            # callers degrade gracefully rather than block.
+            current_pr_head_sha: str = ""
+            if pr_mode:
+                assert pr_owner is not None and pr_repo is not None and pr_number is not None
+                try:
+                    metadata_for_guard = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+                except Exception:  # noqa: BLE001 — metadata is best-effort
+                    metadata_for_guard = {}
+                current_pr_head_sha = str(metadata_for_guard.get("head_sha", "") or "")
 
-        # Use underscore-based key for fractional steps: 6.1 -> "6_1"
-        step_key = str(step_num).replace(".", "_")
-        context[f"step{step_key}_output"] = output
+            if state is not None:
+                # State-identity guard. A state from a prior run on the same
+                # issue_number must match the current invocation across FOUR
+                # axes before reuse:
+                #   (a) mode (issue vs pr) — different worktree paths
+                #   (b) pr_number — same issue can verify different PRs over time
+                #   (c) pr_owner/pr_repo — fork-PR identity (same pr_number could
+                #       refer to different upstream/fork combos)
+                #   (d) pr_head_sha — the PR branch can advance between runs
+                #       (maintainer push, auto-heal, etc.). Cached step outputs
+                #       describing build/test/verify results from the OLD SHA
+                #       would otherwise be silently replayed against new code
+                #       (codex round-1 blocker #1).
+                # Any mismatch carries stale step outputs and a stale
+                # `.pdd/worktrees/checkup-pr-A` path into a verification of PR B,
+                # silently running all subsequent steps against the wrong code.
+                cached_mode = state.get("mode", "issue")
+                current_mode = "pr" if pr_mode else "issue"
+                identity_mismatch_reasons: list[str] = []
+                if cached_mode != current_mode:
+                    identity_mismatch_reasons.append(
+                        f"mode (cached={cached_mode}, current={current_mode})"
+                    )
+                if current_mode == "pr":
+                    cached_pr_number = state.get("pr_number")
+                    if cached_pr_number != pr_number:
+                        identity_mismatch_reasons.append(
+                            f"pr_number (cached={cached_pr_number}, current={pr_number})"
+                        )
+                    cached_pr_owner = state.get("pr_owner")
+                    cached_pr_repo = state.get("pr_repo")
+                    if (
+                        cached_pr_owner is not None
+                        and cached_pr_repo is not None
+                        and (cached_pr_owner, cached_pr_repo) != (pr_owner, pr_repo)
+                    ):
+                        identity_mismatch_reasons.append(
+                            f"pr_repo "
+                            f"(cached={cached_pr_owner}/{cached_pr_repo}, "
+                            f"current={pr_owner}/{pr_repo})"
+                        )
+                    # Head-SHA invalidation — FAIL CLOSED (codex round-2
+                    # follow-through). Reuse cached PR step outputs ONLY when both
+                    # the cached and current ``pr_head_sha`` are non-empty AND
+                    # equal. Every other combination — missing cached SHA (state
+                    # predates this axis), missing current SHA (metadata fetch
+                    # unavailable), or different non-empty SHAs — discards cache.
+                    #
+                    # Fail-open is the bug the SHA axis was added to prevent:
+                    # silently replaying step outputs verified against an unknown
+                    # or older PR head against new code. A first-PR-run with
+                    # cached state predating this field also gets re-verified
+                    # rather than reused; since the field isn't released yet, the
+                    # one-time cost is acceptable to preserve "if you can't prove
+                    # it's the same code, don't trust the verification".
+                    cached_pr_head_sha = state.get("pr_head_sha") or ""
+                    if not (
+                        cached_pr_head_sha
+                        and current_pr_head_sha
+                        and cached_pr_head_sha == current_pr_head_sha
+                    ):
+                        identity_mismatch_reasons.append(
+                            f"pr_head_sha "
+                            f"(cached={cached_pr_head_sha[:8] or '<empty>'}, "
+                            f"current={current_pr_head_sha[:8] or '<empty>'})"
+                        )
+                if identity_mismatch_reasons:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]State identity mismatch — discarding cached "
+                            f"state to avoid running in the wrong worktree. "
+                            f"Reasons: {'; '.join(identity_mismatch_reasons)}[/yellow]"
+                        )
+                    state = None
 
-        # Steps 6.1/6.2/6.3: parse changed files.
-        if step_num in (6.1, 6.2, 6.3) and success:
-            extracted_files = _parse_changed_files(output)
-            changed_files.extend(extracted_files)
-            # Deduplicate preserving order
-            changed_files[:] = list(dict.fromkeys(changed_files))
-            context["files_to_stage"] = ", ".join(changed_files)
+            if state is not None:
+                last_completed_step = state.get("last_completed_step", 0)
+                cached_outputs = state.get("step_outputs", {})
 
-        if not success and not quiet:
-            console.print(
-                f"[yellow]Warning: Step {step_num} reported failure, "
-                f"but proceeding as no hard stop condition met.[/yellow]"
-            )
-        elif not quiet:
-            console.print(f"  -> Step {step_num} complete.")
+                # Validate cached state — find actual last successful step.
+                if cached_outputs:
+                    actual_last_success: Union[int, float] = 0
+                    for sn in STEP_ORDER:
+                        # Fractional steps use "_" in state keys: 6.1 -> "6_1"
+                        state_key = str(sn).replace(".", "_")
+                        output_val = cached_outputs.get(state_key, "")
+                        if not output_val:
+                            break
+                        if output_val.startswith("FAILED:"):
+                            break
+                        actual_last_success = sn
+                    if actual_last_success < last_completed_step:
+                        if not quiet:
+                            console.print(
+                                f"[yellow]State validation: correcting last_completed_step "
+                                f"from {last_completed_step} to {actual_last_success} "
+                                f"(found FAILED steps in cache)[/yellow]"
+                            )
+                        last_completed_step = actual_last_success
 
-        if success:
-            step_outputs[step_key] = output
-            last_completed_step_to_save = step_num
+                resume_start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
+                if not quiet:
+                    console.print(
+                        f"[yellow]Resuming from step {resume_start_step} "
+                        f"(through step {last_completed_step} cached)[/yellow]"
+                    )
+
+                total_cost = state.get("total_cost", 0.0)
+                last_model_used = state.get("model_used", "unknown")
+                step_outputs = state.get("step_outputs", {})
+                changed_files = state.get("changed_files", [])
+                github_comment_id = loaded_gh_id
+                fix_verify_iteration = state.get("fix_verify_iteration", 0)
+                previous_fixes = state.get("previous_fixes", "")
+
+                # Restore worktree path from state
+                wt_path_str = state.get("worktree_path")
+                if wt_path_str:
+                    worktree_path = Path(wt_path_str)
+                    if worktree_path.exists():
+                        current_cwd = worktree_path
+                    else:
+                        # Recreate worktree with existing branch — use the right
+                        # setup helper for the mode. PR-mode worktrees check out
+                        # the PR's head ref via _setup_pr_worktree; reusing
+                        # _setup_worktree here would silently re-create a fresh
+                        # issue-mode worktree from HEAD instead of the PR's code,
+                        # so all subsequent verification steps would run against
+                        # the wrong tree.
+                        if pr_mode:
+                            assert pr_number is not None and pr_owner is not None and pr_repo is not None
+                            wt_path, err = _setup_pr_worktree(
+                                cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=True
+                            )
+                        else:
+                            wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=True)
+                        if err:
+                            return False, f"Failed to recreate worktree on resume: {err}", total_cost, last_model_used
+                        worktree_path = wt_path
+                        current_cwd = worktree_path
+                    context["worktree_path"] = str(worktree_path)
+                    # Round-5 Finding 3: refresh project context on resume too.
+                    # The state dict does not persist architecture_json/pddrc/
+                    # project_root; on resume the caller-supplied (pre-worktree)
+                    # values land in ``context`` and post-resume steps would
+                    # otherwise audit stale architecture/config.
+                    if pr_mode:
+                        _refresh_pr_context_from_worktree(context, worktree_path)
+
+                # Restore context from cached step outputs.
+                # State keys use underscores (e.g. "6_1"); context keys follow suit.
+                for step_key, output in step_outputs.items():
+                    context[f"step{step_key}_output"] = output
+
+                # Restore files_to_stage if available
+                if changed_files:
+                    context["files_to_stage"] = ", ".join(changed_files)
+
+            if state is None:
+                step_comments_set: Set[int] = set()
+            else:
+                step_comments_set = normalize_step_comments_state(state.get("step_comments"))
+
+            # Step definitions (step 6 split into 6.1/6.2/6.3 sub-steps).
+            steps: List[Tuple[Union[int, float], str, str]] = [
+                (1,   "discover",         "Discovering project structure and tech stack"),
+                (2,   "deps",             "Auditing dependencies"),
+                (3,   "build",            "Running build/compile checks"),
+                (4,   "interfaces",       "Checking cross-module interfaces"),
+                (5,   "test",             "Running tests"),
+                (6.1, "fix",              "Fixing discovered issues"),
+                (6.2, "regression_tests", "Writing regression tests"),
+                (6.3, "e2e_tests",       "Writing e2e/integration tests"),
+                (7,   "verify",           "Verifying fixes and generating report"),
+                (8,   "create_pr",        "Creating pull request"),
+            ]
+            step_map: Dict[Union[int, float], Tuple[str, str]] = {
+                s[0]: (s[1], s[2]) for s in steps
+            }
+
+            # Display mapping for fractional steps (user-facing console).
+            _display_step: Dict[float, str] = {6.1: "6a", 6.2: "6b", 6.3: "6c"}
+
+            start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
+            last_completed_step_to_save = last_completed_step
             consecutive_provider_failures = 0
-            if description:
-                _maybe_post_step_comment(step_num, description, output, iteration)
-        else:
-            step_outputs[step_key] = f"FAILED: {output}"
-            if _is_provider_failure(output):
-                consecutive_provider_failures += 1
-                if consecutive_provider_failures >= 3:
-                    _save_state()
-                    return (
-                        False,
-                        f"Aborting: {consecutive_provider_failures} consecutive "
-                        f"steps failed - agent providers unavailable",
-                        total_cost,
-                        last_model_used,
+
+            # ---- Helper closures for state management ----
+
+            def _save_state() -> None:
+                """Persist current workflow state."""
+                nonlocal github_comment_id
+                new_state = _build_state(
+                    issue_number, issue_url, last_completed_step_to_save,
+                    step_outputs, total_cost, last_model_used, github_comment_id,
+                    changed_files, worktree_path,
+                    fix_verify_iteration=fix_verify_iteration,
+                    previous_fixes=previous_fixes,
+                    mode="pr" if pr_mode else "issue",
+                    pr_number=pr_number,
+                    pr_owner=pr_owner,
+                    pr_repo=pr_repo,
+                    pr_head_sha=current_pr_head_sha if pr_mode else None,
+                    pr_head_refreshes_count=pr_head_refreshes_count,
+                    step_comments=sorted(step_comments_set),
+                )
+                github_comment_id = save_workflow_state(
+                    cwd=cwd, issue_number=issue_number, workflow_type="checkup",
+                    state=new_state, state_dir=state_dir,
+                    repo_owner=repo_owner, repo_name=repo_name,
+                    use_github_state=use_github_state,
+                    github_comment_id=github_comment_id,
+                )
+
+            def _check_pr_head_freshness(current_sha: str) -> None:
+                """Best-effort check for remote PR head advancement. (Issue #1116)"""
+                if not pr_mode or pr_head_refreshes_count >= MAX_PR_HEAD_REFRESHES:
+                    return
+                assert pr_owner is not None and pr_repo is not None and pr_number is not None
+                try:
+                    meta = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+                except Exception:  # pylint: disable=broad-except
+                    return
+                remote_sha = str(meta.get("head_sha", "") or "")
+                if remote_sha and current_sha and remote_sha != current_sha:
+                    raise PRHeadAdvancedError(current_sha, remote_sha)
+
+            def _step_comment_key(step_num: Union[int, float], iteration: int = 1) -> int:
+                """Project (step_num, iteration) -> deterministic non-negative int.
+
+                Encoding ``iteration * 10000 + int(round(step_num * 10))`` handles
+                fractional steps (6.1 -> 61) and the iterated fix-verify loop.
+                """
+                return iteration * 10000 + int(round(float(step_num) * 10))
+
+            def _maybe_post_step_comment(
+                step_num: Union[int, float],
+                description: str,
+                step_output: str,
+                iteration: int = 1,
+            ) -> None:
+                """Post a trusted per-step success comment; log-and-continue on error."""
+                try:
+                    report_body = extract_step_report(step_output)
+                    if not report_body:
+                        report_body = (
+                            f"_Step {step_num} completed; no `<step_report>` block "
+                            "returned by agent. Raw output retained in workflow state._"
+                        )
+                    comment_body = (
+                        f"## Step {step_num}/{TOTAL_STEPS}: {description}\n\n{report_body}"
                     )
-            else:
-                consecutive_provider_failures = 0
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=_step_comment_key(step_num, iteration),
+                        body=comment_body,
+                        posted_steps=step_comments_set,
+                        cwd=current_cwd,
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
 
-        _save_state()
-        return None
+            def _is_provider_failure(output: str) -> bool:
+                return "All agent providers failed" in output
 
-    def _run_post_push_reverify_if_needed(
-        push_message: str,
-    ) -> Optional[Tuple[bool, str, float, str]]:
-        """Re-run Step 7 when push rebased local fixes onto a newer PR head."""
-        if "after rebasing onto updated PR head" not in push_message:
-            return None
+            def _handle_step_result(
+                step_num: Union[int, float],
+                success: bool,
+                output: str,
+                cost: float,
+                model: str,
+                description: str = "",
+                iteration: int = 1,
+            ) -> Optional[Tuple[bool, str, float, str]]:
+                """Process a step result — update context, save state.
 
-        name7, desc7 = step_map[7]
-        if not quiet:
-            console.print(
-                f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7} "
-                f"(post-push reverify)..."
-            )
+                Returns an abort tuple if consecutive provider failures are hit,
+                otherwise None.
+                """
+                nonlocal total_cost, last_model_used, last_completed_step_to_save
+                nonlocal consecutive_provider_failures
 
-        result = _run_single_step(
-            7,
-            name7,
-            context,
-            cwd=cwd,
-            step_cwd=current_cwd if worktree_path else cwd,
-            verbose=verbose,
-            quiet=quiet,
-            label="step7_post_push_reverify",
-            timeout_adder=timeout_adder,
-            reasoning_time=reasoning_time,
-        )
-        if result is None:
-            template_name = f"agentic_checkup_step7_{name7}_LLM"
-            return (
-                False,
-                f"Missing prompt template: {template_name}",
-                total_cost,
-                last_model_used,
-            )
+                total_cost += cost
+                last_model_used = model
 
-        success, output, cost, model = result
-        abort = _handle_step_result(7, success, output, cost, model)
-        if abort is not None:
-            return abort
-        if not success or "All Issues Fixed" not in output:
-            return (
-                False,
-                "Post-push verification did not confirm the final rebased PR head is clean.",
-                total_cost,
-                last_model_used,
-            )
-        # Round-4 Finding 1 follow-through: re-apply the strict JSON gate
-        # to the post-push reverify output. The "All Issues Fixed" string
-        # alone is just a loop-exit sentinel; the structured verdict is
-        # what tells us the rebased tree actually satisfies the contract.
-        passed, reason = _step7_passed(output, pr_mode=pr_mode)
-        if not passed:
-            return (
-                False,
-                f"Post-push verification failed Step 7 gate: {reason}",
-                total_cost,
-                last_model_used,
-            )
-        return None
+                # Use underscore-based key for fractional steps: 6.1 -> "6_1"
+                step_key = str(step_num).replace(".", "_")
+                context[f"step{step_key}_output"] = output
 
-    def _post_pr_mode_final_report(final_step7_output: str) -> str:
-        """Post the canonical PR-mode final report to PR + issue threads.
+                # Steps 6.1/6.2/6.3: parse changed files.
+                if step_num in (6.1, 6.2, 6.3) and success:
+                    extracted_files = _parse_changed_files(output)
+                    changed_files.extend(extracted_files)
+                    # Deduplicate preserving order
+                    changed_files[:] = list(dict.fromkeys(changed_files))
+                    context["files_to_stage"] = ", ".join(changed_files)
 
-        Returns a ``status_suffix`` (empty when reporting is not applicable
-        or both posts succeeded). On failure, the rendered body is also
-        persisted under ``.pdd/checkup-pr-<n>/final-report.md`` and a
-        human-readable status is written into
-        ``step_outputs["pr_post_status"]`` so downstream consumers can
-        detect the partial-post condition without parsing the message.
+                if not success and not quiet:
+                    console.print(
+                        f"[yellow]Warning: Step {step_num} reported failure, "
+                        f"but proceeding as no hard stop condition met.[/yellow]"
+                    )
+                elif not quiet:
+                    console.print(f"  -> Step {step_num} complete.")
 
-        The gate outcome is NOT flipped by a post failure — gh / network
-        flakiness must remain decoupled from code-verification truth
-        (round-5 Finding 4). Callers should append the returned suffix
-        to whatever message they return so pdd-issue / pdd_cloud see the
-        partial-post in their summary surface.
-        """
-        if not (
-            pr_mode
-            and use_github_state
-            and pr_owner
-            and pr_repo
-            and pr_number is not None
-            and final_step7_output.strip()
-        ):
-            return ""
+                if success:
+                    step_outputs[step_key] = output
+                    last_completed_step_to_save = step_num
+                    consecutive_provider_failures = 0
+                    if description:
+                        _maybe_post_step_comment(step_num, description, output, iteration)
+                else:
+                    step_outputs[step_key] = f"FAILED: {output}"
+                    if _is_provider_failure(output):
+                        consecutive_provider_failures += 1
+                        if consecutive_provider_failures >= 3:
+                            _save_state()
+                            return (
+                                False,
+                                f"Aborting: {consecutive_provider_failures} consecutive "
+                                f"steps failed - agent providers unavailable",
+                                total_cost,
+                                last_model_used,
+                            )
+                    else:
+                        consecutive_provider_failures = 0
 
-        body = _format_pr_mode_final_report(
-            final_step7_output,
-            context.get("pr_push_output", ""),
-        )
-        pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
-        step_posted = post_step_comment(
-            repo_owner=repo_owner,
-            repo_name=repo_name,
-            issue_number=issue_number,
-            step_num=7,
-            total_steps=TOTAL_STEPS,
-            description="Verification & Final Report",
-            output=final_step7_output,
-            cwd=cwd,
-            body=body,
-        )
-        if pr_posted and step_posted:
-            return ""
+                _save_state()
+                return None
 
-        # Comment-post failed: persist the body so the report is not lost.
-        artifact_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
-        artifact_path: Optional[Path] = artifact_dir / "final-report.md"
-        try:
-            artifact_dir.mkdir(parents=True, exist_ok=True)
-            artifact_path.write_text(body, encoding="utf-8")
-        except OSError as exc:
-            if not quiet:
-                console.print(
-                    f"[yellow]Warning: failed to persist final report "
-                    f"artifact at {artifact_path}: {exc}[/yellow]"
-                )
-            artifact_path = None
+            def _run_post_push_reverify_if_needed(
+                push_message: str,
+            ) -> Optional[Tuple[bool, str, float, str]]:
+                """Re-run Step 7 when push rebased local fixes onto a newer PR head."""
+                if "after rebasing onto updated PR head" not in push_message:
+                    return None
 
-        failed_surfaces: List[str] = []
-        if not pr_posted:
-            failed_surfaces.append("PR")
-        if not step_posted:
-            failed_surfaces.append("issue")
-        surfaces_str = " and ".join(failed_surfaces)
-        if artifact_path is not None:
-            persisted = (
-                f"Final report post failed for {surfaces_str} surface; "
-                f"saved to {artifact_path}"
-            )
-            suffix = (
-                f" (report post failed for {surfaces_str} surface; "
-                f"saved to {artifact_path})"
-            )
-        else:
-            persisted = (
-                f"Final report post failed for {surfaces_str} surface; "
-                f"artifact also could not be persisted"
-            )
-            suffix = (
-                f" (report post failed for {surfaces_str} surface; "
-                f"artifact could not be saved)"
-            )
-        step_outputs["pr_post_status"] = persisted
-        _save_state()
-        if not quiet:
-            console.print(f"[yellow]{persisted}[/yellow]")
-        return suffix
-
-    # ==================================================================
-    # PR mode: create the PR-branch worktree up-front. All subsequent steps
-    # (including no-fix verification) then see the PR's code, not HEAD.
-    # ==================================================================
-    if pr_mode and worktree_path is None and start_step <= 7:
-        assert pr_number is not None  # mypy — pr_mode guarantees this
-        assert pr_owner is not None and pr_repo is not None
-        wt_path, err = _setup_pr_worktree(
-            cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False
-        )
-        if not wt_path:
-            return False, f"Failed to set up PR worktree: {err}", total_cost, last_model_used
-        worktree_path = wt_path
-        current_cwd = worktree_path
-        context["worktree_path"] = str(worktree_path)
-
-        # Round-5 Finding 3: refresh project context from the PR worktree
-        # so downstream prompts audit the PR's project state. Caller
-        # passed architecture/pddrc loaded from the pre-PR-worktree
-        # ``cwd``; if the PR modifies either file, the audit otherwise
-        # never sees the change.
-        _refresh_pr_context_from_worktree(context, worktree_path)
-
-        if not quiet:
-            console.print(
-                f"[blue]PR-mode worktree (PR #{pr_number}): {worktree_path}[/blue]"
-            )
-
-        _save_state()
-
-    # ==================================================================
-    # Section 1: Steps 1-2 (linear, run once)
-    # ==================================================================
-
-    for step_num in (1, 2):
-        if step_num < start_step:
-            continue
-
-        name, description = step_map[step_num]
-        if not quiet:
-            console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
-
-        # PR-mode runs discovery in the PR worktree so project-shape matches
-        # the PR's code (e.g. new files appear, deleted files don't).
-        step_cwd_12 = current_cwd if pr_mode and worktree_path else cwd
-
-        result = _run_single_step(
-            step_num, name, context,
-            cwd=cwd, step_cwd=step_cwd_12,
-            verbose=verbose, quiet=quiet,
-            label=f"step{step_num}",
-            timeout_adder=timeout_adder,
-            reasoning_time=reasoning_time,
-        )
-
-        if result is None:
-            template_name = f"agentic_checkup_step{step_num}_{name}_LLM"
-            return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
-
-        success, output, cost, model = result
-
-        abort = _handle_step_result(step_num, success, output, cost, model, description=description)
-        if abort is not None:
-            return abort
-
-    # ==================================================================
-    # Section 2: Steps 3-7 (iterative loop or linear for --no-fix)
-    # ==================================================================
-
-    loop_steps: List[Tuple[Union[int, float], str, str]] = [
-        (3,   "build",            "Running build/compile checks"),
-        (4,   "interfaces",       "Checking cross-module interfaces"),
-        (5,   "test",             "Running tests"),
-        (6.1, "fix",              "Fixing discovered issues"),
-        (6.2, "regression_tests", "Writing regression tests"),
-        (6.3, "e2e_tests",       "Writing e2e/integration tests"),
-        (7,   "verify",           "Verifying fixes and generating report"),
-    ]
-
-    if no_fix:
-        # --no-fix: run steps 3, 4, 5 linearly, skip 6, run 7, skip 8.
-        # In PR mode the linear steps run inside the PR worktree.
-        nofix_step_cwd = current_cwd if pr_mode and worktree_path else cwd
-        for step_num in (3, 4, 5):
-            if step_num < start_step:
-                continue
-            name, description = step_map[step_num]
-            if not quiet:
-                console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
-
-            result = _run_single_step(
-                step_num, name, context,
-                cwd=cwd, step_cwd=nofix_step_cwd,
-                verbose=verbose, quiet=quiet,
-                label=f"step{step_num}",
-                timeout_adder=timeout_adder,
-                reasoning_time=reasoning_time,
-            )
-
-            if result is None:
-                template_name = f"agentic_checkup_step{step_num}_{name}_LLM"
-                return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
-
-            success, output, cost, model = result
-            abort = _handle_step_result(step_num, success, output, cost, model, description=description)
-            if abort is not None:
-                return abort
-            if not success and _is_provider_failure(output):
-                return (
-                    False,
-                    f"Aborting after Step {step_num}: agent providers unavailable",
-                    total_cost,
-                    last_model_used,
-                )
-
-        # Skip step 6 sub-steps.
-        for sub_step in (6.1, 6.2, 6.3):
-            if sub_step >= start_step:
-                sub_key = str(sub_step).replace(".", "_")
-                disp = _display_step.get(sub_step, str(sub_step))
+                name7, desc7 = step_map[7]
                 if not quiet:
                     console.print(
-                        f"[bold][Step {disp}/{TOTAL_STEPS}][/bold] Skipped (--no-fix mode)"
-                    )
-                skipped_output = "Skipped: --no-fix mode"
-                step_outputs[sub_key] = skipped_output
-                context[f"step{sub_key}_output"] = skipped_output
-                last_completed_step_to_save = sub_step
-        if any(s >= start_step for s in (6.1, 6.2, 6.3)):
-            _save_state()
-
-        # Run step 7.
-        nofix_step7_output = ""
-        if 7 >= start_step:
-            name7, desc7 = step_map[7]
-            if not quiet:
-                console.print(f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7}...")
-
-            result = _run_single_step(
-                7, name7, context,
-                cwd=cwd, step_cwd=nofix_step_cwd,
-                verbose=verbose, quiet=quiet,
-                label="step7",
-                timeout_adder=timeout_adder,
-                reasoning_time=reasoning_time,
-            )
-
-            if result is None:
-                template_name = f"agentic_checkup_step7_{name7}_LLM"
-                return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
-
-            success, output, cost, model = result
-            nofix_step7_output = output
-            abort = _handle_step_result(7, success, output, cost, model, description=desc7)
-            if abort is not None:
-                return abort
-        else:
-            # Resume path that already cached step 7's output.
-            nofix_step7_output = step_outputs.get("7", "")
-
-        # Round-4 Finding 1: gate the --no-fix verification path too.
-        # No push happens here, but pdd-issue / pdd_cloud consume the
-        # return tuple. Returning success when Step 7 reported failure
-        # would be the same anti-pattern as the fix-mode push case.
-        nofix_gate_passed, nofix_gate_reason = _step7_passed(
-            nofix_step7_output, pr_mode=pr_mode
-        )
-
-        # Skip step 8.
-        if 8 >= start_step:
-            if not quiet:
-                console.print(f"[bold][Step 8/{TOTAL_STEPS}][/bold] Skipped (--no-fix mode)")
-            skipped_output = "Skipped: --no-fix mode"
-            step_outputs["8"] = skipped_output
-            context["step8_output"] = skipped_output
-            last_completed_step_to_save = 8
-            _save_state()
-
-        if not nofix_gate_passed:
-            if not quiet:
-                console.print(
-                    f"[red]Step 7 gate failed (--no-fix): {nofix_gate_reason}[/red]"
-                )
-            # Post the canonical PR/issue final report even when the gate
-            # fails: Step 7's PR-mode prompt suppresses agent commenting
-            # because the orchestrator owns the report. Skipping the post
-            # here leaves downstream consumers (pdd-issue, reviewers) with
-            # no record of what was checked or why it failed.
-            post_suffix = _post_pr_mode_final_report(nofix_step7_output)
-            return (
-                False,
-                f"{nofix_gate_reason}{post_suffix}",
-                total_cost,
-                last_model_used,
-            )
-
-        # No-fix gate passed: post the canonical report so PR consumers see
-        # the verification verdict. The fix-mode equivalent runs after the
-        # push at the bottom of this function; the no-fix path never pushes,
-        # so we post here.
-        pending_post_suffix = _post_pr_mode_final_report(nofix_step7_output)
-
-    else:
-        # --- Fix mode: iterative loop over steps 3-7 ---
-
-        # Create worktree before first loop iteration. In PR mode the worktree
-        # was already created above; skip this issue-based setup.
-        if not pr_mode and worktree_path is None and start_step <= 7:
-            wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
-            if not wt_path:
-                return False, f"Failed to create worktree: {err}", total_cost, last_model_used
-
-            worktree_path = wt_path
-            current_cwd = worktree_path
-            context["worktree_path"] = str(worktree_path)
-
-            if not quiet:
-                console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
-
-            # Bug A fix: persist worktree_path immediately so Ctrl+C
-            # during step 3 can resume without recreating it.
-            _save_state()
-
-        is_first_loop_pass = True
-        # If resuming mid-iteration, fix_verify_iteration is already > 0
-        # from state; don't increment on the first pass.
-        resuming_mid_iteration = fix_verify_iteration > 0
-
-        # Bug B fix: between-iterations resume.
-        # If start_step > 7 and we're mid-loop, the previous iteration's
-        # step 7 completed without "All Issues Fixed" — start a fresh
-        # iteration.
-        if (start_step > 7 and fix_verify_iteration > 0
-                and fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS):
-            step6_1_out = step_outputs.get("6_1", step_outputs.get("6", ""))
-            previous_fixes += f"\n\nIteration {fix_verify_iteration} fixes:\n{step6_1_out}"
-            fix_verify_iteration += 1
-            start_step = 3
-            resuming_mid_iteration = True  # Already incremented
-
-        step7_output = ""
-
-        while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
-            if resuming_mid_iteration:
-                resuming_mid_iteration = False
-            else:
-                fix_verify_iteration += 1
-            context["fix_verify_iteration"] = str(fix_verify_iteration)
-            context["max_fix_verify_iterations"] = str(MAX_FIX_VERIFY_ITERATIONS)
-            context["previous_fixes"] = previous_fixes
-
-            if not quiet and not is_first_loop_pass:
-                console.print(
-                    f"\n[bold cyan]--- Fix-Verify Iteration {fix_verify_iteration}"
-                    f"/{MAX_FIX_VERIFY_ITERATIONS} ---[/bold cyan]"
-                )
-
-            step7_output = ""
-
-            for step_num, name, description in loop_steps:
-                # On first pass through the loop, honour resume (skip
-                # already-done steps). Subsequent iterations run all steps.
-                if is_first_loop_pass and step_num < start_step:
-                    continue
-
-                # Label uses underscores: step6_1_iter1
-                step_str = str(step_num).replace(".", "_")
-                iter_label = f"step{step_str}_iter{fix_verify_iteration}"
-
-                # All loop steps (3-7) run in worktree.
-                step_cwd = current_cwd if worktree_path else cwd
-
-                # User-facing display: fractional steps show as 6a/6b/6c.
-                disp = _display_step.get(step_num, str(step_num))
-                if not quiet:
-                    console.print(
-                        f"[bold][Step {disp}/{TOTAL_STEPS}][/bold] "
-                        f"{description} (iter {fix_verify_iteration})..."
+                        f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7} "
+                        f"(post-push reverify)..."
                     )
 
                 result = _run_single_step(
+                    7,
+                    name7,
+                    context,
+                    cwd=cwd,
+                    step_cwd=current_cwd if worktree_path else cwd,
+                    verbose=verbose,
+                    quiet=quiet,
+                    label="step7_post_push_reverify",
+                    timeout_adder=timeout_adder,
+                    reasoning_time=reasoning_time,
+                )
+                if result is None:
+                    template_name = f"agentic_checkup_step7_{name7}_LLM"
+                    return (
+                        False,
+                        f"Missing prompt template: {template_name}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                success, output, cost, model = result
+                abort = _handle_step_result(7, success, output, cost, model)
+                if abort is not None:
+                    return abort
+                if not success or "All Issues Fixed" not in output:
+                    return (
+                        False,
+                        "Post-push verification did not confirm the final rebased PR head is clean.",
+                        total_cost,
+                        last_model_used,
+                    )
+                # Round-4 Finding 1 follow-through: re-apply the strict JSON gate
+                # to the post-push reverify output. The "All Issues Fixed" string
+                # alone is just a loop-exit sentinel; the structured verdict is
+                # what tells us the rebased tree actually satisfies the contract.
+                passed, reason = _step7_passed(output, pr_mode=pr_mode)
+                if not passed:
+                    return (
+                        False,
+                        f"Post-push verification failed Step 7 gate: {reason}",
+                        total_cost,
+                        last_model_used,
+                    )
+                return None
+
+            def _post_pr_mode_final_report(final_step7_output: str) -> str:
+                """Post the canonical PR-mode final report to PR + issue threads.
+
+                Returns a ``status_suffix`` (empty when reporting is not applicable
+                or both posts succeeded). On failure, the rendered body is also
+                persisted under ``.pdd/checkup-pr-<n>/final-report.md`` and a
+                human-readable status is written into
+                ``step_outputs["pr_post_status"]`` so downstream consumers can
+                detect the partial-post condition without parsing the message.
+
+                The gate outcome is NOT flipped by a post failure — gh / network
+                flakiness must remain decoupled from code-verification truth
+                (round-5 Finding 4). Callers should append the returned suffix
+                to whatever message they return so pdd-issue / pdd_cloud see the
+                partial-post in their summary surface.
+                """
+                if not (
+                    pr_mode
+                    and use_github_state
+                    and pr_owner
+                    and pr_repo
+                    and pr_number is not None
+                    and final_step7_output.strip()
+                ):
+                    return ""
+
+                body = _format_pr_mode_final_report(
+                    final_step7_output,
+                    context.get("pr_push_output", ""),
+                )
+                pr_posted = post_pr_comment(pr_owner, pr_repo, pr_number, body, cwd)
+                step_posted = post_step_comment(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=7,
+                    total_steps=TOTAL_STEPS,
+                    description="Verification & Final Report",
+                    output=final_step7_output,
+                    cwd=cwd,
+                    body=body,
+                )
+                if pr_posted and step_posted:
+                    return ""
+
+                # Comment-post failed: persist the body so the report is not lost.
+                artifact_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+                artifact_path: Optional[Path] = artifact_dir / "final-report.md"
+                try:
+                    artifact_dir.mkdir(parents=True, exist_ok=True)
+                    artifact_path.write_text(body, encoding="utf-8")
+                except OSError as exc:
+                    if not quiet:
+                        console.print(
+                            f"[yellow]Warning: failed to persist final report "
+                            f"artifact at {artifact_path}: {exc}[/yellow]"
+                        )
+                    artifact_path = None
+
+                failed_surfaces: List[str] = []
+                if not pr_posted:
+                    failed_surfaces.append("PR")
+                if not step_posted:
+                    failed_surfaces.append("issue")
+                surfaces_str = " and ".join(failed_surfaces)
+                if artifact_path is not None:
+                    persisted = (
+                        f"Final report post failed for {surfaces_str} surface; "
+                        f"saved to {artifact_path}"
+                    )
+                    suffix = (
+                        f" (report post failed for {surfaces_str} surface; "
+                        f"saved to {artifact_path})"
+                    )
+                else:
+                    persisted = (
+                        f"Final report post failed for {surfaces_str} surface; "
+                        f"artifact also could not be persisted"
+                    )
+                    suffix = (
+                        f" (report post failed for {surfaces_str} surface; "
+                        f"artifact could not be saved)"
+                    )
+                step_outputs["pr_post_status"] = persisted
+                _save_state()
+                if not quiet:
+                    console.print(f"[yellow]{persisted}[/yellow]")
+                return suffix
+
+            # ==================================================================
+            # PR mode: create the PR-branch worktree up-front. All subsequent steps
+            # (including no-fix verification) then see the PR's code, not HEAD.
+            # ==================================================================
+            if pr_mode and worktree_path is None and start_step <= 7:
+                assert pr_number is not None  # mypy — pr_mode guarantees this
+                assert pr_owner is not None and pr_repo is not None
+                wt_path, err = _setup_pr_worktree(
+                    cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False
+                )
+                if not wt_path:
+                    return False, f"Failed to set up PR worktree: {err}", total_cost, last_model_used
+                worktree_path = wt_path
+                current_cwd = worktree_path
+                context["worktree_path"] = str(worktree_path)
+
+                # Round-5 Finding 3: refresh project context from the PR worktree
+                # so downstream prompts audit the PR's project state. Caller
+                # passed architecture/pddrc loaded from the pre-PR-worktree
+                # ``cwd``; if the PR modifies either file, the audit otherwise
+                # never sees the change.
+                _refresh_pr_context_from_worktree(context, worktree_path)
+
+                if not quiet:
+                    console.print(
+                        f"[blue]PR-mode worktree (PR #{pr_number}): {worktree_path}[/blue]"
+                    )
+
+                _save_state()
+
+            # ==================================================================
+            # Section 1: Steps 1-2 (linear, run once)
+            # ==================================================================
+
+            for step_num in (1, 2):
+                if step_num < start_step:
+                    continue
+
+                name, description = step_map[step_num]
+                if not quiet:
+                    console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
+
+                # PR-mode runs discovery in the PR worktree so project-shape matches
+                # the PR's code (e.g. new files appear, deleted files don't).
+                step_cwd_12 = current_cwd if pr_mode and worktree_path else cwd
+
+                result = _run_single_step(
                     step_num, name, context,
-                    cwd=cwd, step_cwd=step_cwd,
+                    cwd=cwd, step_cwd=step_cwd_12,
                     verbose=verbose, quiet=quiet,
-                    label=iter_label,
+                    label=f"step{step_num}",
                     timeout_adder=timeout_adder,
                     reasoning_time=reasoning_time,
                 )
 
                 if result is None:
-                    tmpl_name = f"agentic_checkup_step{step_str}_{name}_LLM"
-                    return (False, f"Missing prompt template: {tmpl_name}", total_cost, last_model_used)
+                    template_name = f"agentic_checkup_step{step_num}_{name}_LLM"
+                    return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
 
                 success, output, cost, model = result
-                abort = _handle_step_result(
-                    step_num, success, output, cost, model,
-                    description=description, iteration=fix_verify_iteration,
-                )
+
+                abort = _handle_step_result(step_num, success, output, cost, model, description=description)
                 if abort is not None:
                     return abort
 
-                if step_num == 7:
-                    step7_output = output
+            # ==================================================================
+            # Section 2: Steps 3-7 (iterative loop or linear for --no-fix)
+            # ==================================================================
 
-            # Check exit condition: "All Issues Fixed" in step 7 output.
-            if "All Issues Fixed" in step7_output:
-                if not quiet:
-                    console.print("[green]All issues fixed — exiting loop.[/green]")
-                break
+            loop_steps: List[Tuple[Union[int, float], str, str]] = [
+                (3,   "build",            "Running build/compile checks"),
+                (4,   "interfaces",       "Checking cross-module interfaces"),
+                (5,   "test",             "Running tests"),
+                (6.1, "fix",              "Fixing discovered issues"),
+                (6.2, "regression_tests", "Writing regression tests"),
+                (6.3, "e2e_tests",       "Writing e2e/integration tests"),
+                (7,   "verify",           "Verifying fixes and generating report"),
+            ]
 
-            # Accumulate previous fixes for next iteration.
-            step6_1_out = step_outputs.get("6_1", "")
-            previous_fixes += f"\n\nIteration {fix_verify_iteration} fixes:\n{step6_1_out}"
-            is_first_loop_pass = False
-            _save_state()
+            if no_fix:
+                # --no-fix: run steps 3, 4, 5 linearly, skip 6, run 7, skip 8.
+                # In PR mode the linear steps run inside the PR worktree.
+                nofix_step_cwd = current_cwd if pr_mode and worktree_path else cwd
+                for step_num in (3, 4, 5):
+                    if step_num < start_step:
+                        continue
+                    name, description = step_map[step_num]
+                    if not quiet:
+                        console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
 
-        if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and "All Issues Fixed" not in step7_output:
-            max_msg = (
-                f"Checkup did not verify all issues fixed after "
-                f"{MAX_FIX_VERIFY_ITERATIONS} fix-verify iterations."
-            )
-            max_reason = max_msg
-            max_gate_passed, max_gate_reason = _step7_passed(
-                step7_output, pr_mode=pr_mode
-            )
-            if not max_gate_passed:
-                max_reason = f"{max_msg} {max_gate_reason}"
-            if not quiet:
-                console.print(
-                    f"[red]{max_reason} Not pushing fixes or creating a PR.[/red]"
+                    result = _run_single_step(
+                        step_num, name, context,
+                        cwd=cwd, step_cwd=nofix_step_cwd,
+                        verbose=verbose, quiet=quiet,
+                        label=f"step{step_num}",
+                        timeout_adder=timeout_adder,
+                        reasoning_time=reasoning_time,
+                    )
+
+                    if result is None:
+                        template_name = f"agentic_checkup_step{step_num}_{name}_LLM"
+                        return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
+
+                    success, output, cost, model = result
+                    abort = _handle_step_result(step_num, success, output, cost, model, description=description)
+                    if abort is not None:
+                        return abort
+                    if not success and _is_provider_failure(output):
+                        return (
+                            False,
+                            f"Aborting after Step {step_num}: agent providers unavailable",
+                            total_cost,
+                            last_model_used,
+                        )
+
+                # Skip step 6 sub-steps.
+                for sub_step in (6.1, 6.2, 6.3):
+                    if sub_step >= start_step:
+                        sub_key = str(sub_step).replace(".", "_")
+                        disp = _display_step.get(sub_step, str(sub_step))
+                        if not quiet:
+                            console.print(
+                                f"[bold][Step {disp}/{TOTAL_STEPS}][/bold] Skipped (--no-fix mode)"
+                            )
+                        skipped_output = "Skipped: --no-fix mode"
+                        step_outputs[sub_key] = skipped_output
+                        context[f"step{sub_key}_output"] = skipped_output
+                        last_completed_step_to_save = sub_step
+                if any(s >= start_step for s in (6.1, 6.2, 6.3)):
+                    _save_state()
+
+                # Run step 7.
+                nofix_step7_output = ""
+                if 7 >= start_step:
+                    name7, desc7 = step_map[7]
+                    if not quiet:
+                        console.print(f"[bold][Step 7/{TOTAL_STEPS}][/bold] {desc7}...")
+
+                    # Issue #1116: PR-head freshness lease
+                    _check_pr_head_freshness(current_pr_head_sha)
+
+                    result = _run_single_step(
+                        7, name7, context,
+                        cwd=cwd, step_cwd=nofix_step_cwd,
+                        verbose=verbose, quiet=quiet,
+                        label="step7",
+                        timeout_adder=timeout_adder,
+                        reasoning_time=reasoning_time,
+                    )
+
+                    if result is None:
+                        template_name = f"agentic_checkup_step7_{name7}_LLM"
+                        return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
+
+                    success, output, cost, model = result
+                    nofix_step7_output = output
+                    abort = _handle_step_result(7, success, output, cost, model, description=desc7)
+                    if abort is not None:
+                        return abort
+                else:
+                    # Resume path that already cached step 7's output.
+                    nofix_step7_output = step_outputs.get("7", "")
+
+                # Round-4 Finding 1: gate the --no-fix verification path too.
+                # No push happens here, but pdd-issue / pdd_cloud consume the
+                # return tuple. Returning success when Step 7 reported failure
+                # would be the same anti-pattern as the fix-mode push case.
+                nofix_gate_passed, nofix_gate_reason = _step7_passed(
+                    nofix_step7_output, pr_mode=pr_mode
                 )
-            if pr_mode:
-                step_outputs["pr_push"] = f"Skipped push because: {max_reason}"
-                context["pr_push_output"] = step_outputs["pr_push"]
+
+                # Skip step 8.
+                if 8 >= start_step:
+                    if not quiet:
+                        console.print(f"[bold][Step 8/{TOTAL_STEPS}][/bold] Skipped (--no-fix mode)")
+                    skipped_output = "Skipped: --no-fix mode"
+                    step_outputs["8"] = skipped_output
+                    context["step8_output"] = skipped_output
+                    last_completed_step_to_save = 8
+                    _save_state()
+
+                if not nofix_gate_passed:
+                    if not quiet:
+                        console.print(
+                            f"[red]Step 7 gate failed (--no-fix): {nofix_gate_reason}[/red]"
+                        )
+                    # Post the canonical PR/issue final report even when the gate
+                    # fails: Step 7's PR-mode prompt suppresses agent commenting
+                    # because the orchestrator owns the report. Skipping the post
+                    # here leaves downstream consumers (pdd-issue, reviewers) with
+                    # no record of what was checked or why it failed.
+                    post_suffix = _post_pr_mode_final_report(nofix_step7_output)
+                    return (
+                        False,
+                        f"{nofix_gate_reason}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                # No-fix gate passed: post the canonical report so PR consumers see
+                # the verification verdict. The fix-mode equivalent runs after the
+                # push at the bottom of this function; the no-fix path never pushes,
+                # so we post here.
+                pending_post_suffix = _post_pr_mode_final_report(nofix_step7_output)
+
             else:
-                step_outputs["8"] = f"Skipped step 8 because: {max_reason}"
-                context["step8_output"] = step_outputs["8"]
-            _save_state()
-            # Step 7's PR-mode prompt suppresses agent commenting because
-            # the orchestrator owns the canonical report. Post it here so
-            # the PR thread records the max-iteration verdict instead of
-            # going silent.
-            post_suffix = _post_pr_mode_final_report(
-                step_outputs.get("7", step7_output)
+                # --- Fix mode: iterative loop over steps 3-7 ---
+
+                # Create worktree before first loop iteration. In PR mode the worktree
+                # was already created above; skip this issue-based setup.
+                if not pr_mode and worktree_path is None and start_step <= 7:
+                    wt_path, err = _setup_worktree(cwd, issue_number, quiet, resume_existing=False)
+                    if not wt_path:
+                        return False, f"Failed to create worktree: {err}", total_cost, last_model_used
+
+                    worktree_path = wt_path
+                    current_cwd = worktree_path
+                    context["worktree_path"] = str(worktree_path)
+
+                    if not quiet:
+                        console.print(f"[blue]Working in worktree: {worktree_path}[/blue]")
+
+                    # Bug A fix: persist worktree_path immediately so Ctrl+C
+                    # during step 3 can resume without recreating it.
+                    _save_state()
+
+                is_first_loop_pass = True
+                # If resuming mid-iteration, fix_verify_iteration is already > 0
+                # from state; don't increment on the first pass.
+                resuming_mid_iteration = fix_verify_iteration > 0
+
+                # Bug B fix: between-iterations resume.
+                # If start_step > 7 and we're mid-loop, the previous iteration's
+                # step 7 completed without "All Issues Fixed" — start a fresh
+                # iteration.
+                if (start_step > 7 and fix_verify_iteration > 0
+                        and fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS):
+                    step6_1_out = step_outputs.get("6_1", step_outputs.get("6", ""))
+                    previous_fixes += f"\n\nIteration {fix_verify_iteration} fixes:\n{step6_1_out}"
+                    fix_verify_iteration += 1
+                    start_step = 3
+                    resuming_mid_iteration = True  # Already incremented
+
+                step7_output = ""
+
+                while fix_verify_iteration < MAX_FIX_VERIFY_ITERATIONS:
+                    if resuming_mid_iteration:
+                        resuming_mid_iteration = False
+                    else:
+                        fix_verify_iteration += 1
+                    context["fix_verify_iteration"] = str(fix_verify_iteration)
+                    context["max_fix_verify_iterations"] = str(MAX_FIX_VERIFY_ITERATIONS)
+                    context["previous_fixes"] = previous_fixes
+
+                    if not quiet and not is_first_loop_pass:
+                        console.print(
+                            f"\n[bold cyan]--- Fix-Verify Iteration {fix_verify_iteration}"
+                            f"/{MAX_FIX_VERIFY_ITERATIONS} ---[/bold cyan]"
+                        )
+
+                    step7_output = ""
+
+                    for step_num, name, description in loop_steps:
+                        # On first pass through the loop, honour resume (skip
+                        # already-done steps). Subsequent iterations run all steps.
+                        if is_first_loop_pass and step_num < start_step:
+                            continue
+
+                        # Issue #1116: PR-head freshness lease (Step 7 only)
+                        if step_num == 7:
+                            _check_pr_head_freshness(current_pr_head_sha)
+
+                        # Label uses underscores: step6_1_iter1
+                        step_str = str(step_num).replace(".", "_")
+                        iter_label = f"step{step_str}_iter{fix_verify_iteration}"
+
+                        # All loop steps (3-7) run in worktree.
+                        step_cwd = current_cwd if worktree_path else cwd
+
+                        # User-facing display: fractional steps show as 6a/6b/6c.
+                        disp = _display_step.get(step_num, str(step_num))
+                        if not quiet:
+                            console.print(
+                                f"[bold][Step {disp}/{TOTAL_STEPS}][/bold] "
+                                f"{description} (iter {fix_verify_iteration})..."
+                            )
+
+                        result = _run_single_step(
+                            step_num, name, context,
+                            cwd=cwd, step_cwd=step_cwd,
+                            verbose=verbose, quiet=quiet,
+                            label=iter_label,
+                            timeout_adder=timeout_adder,
+                            reasoning_time=reasoning_time,
+                        )
+
+                        if result is None:
+                            tmpl_name = f"agentic_checkup_step{step_str}_{name}_LLM"
+                            return (False, f"Missing prompt template: {tmpl_name}", total_cost, last_model_used)
+
+                        success, output, cost, model = result
+                        abort = _handle_step_result(
+                            step_num, success, output, cost, model,
+                            description=description, iteration=fix_verify_iteration,
+                        )
+                        if abort is not None:
+                            return abort
+
+                        if step_num == 7:
+                            step7_output = output
+
+                    # Check exit condition: "All Issues Fixed" in step 7 output.
+                    if "All Issues Fixed" in step7_output:
+                        if not quiet:
+                            console.print("[green]All issues fixed — exiting loop.[/green]")
+                        break
+
+                    # Accumulate previous fixes for next iteration.
+                    step6_1_out = step_outputs.get("6_1", "")
+                    previous_fixes += f"\n\nIteration {fix_verify_iteration} fixes:\n{step6_1_out}"
+                    is_first_loop_pass = False
+                    _save_state()
+
+                if fix_verify_iteration >= MAX_FIX_VERIFY_ITERATIONS and "All Issues Fixed" not in step7_output:
+                    max_msg = (
+                        f"Checkup did not verify all issues fixed after "
+                        f"{MAX_FIX_VERIFY_ITERATIONS} fix-verify iterations."
+                    )
+                    max_reason = max_msg
+                    max_gate_passed, max_gate_reason = _step7_passed(
+                        step7_output, pr_mode=pr_mode
+                    )
+                    if not max_gate_passed:
+                        max_reason = f"{max_msg} {max_gate_reason}"
+                    if not quiet:
+                        console.print(
+                            f"[red]{max_reason} Not pushing fixes or creating a PR.[/red]"
+                        )
+                    if pr_mode:
+                        step_outputs["pr_push"] = f"Skipped push because: {max_reason}"
+                        context["pr_push_output"] = step_outputs["pr_push"]
+                    else:
+                        step_outputs["8"] = f"Skipped step 8 because: {max_reason}"
+                        context["step8_output"] = step_outputs["8"]
+                    _save_state()
+                    # Step 7's PR-mode prompt suppresses agent commenting because
+                    # the orchestrator owns the canonical report. Post it here so
+                    # the PR thread records the max-iteration verdict instead of
+                    # going silent.
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{max_reason}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                # --------------------------------------------------------------
+                # Round-4 Finding 1: gate the orchestrator on Step 7's structured
+                # verdict BEFORE pushing to a PR or creating one. Without this
+                # gate, the loop printed a warning and pushed anyway, so a PR
+                # with `issue_aligned: false` or unfixed critical issues could be
+                # marked green by downstream consumers.
+                # --------------------------------------------------------------
+                gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode)
+                if not gate_passed:
+                    if not quiet:
+                        console.print(
+                            f"[red]Step 7 gate failed: {gate_reason}[/red]"
+                        )
+                    if pr_mode:
+                        skip_msg = f"Skipped push because: {gate_reason}"
+                        step_outputs["pr_push"] = skip_msg
+                        context["pr_push_output"] = skip_msg
+                    else:
+                        skip_msg = f"Skipped step 8 because: {gate_reason}"
+                        step_outputs["8"] = skip_msg
+                        context["step8_output"] = skip_msg
+                    # Persist the gate signal but do NOT clear workflow state — an
+                    # operator may want to resume after fixing the underlying
+                    # issue. Return failure so callers (pdd-issue, pdd_cloud,
+                    # operators) see the gate fired instead of receiving a
+                    # success message for a checkup that did not pass.
+                    _save_state()
+                    # Step 7's PR-mode prompt suppresses agent commenting because
+                    # the orchestrator owns the canonical report. Post it on the
+                    # gate-fail path too so the PR thread shows the verdict
+                    # instead of going silent.
+                    post_suffix = _post_pr_mode_final_report(
+                        step_outputs.get("7", step7_output)
+                    )
+                    return (
+                        False,
+                        f"{gate_reason}{post_suffix}",
+                        total_cost,
+                        last_model_used,
+                    )
+
+                # ==============================================================
+                # Section 3: Step 8 (create PR) — after the loop
+                # In PR mode we SKIP step 8 entirely — the PR already exists; our
+                # job was to verify it (and optionally push fix commits, not open a
+                # new PR).
+                # ==============================================================
+
+                if pr_mode:
+                    assert pr_owner is not None
+                    assert pr_repo is not None
+                    assert pr_number is not None
+                    if worktree_path is not None:
+                        pr_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+
+                        # Codex round-1 blocker #3: prompt-source + architecture-
+                        # registry guards. The review-loop runs these BEFORE its
+                        # push (checkup_review_loop.py:1183/:1194); bare PR-mode
+                        # used to skip them, opening a #1063/#1081 bypass. Run
+                        # 10b first (registry-edit) and 10a second (prompt-
+                        # source) to mirror the review-loop ordering.
+                        guard_changed_files = _git_changed_files(worktree_path)
+                        pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
+
+                        registry_refusal = _check_architecture_registry_edit_guard(
+                            worktree_path, guard_changed_files
+                        )
+                        if registry_refusal:
+                            pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                            (
+                                pr_artifacts_dir
+                                / "architecture-registry-guard-refusal.txt"
+                            ).write_text(registry_refusal + "\n")
+                            step_outputs["pr_push"] = registry_refusal
+                            context["pr_push_output"] = registry_refusal
+                            _save_state()
+                            # Step 7 already ran successfully; the registry guard
+                            # blocks the push, not the verdict. Post the canonical
+                            # report so the PR records why the push was refused.
+                            post_suffix = _post_pr_mode_final_report(
+                                step_outputs.get("7", step7_output)
+                            )
+                            return (
+                                False,
+                                f"{registry_refusal}{post_suffix}",
+                                total_cost,
+                                last_model_used,
+                            )
+
+                        prompt_refusal = _check_prompt_source_guard(
+                            worktree_path, guard_changed_files
+                        )
+                        if prompt_refusal:
+                            pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
+                            (
+                                pr_artifacts_dir / "prompt-source-guard-refusal.txt"
+                            ).write_text(prompt_refusal + "\n")
+                            step_outputs["pr_push"] = prompt_refusal
+                            context["pr_push_output"] = prompt_refusal
+                            _save_state()
+                            # Step 7 already ran successfully; the prompt-source
+                            # guard blocks the push, not the verdict. Post the
+                            # canonical report so the PR records why the push was
+                            # refused.
+                            post_suffix = _post_pr_mode_final_report(
+                                step_outputs.get("7", step7_output)
+                            )
+                            return (
+                                False,
+                                f"{prompt_refusal}{post_suffix}",
+                                total_cost,
+                                last_model_used,
+                            )
+
+                        # Issue #1116: PR-head freshness lease
+                        _check_pr_head_freshness(current_pr_head_sha)
+
+                        push_ok, push_message, _, rebase_conflicted = _commit_and_push_if_changed(
+                            worktree_path,
+                            pr_metadata,
+                            f"fix: apply checkup fixes for #{issue_number}",
+                        )
+                        step_outputs["pr_push"] = push_message
+                        context["pr_push_output"] = push_message
+                        _save_state()
+
+                        if rebase_conflicted:
+                            raise PRHeadAdvancedError(current_pr_head_sha, "unknown (rebase conflict)")
+
+                        if not push_ok:
+                            # Codex round-1 blocker #2 / round-2 nit A: enrich the
+                            # failure message so the operator can recover the
+                            # unpushed local fix.
+                            # ``_commit_and_push_if_changed`` can fail at any of
+                            # several points: ``git add`` (no commit yet), ``git
+                            # commit`` (no commit yet), missing PR metadata after
+                            # commit, or ``push`` after commit. We don't try to
+                            # distinguish; instead we point the operator at the
+                            # worktree HEAD with neutral wording so they can
+                            # inspect for an unpushed fix commit regardless of
+                            # which leg failed.
+                            local_sha = _git_rev_parse_head(worktree_path)
+                            sha_clause = (
+                                f" at SHA {local_sha}" if local_sha else ""
+                            )
+                            recovery = (
+                                f" Local HEAD in worktree: {worktree_path}"
+                                f"{sha_clause}; check for an unpushed fix commit "
+                                f"before re-running."
+                            )
+                            sep = "" if push_message.rstrip().endswith(".") else "."
+                            enriched = push_message + sep + recovery
+                            step_outputs["pr_push"] = enriched
+                            context["pr_push_output"] = enriched
+                            _save_state()
+                            # Step 7 already ran successfully; the push itself
+                            # failed. Post the canonical report so the PR records
+                            # the verdict and the enriched failure context.
+                            post_suffix = _post_pr_mode_final_report(
+                                step_outputs.get("7", step7_output)
+                            )
+                            return (
+                                False,
+                                f"{enriched}{post_suffix}",
+                                total_cost,
+                                last_model_used,
+                            )
+                        if not quiet:
+                            console.print(f"[green]{push_message}[/green]")
+                        post_push_abort = _run_post_push_reverify_if_needed(push_message)
+                        if post_push_abort is not None:
+                            # Step 7 ran twice (pre-push + post-rebase reverify).
+                            # The reverify produced a verdict before failing; post
+                            # the canonical report so PR consumers see the failure
+                            # context. ``step_outputs["7"]`` is refreshed by
+                            # ``_run_single_step``'s persistence so it reflects the
+                            # latest (post-rebase) verdict.
+                            abort_ok, abort_reason, abort_cost, abort_model = post_push_abort
+                            post_suffix = _post_pr_mode_final_report(
+                                step_outputs.get("7", step7_output)
+                            )
+                            return (
+                                abort_ok,
+                                f"{abort_reason}{post_suffix}",
+                                abort_cost,
+                                abort_model,
+                            )
+                        pending_post_suffix = _post_pr_mode_final_report(
+                            step_outputs.get("7", step7_output)
+                        )
+                    if 8 >= start_step:
+                        if not quiet:
+                            console.print(
+                                f"[bold][Step 8/{TOTAL_STEPS}][/bold] Skipped "
+                                f"(PR-mode: verifying existing PR #{pr_number})"
+                            )
+                        step_outputs["8"] = f"Skipped: PR-mode verification of PR #{pr_number}"
+                        context["step8_output"] = step_outputs["8"]
+                        last_completed_step_to_save = 8
+                        _save_state()
+                elif 8 >= start_step or fix_verify_iteration > 0:
+                    name8, desc8 = step_map[8]
+                    step_cwd_8 = current_cwd if worktree_path else cwd
+
+                    if not quiet:
+                        console.print(f"[bold][Step 8/{TOTAL_STEPS}][/bold] {desc8}...")
+
+                    result = _run_single_step(
+                        8, name8, context,
+                        cwd=cwd, step_cwd=step_cwd_8,
+                        verbose=verbose, quiet=quiet,
+                        label="step8",
+                        timeout_adder=timeout_adder,
+                        reasoning_time=reasoning_time,
+                    )
+
+                    if result is None:
+                        template_name = f"agentic_checkup_step8_{name8}_LLM"
+                        return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
+
+                    success, output, cost, model = result
+                    abort = _handle_step_result(8, success, output, cost, model, description=desc8)
+                    if abort is not None:
+                        return abort
+
+            # All steps complete — clear state.
+            clear_workflow_state(
+                cwd=cwd,
+                issue_number=issue_number,
+                workflow_type="checkup",
+                state_dir=state_dir,
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                use_github_state=use_github_state,
             )
+
+            final_msg = "Checkup complete"
+            if not quiet:
+                console.print(f"[green]{final_msg}[/green]")
+                console.print(f"   Total cost: ${total_cost:.4f}")
+                if changed_files:
+                    console.print(f"   Files changed: {', '.join(changed_files)}")
+                if worktree_path:
+                    console.print(f"   Worktree: {worktree_path}")
+
             return (
-                False,
-                f"{max_reason}{post_suffix}",
+                True,
+                f"{final_msg}{pending_post_suffix}",
                 total_cost,
                 last_model_used,
             )
 
-        # --------------------------------------------------------------
-        # Round-4 Finding 1: gate the orchestrator on Step 7's structured
-        # verdict BEFORE pushing to a PR or creating one. Without this
-        # gate, the loop printed a warning and pushed anyway, so a PR
-        # with `issue_aligned: false` or unfixed critical issues could be
-        # marked green by downstream consumers.
-        # --------------------------------------------------------------
-        gate_passed, gate_reason = _step7_passed(step7_output, pr_mode=pr_mode)
-        if not gate_passed:
+        except PRHeadAdvancedError as exc:
+            pr_head_refreshes_count += 1
             if not quiet:
                 console.print(
-                    f"[red]Step 7 gate failed: {gate_reason}[/red]"
+                    f"[yellow]PR head advanced remotely ({exc.old_sha[:8]} → "
+                    f"{exc.new_sha[:8]}); restarting workflow "
+                    f"(refresh {pr_head_refreshes_count}/{MAX_PR_HEAD_REFRESHES})[/yellow]"
                 )
-            if pr_mode:
-                skip_msg = f"Skipped push because: {gate_reason}"
-                step_outputs["pr_push"] = skip_msg
-                context["pr_push_output"] = skip_msg
-            else:
-                skip_msg = f"Skipped step 8 because: {gate_reason}"
-                step_outputs["8"] = skip_msg
-                context["step8_output"] = skip_msg
-            # Persist the gate signal but do NOT clear workflow state — an
-            # operator may want to resume after fixing the underlying
-            # issue. Return failure so callers (pdd-issue, pdd_cloud,
-            # operators) see the gate fired instead of receiving a
-            # success message for a checkup that did not pass.
-            _save_state()
-            # Step 7's PR-mode prompt suppresses agent commenting because
-            # the orchestrator owns the canonical report. Post it on the
-            # gate-fail path too so the PR thread shows the verdict
-            # instead of going silent.
-            post_suffix = _post_pr_mode_final_report(
-                step_outputs.get("7", step7_output)
+            # Reset state for full rerun
+            state = None
+            last_completed_step = 0
+            step_outputs = {}
+            worktree_path = None
+            # Persist the incremented counter so a crash/resume doesn't
+            # reset the refresh budget.
+            _save_state_with_counter(
+                issue_number, issue_url, 0, {}, 0.0, "unknown",
+                github_comment_id, [], None, 0, "",
+                "pr" if pr_mode else "issue",
+                pr_number, pr_owner, pr_repo, None,
+                pr_head_refreshes_count, [],
+                cwd, state_dir, repo_owner, repo_name, use_github_state
             )
-            return (
-                False,
-                f"{gate_reason}{post_suffix}",
-                total_cost,
-                last_model_used,
-            )
+            continue
 
-        # ==============================================================
-        # Section 3: Step 8 (create PR) — after the loop
-        # In PR mode we SKIP step 8 entirely — the PR already exists; our
-        # job was to verify it (and optionally push fix commits, not open a
-        # new PR).
-        # ==============================================================
 
-        if pr_mode:
-            assert pr_owner is not None
-            assert pr_repo is not None
-            assert pr_number is not None
-            if worktree_path is not None:
-                pr_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
-
-                # Codex round-1 blocker #3: prompt-source + architecture-
-                # registry guards. The review-loop runs these BEFORE its
-                # push (checkup_review_loop.py:1183/:1194); bare PR-mode
-                # used to skip them, opening a #1063/#1081 bypass. Run
-                # 10b first (registry-edit) and 10a second (prompt-
-                # source) to mirror the review-loop ordering.
-                guard_changed_files = _git_changed_files(worktree_path)
-                pr_artifacts_dir = cwd / ".pdd" / f"checkup-pr-{pr_number}"
-
-                registry_refusal = _check_architecture_registry_edit_guard(
-                    worktree_path, guard_changed_files
-                )
-                if registry_refusal:
-                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
-                    (
-                        pr_artifacts_dir
-                        / "architecture-registry-guard-refusal.txt"
-                    ).write_text(registry_refusal + "\n")
-                    step_outputs["pr_push"] = registry_refusal
-                    context["pr_push_output"] = registry_refusal
-                    _save_state()
-                    # Step 7 already ran successfully; the registry guard
-                    # blocks the push, not the verdict. Post the canonical
-                    # report so the PR records why the push was refused.
-                    post_suffix = _post_pr_mode_final_report(
-                        step_outputs.get("7", step7_output)
-                    )
-                    return (
-                        False,
-                        f"{registry_refusal}{post_suffix}",
-                        total_cost,
-                        last_model_used,
-                    )
-
-                prompt_refusal = _check_prompt_source_guard(
-                    worktree_path, guard_changed_files
-                )
-                if prompt_refusal:
-                    pr_artifacts_dir.mkdir(parents=True, exist_ok=True)
-                    (
-                        pr_artifacts_dir / "prompt-source-guard-refusal.txt"
-                    ).write_text(prompt_refusal + "\n")
-                    step_outputs["pr_push"] = prompt_refusal
-                    context["pr_push_output"] = prompt_refusal
-                    _save_state()
-                    # Step 7 already ran successfully; the prompt-source
-                    # guard blocks the push, not the verdict. Post the
-                    # canonical report so the PR records why the push was
-                    # refused.
-                    post_suffix = _post_pr_mode_final_report(
-                        step_outputs.get("7", step7_output)
-                    )
-                    return (
-                        False,
-                        f"{prompt_refusal}{post_suffix}",
-                        total_cost,
-                        last_model_used,
-                    )
-
-                push_ok, push_message = _commit_and_push_if_changed(
-                    worktree_path,
-                    pr_metadata,
-                    f"fix: apply checkup fixes for #{issue_number}",
-                )
-                step_outputs["pr_push"] = push_message
-                context["pr_push_output"] = push_message
-                _save_state()
-                if not push_ok:
-                    # Codex round-1 blocker #2 / round-2 nit A: enrich the
-                    # failure message so the operator can recover the
-                    # unpushed local fix.
-                    # ``_commit_and_push_if_changed`` can fail at any of
-                    # several points: ``git add`` (no commit yet), ``git
-                    # commit`` (no commit yet), missing PR metadata after
-                    # commit, or ``push`` after commit. We don't try to
-                    # distinguish; instead we point the operator at the
-                    # worktree HEAD with neutral wording so they can
-                    # inspect for an unpushed fix commit regardless of
-                    # which leg failed.
-                    local_sha = _git_rev_parse_head(worktree_path)
-                    sha_clause = (
-                        f" at SHA {local_sha}" if local_sha else ""
-                    )
-                    recovery = (
-                        f" Local HEAD in worktree: {worktree_path}"
-                        f"{sha_clause}; check for an unpushed fix commit "
-                        f"before re-running."
-                    )
-                    sep = "" if push_message.rstrip().endswith(".") else "."
-                    enriched = push_message + sep + recovery
-                    step_outputs["pr_push"] = enriched
-                    context["pr_push_output"] = enriched
-                    _save_state()
-                    # Step 7 already ran successfully; the push itself
-                    # failed. Post the canonical report so the PR records
-                    # the verdict and the enriched failure context.
-                    post_suffix = _post_pr_mode_final_report(
-                        step_outputs.get("7", step7_output)
-                    )
-                    return (
-                        False,
-                        f"{enriched}{post_suffix}",
-                        total_cost,
-                        last_model_used,
-                    )
-                if not quiet:
-                    console.print(f"[green]{push_message}[/green]")
-                post_push_abort = _run_post_push_reverify_if_needed(push_message)
-                if post_push_abort is not None:
-                    # Step 7 ran twice (pre-push + post-rebase reverify).
-                    # The reverify produced a verdict before failing; post
-                    # the canonical report so PR consumers see the failure
-                    # context. ``step_outputs["7"]`` is refreshed by
-                    # ``_run_single_step``'s persistence so it reflects the
-                    # latest (post-rebase) verdict.
-                    abort_ok, abort_reason, abort_cost, abort_model = post_push_abort
-                    post_suffix = _post_pr_mode_final_report(
-                        step_outputs.get("7", step7_output)
-                    )
-                    return (
-                        abort_ok,
-                        f"{abort_reason}{post_suffix}",
-                        abort_cost,
-                        abort_model,
-                    )
-                pending_post_suffix = _post_pr_mode_final_report(
-                    step_outputs.get("7", step7_output)
-                )
-            if 8 >= start_step:
-                if not quiet:
-                    console.print(
-                        f"[bold][Step 8/{TOTAL_STEPS}][/bold] Skipped "
-                        f"(PR-mode: verifying existing PR #{pr_number})"
-                    )
-                step_outputs["8"] = f"Skipped: PR-mode verification of PR #{pr_number}"
-                context["step8_output"] = step_outputs["8"]
-                last_completed_step_to_save = 8
-                _save_state()
-        elif 8 >= start_step or fix_verify_iteration > 0:
-            name8, desc8 = step_map[8]
-            step_cwd_8 = current_cwd if worktree_path else cwd
-
-            if not quiet:
-                console.print(f"[bold][Step 8/{TOTAL_STEPS}][/bold] {desc8}...")
-
-            result = _run_single_step(
-                8, name8, context,
-                cwd=cwd, step_cwd=step_cwd_8,
-                verbose=verbose, quiet=quiet,
-                label="step8",
-                timeout_adder=timeout_adder,
-                reasoning_time=reasoning_time,
-            )
-
-            if result is None:
-                template_name = f"agentic_checkup_step8_{name8}_LLM"
-                return (False, f"Missing prompt template: {template_name}", total_cost, last_model_used)
-
-            success, output, cost, model = result
-            abort = _handle_step_result(8, success, output, cost, model, description=desc8)
-            if abort is not None:
-                return abort
-
-    # All steps complete — clear state.
-    clear_workflow_state(
-        cwd=cwd,
-        issue_number=issue_number,
-        workflow_type="checkup",
-        state_dir=state_dir,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        use_github_state=use_github_state,
+def _save_state_with_counter(
+    issue_number: int,
+    issue_url: str,
+    last_completed_step: Union[int, float],
+    step_outputs: Dict[str, str],
+    total_cost: float,
+    last_model_used: str,
+    github_comment_id: Optional[int],
+    changed_files: List[str],
+    worktree_path: Optional[Path],
+    fix_verify_iteration: int,
+    previous_fixes: str,
+    mode: str,
+    pr_number: Optional[int],
+    pr_owner: Optional[str],
+    pr_repo: Optional[str],
+    pr_head_sha: Optional[str],
+    pr_head_refreshes_count: int,
+    step_comments: List[int],
+    cwd: Path,
+    state_dir: Optional[Path],
+    repo_owner: str,
+    repo_name: str,
+    use_github_state: bool,
+) -> None:
+    """Helper to save state when the main _save_state closure is out of scope."""
+    new_state = _build_state(
+        issue_number, issue_url, last_completed_step,
+        step_outputs, total_cost, last_model_used, github_comment_id,
+        changed_files, worktree_path,
+        fix_verify_iteration=fix_verify_iteration,
+        previous_fixes=previous_fixes,
+        mode=mode,
+        pr_number=pr_number,
+        pr_owner=pr_owner,
+        pr_repo=pr_repo,
+        pr_head_sha=pr_head_sha,
+        pr_head_refreshes_count=pr_head_refreshes_count,
+        step_comments=step_comments,
     )
-
-    final_msg = "Checkup complete"
-    if not quiet:
-        console.print(f"[green]{final_msg}[/green]")
-        console.print(f"   Total cost: ${total_cost:.4f}")
-        if changed_files:
-            console.print(f"   Files changed: {', '.join(changed_files)}")
-        if worktree_path:
-            console.print(f"   Worktree: {worktree_path}")
-
-    return (
-        True,
-        f"{final_msg}{pending_post_suffix}",
-        total_cost,
-        last_model_used,
+    save_workflow_state(
+        cwd=cwd, issue_number=issue_number, workflow_type="checkup",
+        state=new_state, state_dir=state_dir,
+        repo_owner=repo_owner, repo_name=repo_name,
+        use_github_state=use_github_state,
+        github_comment_id=github_comment_id,
     )
 
 
@@ -1956,6 +2075,7 @@ def _build_state(
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
     pr_head_sha: Optional[str] = None,
+    pr_head_refreshes_count: int = 0,
     step_comments: Optional[List[int]] = None,
 ) -> Dict:
     """Build a serialisable state dict for persistence.
@@ -1992,5 +2112,6 @@ def _build_state(
         "pr_owner": pr_owner,
         "pr_repo": pr_repo,
         "pr_head_sha": pr_head_sha,
+        "pr_head_refreshes_count": pr_head_refreshes_count,
         "step_comments": list(step_comments) if step_comments else [],
     }
