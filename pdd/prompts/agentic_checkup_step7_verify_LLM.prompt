@@ -59,6 +59,10 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 {step6_3_output}
 </step6_3_output>
 
+<pr_push_output>
+{pr_push_output}
+</pr_push_output>
+
 % Your Task
 
 1. **Re-run the build** to confirm no build errors remain
@@ -79,7 +83,7 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 
    - **Issue mode** (default; `pr_mode` = `false`): "Did the fixes applied in Steps 6.1–6.3 resolve the issue described in `<issue_content>`, with no new regressions?" Set `success` true if yes, false otherwise.
 
-   - **PR mode** (`pr_mode` = `true`): "Does the PR at `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow has run analysis steps inside the PR's worktree (NOT the issue-author's HEAD). The verdict you must produce here is whether the PR's diff, on its own, addresses the issue's intent — independent of any local fixes. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
+   - **PR mode** (`pr_mode` = `true`): "Does the current PR worktree for `{pr_url}` actually resolve the issue at `{issue_url}`?" In PR mode the workflow runs inside the PR worktree (NOT the issue-author's HEAD). When fix mode is enabled, Steps 6.1-6.3 may have applied local checkup fixes that are not pushed until after Step 7. Your verdict must evaluate the current worktree state, including those local fixes, because this is the exact tree that will be committed and pushed back to the same PR if verification passes. If `<pr_push_output>` says the push rebased onto an updated PR head, this is a post-push verification pass and you must verify that final rebased worktree head. You MUST surface a top-level boolean `issue_aligned` in the JSON: `true` when the PR worktree's changes substantively address the issue, `false` when the PR is unrelated, tests-only-without-real-fix, or otherwise misaligned with the reported defect. Treat `issue_aligned: false` as a higher-severity signal than any individual finding — downstream cloud consumers can gate terminal-fail on this field.
 
 5. **Generate the final JSON report**
 
@@ -112,22 +116,21 @@ In **PR mode**, `issue_aligned` is REQUIRED.
 Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode) `issue_aligned` is true AND no critical findings remain in the PR's diff.
 Set `"success": false` otherwise.
 
-6. **Post the final summary** as a GitHub comment — route by mode:
+6. **Prepare the final summary** — route by mode:
 
    - **Issue mode** (`pr_mode` = `false`): post to the issue thread only.
      ```
      gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
      ```
 
-   - **PR mode** (`pr_mode` = `true`): post to **BOTH** the PR thread (for human reviewers of the PR) AND the source issue thread (the canonical location downstream consumers fetch from). Order: PR comment first, then issue comment with the same body. Do NOT skip the issue post — it is part of the contract with the consumer.
-     ```
-     # 1. Post to the PR (human reviewers see verdict in PR context)
-     gh pr comment {pr_number} --repo {pr_owner}/{pr_repo} --body "..."
-     # 2. Mirror to the issue (consumers fetch Step-7 from the issue thread)
-     gh issue comment {issue_number} --repo {repo_owner}/{repo_name} --body "..."
-     ```
+   - **PR mode** (`pr_mode` = `true`): do NOT post GitHub comments from
+     Step 7. In full PR mode, this verification pass runs before generated
+     fixes are pushed to the PR branch, so a pre-push comment can be falsely
+     clean if the later push fails. Output the markdown summary and final JSON
+     only; the orchestrator posts the final PR/issue report after the pushed
+     PR head has been verified.
 
-Your comment should follow this format:
+Your markdown summary should follow this format:
 
 ```markdown
 ## Step 7/8: Verification & Final Report (Iteration {fix_verify_iteration})
@@ -160,9 +163,10 @@ Your comment should follow this format:
 
 % Important
 
-- The JSON report MUST be the last output — this is parsed programmatically
+- The JSON report MUST be the last `{...}` object in your output — this is parsed programmatically by walking the text from start to end and taking the LAST successfully-parsed JSON object. Intermediate reasoning blocks (fenced or unfenced) that contain `{...}` MUST NOT appear after the final verdict, or the parser will mistake them for the verdict.
 - Always re-run tests even in --no-fix mode to confirm the baseline
 - Report ALL issues found across all steps, whether fixed or not
-- Always post your findings as a GitHub comment before outputting the JSON
+- In issue mode, post your findings as a GitHub comment before outputting the JSON
+- In PR mode, do NOT post GitHub comments from Step 7; output the markdown summary and JSON only
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
 - **Exit signal**: If ALL tests pass (unit + integration + e2e) AND the build succeeds with no remaining issues, you MUST include the exact text "All Issues Fixed" in your output. If ANY test fails or build issues remain, do NOT output "All Issues Fixed" — instead clearly list remaining issues so the next iteration can fix them
