@@ -3040,16 +3040,14 @@ def llm_invoke(
     def _rewind_ctx_attempts_to_snapshot() -> None:
         """Restore ctx.obj['attempted_models'] to its pre-call snapshot.
 
-        IMPORTANT: any new re-raise path inside `llm_invoke` (i.e. any code
-        path that exits with `raise` AFTER `_record_attempt` has run at least
-        once) MUST call this helper before raising. Otherwise the failed
-        call's attempts trail `ctx.obj['attempted_models']` for any caller
-        that catches the exception and recovers — silently violating the
-        documented "list ends with the model column" invariant.
-
-        Existing call sites: terminal candidate-exhaustion failure and the
-        cloud `InsufficientCreditsError` re-raise. New paths should add
-        themselves to this list and grep should find them.
+        Called from the function-tail `finally:` whenever `_succeeded` is
+        still False (i.e. the body exited via an uncaught exception OR
+        bypassed the `_succeeded = True; return ...` happy path). Routing
+        the rewind through the finally guarantees every current AND future
+        bare-`raise` path inside the body cleans up ctx.obj — round-4
+        through round-6 each found a different exception path that
+        bypassed an explicit rewind site; the finally-driven contract
+        makes that whole bug class unrepresentable.
         """
         try:
             import click as _click_rewind  # local import; keep llm_invoke usable without click
@@ -3071,1276 +3069,1021 @@ def llm_invoke(
         attempted_models.append(model_label)
         _publish_attempted_models()
 
-    if use_cloud:
-        from rich.console import Console
-        console = Console()
 
-        if verbose:
-            logger.debug("Attempting cloud execution...")
+    # Centralized rewind: any raise from the body below (validation,
+    # model loading, terminal candidate-exhaustion, cloud credit errors,
+    # ANY future bare raise added inside this region) hits the finally
+    # block and triggers _rewind_ctx_attempts_to_snapshot(). Each
+    # successful return sets _succeeded = True first so the finally is a
+    # no-op on the happy path.
+    _succeeded = False
+    try:
+        if use_cloud:
+            from rich.console import Console
+            console = Console()
 
-        try:
-            _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
-            # Record the cloud attempt BEFORE the request so cloud-then-local
-            # fallbacks preserve the cloud attempt in attempted_models even
-            # when the cloud raises before returning a model name.
-            _cloud_placeholder = f"cloud:{DEFAULT_BASE_MODEL}" if DEFAULT_BASE_MODEL else "cloud:default"
-            _record_attempt(_cloud_placeholder)
-            cloud_result = _llm_invoke_cloud(
-                prompt=prompt,
-                input_json=input_json,
-                strength=strength,
-                temperature=temperature,
-                verbose=verbose,
-                output_pydantic=output_pydantic,
-                output_schema=output_schema,
-                time=time,
-                use_batch_mode=use_batch_mode,
-                messages=messages,
-                language=language,
-            )
-            # On success, replace the placeholder with the cloud-returned
-            # modelName so the history reflects the actual model used.
+            if verbose:
+                logger.debug("Attempting cloud execution...")
+
             try:
-                cloud_model_name = cloud_result.get("model_name") if isinstance(cloud_result, dict) else None
-            except Exception:
-                cloud_model_name = None
-            if cloud_model_name and attempted_models:
-                attempted_models[-1] = str(cloud_model_name)
-                _publish_attempted_models()
-            if isinstance(cloud_result, dict):
-                cloud_result.setdefault("attempted_models", list(attempted_models))
-            return cloud_result
-        except CloudFallbackError as e:
-            # Notify user and fall back to local execution
-            console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
-            logger.warning(f"Cloud fallback: {e}")
-            _emit_llm_attribution(
-                attribution_context,
-                "llm_invoke.cloud_fallback",
-                **_safe_error_fields(e),
-            )
-            # Continue to local execution below
-        except InsufficientCreditsError:
-            # Re-raise credit errors - user needs to know.
-            # The cloud placeholder was already recorded via _record_attempt
-            # before the cloud request, so it's currently sitting on
-            # ctx.obj['attempted_models']. If a caller catches this credit
-            # error and recovers with a different model (e.g. auto_include
-            # falling back to summary_model), the placeholder would trail
-            # the per-command history. Rewind the snapshot so the invariant
-            # holds for the recovered call.
-            _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
-            _rewind_ctx_attempts_to_snapshot()
-            raise
-        except CloudInvocationError as e:
-            # Non-recoverable cloud error - notify and fall back
-            console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
-            logger.warning(f"Cloud invocation error: {e}")
-            _emit_llm_attribution(
-                attribution_context,
-                "llm_invoke.cloud_error",
-                **_safe_error_fields(e),
-            )
-            # Continue to local execution below
+                _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
+                # Record the cloud attempt BEFORE the request so cloud-then-local
+                # fallbacks preserve the cloud attempt in attempted_models even
+                # when the cloud raises before returning a model name.
+                _cloud_placeholder = f"cloud:{DEFAULT_BASE_MODEL}" if DEFAULT_BASE_MODEL else "cloud:default"
+                _record_attempt(_cloud_placeholder)
+                cloud_result = _llm_invoke_cloud(
+                    prompt=prompt,
+                    input_json=input_json,
+                    strength=strength,
+                    temperature=temperature,
+                    verbose=verbose,
+                    output_pydantic=output_pydantic,
+                    output_schema=output_schema,
+                    time=time,
+                    use_batch_mode=use_batch_mode,
+                    messages=messages,
+                    language=language,
+                )
+                # On success, replace the placeholder with the cloud-returned
+                # modelName so the history reflects the actual model used.
+                try:
+                    cloud_model_name = cloud_result.get("model_name") if isinstance(cloud_result, dict) else None
+                except Exception:
+                    cloud_model_name = None
+                if cloud_model_name and attempted_models:
+                    attempted_models[-1] = str(cloud_model_name)
+                    _publish_attempted_models()
+                if isinstance(cloud_result, dict):
+                    cloud_result.setdefault("attempted_models", list(attempted_models))
+                _succeeded = True
+                return cloud_result
+            except CloudFallbackError as e:
+                # Notify user and fall back to local execution
+                console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
+                logger.warning(f"Cloud fallback: {e}")
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.cloud_fallback",
+                    **_safe_error_fields(e),
+                )
+                # Continue to local execution below
+            except InsufficientCreditsError as exc:
+                # Re-raise credit errors - user needs to know. The finally
+                # block at the function tail rewinds ctx.obj automatically,
+                # so the placeholder doesn't trail attempted_models if the
+                # caller recovers. We do need to attach the per-call
+                # attempts to the exception here (parity with the terminal
+                # RuntimeError below) — without that, callers like
+                # summarize_directory workers cannot recover the fallback
+                # history via getattr(e, "attempted_models", None) and the
+                # CSV silently loses the credit-error attempt record.
+                _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
+                try:
+                    setattr(exc, "attempted_models", list(attempted_models))
+                except Exception:
+                    pass
+                raise
+            except CloudInvocationError as e:
+                # Non-recoverable cloud error - notify and fall back
+                console.print(f"[yellow]Cloud error ({e}), falling back to local execution...[/yellow]")
+                logger.warning(f"Cloud invocation error: {e}")
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.cloud_error",
+                    **_safe_error_fields(e),
+                )
+                # Continue to local execution below
 
-    # --- 2. Local execution uses already-validated formatted_messages ---
+        # --- 2. Local execution uses already-validated formatted_messages ---
 
-    # Best-effort: precompute a compact representation of the final messages.
-    # We'll record (messages, raw_response) after we receive the response.
-    trace_prompt_repr: Any = None
-    try:
-        if not use_batch_mode:
-            trace_prompt_repr = formatted_messages
-        else:
-            # Avoid huge traces for batch requests.
+        # Best-effort: precompute a compact representation of the final messages.
+        # We'll record (messages, raw_response) after we receive the response.
+        trace_prompt_repr: Any = None
+        try:
+            if not use_batch_mode:
+                trace_prompt_repr = formatted_messages
+            else:
+                # Avoid huge traces for batch requests.
+                trace_prompt_repr = None
+        except Exception:
             trace_prompt_repr = None
-    except Exception:
-        trace_prompt_repr = None
 
-    # Handle None time (means "no reasoning requested")
-    if time is None:
-        time = 0.0
+        # Handle None time (means "no reasoning requested")
+        if time is None:
+            time = 0.0
 
-    if not (0.0 <= strength <= 1.0):
-        raise ValueError("'strength' must be between 0.0 and 1.0.")
-    if not (0.0 <= temperature <= 2.0): # Common range for temperature
-        warnings.warn("'temperature' is outside the typical range (0.0-2.0).")
-    if not (0.0 <= time <= 1.0):
-        raise ValueError("'time' must be between 0.0 and 1.0.")
+        if not (0.0 <= strength <= 1.0):
+            raise ValueError("'strength' must be between 0.0 and 1.0.")
+        if not (0.0 <= temperature <= 2.0): # Common range for temperature
+            warnings.warn("'temperature' is outside the typical range (0.0-2.0).")
+        if not (0.0 <= time <= 1.0):
+            raise ValueError("'time' must be between 0.0 and 1.0.")
 
-    # --- 2. Load Model Data & Select Candidates ---
-    try:
-        model_df = _load_model_data(LLM_MODEL_CSV_PATH)
-        candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
-    except (FileNotFoundError, ValueError, RuntimeError) as e:
-        logger.error(f"Failed during model loading or selection: {e}")
+        # --- 2. Load Model Data & Select Candidates ---
+        try:
+            model_df = _load_model_data(LLM_MODEL_CSV_PATH)
+            candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
+        except (FileNotFoundError, ValueError, RuntimeError) as e:
+            logger.error(f"Failed during model loading or selection: {e}")
+            _emit_llm_attribution(
+                attribution_context,
+                "llm_invoke.model_selection_error",
+                **_safe_error_fields(e),
+            )
+            raise
+
         _emit_llm_attribution(
             attribution_context,
-            "llm_invoke.model_selection_error",
-            **_safe_error_fields(e),
+            "llm_invoke.model_candidates",
+            candidate_models=[
+                {
+                    "model": str(candidate.get("model")),
+                    "provider": str(candidate.get("provider", "")),
+                    "api_key_env_names": _api_key_field_names(candidate.get("api_key")),
+                    "location": str(candidate.get("location", "")) if pd.notna(candidate.get("location", "")) else "",
+                }
+                for candidate in candidate_models[:10]
+            ],
+            candidate_count=len(candidate_models),
         )
-        raise
-
-    _emit_llm_attribution(
-        attribution_context,
-        "llm_invoke.model_candidates",
-        candidate_models=[
-            {
-                "model": str(candidate.get("model")),
-                "provider": str(candidate.get("provider", "")),
-                "api_key_env_names": _api_key_field_names(candidate.get("api_key")),
-                "location": str(candidate.get("location", "")) if pd.notna(candidate.get("location", "")) else "",
-            }
-            for candidate in candidate_models[:10]
-        ],
-        candidate_count=len(candidate_models),
-    )
-
-    if verbose:
-        # This print statement is crucial for the verbose test
-        # Calculate and print strength for each candidate model
-        # Find min/max for cost and ELO
-        min_cost = model_df['avg_cost'].min()
-        max_elo = model_df['coding_arena_elo'].max()
-        base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
-        base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
-        
-        def calc_strength(candidate):
-            # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
-            # If strength > 0.5, interpolate by ELO (base = 0.5, highest = 1.0)
-            avg_cost = candidate.get('avg_cost', min_cost)
-            elo = candidate.get('coding_arena_elo', base_elo)
-            if strength < 0.5:
-                # Map cost to [0, 0.5]
-                if base_cost == min_cost:
-                    return 0.5 # Avoid div by zero
-                rel = (avg_cost - min_cost) / (base_cost - min_cost)
-                return max(0.0, min(0.5, rel * 0.5))
-            elif strength > 0.5:
-                # Map ELO to [0.5, 1.0]
-                if max_elo == base_elo:
-                    return 0.5 # Avoid div by zero
-                rel = (elo - base_elo) / (max_elo - base_elo)
-                return max(0.5, min(1.0, 0.5 + rel * 0.5))
-            else:
-                return 0.5
-        
-        model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
-        logger.info("Candidate models selected and ordered (with strength): %s", model_strengths_formatted) # CORRECTED
-        logger.info(f"Strength: {strength}, Temperature: {temperature}, Time: {time}")
-        if use_batch_mode:
-            logger.info("Batch mode enabled.")
-        if output_pydantic:
-            logger.info(f"Pydantic output requested: {output_pydantic.__name__}")
-        try:
-            # Only print input_json if it was actually provided (not when messages were used)
-            if input_json is not None:
-                logger.info("Input JSON:")
-                logger.info(input_json) 
-            else:
-                 logger.info("Input: Using pre-formatted 'messages'.")
-        except Exception:
-            logger.info("Input JSON/Messages (fallback print):") 
-            logger.info(input_json if input_json is not None else "[Messages provided directly]")
-
-
-    # --- 3. Iterate Through Candidates and Invoke LLM ---
-    last_exception = None
-    newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
-    
-    # Initialize variables for retry section
-    response_format = None
-    time_kwargs = {}
-
-    # Update global rate map for callback cost fallback
-    try:
-        _set_model_rate_map(model_df)
-    except Exception:
-        pass
-
-    attempt_counter = 0
-
-    for model_info in candidate_models:
-        model_name_litellm = model_info['model']
-        api_key_name = model_info.get('api_key')
-        provider = model_info.get('provider', '').lower()
-
-        # Record this candidate before any pre-call validation/skip logic so
-        # models skipped mid-call (context window pre-check, missing api_key,
-        # github_copilot OAuth missing, auth-error skip, etc.) are still
-        # captured in the history.
-        _record_attempt(str(model_name_litellm))
 
         if verbose:
-            logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
-
-        retry_with_same_model = True
-        # Track per-model temperature adjustment attempt (avoid infinite loop)
-        current_temperature = temperature
-        temp_adjustment_done = False
-        while retry_with_same_model:
-            retry_with_same_model = False # Assume success unless auth error on new key
-            attempt_counter += 1
-            request_id = attribution_context.get("request_id", "no-attribution") if attribution_context else "no-attribution"
-            attempt_id = f"{request_id}-{attempt_counter}"
-
-            # --- 4. API Key Check & Acquisition ---
-            if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
-                # Problem getting key, break inner loop, try next model candidate
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.model_skipped",
-                    attempt_id=attempt_id,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    api_key_env_names=_api_key_field_names(api_key_name),
-                    reason="credential_check_failed",
-                )
-                if verbose:
-                    logger.info(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
-                break # Breaks the 'while retry_with_same_model' loop
-
-            # --- 5. Prepare LiteLLM Arguments ---
-            litellm_kwargs: Dict[str, Any] = {
-                "model": model_name_litellm,
-                "messages": copy.deepcopy(formatted_messages),
-                # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
-                "num_retries": 2,
-            }
-            if _model_disallows_temperature(model_name_litellm):
-                if verbose:
-                    logger.info("[INFO] Skipping 'temperature' for this model; the provider rejects it.")
-            else:
-                # Use a local adjustable temperature to allow provider-specific fallbacks.
-                litellm_kwargs["temperature"] = current_temperature
-
-            # Gemini 3 family clamp: temperature < 1.0 is documented by litellm
-            # to cause infinite loops and degraded reasoning. Apply BEFORE the
-            # batch/single split so both litellm.completion and
-            # litellm.batch_completion paths are protected. See
-            # _maybe_clamp_gemini_3_temperature for the rationale.
-            if _maybe_clamp_gemini_3_temperature(litellm_kwargs, model_name_litellm, verbose):
-                current_temperature = 1
-
-            # --- Resolve API key / credentials ---
-            # The CSV api_key field may be:
-            #   - Single env var (e.g. "ANTHROPIC_API_KEY") → pass as api_key=
-            #   - Pipe-delimited (e.g. "VAR1|VAR2|VAR3")   → litellm reads from env
-            #   - Empty (device flow / local)               → no api_key needed
-            from pdd.provider_manager import parse_api_key_vars
-
-            api_key_field = str(model_info.get('api_key', '') or '')
-            env_vars = parse_api_key_vars(api_key_field)
-
-            if len(env_vars) == 1:
-                # Simple provider: pass env var value as api_key=
-                key_value = os.getenv(env_vars[0])
-                if key_value:
-                    key_value = _sanitize_api_key(key_value)
-                    litellm_kwargs["api_key"] = key_value
-                    if verbose:
-                        logger.info(f"[INFO] Passing API key from '{env_vars[0]}' to LiteLLM.")
-                elif verbose:
-                    logger.warning(f"[WARN] Env var '{env_vars[0]}' not set. LiteLLM will use default auth.")
-            elif len(env_vars) > 1:
-                # Multi-credential provider (Bedrock, Azure, Vertex AI, etc.)
-                # litellm reads these env vars from os.environ automatically.
-                if verbose:
-                    logger.info(f"[INFO] Multi-credential provider; litellm reads env vars: {env_vars}")
-            else:
-                # Empty api_key — device flow (GitHub Copilot) or local model
-                if verbose:
-                    logger.info(f"[INFO] No API key for '{model_name_litellm}'; using device flow or default auth.")
-
-            # Pass vertex_location from CSV (e.g., "global" for gemini-3-flash-preview)
-            location = model_info.get('location')
-            if pd.notna(location) and location:
-                litellm_kwargs["vertex_location"] = str(location)
-
-            # Add base_url/api_base override if present in CSV
-            api_base = model_info.get('base_url')
-            if pd.notna(api_base) and api_base:
-                # LiteLLM prefers `base_url`; some older paths accept `api_base`.
-                litellm_kwargs["base_url"] = str(api_base)
-                litellm_kwargs["api_base"] = str(api_base)
-
-            # Enable 1M context window for Claude models via Anthropic beta header.
-            # Safe to send for all prompt lengths — the API only charges premium rates
-            # when the request actually exceeds 200K tokens.
-            if "claude" in model_name_litellm.lower():
-                litellm_kwargs["extra_headers"] = {"anthropic-beta": "context-1m-2025-08-07"}
-                if verbose:
-                    logger.info("[INFO] Added anthropic-beta: context-1m-2025-08-07 header for Claude model.")
-
-            # Provider-specific defaults (e.g., LM Studio)
-            model_name_lower = str(model_name_litellm).lower()
-            provider_lower_for_model = provider.lower()
-            is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
-            is_groq = model_name_lower.startswith('groq/') or provider_lower_for_model == 'groq'
-            if is_lm_studio:
-                # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
-                if not litellm_kwargs.get("base_url"):
-                    lm_studio_base = os.getenv("LM_STUDIO_API_BASE", "http://localhost:1234/v1")
-                    litellm_kwargs["base_url"] = lm_studio_base
-                    litellm_kwargs["api_base"] = lm_studio_base
-                    if verbose:
-                        logger.info(f"[INFO] Using LM Studio base_url: {lm_studio_base}")
-
-                # Ensure a non-empty api_key; LM Studio accepts any non-empty token (e.g., 'lm-studio')
-                if not litellm_kwargs.get("api_key"):
-                    lm_studio_key = os.getenv("LM_STUDIO_API_KEY") or "lm-studio"
-                    litellm_kwargs["api_key"] = lm_studio_key
-                    if verbose:
-                        logger.info("[INFO] Using LM Studio api_key placeholder (set LM_STUDIO_API_KEY to customize).")
-
-            # Handle Structured Output (JSON Mode / Pydantic / JSON Schema)
-            if output_pydantic or output_schema:
-                # Check if model supports structured output based on CSV flag or LiteLLM check
-                supports_structured = model_info.get('structured_output', False)
-                # Optional: Add litellm.supports_response_schema check if CSV flag is unreliable
-                # if not supports_structured:
-                #     try: supports_structured = litellm.supports_response_schema(model=model_name_litellm)
-                #     except: pass # Ignore errors in supports_response_schema check
-
-                if supports_structured:
-                    if output_pydantic:
-                        if verbose:
-                            logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
-                        # Use json_schema with strict=True to enforce ALL required fields are present
-                        # This prevents LLMs from omitting required fields when they think they're not needed
-                        schema = output_pydantic.model_json_schema()
-                        # Ensure all properties are in required array (OpenAI strict mode requirement)
-                        _ensure_all_properties_required(schema)
-                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
-                        _add_additional_properties_false(schema)
-                        response_format = {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": output_pydantic.__name__,
-                                "schema": schema,
-                                "strict": True
-                            }
-                        }
-                    else: # output_schema is set
-                        if verbose:
-                            logger.info(f"[INFO] Requesting structured output (JSON Schema) for {model_name_litellm}")
-                        # LiteLLM expects {"type": "json_schema", "json_schema": {"name": "response", "schema": schema_dict, "strict": true}}
-                        # OR for some providers just the schema dict if type is json_object.
-                        # Best practice for broad compatibility via LiteLLM is usually the dict directly or wrapped.
-                        # For now, let's assume we pass the schema dict as 'response_format' which LiteLLM handles for many providers
-                        # or wrap it if needed. LiteLLM 1.40+ supports passing the dict directly for many.
-                        response_format = {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "response",
-                                "schema": output_schema,
-                                "strict": False
-                            }
-                        }
-                        # Ensure all properties are in required array (OpenAI strict mode requirement)
-                        _ensure_all_properties_required(response_format["json_schema"]["schema"])
-                        # Add additionalProperties: false recursively for strict mode (required by OpenAI)
-                        _add_additional_properties_false(response_format["json_schema"]["schema"])
-
-                    litellm_kwargs["response_format"] = response_format
-
-                    # LM Studio requires "json_schema" format, not "json_object"
-                    # Use extra_body to bypass litellm.drop_params stripping the schema
-                    if is_lm_studio and response_format and response_format.get("type") == "json_object":
-                        schema = response_format.get("response_schema", {})
-                        lm_studio_response_format = {
-                            "type": "json_schema",
-                            "json_schema": {
-                                "name": "response",
-                                "strict": True,
-                                "schema": schema
-                            }
-                        }
-                        # Use extra_body to bypass drop_params - passes directly to API
-                        litellm_kwargs["extra_body"] = {"response_format": lm_studio_response_format}
-                        # Remove from regular response_format to avoid conflicts
-                        if "response_format" in litellm_kwargs:
-                            del litellm_kwargs["response_format"]
-                        if verbose:
-                            logger.info(f"[INFO] Using extra_body for LM Studio response_format to bypass drop_params")
-
-                    # Groq has issues with tool-based structured output - use JSON mode with schema in prompt
-                    if is_groq and response_format:
-                        # Get the schema to include in system prompt
-                        if output_pydantic:
-                            schema = output_pydantic.model_json_schema()
-                        else:
-                            schema = output_schema
-
-                        # Use simple json_object mode (Groq's tool_use often fails)
-                        litellm_kwargs["response_format"] = {"type": "json_object"}
-
-                        # Prepend schema instruction to messages (json module is imported at top of file)
-                        schema_instruction = f"You must respond with valid JSON matching this schema:\n```json\n{json.dumps(schema, indent=2)}\n```\nRespond ONLY with the JSON object, no other text."
-
-                        # Find or create system message to prepend schema
-                        messages_list = litellm_kwargs.get("messages", [])
-                        if messages_list and messages_list[0].get("role") == "system":
-                            messages_list[0]["content"] = schema_instruction + "\n\n" + messages_list[0]["content"]
-                        else:
-                            messages_list.insert(0, {"role": "system", "content": schema_instruction})
-                        litellm_kwargs["messages"] = messages_list
-
-                        if verbose:
-                            logger.info(f"[INFO] Using JSON object mode with schema in prompt for Groq (avoiding tool_use issues)")
-
-                    # As a fallback, one could use:
-                    # litellm_kwargs["response_format"] = {"type": "json_object"}
-                    # And potentially enable client-side validation:
-                    # litellm.enable_json_schema_validation = True # Enable globally if needed
+            # This print statement is crucial for the verbose test
+            # Calculate and print strength for each candidate model
+            # Find min/max for cost and ELO
+            min_cost = model_df['avg_cost'].min()
+            max_elo = model_df['coding_arena_elo'].max()
+            base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
+            base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
+        
+            def calc_strength(candidate):
+                # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
+                # If strength > 0.5, interpolate by ELO (base = 0.5, highest = 1.0)
+                avg_cost = candidate.get('avg_cost', min_cost)
+                elo = candidate.get('coding_arena_elo', base_elo)
+                if strength < 0.5:
+                    # Map cost to [0, 0.5]
+                    if base_cost == min_cost:
+                        return 0.5 # Avoid div by zero
+                    rel = (avg_cost - min_cost) / (base_cost - min_cost)
+                    return max(0.0, min(0.5, rel * 0.5))
+                elif strength > 0.5:
+                    # Map ELO to [0.5, 1.0]
+                    if max_elo == base_elo:
+                        return 0.5 # Avoid div by zero
+                    rel = (elo - base_elo) / (max_elo - base_elo)
+                    return max(0.5, min(1.0, 0.5 + rel * 0.5))
                 else:
-                    schema_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
-                    if verbose:
-                        logger.warning(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {schema_name}.")
-                    # Proceed without forcing JSON mode, parsing will be attempted later
-
-            # --- NEW REASONING LOGIC ---
-            reasoning_type = model_info.get('reasoning_type', 'none') # Defaults to 'none'
-            max_reasoning_tokens_val = model_info.get('max_reasoning_tokens', 0) # Defaults to 0
-
-            if time > 0: # Only apply reasoning if time is requested
-                if reasoning_type == 'budget':
-                    if max_reasoning_tokens_val > 0:
-                        budget = int(time * max_reasoning_tokens_val)
-                        if budget > 0:
-                            # Currently known: Anthropic uses 'thinking'
-                            # Model name comparison is more robust than provider string
-                            if provider == 'anthropic': # Check provider column instead of model prefix
-                                thinking_param = {"type": "enabled", "budget_tokens": budget}
-                                litellm_kwargs["thinking"] = thinking_param
-                                time_kwargs["thinking"] = thinking_param
-                                if verbose:
-                                    logger.info(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
-                            else:
-                                # If other providers adopt a budget param recognized by LiteLLM, add here
-                                if verbose:
-                                    logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but no specific LiteLLM budget parameter known for this provider. Parameter not sent.")
-                        elif verbose:
-                            logger.info(f"[INFO] Calculated reasoning budget is 0 for {model_name_litellm}, skipping reasoning parameter.")
-                    elif verbose:
-                        logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
-
-                elif reasoning_type == 'effort':
-                    from .reasoning import time_to_effort_level
-                    effort = time_to_effort_level(time)
-
-                    # Map effort parameter per-provider/model family
-                    model_lower = str(model_name_litellm).lower()
-                    provider_lower = str(provider).lower()
-
-                    if provider_lower == 'openai' and model_lower.startswith('gpt-5'):
-                        # OpenAI 5-series uses Responses API with nested 'reasoning'
-                        reasoning_obj = {"effort": effort, "summary": "auto"}
-                        litellm_kwargs["reasoning"] = reasoning_obj
-                        time_kwargs["reasoning"] = reasoning_obj
-                        if verbose:
-                            logger.info(f"[INFO] Requesting OpenAI reasoning.effort='{effort}' for {model_name_litellm} (Responses API)")
-
-                    elif provider_lower == 'openai' and model_lower.startswith('o') and 'mini' not in model_lower:
-                        # Historical o* models may use LiteLLM's generic reasoning_effort param
-                        litellm_kwargs["reasoning_effort"] = effort
-                        time_kwargs["reasoning_effort"] = effort
-                        if verbose:
-                            logger.info(f"[INFO] Requesting reasoning_effort='{effort}' for {model_name_litellm}")
-
-                    else:
-                        # Fallback to LiteLLM generic param when supported by provider adapter
-                        litellm_kwargs["reasoning_effort"] = effort
-                        time_kwargs["reasoning_effort"] = effort
-                        if verbose:
-                            logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
-
-                elif reasoning_type == 'adaptive':
-                    # Anthropic Claude Opus 4.7 (and onward) removed the legacy
-                    # `thinking={"type":"enabled","budget_tokens":N}` shape and
-                    # only accepts the new adaptive thinking API:
-                    # `thinking={"type":"adaptive"}` + `output_config.effort`.
-                    # We send `thinking` explicitly (with summarized display so
-                    # any future structured thinking blocks surface in logs)
-                    # and pass `reasoning_effort` so LiteLLM 1.80+ maps it to
-                    # `output_config.effort` server-side (gated by
-                    # AnthropicConfig._is_claude_opus_4_5 on its side; callers
-                    # that ship a newer Opus may need to monkey-patch that
-                    # helper until LiteLLM ships native matching).
-                    from .reasoning import time_to_effort_level
-                    effort = time_to_effort_level(time)
-                    provider_lower = str(provider).lower()
-                    if provider_lower == 'anthropic':
-                        thinking_param = {"type": "adaptive", "display": "summarized"}
-                        litellm_kwargs["thinking"] = thinking_param
-                        time_kwargs["thinking"] = thinking_param
-                        litellm_kwargs["reasoning_effort"] = effort
-                        time_kwargs["reasoning_effort"] = effort
-                        if verbose:
-                            logger.info(f"[INFO] Requesting Anthropic adaptive thinking with effort='{effort}' for {model_name_litellm}")
-                    else:
-                        if verbose:
-                            logger.warning(f"[WARN] reasoning_type='adaptive' but provider '{provider}' is not Anthropic; reasoning parameter not sent for {model_name_litellm}.")
-
-                elif reasoning_type == 'none':
-                    if verbose:
-                        logger.info(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
-
-                else: # Unknown reasoning_type in CSV
-                     if verbose:
-                         logger.warning(f"[WARN] Unknown reasoning_type '{reasoning_type}' for model {model_name_litellm} in CSV. No reasoning parameter sent.")
-
-            # --- END NEW REASONING LOGIC ---
-
-            # Add caching control per call if needed (example: force refresh)
-            # litellm_kwargs["cache"] = {"no-cache": True}
-
-            # --- 6. LLM Invocation ---
+                    return 0.5
+        
+            model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
+            logger.info("Candidate models selected and ordered (with strength): %s", model_strengths_formatted) # CORRECTED
+            logger.info(f"Strength: {strength}, Temperature: {temperature}, Time: {time}")
+            if use_batch_mode:
+                logger.info("Batch mode enabled.")
+            if output_pydantic:
+                logger.info(f"Pydantic output requested: {output_pydantic.__name__}")
             try:
-                start_time = time_module.time()
-
-                # Log cache status with proper logging
-                logger.debug(f"Cache Check: litellm.cache is None: {litellm.cache is None}")
-                if litellm.cache is not None:
-                    logger.debug(f"litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}")
-
-                # Only add if litellm.cache is configured
-                if litellm.cache is not None:
-                    litellm_kwargs["caching"] = True
-                    # Workaround for litellm bug where metadata=None causes AttributeError
-                    # in caching.py when it tries kwargs.get("metadata", {}).get("redis_namespace")
-                    if litellm_kwargs.get("metadata") is None:
-                        litellm_kwargs["metadata"] = {}
-                    logger.debug("Caching enabled for this request")
+                # Only print input_json if it was actually provided (not when messages were used)
+                if input_json is not None:
+                    logger.info("Input JSON:")
+                    logger.info(input_json) 
                 else:
-                    logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
+                     logger.info("Input: Using pre-formatted 'messages'.")
+            except Exception:
+                logger.info("Input JSON/Messages (fallback print):") 
+                logger.info(input_json if input_json is not None else "[Messages provided directly]")
 
 
-                # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
-                model_lower_for_call = str(model_name_litellm).lower()
-                provider_lower_for_call = str(provider).lower()
+        # --- 3. Iterate Through Candidates and Invoke LLM ---
+        last_exception = None
+        newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
+    
+        # Initialize variables for retry section
+        response_format = None
+        time_kwargs = {}
 
-                if (
-                    not use_batch_mode
-                    and provider_lower_for_call == 'openai'
-                    and model_lower_for_call.startswith('gpt-5')
-                ):
+        # Update global rate map for callback cost fallback
+        try:
+            _set_model_rate_map(model_df)
+        except Exception:
+            pass
+
+        attempt_counter = 0
+
+        for model_info in candidate_models:
+            model_name_litellm = model_info['model']
+            api_key_name = model_info.get('api_key')
+            provider = model_info.get('provider', '').lower()
+
+            # Record this candidate before any pre-call validation/skip logic so
+            # models skipped mid-call (context window pre-check, missing api_key,
+            # github_copilot OAuth missing, auth-error skip, etc.) are still
+            # captured in the history.
+            _record_attempt(str(model_name_litellm))
+
+            if verbose:
+                logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
+
+            retry_with_same_model = True
+            # Track per-model temperature adjustment attempt (avoid infinite loop)
+            current_temperature = temperature
+            temp_adjustment_done = False
+            while retry_with_same_model:
+                retry_with_same_model = False # Assume success unless auth error on new key
+                attempt_counter += 1
+                request_id = attribution_context.get("request_id", "no-attribution") if attribution_context else "no-attribution"
+                attempt_id = f"{request_id}-{attempt_counter}"
+
+                # --- 4. API Key Check & Acquisition ---
+                if not _ensure_api_key(model_info, newly_acquired_keys, verbose):
+                    # Problem getting key, break inner loop, try next model candidate
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.model_skipped",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        api_key_env_names=_api_key_field_names(api_key_name),
+                        reason="credential_check_failed",
+                    )
                     if verbose:
-                        logger.info(f"[INFO] Calling LiteLLM Responses API for {model_name_litellm}...")
-                    try:
-                        # Build input text from messages
-                        if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
-                            input_text = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in formatted_messages)
-                        else:
-                            # Fallback: string cast
-                            input_text = str(formatted_messages)
+                        logger.info(f"[SKIP] Skipping {model_name_litellm} due to API key/credentials issue after prompt.")
+                    break # Breaks the 'while retry_with_same_model' loop
 
-                        # Derive effort mapping already computed in time_kwargs
-                        reasoning_param = time_kwargs.get("reasoning")
+                # --- 5. Prepare LiteLLM Arguments ---
+                litellm_kwargs: Dict[str, Any] = {
+                    "model": model_name_litellm,
+                    "messages": copy.deepcopy(formatted_messages),
+                    # Retry on transient network errors (APIError, TimeoutError, ServiceUnavailableError)
+                    "num_retries": 2,
+                }
+                if _model_disallows_temperature(model_name_litellm):
+                    if verbose:
+                        logger.info("[INFO] Skipping 'temperature' for this model; the provider rejects it.")
+                else:
+                    # Use a local adjustable temperature to allow provider-specific fallbacks.
+                    litellm_kwargs["temperature"] = current_temperature
 
-                        # Build text.format block for structured output
-                        # Default to plain text format
-                        text_block = {"format": {"type": "text"}}
+                # Gemini 3 family clamp: temperature < 1.0 is documented by litellm
+                # to cause infinite loops and degraded reasoning. Apply BEFORE the
+                # batch/single split so both litellm.completion and
+                # litellm.batch_completion paths are protected. See
+                # _maybe_clamp_gemini_3_temperature for the rationale.
+                if _maybe_clamp_gemini_3_temperature(litellm_kwargs, model_name_litellm, verbose):
+                    current_temperature = 1
 
-                        # If structured output requested, use text.format with json_schema
-                        # This is the correct way to enforce structured output via litellm.responses()
-                        if output_pydantic or output_schema:
-                            try:
-                                if output_pydantic:
-                                    schema = output_pydantic.model_json_schema()
-                                    name = output_pydantic.__name__
-                                else:
-                                    schema = output_schema
-                                    name = "response"
+                # --- Resolve API key / credentials ---
+                # The CSV api_key field may be:
+                #   - Single env var (e.g. "ANTHROPIC_API_KEY") → pass as api_key=
+                #   - Pipe-delimited (e.g. "VAR1|VAR2|VAR3")   → litellm reads from env
+                #   - Empty (device flow / local)               → no api_key needed
+                from pdd.provider_manager import parse_api_key_vars
 
-                                # Ensure all properties are in required array (OpenAI strict mode requirement)
-                                _ensure_all_properties_required(schema)
-                                # Add additionalProperties: false recursively for strict mode (required by OpenAI)
-                                _add_additional_properties_false(schema)
+                api_key_field = str(model_info.get('api_key', '') or '')
+                env_vars = parse_api_key_vars(api_key_field)
 
-                                # Use text.format with json_schema for structured output
-                                text_block = {
-                                    "format": {
-                                        "type": "json_schema",
-                                        "name": name,
-                                        "strict": True,
-                                        "schema": schema,
-                                    }
-                                }
-                                if verbose:
-                                    logger.info(f"[INFO] Using structured output via text.format for Responses API")
-                            except Exception as schema_e:
-                                logger.warning(f"[WARN] Failed to derive JSON schema: {schema_e}. Proceeding with plain text format.")
-
-                        # Build kwargs for litellm.responses()
-                        responses_kwargs = {
-                            "model": model_name_litellm,
-                            "input": input_text,
-                            "text": text_block,
-                        }
-                        if verbose and temperature not in (None, 0, 0.0):
-                            logger.info("[INFO] Skipping 'temperature' for OpenAI GPT-5 Responses call (unsupported by API).")
-                        if reasoning_param is not None:
-                            responses_kwargs["reasoning"] = reasoning_param
-
-                        # Call litellm.responses() which handles the API interaction
-                        call_start = time_module.time()
-                        _emit_llm_attribution(
-                            attribution_context,
-                            "llm_invoke.litellm_request",
-                            attempt_id=attempt_id,
-                            call_type="responses",
-                            model=str(model_name_litellm),
-                            provider=str(provider),
-                            api_key_env_names=_api_key_field_names(api_key_name),
-                            kwargs_summary={
-                                "model": responses_kwargs.get("model"),
-                                "has_reasoning": "reasoning" in responses_kwargs,
-                                "has_structured_text_format": text_block.get("format", {}).get("type") == "json_schema",
-                            },
-                        )
-                        resp = litellm.responses(**responses_kwargs)
-                        call_duration = time_module.time() - call_start
-
-                        # Extract text result from response
-                        result_text = None
-                        try:
-                            # LiteLLM responses return output as a list of items
-                            for item in resp.output:
-                                if getattr(item, 'type', None) == 'message' and hasattr(item, 'content') and item.content:
-                                    for content_item in item.content:
-                                        if hasattr(content_item, 'text'):
-                                            result_text = content_item.text
-                                            break
-                                    if result_text:
-                                        break
-                        except Exception:
-                            result_text = None
-
-                        # Calculate cost using usage + CSV rates
-                        total_cost = 0.0
-                        finish_reason = getattr(resp, "status", None)
-                        usage = getattr(resp, "usage", None)
-                        if usage is not None:
-                            in_tok = getattr(usage, "input_tokens", 0) or 0
-                            out_tok = getattr(usage, "output_tokens", 0) or 0
-                            in_rate = model_info.get('input', 0.0) or 0.0
-                            out_rate = model_info.get('output', 0.0) or 0.0
-                            total_cost = (in_tok * in_rate + out_tok * out_rate) / 1_000_000.0
-                        _emit_llm_attribution(
-                            attribution_context,
-                            "llm_invoke.litellm_response",
-                            attempt_id=attempt_id,
-                            call_type="responses",
-                            model=str(model_name_litellm),
-                            duration_seconds=round(call_duration, 3),
-                            usage={
-                                "prompt_tokens": getattr(usage, "input_tokens", 0) if usage is not None else 0,
-                                "completion_tokens": getattr(usage, "output_tokens", 0) if usage is not None else 0,
-                            },
-                            cost=total_cost,
-                        )
-
-                        # Parse result if Pydantic output requested
-                        final_result = None
-                        if output_pydantic and result_text:
-                            try:
-                                final_result = _validate_pydantic_with_unwrap(result_text, output_pydantic)
-                            except Exception as e:
-                                # With structured output, parsing should succeed
-                                # But if it fails, try JSON repair as fallback
-                                logger.warning(f"[WARN] Pydantic parse failed on Responses output: {e}. Attempting JSON repair...")
-
-                                # Try extracting from fenced JSON blocks first
-                                fenced = _extract_fenced_json_block(result_text)
-                                candidates: List[str] = []
-                                if fenced:
-                                    candidates.append(fenced)
-                                else:
-                                    candidates.extend(_extract_balanced_json_objects(result_text))
-
-                                # Also try the raw text as-is after stripping fences
-                                cleaned = result_text.strip()
-                                if cleaned.startswith("```json"):
-                                    cleaned = cleaned[7:]
-                                elif cleaned.startswith("```"):
-                                    cleaned = cleaned[3:]
-                                if cleaned.endswith("```"):
-                                    cleaned = cleaned[:-3]
-                                cleaned = cleaned.strip()
-                                if cleaned and cleaned not in candidates:
-                                    candidates.append(cleaned)
-
-                                parse_succeeded = False
-                                for cand in candidates:
-                                    try:
-                                        final_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
-                                        parse_succeeded = True
-                                        logger.info(f"[SUCCESS] JSON repair succeeded for Responses output")
-                                        break
-                                    except Exception:
-                                        continue
-
-                                if not parse_succeeded:
-                                    logger.error(f"[ERROR] All JSON repair attempts failed for Responses output. Original error: {e}")
-                                    final_result = f"ERROR: Failed to parse structured output from Responses API. Raw: {repr(result_text)[:200]}"
-                        else:
-                            final_result = result_text
-
+                if len(env_vars) == 1:
+                    # Simple provider: pass env var value as api_key=
+                    key_value = os.getenv(env_vars[0])
+                    if key_value:
+                        key_value = _sanitize_api_key(key_value)
+                        litellm_kwargs["api_key"] = key_value
                         if verbose:
-                            logger.info(f"[RESULT] Model Used: {model_name_litellm}")
-                            logger.info(f"[RESULT] Total Cost (estimated): ${total_cost:.6g}")
+                            logger.info(f"[INFO] Passing API key from '{env_vars[0]}' to LiteLLM.")
+                    elif verbose:
+                        logger.warning(f"[WARN] Env var '{env_vars[0]}' not set. LiteLLM will use default auth.")
+                elif len(env_vars) > 1:
+                    # Multi-credential provider (Bedrock, Azure, Vertex AI, etc.)
+                    # litellm reads these env vars from os.environ automatically.
+                    if verbose:
+                        logger.info(f"[INFO] Multi-credential provider; litellm reads env vars: {env_vars}")
+                else:
+                    # Empty api_key — device flow (GitHub Copilot) or local model
+                    if verbose:
+                        logger.info(f"[INFO] No API key for '{model_name_litellm}'; using device flow or default auth.")
 
-                        _emit_llm_attribution(
-                            attribution_context,
-                            "llm_invoke.success",
-                            attempt_id=attempt_id,
-                            model=str(model_name_litellm),
-                            provider=str(provider),
-                            cost=total_cost,
-                            finish_reason=finish_reason,
-                            call_type="responses",
-                        )
-                        return {
-                            'result': final_result,
-                            'cost': total_cost,
-                            'model_name': model_name_litellm,
-                            'thinking_output': None,
-                            'finish_reason': finish_reason,
-                            'attempted_models': list(attempted_models),
-                        }
-                    except Exception as e:
-                        last_exception = e
-                        _emit_llm_attribution(
-                            attribution_context,
-                            "llm_invoke.litellm_error",
-                            attempt_id=attempt_id,
-                            call_type="responses",
-                            model=str(model_name_litellm),
-                            provider=str(provider),
-                            **_safe_error_fields(e),
-                        )
-                        logger.error(f"[ERROR] OpenAI Responses call failed for {model_name_litellm}: {e}")
-                        # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
-                        if "reasoning" in litellm_kwargs:
-                            try:
-                                litellm_kwargs.pop("reasoning", None)
-                            except Exception:
-                                pass
-                        # Fall through to LiteLLM path as a fallback
+                # Pass vertex_location from CSV (e.g., "global" for gemini-3-flash-preview)
+                location = model_info.get('location')
+                if pd.notna(location) and location:
+                    litellm_kwargs["vertex_location"] = str(location)
 
-                # --- Context Window Validation ---
-                token_count_for_attribution = None
-                context_limit_for_attribution = None
+                # Add base_url/api_base override if present in CSV
+                api_base = model_info.get('base_url')
+                if pd.notna(api_base) and api_base:
+                    # LiteLLM prefers `base_url`; some older paths accept `api_base`.
+                    litellm_kwargs["base_url"] = str(api_base)
+                    litellm_kwargs["api_base"] = str(api_base)
+
+                # Enable 1M context window for Claude models via Anthropic beta header.
+                # Safe to send for all prompt lengths — the API only charges premium rates
+                # when the request actually exceeds 200K tokens.
+                if "claude" in model_name_litellm.lower():
+                    litellm_kwargs["extra_headers"] = {"anthropic-beta": "context-1m-2025-08-07"}
+                    if verbose:
+                        logger.info("[INFO] Added anthropic-beta: context-1m-2025-08-07 header for Claude model.")
+
+                # Provider-specific defaults (e.g., LM Studio)
+                model_name_lower = str(model_name_litellm).lower()
+                provider_lower_for_model = provider.lower()
+                is_lm_studio = model_name_lower.startswith('lm_studio/') or provider_lower_for_model == 'lm_studio'
+                is_groq = model_name_lower.startswith('groq/') or provider_lower_for_model == 'groq'
+                if is_lm_studio:
+                    # Ensure base_url is set (fallback to env LM_STUDIO_API_BASE or localhost)
+                    if not litellm_kwargs.get("base_url"):
+                        lm_studio_base = os.getenv("LM_STUDIO_API_BASE", "http://localhost:1234/v1")
+                        litellm_kwargs["base_url"] = lm_studio_base
+                        litellm_kwargs["api_base"] = lm_studio_base
+                        if verbose:
+                            logger.info(f"[INFO] Using LM Studio base_url: {lm_studio_base}")
+
+                    # Ensure a non-empty api_key; LM Studio accepts any non-empty token (e.g., 'lm-studio')
+                    if not litellm_kwargs.get("api_key"):
+                        lm_studio_key = os.getenv("LM_STUDIO_API_KEY") or "lm-studio"
+                        litellm_kwargs["api_key"] = lm_studio_key
+                        if verbose:
+                            logger.info("[INFO] Using LM Studio api_key placeholder (set LM_STUDIO_API_KEY to customize).")
+
+                # Handle Structured Output (JSON Mode / Pydantic / JSON Schema)
+                if output_pydantic or output_schema:
+                    # Check if model supports structured output based on CSV flag or LiteLLM check
+                    supports_structured = model_info.get('structured_output', False)
+                    # Optional: Add litellm.supports_response_schema check if CSV flag is unreliable
+                    # if not supports_structured:
+                    #     try: supports_structured = litellm.supports_response_schema(model=model_name_litellm)
+                    #     except: pass # Ignore errors in supports_response_schema check
+
+                    if supports_structured:
+                        if output_pydantic:
+                            if verbose:
+                                logger.info(f"[INFO] Requesting structured output (Pydantic: {output_pydantic.__name__}) for {model_name_litellm}")
+                            # Use json_schema with strict=True to enforce ALL required fields are present
+                            # This prevents LLMs from omitting required fields when they think they're not needed
+                            schema = output_pydantic.model_json_schema()
+                            # Ensure all properties are in required array (OpenAI strict mode requirement)
+                            _ensure_all_properties_required(schema)
+                            # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                            _add_additional_properties_false(schema)
+                            response_format = {
+                                "type": "json_schema",
+                                "json_schema": {
+                                    "name": output_pydantic.__name__,
+                                    "schema": schema,
+                                    "strict": True
+                                }
+                            }
+                        else: # output_schema is set
+                            if verbose:
+                                logger.info(f"[INFO] Requesting structured output (JSON Schema) for {model_name_litellm}")
+                            # LiteLLM expects {"type": "json_schema", "json_schema": {"name": "response", "schema": schema_dict, "strict": true}}
+                            # OR for some providers just the schema dict if type is json_object.
+                            # Best practice for broad compatibility via LiteLLM is usually the dict directly or wrapped.
+                            # For now, let's assume we pass the schema dict as 'response_format' which LiteLLM handles for many providers
+                            # or wrap it if needed. LiteLLM 1.40+ supports passing the dict directly for many.
+                            response_format = {
+                                "type": "json_schema",
+                                "json_schema": {
+                                    "name": "response",
+                                    "schema": output_schema,
+                                    "strict": False
+                                }
+                            }
+                            # Ensure all properties are in required array (OpenAI strict mode requirement)
+                            _ensure_all_properties_required(response_format["json_schema"]["schema"])
+                            # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                            _add_additional_properties_false(response_format["json_schema"]["schema"])
+
+                        litellm_kwargs["response_format"] = response_format
+
+                        # LM Studio requires "json_schema" format, not "json_object"
+                        # Use extra_body to bypass litellm.drop_params stripping the schema
+                        if is_lm_studio and response_format and response_format.get("type") == "json_object":
+                            schema = response_format.get("response_schema", {})
+                            lm_studio_response_format = {
+                                "type": "json_schema",
+                                "json_schema": {
+                                    "name": "response",
+                                    "strict": True,
+                                    "schema": schema
+                                }
+                            }
+                            # Use extra_body to bypass drop_params - passes directly to API
+                            litellm_kwargs["extra_body"] = {"response_format": lm_studio_response_format}
+                            # Remove from regular response_format to avoid conflicts
+                            if "response_format" in litellm_kwargs:
+                                del litellm_kwargs["response_format"]
+                            if verbose:
+                                logger.info(f"[INFO] Using extra_body for LM Studio response_format to bypass drop_params")
+
+                        # Groq has issues with tool-based structured output - use JSON mode with schema in prompt
+                        if is_groq and response_format:
+                            # Get the schema to include in system prompt
+                            if output_pydantic:
+                                schema = output_pydantic.model_json_schema()
+                            else:
+                                schema = output_schema
+
+                            # Use simple json_object mode (Groq's tool_use often fails)
+                            litellm_kwargs["response_format"] = {"type": "json_object"}
+
+                            # Prepend schema instruction to messages (json module is imported at top of file)
+                            schema_instruction = f"You must respond with valid JSON matching this schema:\n```json\n{json.dumps(schema, indent=2)}\n```\nRespond ONLY with the JSON object, no other text."
+
+                            # Find or create system message to prepend schema
+                            messages_list = litellm_kwargs.get("messages", [])
+                            if messages_list and messages_list[0].get("role") == "system":
+                                messages_list[0]["content"] = schema_instruction + "\n\n" + messages_list[0]["content"]
+                            else:
+                                messages_list.insert(0, {"role": "system", "content": schema_instruction})
+                            litellm_kwargs["messages"] = messages_list
+
+                            if verbose:
+                                logger.info(f"[INFO] Using JSON object mode with schema in prompt for Groq (avoiding tool_use issues)")
+
+                        # As a fallback, one could use:
+                        # litellm_kwargs["response_format"] = {"type": "json_object"}
+                        # And potentially enable client-side validation:
+                        # litellm.enable_json_schema_validation = True # Enable globally if needed
+                    else:
+                        schema_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
+                        if verbose:
+                            logger.warning(f"[WARN] Model {model_name_litellm} does not support structured output via CSV flag. Output might not be valid {schema_name}.")
+                        # Proceed without forcing JSON mode, parsing will be attempted later
+
+                # --- NEW REASONING LOGIC ---
+                reasoning_type = model_info.get('reasoning_type', 'none') # Defaults to 'none'
+                max_reasoning_tokens_val = model_info.get('max_reasoning_tokens', 0) # Defaults to 0
+
+                if time > 0: # Only apply reasoning if time is requested
+                    if reasoning_type == 'budget':
+                        if max_reasoning_tokens_val > 0:
+                            budget = int(time * max_reasoning_tokens_val)
+                            if budget > 0:
+                                # Currently known: Anthropic uses 'thinking'
+                                # Model name comparison is more robust than provider string
+                                if provider == 'anthropic': # Check provider column instead of model prefix
+                                    thinking_param = {"type": "enabled", "budget_tokens": budget}
+                                    litellm_kwargs["thinking"] = thinking_param
+                                    time_kwargs["thinking"] = thinking_param
+                                    if verbose:
+                                        logger.info(f"[INFO] Requesting Anthropic thinking (budget type) with budget: {budget} tokens for {model_name_litellm}")
+                                else:
+                                    # If other providers adopt a budget param recognized by LiteLLM, add here
+                                    if verbose:
+                                        logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but no specific LiteLLM budget parameter known for this provider. Parameter not sent.")
+                            elif verbose:
+                                logger.info(f"[INFO] Calculated reasoning budget is 0 for {model_name_litellm}, skipping reasoning parameter.")
+                        elif verbose:
+                            logger.warning(f"[WARN] Reasoning type is 'budget' for {model_name_litellm}, but 'max_reasoning_tokens' is missing or zero in CSV. Reasoning parameter not sent.")
+
+                    elif reasoning_type == 'effort':
+                        from .reasoning import time_to_effort_level
+                        effort = time_to_effort_level(time)
+
+                        # Map effort parameter per-provider/model family
+                        model_lower = str(model_name_litellm).lower()
+                        provider_lower = str(provider).lower()
+
+                        if provider_lower == 'openai' and model_lower.startswith('gpt-5'):
+                            # OpenAI 5-series uses Responses API with nested 'reasoning'
+                            reasoning_obj = {"effort": effort, "summary": "auto"}
+                            litellm_kwargs["reasoning"] = reasoning_obj
+                            time_kwargs["reasoning"] = reasoning_obj
+                            if verbose:
+                                logger.info(f"[INFO] Requesting OpenAI reasoning.effort='{effort}' for {model_name_litellm} (Responses API)")
+
+                        elif provider_lower == 'openai' and model_lower.startswith('o') and 'mini' not in model_lower:
+                            # Historical o* models may use LiteLLM's generic reasoning_effort param
+                            litellm_kwargs["reasoning_effort"] = effort
+                            time_kwargs["reasoning_effort"] = effort
+                            if verbose:
+                                logger.info(f"[INFO] Requesting reasoning_effort='{effort}' for {model_name_litellm}")
+
+                        else:
+                            # Fallback to LiteLLM generic param when supported by provider adapter
+                            litellm_kwargs["reasoning_effort"] = effort
+                            time_kwargs["reasoning_effort"] = effort
+                            if verbose:
+                                logger.info(f"[INFO] Requesting generic reasoning_effort='{effort}' for {model_name_litellm}")
+
+                    elif reasoning_type == 'adaptive':
+                        # Anthropic Claude Opus 4.7 (and onward) removed the legacy
+                        # `thinking={"type":"enabled","budget_tokens":N}` shape and
+                        # only accepts the new adaptive thinking API:
+                        # `thinking={"type":"adaptive"}` + `output_config.effort`.
+                        # We send `thinking` explicitly (with summarized display so
+                        # any future structured thinking blocks surface in logs)
+                        # and pass `reasoning_effort` so LiteLLM 1.80+ maps it to
+                        # `output_config.effort` server-side (gated by
+                        # AnthropicConfig._is_claude_opus_4_5 on its side; callers
+                        # that ship a newer Opus may need to monkey-patch that
+                        # helper until LiteLLM ships native matching).
+                        from .reasoning import time_to_effort_level
+                        effort = time_to_effort_level(time)
+                        provider_lower = str(provider).lower()
+                        if provider_lower == 'anthropic':
+                            thinking_param = {"type": "adaptive", "display": "summarized"}
+                            litellm_kwargs["thinking"] = thinking_param
+                            time_kwargs["thinking"] = thinking_param
+                            litellm_kwargs["reasoning_effort"] = effort
+                            time_kwargs["reasoning_effort"] = effort
+                            if verbose:
+                                logger.info(f"[INFO] Requesting Anthropic adaptive thinking with effort='{effort}' for {model_name_litellm}")
+                        else:
+                            if verbose:
+                                logger.warning(f"[WARN] reasoning_type='adaptive' but provider '{provider}' is not Anthropic; reasoning parameter not sent for {model_name_litellm}.")
+
+                    elif reasoning_type == 'none':
+                        if verbose:
+                            logger.info(f"[INFO] Model {model_name_litellm} has reasoning_type='none'. No reasoning parameter sent.")
+
+                    else: # Unknown reasoning_type in CSV
+                         if verbose:
+                             logger.warning(f"[WARN] Unknown reasoning_type '{reasoning_type}' for model {model_name_litellm} in CSV. No reasoning parameter sent.")
+
+                # --- END NEW REASONING LOGIC ---
+
+                # Add caching control per call if needed (example: force refresh)
+                # litellm_kwargs["cache"] = {"no-cache": True}
+
+                # --- 6. LLM Invocation ---
                 try:
-                    messages_for_count = litellm_kwargs.get("messages", [])
-                    # Use the hang-safe wrapper so a misrouted provider-detection
-                    # call (e.g. github_copilot device-code OAuth) can't wedge
-                    # the entire LLM invocation. See pdd/server/token_counter.py.
-                    token_count = count_tokens_for_messages(messages_for_count, model=model_name_litellm)
-                    context_limit = get_context_limit(model_name_litellm)
-                    token_count_for_attribution = token_count
-                    context_limit_for_attribution = context_limit
+                    start_time = time_module.time()
 
-                    # If the Claude 1M beta header is active, honour it as the effective limit
-                    extra_headers = litellm_kwargs.get("extra_headers", {})
-                    if (context_limit is not None
-                            and "anthropic-beta" in extra_headers
-                            and "context-1m" in extra_headers.get("anthropic-beta", "")):
-                        context_limit = 1_000_000
+                    # Log cache status with proper logging
+                    logger.debug(f"Cache Check: litellm.cache is None: {litellm.cache is None}")
+                    if litellm.cache is not None:
+                        logger.debug(f"litellm.cache type: {type(litellm.cache)}, ID: {id(litellm.cache)}")
+
+                    # Only add if litellm.cache is configured
+                    if litellm.cache is not None:
+                        litellm_kwargs["caching"] = True
+                        # Workaround for litellm bug where metadata=None causes AttributeError
+                        # in caching.py when it tries kwargs.get("metadata", {}).get("redis_namespace")
+                        if litellm_kwargs.get("metadata") is None:
+                            litellm_kwargs["metadata"] = {}
+                        logger.debug("Caching enabled for this request")
+                    else:
+                        logger.debug("NOT ENABLING CACHING: litellm.cache is None at call time")
+
+
+                    # Route OpenAI gpt-5* models through Responses API to support 'reasoning'
+                    model_lower_for_call = str(model_name_litellm).lower()
+                    provider_lower_for_call = str(provider).lower()
+
+                    if (
+                        not use_batch_mode
+                        and provider_lower_for_call == 'openai'
+                        and model_lower_for_call.startswith('gpt-5')
+                    ):
+                        if verbose:
+                            logger.info(f"[INFO] Calling LiteLLM Responses API for {model_name_litellm}...")
+                        try:
+                            # Build input text from messages
+                            if isinstance(formatted_messages, list) and formatted_messages and isinstance(formatted_messages[0], dict):
+                                input_text = "\n\n".join(f"{m.get('role','user')}: {m.get('content','')}" for m in formatted_messages)
+                            else:
+                                # Fallback: string cast
+                                input_text = str(formatted_messages)
+
+                            # Derive effort mapping already computed in time_kwargs
+                            reasoning_param = time_kwargs.get("reasoning")
+
+                            # Build text.format block for structured output
+                            # Default to plain text format
+                            text_block = {"format": {"type": "text"}}
+
+                            # If structured output requested, use text.format with json_schema
+                            # This is the correct way to enforce structured output via litellm.responses()
+                            if output_pydantic or output_schema:
+                                try:
+                                    if output_pydantic:
+                                        schema = output_pydantic.model_json_schema()
+                                        name = output_pydantic.__name__
+                                    else:
+                                        schema = output_schema
+                                        name = "response"
+
+                                    # Ensure all properties are in required array (OpenAI strict mode requirement)
+                                    _ensure_all_properties_required(schema)
+                                    # Add additionalProperties: false recursively for strict mode (required by OpenAI)
+                                    _add_additional_properties_false(schema)
+
+                                    # Use text.format with json_schema for structured output
+                                    text_block = {
+                                        "format": {
+                                            "type": "json_schema",
+                                            "name": name,
+                                            "strict": True,
+                                            "schema": schema,
+                                        }
+                                    }
+                                    if verbose:
+                                        logger.info(f"[INFO] Using structured output via text.format for Responses API")
+                                except Exception as schema_e:
+                                    logger.warning(f"[WARN] Failed to derive JSON schema: {schema_e}. Proceeding with plain text format.")
+
+                            # Build kwargs for litellm.responses()
+                            responses_kwargs = {
+                                "model": model_name_litellm,
+                                "input": input_text,
+                                "text": text_block,
+                            }
+                            if verbose and temperature not in (None, 0, 0.0):
+                                logger.info("[INFO] Skipping 'temperature' for OpenAI GPT-5 Responses call (unsupported by API).")
+                            if reasoning_param is not None:
+                                responses_kwargs["reasoning"] = reasoning_param
+
+                            # Call litellm.responses() which handles the API interaction
+                            call_start = time_module.time()
+                            _emit_llm_attribution(
+                                attribution_context,
+                                "llm_invoke.litellm_request",
+                                attempt_id=attempt_id,
+                                call_type="responses",
+                                model=str(model_name_litellm),
+                                provider=str(provider),
+                                api_key_env_names=_api_key_field_names(api_key_name),
+                                kwargs_summary={
+                                    "model": responses_kwargs.get("model"),
+                                    "has_reasoning": "reasoning" in responses_kwargs,
+                                    "has_structured_text_format": text_block.get("format", {}).get("type") == "json_schema",
+                                },
+                            )
+                            resp = litellm.responses(**responses_kwargs)
+                            call_duration = time_module.time() - call_start
+
+                            # Extract text result from response
+                            result_text = None
+                            try:
+                                # LiteLLM responses return output as a list of items
+                                for item in resp.output:
+                                    if getattr(item, 'type', None) == 'message' and hasattr(item, 'content') and item.content:
+                                        for content_item in item.content:
+                                            if hasattr(content_item, 'text'):
+                                                result_text = content_item.text
+                                                break
+                                        if result_text:
+                                            break
+                            except Exception:
+                                result_text = None
+
+                            # Calculate cost using usage + CSV rates
+                            total_cost = 0.0
+                            finish_reason = getattr(resp, "status", None)
+                            usage = getattr(resp, "usage", None)
+                            if usage is not None:
+                                in_tok = getattr(usage, "input_tokens", 0) or 0
+                                out_tok = getattr(usage, "output_tokens", 0) or 0
+                                in_rate = model_info.get('input', 0.0) or 0.0
+                                out_rate = model_info.get('output', 0.0) or 0.0
+                                total_cost = (in_tok * in_rate + out_tok * out_rate) / 1_000_000.0
+                            _emit_llm_attribution(
+                                attribution_context,
+                                "llm_invoke.litellm_response",
+                                attempt_id=attempt_id,
+                                call_type="responses",
+                                model=str(model_name_litellm),
+                                duration_seconds=round(call_duration, 3),
+                                usage={
+                                    "prompt_tokens": getattr(usage, "input_tokens", 0) if usage is not None else 0,
+                                    "completion_tokens": getattr(usage, "output_tokens", 0) if usage is not None else 0,
+                                },
+                                cost=total_cost,
+                            )
+
+                            # Parse result if Pydantic output requested
+                            final_result = None
+                            if output_pydantic and result_text:
+                                try:
+                                    final_result = _validate_pydantic_with_unwrap(result_text, output_pydantic)
+                                except Exception as e:
+                                    # With structured output, parsing should succeed
+                                    # But if it fails, try JSON repair as fallback
+                                    logger.warning(f"[WARN] Pydantic parse failed on Responses output: {e}. Attempting JSON repair...")
+
+                                    # Try extracting from fenced JSON blocks first
+                                    fenced = _extract_fenced_json_block(result_text)
+                                    candidates: List[str] = []
+                                    if fenced:
+                                        candidates.append(fenced)
+                                    else:
+                                        candidates.extend(_extract_balanced_json_objects(result_text))
+
+                                    # Also try the raw text as-is after stripping fences
+                                    cleaned = result_text.strip()
+                                    if cleaned.startswith("```json"):
+                                        cleaned = cleaned[7:]
+                                    elif cleaned.startswith("```"):
+                                        cleaned = cleaned[3:]
+                                    if cleaned.endswith("```"):
+                                        cleaned = cleaned[:-3]
+                                    cleaned = cleaned.strip()
+                                    if cleaned and cleaned not in candidates:
+                                        candidates.append(cleaned)
+
+                                    parse_succeeded = False
+                                    for cand in candidates:
+                                        try:
+                                            final_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
+                                            parse_succeeded = True
+                                            logger.info(f"[SUCCESS] JSON repair succeeded for Responses output")
+                                            break
+                                        except Exception:
+                                            continue
+
+                                    if not parse_succeeded:
+                                        logger.error(f"[ERROR] All JSON repair attempts failed for Responses output. Original error: {e}")
+                                        final_result = f"ERROR: Failed to parse structured output from Responses API. Raw: {repr(result_text)[:200]}"
+                            else:
+                                final_result = result_text
+
+                            if verbose:
+                                logger.info(f"[RESULT] Model Used: {model_name_litellm}")
+                                logger.info(f"[RESULT] Total Cost (estimated): ${total_cost:.6g}")
+
+                            _emit_llm_attribution(
+                                attribution_context,
+                                "llm_invoke.success",
+                                attempt_id=attempt_id,
+                                model=str(model_name_litellm),
+                                provider=str(provider),
+                                cost=total_cost,
+                                finish_reason=finish_reason,
+                                call_type="responses",
+                            )
+                            _succeeded = True
+                            return {
+                                'result': final_result,
+                                'cost': total_cost,
+                                'model_name': model_name_litellm,
+                                'thinking_output': None,
+                                'finish_reason': finish_reason,
+                                'attempted_models': list(attempted_models),
+                            }
+                        except Exception as e:
+                            last_exception = e
+                            _emit_llm_attribution(
+                                attribution_context,
+                                "llm_invoke.litellm_error",
+                                attempt_id=attempt_id,
+                                call_type="responses",
+                                model=str(model_name_litellm),
+                                provider=str(provider),
+                                **_safe_error_fields(e),
+                            )
+                            logger.error(f"[ERROR] OpenAI Responses call failed for {model_name_litellm}: {e}")
+                            # Remove 'reasoning' key to avoid OpenAI Chat API unknown param errors
+                            if "reasoning" in litellm_kwargs:
+                                try:
+                                    litellm_kwargs.pop("reasoning", None)
+                                except Exception:
+                                    pass
+                            # Fall through to LiteLLM path as a fallback
+
+                    # --- Context Window Validation ---
+                    token_count_for_attribution = None
+                    context_limit_for_attribution = None
+                    try:
+                        messages_for_count = litellm_kwargs.get("messages", [])
+                        # Use the hang-safe wrapper so a misrouted provider-detection
+                        # call (e.g. github_copilot device-code OAuth) can't wedge
+                        # the entire LLM invocation. See pdd/server/token_counter.py.
+                        token_count = count_tokens_for_messages(messages_for_count, model=model_name_litellm)
+                        context_limit = get_context_limit(model_name_litellm)
+                        token_count_for_attribution = token_count
                         context_limit_for_attribution = context_limit
 
-                    if context_limit is None:
-                        if verbose:
-                            logger.debug(
-                                f"[CONTEXT] Context limit unknown for {model_name_litellm}; "
-                                f"skipping validation. Token count: {token_count:,}"
-                            )
-                    else:
-                        usage_pct = (token_count / context_limit) * 100
+                        # If the Claude 1M beta header is active, honour it as the effective limit
+                        extra_headers = litellm_kwargs.get("extra_headers", {})
+                        if (context_limit is not None
+                                and "anthropic-beta" in extra_headers
+                                and "context-1m" in extra_headers.get("anthropic-beta", "")):
+                            context_limit = 1_000_000
+                            context_limit_for_attribution = context_limit
 
-                        if token_count > context_limit:
-                            logger.error(
-                                f"[CONTEXT] Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
-                                f"context limit ({context_limit:,} tokens, {usage_pct:.1f}% usage). "
-                                f"Trying next model."
-                            )
-                            last_exception = RuntimeError(
-                                f"Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
-                                f"context limit ({context_limit:,} tokens)"
-                            )
-                            break  # try next candidate model
-
-                        if verbose and usage_pct > 90:
-                            logger.warning(
-                                f"[CONTEXT] Prompt is {usage_pct:.1f}% of {model_name_litellm} context "
-                                f"({token_count:,}/{context_limit:,} tokens)"
-                            )
-                        elif verbose:
-                            logger.info(
-                                f"[CONTEXT] Token count: {token_count:,}/{context_limit:,} "
-                                f"({usage_pct:.1f}%) for {model_name_litellm}"
-                            )
-                except Exception as ctx_err:
-                    if verbose:
-                        logger.debug(f"[CONTEXT] Token validation skipped: {ctx_err}")
-
-                call_type_for_attribution = "batch_completion" if use_batch_mode else "completion"
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.litellm_request",
-                    attempt_id=attempt_id,
-                    call_type=call_type_for_attribution,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    api_key_env_names=_api_key_field_names(api_key_name),
-                    kwargs_summary=_summarize_litellm_kwargs(litellm_kwargs),
-                    token_count=token_count_for_attribution,
-                    context_limit=context_limit_for_attribution,
-                )
-
-                if use_batch_mode:
-                    if verbose:
-                        logger.info(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
-                    response = litellm.batch_completion(**litellm_kwargs)
-
-
-                else:
-                    # Claude requirement: when thinking/reasoning is enabled, temperature must be 1.
-                    # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
-                    # Check both 'thinking' and 'reasoning_effort' because litellm translates
-                    # reasoning_effort to thinking internally during transform_request.
-                    try:
-                        is_claude_model = 'claude' in model_name_litellm.lower()
-                        has_thinking_or_reasoning = 'thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs
-                        if is_claude_model and has_thinking_or_reasoning and 'temperature' in litellm_kwargs:
-                            if litellm_kwargs.get('temperature') != 1:
-                                if verbose:
-                                    logger.info("[INFO] Claude with thinking/reasoning enabled: forcing temperature=1 for compliance.")
-                                litellm_kwargs['temperature'] = 1
-                                current_temperature = 1
-                    except Exception:
-                        pass
-                    # Gemini 3 temperature clamp now happens once, early —
-                    # see _maybe_clamp_gemini_3_temperature in section 5 above.
-                    # Both litellm.completion and litellm.batch_completion
-                    # paths are protected by the early clamp, so no per-call
-                    # override is needed here.
-                    if verbose:
-                        logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
-                    response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
-
-                end_time = time_module.time()
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.litellm_response",
-                    attempt_id=attempt_id,
-                    call_type=call_type_for_attribution,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    duration_seconds=round(end_time - start_time, 3),
-                    usage=_response_usage_summary(response),
-                )
-
-                if verbose:
-                    logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
-
-                # Build retry kwargs with provider credentials from litellm_kwargs
-                retry_provider_kwargs = {k: v for k, v in litellm_kwargs.items()
-                                         if k in ('api_key', 'base_url', 'api_base',
-                                                  'api_version')}
-
-                # --- 7. Process Response ---
-                results = []
-                thinking_outputs = []
-
-                response_list = response if use_batch_mode else [response]
-
-                for i, resp_item in enumerate(response_list):
-                    # Cost calculation is handled entirely by the success callback
-
-                    # Thinking Output
-                    thinking = None
-                    try:
-                        # Attempt 1: Check _hidden_params based on isolated test script
-                        if hasattr(resp_item, '_hidden_params') and resp_item._hidden_params and 'thinking' in resp_item._hidden_params:
-                             thinking = resp_item._hidden_params['thinking']
-                             if verbose:
-                                 logger.debug("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
-                        # Attempt 2: Fallback to reasoning_content in message
-                        # Use .get() for safer access
-                        elif hasattr(resp_item, 'choices') and resp_item.choices and hasattr(resp_item.choices[0], 'message') and hasattr(resp_item.choices[0].message, 'get') and resp_item.choices[0].message.get('reasoning_content'):
-                            thinking = resp_item.choices[0].message.get('reasoning_content')
+                        if context_limit is None:
                             if verbose:
-                                logger.debug("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
-
-                    except (AttributeError, IndexError, KeyError, TypeError):
-                        if verbose:
-                            logger.debug("[DEBUG] Failed to extract thinking output from known locations.")
-                        pass # Ignore if structure doesn't match or errors occur
-                    thinking_outputs.append(thinking)
-
-                    # Result (String or Pydantic)
-                    try:
-                        raw_result = resp_item.choices[0].message.content
-                        # Record the last (prompt, raw response) pair for the current operation.
-                        if _record_llm_pair is not None and trace_prompt_repr is not None:
-                            try:
-                                _record_llm_pair(
-                                    prompt=trace_prompt_repr,
-                                    response=raw_result,
-                                    model=str(model_name_litellm),
+                                logger.debug(
+                                    f"[CONTEXT] Context limit unknown for {model_name_litellm}; "
+                                    f"skipping validation. Token count: {token_count:,}"
                                 )
-                            except Exception:
-                                pass
+                        else:
+                            usage_pct = (token_count / context_limit) * 100
+
+                            if token_count > context_limit:
+                                logger.error(
+                                    f"[CONTEXT] Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                    f"context limit ({context_limit:,} tokens, {usage_pct:.1f}% usage). "
+                                    f"Trying next model."
+                                )
+                                last_exception = RuntimeError(
+                                    f"Prompt ({token_count:,} tokens) exceeds {model_name_litellm} "
+                                    f"context limit ({context_limit:,} tokens)"
+                                )
+                                break  # try next candidate model
+
+                            if verbose and usage_pct > 90:
+                                logger.warning(
+                                    f"[CONTEXT] Prompt is {usage_pct:.1f}% of {model_name_litellm} context "
+                                    f"({token_count:,}/{context_limit:,} tokens)"
+                                )
+                            elif verbose:
+                                logger.info(
+                                    f"[CONTEXT] Token count: {token_count:,}/{context_limit:,} "
+                                    f"({usage_pct:.1f}%) for {model_name_litellm}"
+                                )
+                    except Exception as ctx_err:
+                        if verbose:
+                            logger.debug(f"[CONTEXT] Token validation skipped: {ctx_err}")
+
+                    call_type_for_attribution = "batch_completion" if use_batch_mode else "completion"
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.litellm_request",
+                        attempt_id=attempt_id,
+                        call_type=call_type_for_attribution,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        api_key_env_names=_api_key_field_names(api_key_name),
+                        kwargs_summary=_summarize_litellm_kwargs(litellm_kwargs),
+                        token_count=token_count_for_attribution,
+                        context_limit=context_limit_for_attribution,
+                    )
+
+                    if use_batch_mode:
+                        if verbose:
+                            logger.info(f"[INFO] Calling litellm.batch_completion for {model_name_litellm}...")
+                        response = litellm.batch_completion(**litellm_kwargs)
+
+
+                    else:
+                        # Claude requirement: when thinking/reasoning is enabled, temperature must be 1.
+                        # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
+                        # Check both 'thinking' and 'reasoning_effort' because litellm translates
+                        # reasoning_effort to thinking internally during transform_request.
+                        try:
+                            is_claude_model = 'claude' in model_name_litellm.lower()
+                            has_thinking_or_reasoning = 'thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs
+                            if is_claude_model and has_thinking_or_reasoning and 'temperature' in litellm_kwargs:
+                                if litellm_kwargs.get('temperature') != 1:
+                                    if verbose:
+                                        logger.info("[INFO] Claude with thinking/reasoning enabled: forcing temperature=1 for compliance.")
+                                    litellm_kwargs['temperature'] = 1
+                                    current_temperature = 1
+                        except Exception:
+                            pass
+                        # Gemini 3 temperature clamp now happens once, early —
+                        # see _maybe_clamp_gemini_3_temperature in section 5 above.
+                        # Both litellm.completion and litellm.batch_completion
+                        # paths are protected by the early clamp, so no per-call
+                        # override is needed here.
+                        if verbose:
+                            logger.info(f"[INFO] Calling litellm.completion for {model_name_litellm}...")
+                        response = litellm.completion(**litellm_kwargs, timeout=LLM_CALL_TIMEOUT)
+
+                    end_time = time_module.time()
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.litellm_response",
+                        attempt_id=attempt_id,
+                        call_type=call_type_for_attribution,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        duration_seconds=round(end_time - start_time, 3),
+                        usage=_response_usage_summary(response),
+                    )
+
+                    if verbose:
+                        logger.info(f"[SUCCESS] Invocation successful for {model_name_litellm} (took {end_time - start_time:.2f}s)")
+
+                    # Build retry kwargs with provider credentials from litellm_kwargs
+                    retry_provider_kwargs = {k: v for k, v in litellm_kwargs.items()
+                                             if k in ('api_key', 'base_url', 'api_base',
+                                                      'api_version')}
+
+                    # --- 7. Process Response ---
+                    results = []
+                    thinking_outputs = []
+
+                    response_list = response if use_batch_mode else [response]
+
+                    for i, resp_item in enumerate(response_list):
+                        # Cost calculation is handled entirely by the success callback
+
+                        # Thinking Output
+                        thinking = None
+                        try:
+                            # Attempt 1: Check _hidden_params based on isolated test script
+                            if hasattr(resp_item, '_hidden_params') and resp_item._hidden_params and 'thinking' in resp_item._hidden_params:
+                                 thinking = resp_item._hidden_params['thinking']
+                                 if verbose:
+                                     logger.debug("[DEBUG] Extracted thinking output from response._hidden_params['thinking']")
+                            # Attempt 2: Fallback to reasoning_content in message
+                            # Use .get() for safer access
+                            elif hasattr(resp_item, 'choices') and resp_item.choices and hasattr(resp_item.choices[0], 'message') and hasattr(resp_item.choices[0].message, 'get') and resp_item.choices[0].message.get('reasoning_content'):
+                                thinking = resp_item.choices[0].message.get('reasoning_content')
+                                if verbose:
+                                    logger.debug("[DEBUG] Extracted thinking output from response.choices[0].message.get('reasoning_content')")
+
+                        except (AttributeError, IndexError, KeyError, TypeError):
+                            if verbose:
+                                logger.debug("[DEBUG] Failed to extract thinking output from known locations.")
+                            pass # Ignore if structure doesn't match or errors occur
+                        thinking_outputs.append(thinking)
+
+                        # Result (String or Pydantic)
+                        try:
+                            raw_result = resp_item.choices[0].message.content
+                            # Record the last (prompt, raw response) pair for the current operation.
+                            if _record_llm_pair is not None and trace_prompt_repr is not None:
+                                try:
+                                    _record_llm_pair(
+                                        prompt=trace_prompt_repr,
+                                        response=raw_result,
+                                        model=str(model_name_litellm),
+                                    )
+                                except Exception:
+                                    pass
                         
-                        # Check if raw_result is None (likely cached corrupted data)
-                        if raw_result is None:
-                            logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
-                            # Retry with cache bypass by modifying the prompt slightly
-                            if not use_batch_mode and prompt and input_json is not None:
-                                # Add a small space to bypass cache
-                                modified_prompt = prompt + " "
-                                try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
-                                    # Disable cache for retry
-                                    litellm.cache = None
-                                    # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
-                                    _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
-                                    _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
-                                    _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    try:
-                                        retry_kwargs = {
-                                            "model": model_name_litellm,
-                                            "messages": retry_messages,
-                                            "temperature": current_temperature,
-                                            "response_format": response_format,
-                                            "timeout": LLM_CALL_TIMEOUT,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                        }
-                                        if _model_disallows_temperature(model_name_litellm):
-                                            retry_kwargs.pop("temperature", None)
-                                        retry_response = _completion_with_attribution(
-                                            context=attribution_context,
-                                            attempt_id=attempt_id,
-                                            call_type="completion_retry_cache_bypass",
-                                            model=str(model_name_litellm),
-                                            provider=str(provider),
-                                            api_key_name=api_key_name,
-                                            kwargs=retry_kwargs,
-                                        )
-                                    finally:
-                                        # Always restore cache, even if retry raises
-                                        litellm.cache = configured_cache
-                                    # Issue #509: Accumulate cost/tokens from original call + retry
-                                    _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
-                                    _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
-                                    _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
-                                    # Extract result from retry
-                                    retry_raw_result = retry_response.choices[0].message.content
-                                    if _record_llm_pair is not None and trace_prompt_repr is not None:
-                                        try:
-                                            _record_llm_pair(
-                                                prompt=trace_prompt_repr,
-                                                response=retry_raw_result,
-                                                model=str(model_name_litellm),
-                                            )
-                                        except Exception:
-                                            pass
-                                    if retry_raw_result is not None:
-                                        logger.info(f"[SUCCESS] Cache bypass retry succeeded for item {i}")
-                                        raw_result = retry_raw_result
-                                    else:
-                                        logger.error(f"[ERROR] Cache bypass retry also returned None for item {i}")
-                                        results.append("ERROR: LLM returned None content even after cache bypass")
-                                        continue
-                                except Exception as retry_e:
-                                    logger.error(f"[ERROR] Cache bypass retry failed for item {i}: {retry_e}")
-                                    results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
-                                    continue
-                            else:
-                                logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
-                                results.append("ERROR: LLM returned None content and cannot retry")
-                                continue
-
-                        # Check for malformed JSON response (excessive trailing newlines causing truncation)
-                        # This can happen when Gemini generates thousands of \n in JSON string values
-                        if isinstance(raw_result, str) and _is_malformed_json_response(raw_result):
-                            logger.warning(f"[WARNING] Detected malformed JSON response with excessive trailing newlines for item {i}. Retrying with cache bypass...")
-                            if not use_batch_mode and prompt and input_json is not None:
-                                # Add a small space to bypass cache
-                                modified_prompt = prompt + " "
-                                try:
-                                    retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
-                                    # Disable cache for retry
-                                    original_cache = litellm.cache
-                                    litellm.cache = None
-                                    # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
-                                    _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
-                                    _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
-                                    _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
-                                    try:
-                                        retry_kwargs = {
-                                            "model": model_name_litellm,
-                                            "messages": retry_messages,
-                                            "temperature": current_temperature,
-                                            "response_format": response_format,
-                                            "timeout": LLM_CALL_TIMEOUT,
-                                            **time_kwargs,
-                                            **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
-                                        }
-                                        if _model_disallows_temperature(model_name_litellm):
-                                            retry_kwargs.pop("temperature", None)
-                                        retry_response = _completion_with_attribution(
-                                            context=attribution_context,
-                                            attempt_id=attempt_id,
-                                            call_type="completion_retry_malformed_json",
-                                            model=str(model_name_litellm),
-                                            provider=str(provider),
-                                            api_key_name=api_key_name,
-                                            kwargs=retry_kwargs,
-                                        )
-                                    finally:
-                                        # Always restore cache, even if retry raises
-                                        litellm.cache = original_cache
-                                    # Issue #509: Accumulate cost/tokens from original call + retry
-                                    _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
-                                    _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
-                                    _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
-                                    # Extract result from retry
-                                    retry_raw_result = retry_response.choices[0].message.content
-                                    if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
-                                        logger.info(f"[SUCCESS] Cache bypass retry for malformed JSON succeeded for item {i}")
-                                        raw_result = retry_raw_result
-                                    else:
-                                        # Retry also failed, but we'll continue with repair logic below
-                                        logger.warning(f"[WARNING] Cache bypass retry also returned malformed JSON for item {i}, attempting repair...")
-                                except Exception as retry_e:
-                                    logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
-                            else:
-                                logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
-
-                        if output_pydantic or output_schema:
-                            parsed_result = None
-                            json_string_to_parse = None
-
-                            try:
-                                # Attempt 1: Check if LiteLLM already parsed it (only for Pydantic)
-                                if output_pydantic and isinstance(raw_result, output_pydantic):
-                                    parsed_result = raw_result
-                                    if verbose:
-                                        logger.debug("[DEBUG] Pydantic object received directly from LiteLLM.")
-
-                                # Attempt 2: Check if raw_result is dict-like and validate
-                                elif isinstance(raw_result, dict):
-                                    if output_pydantic:
-                                        parsed_result = _validate_pydantic_with_unwrap(raw_result, output_pydantic)
-                                    else:
-                                        # Validate against JSON schema (with envelope unwrap for Vertex Anthropic).
-                                        # The helper returns the validated payload — either ``raw_result``
-                                        # itself or the inner dict when the ``{"parameter": {...}}`` envelope
-                                        # was peeled off. Serializing ``raw_result`` directly would leak the
-                                        # wrapper into the caller's response.
-                                        try:
-                                            validated = _validate_jsonschema_with_unwrap(raw_result, output_schema)
-                                            parsed_result = json.dumps(validated)  # Return as JSON string for consistency
-                                        except ImportError:
-                                            logger.warning("jsonschema not installed, skipping validation")
-                                            parsed_result = json.dumps(raw_result)
-                                    
-                                    if verbose:
-                                        logger.debug("[DEBUG] Validated dictionary-like object directly.")
-
-                                # Attempt 3: Process as string (if not already parsed/validated)
-                                elif isinstance(raw_result, str):
-                                    json_string_to_parse = raw_result # Start with the raw string
-                                    try:
-                                        # 1) Prefer fenced ```json blocks
-                                        fenced = _extract_fenced_json_block(raw_result)
-                                        candidates: List[str] = []
-                                        if fenced:
-                                            candidates.append(fenced)
-                                        else:
-                                            # 2) Fall back to scanning for balanced JSON objects
-                                            candidates.extend(_extract_balanced_json_objects(raw_result))
-
-                                        if not candidates:
-                                            raise ValueError("No JSON-like content found")
-
-                                        parse_err: Optional[Exception] = None
-                                        for cand in candidates:
-                                            try:
-                                                if verbose:
-                                                    logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
-                                                
-                                                if output_pydantic:
-                                                    parsed_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
-                                                else:
-                                                    # Parse JSON and validate against schema (with envelope unwrap).
-                                                    # Use the validated payload returned by the helper: when the
-                                                    # ``{"parameter": {...}}`` envelope was peeled, ``cand`` still
-                                                    # carries the wrapper, so we must re-serialize the unwrapped
-                                                    # form. When no unwrap was needed, keep ``cand`` byte-for-byte
-                                                    # to preserve the original whitespace/key order.
-                                                    loaded = json.loads(cand)
-                                                    try:
-                                                        validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
-                                                        parsed_result = cand if validated is loaded else json.dumps(validated)
-                                                    except ImportError:
-                                                        parsed_result = cand # Skip validation if lib missing
-
-                                                json_string_to_parse = cand
-                                                parse_err = None
-                                                break
-                                            except (json.JSONDecodeError, ValidationError, ValueError) as pe:
-                                                # Also catch jsonschema.ValidationError if imported
-                                                parse_err = pe
-                                                try:
-                                                    import jsonschema
-                                                    if isinstance(pe, jsonschema.ValidationError):
-                                                        parse_err = pe
-                                                except ImportError:
-                                                    pass
-
-                                        if parsed_result is None:
-                                            # If none of the candidates parsed, raise last error
-                                            if parse_err is not None:
-                                                raise parse_err
-                                            raise ValueError("Unable to parse any JSON candidates")
-                                    except (json.JSONDecodeError, ValidationError, ValueError, Exception) as extraction_error:
-                                        # Catch generic Exception to handle jsonschema errors without explicit import here
-                                        if verbose:
-                                            logger.debug(f"[DEBUG] JSON extraction/validation failed ('{extraction_error}'). Trying fence cleaning.")
-                                        # Last resort: strip any leading/trailing code fences and retry
-                                        cleaned_result_str = raw_result.strip()
-                                        if cleaned_result_str.startswith("```json"):
-                                            cleaned_result_str = cleaned_result_str[7:]
-                                        elif cleaned_result_str.startswith("```"):
-                                            cleaned_result_str = cleaned_result_str[3:]
-                                        if cleaned_result_str.endswith("```"):
-                                            cleaned_result_str = cleaned_result_str[:-3]
-                                        cleaned_result_str = cleaned_result_str.strip()
-                                        # Check for complete JSON object or array
-                                        is_complete_object = cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}')
-                                        is_complete_array = cleaned_result_str.startswith('[') and cleaned_result_str.endswith(']')
-                                        if is_complete_object or is_complete_array:
-                                            if verbose:
-                                                logger.debug(f"[DEBUG] Attempting parse after generic fence cleaning. Cleaned string: '{cleaned_result_str}'")
-                                            json_string_to_parse = cleaned_result_str
-
-                                            if output_pydantic:
-                                                parsed_result = _validate_pydantic_with_unwrap(json_string_to_parse, output_pydantic)
-                                            else:
-                                                # Use the validated payload from the helper so the unwrapped
-                                                # form is what callers see — see helper docstring.
-                                                loaded = json.loads(json_string_to_parse)
-                                                try:
-                                                    validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
-                                                    parsed_result = json_string_to_parse if validated is loaded else json.dumps(validated)
-                                                except ImportError:
-                                                    parsed_result = json_string_to_parse
-                                        elif cleaned_result_str.startswith('{') or cleaned_result_str.startswith('['):
-                                            # Attempt to repair truncated JSON (e.g., missing closing braces)
-                                            # This can happen when Gemini generates excessive trailing content
-                                            # that causes token limit truncation
-                                            if verbose:
-                                                logger.debug(f"[DEBUG] JSON appears truncated (missing closing brace). Attempting repair.")
-
-                                            # Try to find the last valid JSON structure
-                                            # For simple schemas like {"extracted_code": "..."}, we can try to close it
-                                            repaired = cleaned_result_str.rstrip()
-
-                                            # Strip trailing escaped newline sequences (\\n in the JSON string)
-                                            # These appear as literal backslash-n when Gemini generates excessive newlines
-                                            while repaired.endswith('\\n'):
-                                                repaired = repaired[:-2]
-                                            # Also strip trailing literal backslashes that might be orphaned
-                                            repaired = repaired.rstrip('\\')
-
-                                            # If we're in the middle of a string value, try to close it
-                                            # Count unescaped quotes to determine if we're inside a string
-                                            # Simple heuristic: if it ends without proper closure, add closing
-                                            is_array = cleaned_result_str.startswith('[')
-                                            expected_end = ']' if is_array else '}'
-                                            if not repaired.endswith(expected_end):
-                                                # Try adding various closures to repair
-                                                if is_array:
-                                                    repair_attempts = [
-                                                        repaired + '}]',  # Close object and array
-                                                        repaired + '"}]',  # Close string, object and array
-                                                        repaired + '"}}]',  # Close string, nested object and array
-                                                        repaired.rstrip(',') + ']',  # Remove trailing comma and close array
-                                                        repaired.rstrip('"') + '"}]',  # Handle partial string end
-                                                    ]
-                                                else:
-                                                    repair_attempts = [
-                                                        repaired + '"}',  # Close string and object
-                                                        repaired + '"}\n}',  # Close string and nested object
-                                                        repaired + '"}}}',  # Deeper nesting
-                                                        repaired.rstrip(',') + '}',  # Remove trailing comma
-                                                        repaired.rstrip('"') + '"}',  # Handle partial string end
-                                                    ]
-
-                                                for attempt in repair_attempts:
-                                                    try:
-                                                        if output_pydantic:
-                                                            parsed_result = _validate_pydantic_with_unwrap(attempt, output_pydantic)
-                                                        else:
-                                                            # Use the validated payload from the helper — see
-                                                            # helper docstring on why ``attempt`` cannot be used
-                                                            # directly when an unwrap occurred.
-                                                            loaded = json.loads(attempt)
-                                                            try:
-                                                                validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
-                                                                parsed_result = attempt if validated is loaded else json.dumps(validated)
-                                                            except ImportError:
-                                                                parsed_result = attempt
-
-                                                        if verbose:
-                                                            logger.info(f"[INFO] Successfully repaired truncated JSON response")
-                                                        json_string_to_parse = attempt
-                                                        break
-                                                    except (json.JSONDecodeError, ValidationError, ValueError):
-                                                        continue
-
-                                                if parsed_result is None:
-                                                    raise ValueError("Content after cleaning doesn't look like JSON (and repair attempts failed)")
-                                        else:
-                                            raise ValueError("Content after cleaning doesn't look like JSON")
-
-
-                                # Check if any parsing attempt succeeded
-                                if parsed_result is None:
-                                    target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
-                                    # This case should ideally be caught by exceptions above, but as a safeguard:
-                                    raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {target_name}.")
-
-                            except (ValidationError, json.JSONDecodeError, TypeError, ValueError, Exception) as parse_error:
-                                target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
-                                logger.error(f"[ERROR] Failed to parse response into {target_name} for item {i}: {parse_error}")
-                                # Use the string that was last attempted for parsing in the error message
-                                error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
-                                logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content))
-                                # Issue #168: Raise SchemaValidationError to trigger model fallback
-                                # Previously this used `continue` which only skipped to the next batch item
-                                raise SchemaValidationError(
-                                    f"Failed to parse response into {target_name}: {parse_error}",
-                                    raw_response=raw_result,
-                                    item_index=i
-                                ) from parse_error
-
-                            # Post-process: unescape newlines and repair Python syntax
-                            _unescape_code_newlines(parsed_result)
-
-                            # Check if code fields still have invalid Python syntax after repair
-                            # If so, retry without cache to get a fresh response
-                            # Skip validation for non-Python languages to avoid false positives
-                            if language in (None, "python") and _has_invalid_python_code(parsed_result):
-                                logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
+                            # Check if raw_result is None (likely cached corrupted data)
+                            if raw_result is None:
+                                logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
+                                # Retry with cache bypass by modifying the prompt slightly
                                 if not use_batch_mode and prompt and input_json is not None:
-                                    # Add a small variation to bypass cache
-                                    modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
+                                    # Add a small space to bypass cache
+                                    modified_prompt = prompt + " "
+                                    try:
+                                        retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                        # Disable cache for retry
+                                        litellm.cache = None
+                                        # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                        _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                        _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                        _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                        try:
+                                            retry_kwargs = {
+                                                "model": model_name_litellm,
+                                                "messages": retry_messages,
+                                                "temperature": current_temperature,
+                                                "response_format": response_format,
+                                                "timeout": LLM_CALL_TIMEOUT,
+                                                **time_kwargs,
+                                                **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                            }
+                                            if _model_disallows_temperature(model_name_litellm):
+                                                retry_kwargs.pop("temperature", None)
+                                            retry_response = _completion_with_attribution(
+                                                context=attribution_context,
+                                                attempt_id=attempt_id,
+                                                call_type="completion_retry_cache_bypass",
+                                                model=str(model_name_litellm),
+                                                provider=str(provider),
+                                                api_key_name=api_key_name,
+                                                kwargs=retry_kwargs,
+                                            )
+                                        finally:
+                                            # Always restore cache, even if retry raises
+                                            litellm.cache = configured_cache
+                                        # Issue #509: Accumulate cost/tokens from original call + retry
+                                        _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                        _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                        _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
+                                        # Extract result from retry
+                                        retry_raw_result = retry_response.choices[0].message.content
+                                        if _record_llm_pair is not None and trace_prompt_repr is not None:
+                                            try:
+                                                _record_llm_pair(
+                                                    prompt=trace_prompt_repr,
+                                                    response=retry_raw_result,
+                                                    model=str(model_name_litellm),
+                                                )
+                                            except Exception:
+                                                pass
+                                        if retry_raw_result is not None:
+                                            logger.info(f"[SUCCESS] Cache bypass retry succeeded for item {i}")
+                                            raw_result = retry_raw_result
+                                        else:
+                                            logger.error(f"[ERROR] Cache bypass retry also returned None for item {i}")
+                                            results.append("ERROR: LLM returned None content even after cache bypass")
+                                            continue
+                                    except Exception as retry_e:
+                                        logger.error(f"[ERROR] Cache bypass retry failed for item {i}: {retry_e}")
+                                        results.append(f"ERROR: LLM returned None content and retry failed: {retry_e}")
+                                        continue
+                                else:
+                                    logger.error(f"[ERROR] Cannot retry - batch mode or missing prompt/input_json")
+                                    results.append("ERROR: LLM returned None content and cannot retry")
+                                    continue
+
+                            # Check for malformed JSON response (excessive trailing newlines causing truncation)
+                            # This can happen when Gemini generates thousands of \n in JSON string values
+                            if isinstance(raw_result, str) and _is_malformed_json_response(raw_result):
+                                logger.warning(f"[WARNING] Detected malformed JSON response with excessive trailing newlines for item {i}. Retrying with cache bypass...")
+                                if not use_batch_mode and prompt and input_json is not None:
+                                    # Add a small space to bypass cache
+                                    modified_prompt = prompt + " "
                                     try:
                                         retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
                                         # Disable cache for retry
@@ -4365,7 +4108,7 @@ def llm_invoke(
                                             retry_response = _completion_with_attribution(
                                                 context=attribution_context,
                                                 attempt_id=attempt_id,
-                                                call_type="completion_retry_invalid_python",
+                                                call_type="completion_retry_malformed_json",
                                                 model=str(model_name_litellm),
                                                 provider=str(provider),
                                                 api_key_name=api_key_name,
@@ -4378,263 +4121,535 @@ def llm_invoke(
                                         _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
                                         _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
                                         _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
-                                        # Extract and re-parse the retry result
+                                        # Extract result from retry
                                         retry_raw_result = retry_response.choices[0].message.content
-                                        if retry_raw_result is not None:
-                                            # Re-parse the retry result
-                                            retry_parsed = None
-                                            if output_pydantic:
-                                                if isinstance(retry_raw_result, output_pydantic):
-                                                    retry_parsed = retry_raw_result
-                                                elif isinstance(retry_raw_result, (dict, str)):
-                                                    retry_parsed = _validate_pydantic_with_unwrap(retry_raw_result, output_pydantic)
-                                            elif output_schema and isinstance(retry_raw_result, str):
-                                                retry_parsed = retry_raw_result  # Keep as string for schema validation
-
-                                            if retry_parsed is not None:
-                                                _unescape_code_newlines(retry_parsed)
-                                                if not _has_invalid_python_code(retry_parsed):
-                                                    logger.info(f"[SUCCESS] Cache bypass retry for invalid Python code succeeded for item {i}")
-                                                    parsed_result = retry_parsed
-                                                else:
-                                                    logger.warning(f"[WARNING] Cache bypass retry still has invalid Python code for item {i}, using original")
-                                            else:
-                                                logger.warning(f"[WARNING] Cache bypass retry returned unparseable result for item {i}")
+                                        if retry_raw_result is not None and not _is_malformed_json_response(retry_raw_result):
+                                            logger.info(f"[SUCCESS] Cache bypass retry for malformed JSON succeeded for item {i}")
+                                            raw_result = retry_raw_result
                                         else:
-                                            logger.warning(f"[WARNING] Cache bypass retry returned None for item {i}")
+                                            # Retry also failed, but we'll continue with repair logic below
+                                            logger.warning(f"[WARNING] Cache bypass retry also returned malformed JSON for item {i}, attempting repair...")
                                     except Exception as retry_e:
-                                        logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
+                                        logger.warning(f"[WARNING] Cache bypass retry for malformed JSON failed for item {i}: {retry_e}, attempting repair...")
                                 else:
-                                    logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
+                                    logger.warning(f"[WARNING] Cannot retry malformed JSON - batch mode or missing prompt/input_json, attempting repair...")
 
-                            results.append(parsed_result)
+                            if output_pydantic or output_schema:
+                                parsed_result = None
+                                json_string_to_parse = None
 
-                        else:
-                            # If output_pydantic/schema was not requested, append the raw result
-                            results.append(raw_result)
+                                try:
+                                    # Attempt 1: Check if LiteLLM already parsed it (only for Pydantic)
+                                    if output_pydantic and isinstance(raw_result, output_pydantic):
+                                        parsed_result = raw_result
+                                        if verbose:
+                                            logger.debug("[DEBUG] Pydantic object received directly from LiteLLM.")
 
-                    except (AttributeError, IndexError) as e:
-                         logger.error(f"[ERROR] Could not extract result content from response item {i}: {e}")
-                         results.append(f"ERROR: Could not extract result content. Response: {resp_item}")
+                                    # Attempt 2: Check if raw_result is dict-like and validate
+                                    elif isinstance(raw_result, dict):
+                                        if output_pydantic:
+                                            parsed_result = _validate_pydantic_with_unwrap(raw_result, output_pydantic)
+                                        else:
+                                            # Validate against JSON schema (with envelope unwrap for Vertex Anthropic).
+                                            # The helper returns the validated payload — either ``raw_result``
+                                            # itself or the inner dict when the ``{"parameter": {...}}`` envelope
+                                            # was peeled off. Serializing ``raw_result`` directly would leak the
+                                            # wrapper into the caller's response.
+                                            try:
+                                                validated = _validate_jsonschema_with_unwrap(raw_result, output_schema)
+                                                parsed_result = json.dumps(validated)  # Return as JSON string for consistency
+                                            except ImportError:
+                                                logger.warning("jsonschema not installed, skipping validation")
+                                                parsed_result = json.dumps(raw_result)
+                                    
+                                        if verbose:
+                                            logger.debug("[DEBUG] Validated dictionary-like object directly.")
 
-                # --- Retrieve Cost from Callback Data --- (Reinstated)
-                # For batch, this will reflect the cost associated with the *last* item processed by the callback.
-                # A fully accurate batch total would require a more complex callback class to aggregate.
-                total_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
-                # ----------------------------------------
+                                    # Attempt 3: Process as string (if not already parsed/validated)
+                                    elif isinstance(raw_result, str):
+                                        json_string_to_parse = raw_result # Start with the raw string
+                                        try:
+                                            # 1) Prefer fenced ```json blocks
+                                            fenced = _extract_fenced_json_block(raw_result)
+                                            candidates: List[str] = []
+                                            if fenced:
+                                                candidates.append(fenced)
+                                            else:
+                                                # 2) Fall back to scanning for balanced JSON objects
+                                                candidates.extend(_extract_balanced_json_objects(raw_result))
 
-                final_result = results if use_batch_mode else results[0]
-                final_thinking = thinking_outputs if use_batch_mode else thinking_outputs[0]
+                                            if not candidates:
+                                                raise ValueError("No JSON-like content found")
 
-                # --- Verbose Output for Success ---
-                if verbose:
-                    # Get token usage from the *last* callback data (might not be accurate for batch)
-                    input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
-                    output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                            parse_err: Optional[Exception] = None
+                                            for cand in candidates:
+                                                try:
+                                                    if verbose:
+                                                        logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
+                                                
+                                                    if output_pydantic:
+                                                        parsed_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
+                                                    else:
+                                                        # Parse JSON and validate against schema (with envelope unwrap).
+                                                        # Use the validated payload returned by the helper: when the
+                                                        # ``{"parameter": {...}}`` envelope was peeled, ``cand`` still
+                                                        # carries the wrapper, so we must re-serialize the unwrapped
+                                                        # form. When no unwrap was needed, keep ``cand`` byte-for-byte
+                                                        # to preserve the original whitespace/key order.
+                                                        loaded = json.loads(cand)
+                                                        try:
+                                                            validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                            parsed_result = cand if validated is loaded else json.dumps(validated)
+                                                        except ImportError:
+                                                            parsed_result = cand # Skip validation if lib missing
 
-                    cost_input_pm = model_info.get('input', 0.0) if pd.notna(model_info.get('input')) else 0.0
-                    cost_output_pm = model_info.get('output', 0.0) if pd.notna(model_info.get('output')) else 0.0
+                                                    json_string_to_parse = cand
+                                                    parse_err = None
+                                                    break
+                                                except (json.JSONDecodeError, ValidationError, ValueError) as pe:
+                                                    # Also catch jsonschema.ValidationError if imported
+                                                    parse_err = pe
+                                                    try:
+                                                        import jsonschema
+                                                        if isinstance(pe, jsonschema.ValidationError):
+                                                            parse_err = pe
+                                                    except ImportError:
+                                                        pass
 
-                    logger.info(f"[RESULT] Model Used: {model_name_litellm}")
-                    logger.info(f"[RESULT] Cost (Input): ${cost_input_pm:.2f}/M tokens")
-                    logger.info(f"[RESULT] Cost (Output): ${cost_output_pm:.2f}/M tokens")
-                    logger.info(f"[RESULT] Tokens (Prompt): {input_tokens}")
-                    logger.info(f"[RESULT] Tokens (Completion): {output_tokens}")
-                    # Display the cost captured by the callback
-                    logger.info(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
-                    logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
-                    if final_thinking:
-                        logger.info("[RESULT] Thinking Output:")
-                        logger.info(final_thinking) 
+                                            if parsed_result is None:
+                                                # If none of the candidates parsed, raise last error
+                                                if parse_err is not None:
+                                                    raise parse_err
+                                                raise ValueError("Unable to parse any JSON candidates")
+                                        except (json.JSONDecodeError, ValidationError, ValueError, Exception) as extraction_error:
+                                            # Catch generic Exception to handle jsonschema errors without explicit import here
+                                            if verbose:
+                                                logger.debug(f"[DEBUG] JSON extraction/validation failed ('{extraction_error}'). Trying fence cleaning.")
+                                            # Last resort: strip any leading/trailing code fences and retry
+                                            cleaned_result_str = raw_result.strip()
+                                            if cleaned_result_str.startswith("```json"):
+                                                cleaned_result_str = cleaned_result_str[7:]
+                                            elif cleaned_result_str.startswith("```"):
+                                                cleaned_result_str = cleaned_result_str[3:]
+                                            if cleaned_result_str.endswith("```"):
+                                                cleaned_result_str = cleaned_result_str[:-3]
+                                            cleaned_result_str = cleaned_result_str.strip()
+                                            # Check for complete JSON object or array
+                                            is_complete_object = cleaned_result_str.startswith('{') and cleaned_result_str.endswith('}')
+                                            is_complete_array = cleaned_result_str.startswith('[') and cleaned_result_str.endswith(']')
+                                            if is_complete_object or is_complete_array:
+                                                if verbose:
+                                                    logger.debug(f"[DEBUG] Attempting parse after generic fence cleaning. Cleaned string: '{cleaned_result_str}'")
+                                                json_string_to_parse = cleaned_result_str
 
-                # --- Print raw output before returning if verbose ---
-                if verbose:
-                    logger.debug("[DEBUG] Raw output before return:")
-                    logger.debug(f"  Raw Result (repr): {repr(final_result)}")
-                    logger.debug(f"  Raw Thinking (repr): {repr(final_thinking)}")
-                    logger.debug("-" * 20) # Separator
+                                                if output_pydantic:
+                                                    parsed_result = _validate_pydantic_with_unwrap(json_string_to_parse, output_pydantic)
+                                                else:
+                                                    # Use the validated payload from the helper so the unwrapped
+                                                    # form is what callers see — see helper docstring.
+                                                    loaded = json.loads(json_string_to_parse)
+                                                    try:
+                                                        validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                        parsed_result = json_string_to_parse if validated is loaded else json.dumps(validated)
+                                                    except ImportError:
+                                                        parsed_result = json_string_to_parse
+                                            elif cleaned_result_str.startswith('{') or cleaned_result_str.startswith('['):
+                                                # Attempt to repair truncated JSON (e.g., missing closing braces)
+                                                # This can happen when Gemini generates excessive trailing content
+                                                # that causes token limit truncation
+                                                if verbose:
+                                                    logger.debug(f"[DEBUG] JSON appears truncated (missing closing brace). Attempting repair.")
 
-                # --- Return Success ---
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.success",
-                    attempt_id=attempt_id,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    cost=total_cost,
-                    input_tokens=_LAST_CALLBACK_DATA.get("input_tokens", 0),
-                    output_tokens=_LAST_CALLBACK_DATA.get("output_tokens", 0),
-                    finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
-                    call_type=call_type_for_attribution,
-                )
-                return {
-                    'result': final_result,
-                    'cost': total_cost,
-                    'model_name': model_name_litellm, # Actual model used
-                    'thinking_output': final_thinking if final_thinking else None,
-                    'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
-                    'attempted_models': list(attempted_models),
-                }
+                                                # Try to find the last valid JSON structure
+                                                # For simple schemas like {"extracted_code": "..."}, we can try to close it
+                                                repaired = cleaned_result_str.rstrip()
 
-            # --- 6b. Handle Invocation Errors ---
-            except openai.AuthenticationError as e:
-                last_exception = e
-                error_message = str(e)
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.litellm_error",
-                    attempt_id=attempt_id,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    **_safe_error_fields(e),
-                )
-                
-                # Check for WSL-specific issues in authentication errors
-                if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
-                    logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
-                    logger.warning("[WSL AUTH ERROR] This is likely caused by API key environment variables containing carriage returns")
-                    logger.warning("[WSL AUTH ERROR] Try setting your API key again or check your .env file for line ending issues")
-                    env_info = _get_environment_info()
-                    logger.debug(f"Environment info: {env_info}")
-                    
-                if newly_acquired_keys.get(api_key_name):
-                    logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
-                    # Invalidate the key in env for this session to force re-prompt on retry
-                    if api_key_name in os.environ:
-                         del os.environ[api_key_name]
-                    # Clear the 'newly acquired' status for this key so the next attempt doesn't trigger immediate retry loop
-                    newly_acquired_keys[api_key_name] = False
-                    retry_with_same_model = True # Set flag to retry the same model after re-prompt
-                    # Go back to the start of the 'while retry_with_same_model' loop
-                else:
-                    logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} using existing key '{api_key_name}'. Trying next model.")
-                    break # Break inner loop, try next model candidate
+                                                # Strip trailing escaped newline sequences (\\n in the JSON string)
+                                                # These appear as literal backslash-n when Gemini generates excessive newlines
+                                                while repaired.endswith('\\n'):
+                                                    repaired = repaired[:-2]
+                                                # Also strip trailing literal backslashes that might be orphaned
+                                                repaired = repaired.rstrip('\\')
 
-            except SchemaValidationError as e:
-                # Issue #168: Schema validation failures now trigger model fallback
-                last_exception = e
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.schema_validation_error",
-                    attempt_id=attempt_id,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    **_safe_error_fields(e),
-                    item_index=e.item_index,
-                )
-                logger.warning(f"[SCHEMA ERROR] Validation failed for {model_name_litellm}: {e}. Trying next model.")
-                if verbose:
-                    logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
-                break  # Break inner loop, try next model candidate
+                                                # If we're in the middle of a string value, try to close it
+                                                # Count unescaped quotes to determine if we're inside a string
+                                                # Simple heuristic: if it ends without proper closure, add closing
+                                                is_array = cleaned_result_str.startswith('[')
+                                                expected_end = ']' if is_array else '}'
+                                                if not repaired.endswith(expected_end):
+                                                    # Try adding various closures to repair
+                                                    if is_array:
+                                                        repair_attempts = [
+                                                            repaired + '}]',  # Close object and array
+                                                            repaired + '"}]',  # Close string, object and array
+                                                            repaired + '"}}]',  # Close string, nested object and array
+                                                            repaired.rstrip(',') + ']',  # Remove trailing comma and close array
+                                                            repaired.rstrip('"') + '"}]',  # Handle partial string end
+                                                        ]
+                                                    else:
+                                                        repair_attempts = [
+                                                            repaired + '"}',  # Close string and object
+                                                            repaired + '"}\n}',  # Close string and nested object
+                                                            repaired + '"}}}',  # Deeper nesting
+                                                            repaired.rstrip(',') + '}',  # Remove trailing comma
+                                                            repaired.rstrip('"') + '"}',  # Handle partial string end
+                                                        ]
 
-            except litellm.ContextWindowExceededError as e:
-                # Post-call safety net: model rejected prompt as too large after the pre-call
-                # check (e.g. tokenizer mismatch). Fall back to the next candidate.
-                last_exception = e
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.context_window_error",
-                    attempt_id=attempt_id,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    **_safe_error_fields(e),
-                )
-                logger.error(
-                    f"[CONTEXT] {model_name_litellm} rejected prompt as too large. Trying next model."
-                )
-                break  # Break inner loop, try next model candidate
+                                                    for attempt in repair_attempts:
+                                                        try:
+                                                            if output_pydantic:
+                                                                parsed_result = _validate_pydantic_with_unwrap(attempt, output_pydantic)
+                                                            else:
+                                                                # Use the validated payload from the helper — see
+                                                                # helper docstring on why ``attempt`` cannot be used
+                                                                # directly when an unwrap occurred.
+                                                                loaded = json.loads(attempt)
+                                                                try:
+                                                                    validated = _validate_jsonschema_with_unwrap(loaded, output_schema)
+                                                                    parsed_result = attempt if validated is loaded else json.dumps(validated)
+                                                                except ImportError:
+                                                                    parsed_result = attempt
 
-            except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
-                    openai.APIStatusError, openai.BadRequestError, openai.InternalServerError,
-                    Exception) as e: # Catch generic Exception last
-                last_exception = e
-                error_type = type(e).__name__
-                error_str = str(e)
+                                                            if verbose:
+                                                                logger.info(f"[INFO] Successfully repaired truncated JSON response")
+                                                            json_string_to_parse = attempt
+                                                            break
+                                                        except (json.JSONDecodeError, ValidationError, ValueError):
+                                                            continue
 
-                # Claude-specific handling for temperature + thinking/reasoning rules.
-                # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
-                # Two scenarios we auto-correct:
-                # 1) temperature==1 without thinking -> retry with 0.99
-                # 2) thinking enabled but temperature!=1 -> retry with 1
-                lower_err = error_str.lower()
-                if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
-                    claude_thinking_sent = ('thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs) and 'claude' in model_name_litellm.lower()
-                    # Decide direction of adjustment based on whether thinking was enabled in the call
-                    if claude_thinking_sent:
-                        # thinking enabled -> force temperature=1
-                        adjusted_temp = 1
-                        logger.warning(
-                            f"[WARN] {model_name_litellm}: Claude with thinking requires temperature=1. "
-                            f"Retrying with temperature={adjusted_temp}."
-                        )
-                    else:
-                        # thinking not enabled -> avoid temperature=1
-                        adjusted_temp = 0.99
-                        logger.warning(
-                            f"[WARN] {model_name_litellm}: Provider rejected temperature=1 without thinking. "
-                            f"Retrying with temperature={adjusted_temp}."
-                        )
-                    current_temperature = adjusted_temp
-                    temp_adjustment_done = True
-                    retry_with_same_model = True
+                                                    if parsed_result is None:
+                                                        raise ValueError("Content after cleaning doesn't look like JSON (and repair attempts failed)")
+                                            else:
+                                                raise ValueError("Content after cleaning doesn't look like JSON")
+
+
+                                    # Check if any parsing attempt succeeded
+                                    if parsed_result is None:
+                                        target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
+                                        # This case should ideally be caught by exceptions above, but as a safeguard:
+                                        raise TypeError(f"Raw result type {type(raw_result)} or content could not be validated/parsed against {target_name}.")
+
+                                except (ValidationError, json.JSONDecodeError, TypeError, ValueError, Exception) as parse_error:
+                                    target_name = output_pydantic.__name__ if output_pydantic else "JSON Schema"
+                                    logger.error(f"[ERROR] Failed to parse response into {target_name} for item {i}: {parse_error}")
+                                    # Use the string that was last attempted for parsing in the error message
+                                    error_content = json_string_to_parse if json_string_to_parse is not None else raw_result
+                                    logger.error("[ERROR] Content attempted for parsing: %s", repr(error_content))
+                                    # Issue #168: Raise SchemaValidationError to trigger model fallback
+                                    # Previously this used `continue` which only skipped to the next batch item
+                                    raise SchemaValidationError(
+                                        f"Failed to parse response into {target_name}: {parse_error}",
+                                        raw_response=raw_result,
+                                        item_index=i
+                                    ) from parse_error
+
+                                # Post-process: unescape newlines and repair Python syntax
+                                _unescape_code_newlines(parsed_result)
+
+                                # Check if code fields still have invalid Python syntax after repair
+                                # If so, retry without cache to get a fresh response
+                                # Skip validation for non-Python languages to avoid false positives
+                                if language in (None, "python") and _has_invalid_python_code(parsed_result):
+                                    logger.warning(f"[WARNING] Detected invalid Python syntax in code fields for item {i} after repair. Retrying with cache bypass...")
+                                    if not use_batch_mode and prompt and input_json is not None:
+                                        # Add a small variation to bypass cache
+                                        modified_prompt = prompt + "  "  # Two spaces to differentiate from other retries
+                                        try:
+                                            retry_messages = _format_messages(modified_prompt, input_json, use_batch_mode)
+                                            # Disable cache for retry
+                                            original_cache = litellm.cache
+                                            litellm.cache = None
+                                            # Issue #509: Save accumulated cost/tokens before retry overwrites callback data
+                                            _accumulated_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                                            _accumulated_input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                                            _accumulated_output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+                                            try:
+                                                retry_kwargs = {
+                                                    "model": model_name_litellm,
+                                                    "messages": retry_messages,
+                                                    "temperature": current_temperature,
+                                                    "response_format": response_format,
+                                                    "timeout": LLM_CALL_TIMEOUT,
+                                                    **time_kwargs,
+                                                    **retry_provider_kwargs,  # Issue #185: Pass Vertex AI credentials
+                                                }
+                                                if _model_disallows_temperature(model_name_litellm):
+                                                    retry_kwargs.pop("temperature", None)
+                                                retry_response = _completion_with_attribution(
+                                                    context=attribution_context,
+                                                    attempt_id=attempt_id,
+                                                    call_type="completion_retry_invalid_python",
+                                                    model=str(model_name_litellm),
+                                                    provider=str(provider),
+                                                    api_key_name=api_key_name,
+                                                    kwargs=retry_kwargs,
+                                                )
+                                            finally:
+                                                # Always restore cache, even if retry raises
+                                                litellm.cache = original_cache
+                                            # Issue #509: Accumulate cost/tokens from original call + retry
+                                            _LAST_CALLBACK_DATA["cost"] = _LAST_CALLBACK_DATA.get("cost", 0.0) + _accumulated_cost
+                                            _LAST_CALLBACK_DATA["input_tokens"] = _LAST_CALLBACK_DATA.get("input_tokens", 0) + _accumulated_input_tokens
+                                            _LAST_CALLBACK_DATA["output_tokens"] = _LAST_CALLBACK_DATA.get("output_tokens", 0) + _accumulated_output_tokens
+                                            # Extract and re-parse the retry result
+                                            retry_raw_result = retry_response.choices[0].message.content
+                                            if retry_raw_result is not None:
+                                                # Re-parse the retry result
+                                                retry_parsed = None
+                                                if output_pydantic:
+                                                    if isinstance(retry_raw_result, output_pydantic):
+                                                        retry_parsed = retry_raw_result
+                                                    elif isinstance(retry_raw_result, (dict, str)):
+                                                        retry_parsed = _validate_pydantic_with_unwrap(retry_raw_result, output_pydantic)
+                                                elif output_schema and isinstance(retry_raw_result, str):
+                                                    retry_parsed = retry_raw_result  # Keep as string for schema validation
+
+                                                if retry_parsed is not None:
+                                                    _unescape_code_newlines(retry_parsed)
+                                                    if not _has_invalid_python_code(retry_parsed):
+                                                        logger.info(f"[SUCCESS] Cache bypass retry for invalid Python code succeeded for item {i}")
+                                                        parsed_result = retry_parsed
+                                                    else:
+                                                        logger.warning(f"[WARNING] Cache bypass retry still has invalid Python code for item {i}, using original")
+                                                else:
+                                                    logger.warning(f"[WARNING] Cache bypass retry returned unparseable result for item {i}")
+                                            else:
+                                                logger.warning(f"[WARNING] Cache bypass retry returned None for item {i}")
+                                        except Exception as retry_e:
+                                            logger.warning(f"[WARNING] Cache bypass retry for invalid Python code failed for item {i}: {retry_e}")
+                                    else:
+                                        logger.warning(f"[WARNING] Cannot retry invalid Python code - batch mode or missing prompt/input_json")
+
+                                results.append(parsed_result)
+
+                            else:
+                                # If output_pydantic/schema was not requested, append the raw result
+                                results.append(raw_result)
+
+                        except (AttributeError, IndexError) as e:
+                             logger.error(f"[ERROR] Could not extract result content from response item {i}: {e}")
+                             results.append(f"ERROR: Could not extract result content. Response: {resp_item}")
+
+                    # --- Retrieve Cost from Callback Data --- (Reinstated)
+                    # For batch, this will reflect the cost associated with the *last* item processed by the callback.
+                    # A fully accurate batch total would require a more complex callback class to aggregate.
+                    total_cost = _LAST_CALLBACK_DATA.get("cost", 0.0)
+                    # ----------------------------------------
+
+                    final_result = results if use_batch_mode else results[0]
+                    final_thinking = thinking_outputs if use_batch_mode else thinking_outputs[0]
+
+                    # --- Verbose Output for Success ---
+                    if verbose:
+                        # Get token usage from the *last* callback data (might not be accurate for batch)
+                        input_tokens = _LAST_CALLBACK_DATA.get("input_tokens", 0)
+                        output_tokens = _LAST_CALLBACK_DATA.get("output_tokens", 0)
+
+                        cost_input_pm = model_info.get('input', 0.0) if pd.notna(model_info.get('input')) else 0.0
+                        cost_output_pm = model_info.get('output', 0.0) if pd.notna(model_info.get('output')) else 0.0
+
+                        logger.info(f"[RESULT] Model Used: {model_name_litellm}")
+                        logger.info(f"[RESULT] Cost (Input): ${cost_input_pm:.2f}/M tokens")
+                        logger.info(f"[RESULT] Cost (Output): ${cost_output_pm:.2f}/M tokens")
+                        logger.info(f"[RESULT] Tokens (Prompt): {input_tokens}")
+                        logger.info(f"[RESULT] Tokens (Completion): {output_tokens}")
+                        # Display the cost captured by the callback
+                        logger.info(f"[RESULT] Total Cost (from callback): ${total_cost:.6g}") # Renamed label for clarity
+                        logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
+                        if final_thinking:
+                            logger.info("[RESULT] Thinking Output:")
+                            logger.info(final_thinking) 
+
+                    # --- Print raw output before returning if verbose ---
+                    if verbose:
+                        logger.debug("[DEBUG] Raw output before return:")
+                        logger.debug(f"  Raw Result (repr): {repr(final_result)}")
+                        logger.debug(f"  Raw Thinking (repr): {repr(final_thinking)}")
+                        logger.debug("-" * 20) # Separator
+
+                    # --- Return Success ---
                     _emit_llm_attribution(
                         attribution_context,
-                        "llm_invoke.temperature_retry",
+                        "llm_invoke.success",
                         attempt_id=attempt_id,
                         model=str(model_name_litellm),
                         provider=str(provider),
-                        adjusted_temperature=adjusted_temp,
+                        cost=total_cost,
+                        input_tokens=_LAST_CALLBACK_DATA.get("input_tokens", 0),
+                        output_tokens=_LAST_CALLBACK_DATA.get("output_tokens", 0),
+                        finish_reason=_LAST_CALLBACK_DATA.get("finish_reason"),
+                        call_type=call_type_for_attribution,
+                    )
+                    _succeeded = True
+                    return {
+                        'result': final_result,
+                        'cost': total_cost,
+                        'model_name': model_name_litellm, # Actual model used
+                        'thinking_output': final_thinking if final_thinking else None,
+                        'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
+                        'attempted_models': list(attempted_models),
+                    }
+
+                # --- 6b. Handle Invocation Errors ---
+                except openai.AuthenticationError as e:
+                    last_exception = e
+                    error_message = str(e)
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.litellm_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
                         **_safe_error_fields(e),
                     )
+                
+                    # Check for WSL-specific issues in authentication errors
+                    if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
+                        logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
+                        logger.warning("[WSL AUTH ERROR] This is likely caused by API key environment variables containing carriage returns")
+                        logger.warning("[WSL AUTH ERROR] Try setting your API key again or check your .env file for line ending issues")
+                        env_info = _get_environment_info()
+                        logger.debug(f"Environment info: {env_info}")
+                    
+                    if newly_acquired_keys.get(api_key_name):
+                        logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
+                        # Invalidate the key in env for this session to force re-prompt on retry
+                        if api_key_name in os.environ:
+                             del os.environ[api_key_name]
+                        # Clear the 'newly acquired' status for this key so the next attempt doesn't trigger immediate retry loop
+                        newly_acquired_keys[api_key_name] = False
+                        retry_with_same_model = True # Set flag to retry the same model after re-prompt
+                        # Go back to the start of the 'while retry_with_same_model' loop
+                    else:
+                        logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} using existing key '{api_key_name}'. Trying next model.")
+                        break # Break inner loop, try next model candidate
+
+                except SchemaValidationError as e:
+                    # Issue #168: Schema validation failures now trigger model fallback
+                    last_exception = e
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.schema_validation_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                        item_index=e.item_index,
+                    )
+                    logger.warning(f"[SCHEMA ERROR] Validation failed for {model_name_litellm}: {e}. Trying next model.")
                     if verbose:
-                        logger.debug(f"Retrying {model_name_litellm} with adjusted temperature {current_temperature}")
-                    continue
+                        logger.debug(f"Raw response that failed validation: {repr(e.raw_response)}")
+                    break  # Break inner loop, try next model candidate
 
-                _emit_llm_attribution(
-                    attribution_context,
-                    "llm_invoke.litellm_error",
-                    attempt_id=attempt_id,
-                    model=str(model_name_litellm),
-                    provider=str(provider),
-                    **_safe_error_fields(e),
-                )
-                logger.error(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
-                # Log more details in verbose mode
-                if verbose:
-                    logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
-                break # Break inner loop, try next model candidate
+                except litellm.ContextWindowExceededError as e:
+                    # Post-call safety net: model rejected prompt as too large after the pre-call
+                    # check (e.g. tokenizer mismatch). Fall back to the next candidate.
+                    last_exception = e
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.context_window_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                    )
+                    logger.error(
+                        f"[CONTEXT] {model_name_litellm} rejected prompt as too large. Trying next model."
+                    )
+                    break  # Break inner loop, try next model candidate
 
-        # If the inner loop was broken (not by success), continue to the next candidate model
-        continue
+                except (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError,
+                        openai.APIStatusError, openai.BadRequestError, openai.InternalServerError,
+                        Exception) as e: # Catch generic Exception last
+                    last_exception = e
+                    error_type = type(e).__name__
+                    error_str = str(e)
 
-    # --- 8. Handle Failure of All Candidates ---
-    error_message = "All candidate models failed."
-    if last_exception:
-        error_message += f" Last error ({type(last_exception).__name__}): {last_exception}"
-    if last_exception and "context limit" in str(last_exception):
-        error_message += (
-            " Hint: Try reducing prompt size, splitting into smaller prompts, "
-            "or using a model with a larger context window."
+                    # Claude-specific handling for temperature + thinking/reasoning rules.
+                    # Check model name (not provider) to cover both direct Anthropic and Vertex AI Claude.
+                    # Two scenarios we auto-correct:
+                    # 1) temperature==1 without thinking -> retry with 0.99
+                    # 2) thinking enabled but temperature!=1 -> retry with 1
+                    lower_err = error_str.lower()
+                    if (not temp_adjustment_done) and ("temperature" in lower_err) and ("thinking" in lower_err):
+                        claude_thinking_sent = ('thinking' in litellm_kwargs or 'reasoning_effort' in litellm_kwargs) and 'claude' in model_name_litellm.lower()
+                        # Decide direction of adjustment based on whether thinking was enabled in the call
+                        if claude_thinking_sent:
+                            # thinking enabled -> force temperature=1
+                            adjusted_temp = 1
+                            logger.warning(
+                                f"[WARN] {model_name_litellm}: Claude with thinking requires temperature=1. "
+                                f"Retrying with temperature={adjusted_temp}."
+                            )
+                        else:
+                            # thinking not enabled -> avoid temperature=1
+                            adjusted_temp = 0.99
+                            logger.warning(
+                                f"[WARN] {model_name_litellm}: Provider rejected temperature=1 without thinking. "
+                                f"Retrying with temperature={adjusted_temp}."
+                            )
+                        current_temperature = adjusted_temp
+                        temp_adjustment_done = True
+                        retry_with_same_model = True
+                        _emit_llm_attribution(
+                            attribution_context,
+                            "llm_invoke.temperature_retry",
+                            attempt_id=attempt_id,
+                            model=str(model_name_litellm),
+                            provider=str(provider),
+                            adjusted_temperature=adjusted_temp,
+                            **_safe_error_fields(e),
+                        )
+                        if verbose:
+                            logger.debug(f"Retrying {model_name_litellm} with adjusted temperature {current_temperature}")
+                        continue
+
+                    _emit_llm_attribution(
+                        attribution_context,
+                        "llm_invoke.litellm_error",
+                        attempt_id=attempt_id,
+                        model=str(model_name_litellm),
+                        provider=str(provider),
+                        **_safe_error_fields(e),
+                    )
+                    logger.error(f"[ERROR] Invocation failed for {model_name_litellm} ({error_type}): {e}. Trying next model.")
+                    # Log more details in verbose mode
+                    if verbose:
+                        logger.debug(f"Detailed exception traceback for {model_name_litellm}:", exc_info=True)
+                    break # Break inner loop, try next model candidate
+
+            # If the inner loop was broken (not by success), continue to the next candidate model
+            continue
+
+        # --- 8. Handle Failure of All Candidates ---
+        error_message = "All candidate models failed."
+        if last_exception:
+            error_message += f" Last error ({type(last_exception).__name__}): {last_exception}"
+        if last_exception and "context limit" in str(last_exception):
+            error_message += (
+                " Hint: Try reducing prompt size, splitting into smaller prompts, "
+                "or using a model with a larger context window."
+            )
+        logger.error(f"[FATAL] {error_message}")
+        _emit_llm_attribution(
+            attribution_context,
+            "llm_invoke.failure",
+            failure_reason="all_candidate_models_failed",
+            last_error_type=type(last_exception).__name__ if last_exception else None,
         )
-    logger.error(f"[FATAL] {error_message}")
-    _emit_llm_attribution(
-        attribution_context,
-        "llm_invoke.failure",
-        failure_reason="all_candidate_models_failed",
-        last_error_type=type(last_exception).__name__ if last_exception else None,
-    )
-    # Rewind ctx.obj['attempted_models'] to the snapshot taken at the start
-    # of this call. Attempts remain available on the raised exception via
-    # the `attempted_models` attribute below for callers (e.g. worker
-    # threads) that want to preserve them explicitly.
-    _rewind_ctx_attempts_to_snapshot()
-
-    terminal_error = RuntimeError(error_message)
-    try:
-        setattr(terminal_error, "attempted_models", list(attempted_models))
-    except Exception:
-        pass
-    raise terminal_error from last_exception
+        # The finally block at the function tail rewinds ctx.obj
+        # automatically on this raise; we only need to attach the attempts
+        # to the exception so worker threads can recover them via
+        # getattr(exc, "attempted_models", None).
+        terminal_error = RuntimeError(error_message)
+        try:
+            setattr(terminal_error, "attempted_models", list(attempted_models))
+        except Exception:
+            pass
+        raise terminal_error from last_exception
+    finally:
+        if not _succeeded:
+            _rewind_ctx_attempts_to_snapshot()
 
 # --- Example Usage (Optional) ---
 if __name__ == "__main__":

@@ -2123,23 +2123,26 @@ class TestMaxWorkers:
                 f"history; missing {failed_cand!r}. Published: {published}"
             )
 
-    def test_max_workers_failed_highest_idx_worker_aligns_invariant(
+    def test_max_workers_failed_last_file_returns_earlier_success_model(
         self, tmp_path, mock_load_prompt_template
     ):
-        """F9 regression (PR #1056 5th-round review).
+        """F11 regression (PR #1056 6th-round review).
 
-        When the highest-submission-index worker fails terminally and a
-        lower-index worker succeeded, the F5 logic (track
-        `last_summarized_idx` only on `model != "cached"`) returned the
-        earlier successful model — but flattened `attempted_models` ended
-        with the failed worker's last candidate. model_name disagreed
-        with attempted_models[-1].
+        SUPERSEDES the round-5 F9 fix: model_name was being pinned to
+        ``attempted_models[-1]`` to defend "list ends with the model
+        column", but that meant the CSV `model` column could become a
+        failed candidate name when the highest-idx file failed
+        terminally. README:802 says `model` is "The AI model used for
+        the operation" — implying success. We can't satisfy both
+        invariants once recovery is in play.
 
-        After the fix: returned model_name equals attempted_models[-1]
-        unconditionally (set from `flattened[-1]` after sort), even
-        when that tail entry is a failed candidate. Semantically odd
-        but consistent with the invariant that downstream callers
-        (e.g. auto_include returning summary_model on recovery) rely on.
+        New contract: model_name is the model from the highest-
+        submission-idx worker that ACTUALLY produced output
+        (`model != "cached"`). Terminal-failure workers contribute
+        their attempt history to `attempted_models` but do not bump
+        `model_name`. `attempted_models[-1]` may therefore diverge
+        from the `model` column when a later file failed — that's the
+        intended honest record.
         """
         import click
         import threading as _threading
@@ -2147,10 +2150,8 @@ class TestMaxWorkers:
         (tmp_path / "a.py").write_text("a-content")
         (tmp_path / "b.py").write_text("b-content")
 
-        # Use the submission counter to drive failure on the LAST-submitted
-        # file regardless of filesystem ordering. summarize_directory submits
-        # files in the order returned by its globbing helper, which is not
-        # guaranteed sorted across platforms.
+        # Force the LAST-submitted worker to fail terminally regardless
+        # of filesystem ordering, so the regression target is concrete.
         call_counter = {'n': 0, 'total': 2}
         counter_lock = _threading.Lock()
 
@@ -2178,23 +2179,24 @@ class TestMaxWorkers:
                     directory_path=str(tmp_path / "*.py"),
                     strength=0.5,
                     temperature=0.0,
-                    max_workers=1,  # Force submission-order processing so
-                                    # the "last-submitted file fails" rule
-                                    # is unambiguous. (The threaded path is
-                                    # covered by the test above.)
+                    max_workers=1,
                 )
-                tail = ctx.obj['attempted_models'][-1]
+                published = ctx.obj.get('attempted_models') or []
 
-        assert returned_model == tail, (
-            f"When the highest-idx worker fails terminally, model_name "
-            f"must still equal attempted_models[-1]. Got model_name="
-            f"{returned_model!r}, tail={tail!r}, full list="
-            f"{ctx.obj['attempted_models']}"
+        assert returned_model == 'success-0', (
+            f"When the last file fails terminally, model_name must point "
+            f"at the EARLIER successful worker ('success-0'), not at any "
+            f"failed candidate. Got {returned_model!r}; published list: "
+            f"{published}"
         )
-        assert returned_model == 'fail-B', (
-            f"Expected returned model_name to be the highest-idx worker's "
-            f"last failed candidate ('fail-B'), got {returned_model!r}"
-        )
+        # Failed attempts STILL surface in the audit log; just not in
+        # the model column.
+        for failed_cand in ('fail-A', 'fail-B'):
+            assert failed_cand in published, (
+                f"Terminal failure's attempts must still surface in "
+                f"attempted_models; missing {failed_cand!r}. "
+                f"Published: {published}"
+            )
 
     def test_single_thread_terminal_failure_publishes_attempts(
         self, tmp_path, mock_load_prompt_template
@@ -2241,6 +2243,54 @@ class TestMaxWorkers:
             f"Single-thread terminal failure must re-publish the helper's "
             f"recovered attempts to ctx.obj['attempted_models']. Expected "
             f"['fail-1', 'fail-2', 'fail-3'], got: {published}"
+        )
+
+    def test_max_workers_worker_credit_error_surfaces_attempted_models(
+        self, tmp_path, mock_load_prompt_template
+    ):
+        """F12 contract test (PR #1056 6th-round review).
+
+        Contract: when a worker's llm_invoke raises
+        InsufficientCreditsError WITH attempted_models attached
+        (the contract that llm_invoke fulfills after F12), the
+        summarize_directory helper recovers those attempts via
+        getattr and surfaces them through ctx.obj.
+
+        This test mocks llm_invoke at the summarize_directory
+        boundary so it does NOT directly catch the F12 bug
+        (which is inside llm_invoke). The actual F12 regression
+        lives in
+        test_llm_invoke_insufficient_credits_attaches_attempts_to_exception
+        — that test patches `_llm_invoke_cloud` so the real
+        llm_invoke code runs and the missing-setattr bug surfaces.
+        Keeping this test as a contract pin: if the helper later
+        regresses on consuming the attribute, this catches it.
+        """
+        import click
+        from pdd.llm_invoke import InsufficientCreditsError as _CreditErr
+
+        (tmp_path / "doomed.py").write_text("doomed")
+
+        def fake_llm_invoke(**kwargs):
+            err = _CreditErr("HTTP 402 from cloud")
+            setattr(err, "attempted_models", ['cloud:base', 'cloud:fallback'])
+            raise err
+
+        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+            with click.Context(click.Command('test-cmd')) as ctx:
+                ctx.obj = {}
+                summarize_directory(
+                    directory_path=str(tmp_path / "*.py"),
+                    strength=0.5,
+                    temperature=0.0,
+                    max_workers=2,
+                )
+                published = ctx.obj.get('attempted_models') or []
+
+        assert published == ['cloud:base', 'cloud:fallback'], (
+            f"summarize_directory helper must consume attempted_models "
+            f"from the exception attribute and surface to ctx.obj. "
+            f"Got: {published}"
         )
 
 

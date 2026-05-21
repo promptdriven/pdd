@@ -1831,6 +1831,129 @@ def test_llm_invoke_insufficient_credits_rewinds_ctx_obj(
     )
 
 
+def test_llm_invoke_model_loading_failure_rewinds_ctx_obj(
+    mock_set_llm_cache,
+):
+    """F13 regression (PR #1056 6th-round review).
+
+    The structural rewind contract: ANY raise out of llm_invoke (after
+    the snapshot) must rewind ctx.obj['attempted_models']. Round-5 fixed
+    a specific subset (terminal RuntimeError, InsufficientCreditsError)
+    by calling _rewind explicitly at those raise sites. But the model
+    loading/selection raise at pdd/llm_invoke.py:3182 didn't have its
+    own rewind call — and the cloud path records a
+    `cloud:<DEFAULT_BASE_MODEL>` placeholder BEFORE the request (so a
+    cloud-fallback-then-local-load-failure sequence leaves the
+    placeholder stranded on ctx.obj).
+
+    To actually exercise the bug we need: use_cloud=True → cloud raises
+    a RECOVERABLE error (CloudFallbackError) so we fall through to
+    local → _load_model_data raises FileNotFoundError → exception
+    propagates. Without the structural try/finally fix, the cloud
+    placeholder stays in ctx.obj.
+
+    Round-6 fixes this structurally by wrapping the llm_invoke body in
+    try/finally — every uncaught exception rewinds automatically.
+    Future bare raises added inside the body are covered by the same
+    finally without remembering to add a rewind call site.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="caller_with_model_loading_failure")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.CloudFallbackError("cloud unavailable"),
+        ):
+            with patch.object(
+                _llm_mod, "_load_model_data",
+                side_effect=FileNotFoundError("simulated missing CSV"),
+            ):
+                try:
+                    _llm_mod.llm_invoke(
+                        prompt="hi",
+                        input_json={"x": "y"},
+                        strength=0.5,
+                        temperature=0.0,
+                        use_cloud=True,  # Triggers cloud placeholder
+                                         # recording BEFORE model loading
+                                         # is attempted.
+                    )
+                except FileNotFoundError as exc:
+                    raised = exc
+
+    assert isinstance(raised, FileNotFoundError), (
+        "Model-loading failure must propagate FileNotFoundError"
+    )
+    assert ctx.obj.get('attempted_models') == prior_attempts, (
+        f"Model-loading failure after cloud fallback must rewind "
+        f"ctx.obj['attempted_models'] to its pre-call state via the "
+        f"structural try/finally. Without it, the cloud:<base_model> "
+        f"placeholder recorded before _llm_invoke_cloud was called trails "
+        f"attempted_models for any recovered caller. "
+        f"Expected {prior_attempts!r}, got "
+        f"{ctx.obj.get('attempted_models')!r}"
+    )
+
+
+def test_llm_invoke_insufficient_credits_attaches_attempts_to_exception(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F12 regression (PR #1056 6th-round review).
+
+    The terminal RuntimeError path has always done
+    ``setattr(exc, "attempted_models", list(attempted_models))`` so worker
+    threads can recover the per-call attempt history via getattr (Click
+    context is thread-local; workers can't read ctx.obj). The
+    InsufficientCreditsError re-raise was missing this — workers caught
+    the credit error and got nothing back, silently dropping the
+    fallback record.
+
+    After F12: InsufficientCreditsError carries the same attribute,
+    parity with the terminal-RuntimeError path.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+
+    cmd = click.Command(name="caller_for_credit_check")
+    ctx = click.Context(cmd, obj={})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.InsufficientCreditsError("HTTP 402"),
+        ):
+            try:
+                _llm_mod.llm_invoke(
+                    prompt="hi",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                    use_cloud=True,
+                )
+            except _llm_mod.InsufficientCreditsError as exc:
+                raised = exc
+
+    assert raised is not None
+    attached = getattr(raised, "attempted_models", None)
+    assert isinstance(attached, list) and len(attached) > 0, (
+        f"InsufficientCreditsError must carry the per-call attempts as "
+        f"an `attempted_models` attribute (parity with terminal "
+        f"RuntimeError) so worker threads can recover the history via "
+        f"getattr. Got: {attached!r}"
+    )
+    assert any('cloud' in str(m) for m in attached), (
+        f"Attached attempts should include the cloud placeholder that "
+        f"was recorded before the cloud request. Got: {attached!r}"
+    )
+
+
 def test_llm_invoke_terminal_failure_pops_ctx_obj_when_no_prior_key(
     mock_load_models, mock_set_llm_cache,
 ):
