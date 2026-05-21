@@ -3119,6 +3119,7 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Step 11: Code Cleanup (runs BEFORE CI so cleanup is CI-validated)
             if not skip_cleanup:
+                _pre_cleanup_files = set(changed_files or [])
                 total_cost, changed_files = _run_step11_code_cleanup(
                     cwd=cwd,
                     issue_number=issue_number,
@@ -3135,6 +3136,39 @@ def run_agentic_e2e_fix_orchestrator(
                     quiet=quiet,
                     reasoning_time=reasoning_time,
                 )
+                # Round-2 of Greg's review: extend trusted step-comment
+                # coverage to the post-loop Step 11 (cleanup) path. The
+                # helper does its own console output but did not post a
+                # visible per-step comment through trusted credentials.
+                # The encoding matches the in-loop scheme:
+                # `current_cycle * 10000 + 11` so resume/dedup remains
+                # consistent across cycles.
+                try:
+                    _post_cleanup_files = set(changed_files or [])
+                    _cleanup_changed = sorted(_post_cleanup_files - _pre_cleanup_files)
+                    if _cleanup_changed:
+                        _step11_summary = (
+                            "_Step 11 cleanup pass applied changes to: "
+                            f"{', '.join(_cleanup_changed)}._"
+                        )
+                    else:
+                        _step11_summary = (
+                            "_Step 11 cleanup pass completed; no additional "
+                            "files were modified (cleanup found nothing to do "
+                            "or reverted itself when verification failed)._"
+                        )
+                    _step11_desc = STEP_DESCRIPTIONS.get(11, "Code cleanup")
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=current_cycle * 10000 + 11,
+                        body=f"## Step 11/11: {_step11_desc}\n\n{_step11_summary}",
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed (step 11): {_exc}[/yellow]")
 
             if skip_ci:
                 if not quiet:
@@ -3160,7 +3194,30 @@ def run_agentic_e2e_fix_orchestrator(
             )
             total_cost += ci_cost
             changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
+            # Round-2 of Greg's review: extend trusted step-comment coverage
+            # past the linear `range(1, 10)` loop. Step 10 (CI validation)
+            # runs outside the loop and must also post a visible per-step
+            # comment via trusted PDD credentials, keyed by
+            # `current_cycle * 10000 + 10` so the composite-key scheme matches
+            # the in-loop encoding and dedup survives resume/retry.
             if ci_success:
+                try:
+                    _step10_desc = STEP_DESCRIPTIONS.get(10, "CI validation")
+                    _step10_body = (
+                        f"## Step 10/11: {_step10_desc}\n\n"
+                        f"_Step 10 completed; CI validation finished: {ci_message}_"
+                    )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=current_cycle * 10000 + 10,
+                        body=_step10_body,
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed (step 10): {_exc}[/yellow]")
                 if ci_message not in {
                     "No open PR found for current branch; skipping CI validation",
                     "No CI checks detected",

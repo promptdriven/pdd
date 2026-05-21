@@ -2002,25 +2002,33 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
-            try:
-                s11_report = extract_step_report(s11_output)
-                if not s11_report:
-                    s11_report = (
-                        "_Step 11 completed; no `<step_report>` block returned "
-                        "by agent. Raw output retained in workflow state._"
+            # Round-2 of Greg's review: gate the trusted Step 11 post on
+            # s11_success. A failed task (e.g. provider exhaustion) still
+            # returns step output, and posting a "completed" fallback would
+            # both mislead the user and mark this iteration's composite key
+            # (review_iteration*100 + 11) as already-posted in
+            # state["step_comments"]. On a later resume/retry the real
+            # successful Step 11 report would be silently deduped away.
+            if s11_success:
+                try:
+                    s11_report = extract_step_report(s11_output)
+                    if not s11_report:
+                        s11_report = (
+                            "_Step 11 completed; no `<step_report>` block returned "
+                            "by agent. Raw output retained in workflow state._"
+                        )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=review_iteration * 100 + 11,
+                        body=f"## Step 11/13: Review (iteration {review_iteration})\n\n{s11_report}",
+                        posted_steps=step_comments_set,
+                        cwd=current_work_dir,
                     )
-                post_step_comment_once(
-                    repo_owner=repo_owner,
-                    repo_name=repo_name,
-                    issue_number=issue_number,
-                    step_num=review_iteration * 100 + 11,
-                    body=f"## Step 11/13: Review (iteration {review_iteration})\n\n{s11_report}",
-                    posted_steps=step_comments_set,
-                    cwd=current_work_dir,
-                )
-                state["step_comments"] = sorted(step_comments_set)
-            except Exception as exc:  # pylint: disable=broad-except
-                console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+                    state["step_comments"] = sorted(step_comments_set)
+                except Exception as exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
             if _review_loop_no_issues(s11_output):
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
@@ -2040,25 +2048,30 @@ def run_agentic_change_orchestrator(
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
             previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
             state["previous_fixes"] = previous_fixes
-            try:
-                s12_report = extract_step_report(s12_output)
-                if not s12_report:
-                    s12_report = (
-                        "_Step 12 completed; no `<step_report>` block returned "
-                        "by agent. Raw output retained in workflow state._"
+            # Round-2 of Greg's review: gate the trusted Step 12 post on
+            # s12_success. Same reasoning as Step 11 above — a failed fix
+            # task must not burn the composite key, otherwise a later
+            # successful retry of the same iteration would be deduped.
+            if s12_success:
+                try:
+                    s12_report = extract_step_report(s12_output)
+                    if not s12_report:
+                        s12_report = (
+                            "_Step 12 completed; no `<step_report>` block returned "
+                            "by agent. Raw output retained in workflow state._"
+                        )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=review_iteration * 100 + 12,
+                        body=f"## Step 12/13: Fix (iteration {review_iteration})\n\n{s12_report}",
+                        posted_steps=step_comments_set,
+                        cwd=current_work_dir,
                     )
-                post_step_comment_once(
-                    repo_owner=repo_owner,
-                    repo_name=repo_name,
-                    issue_number=issue_number,
-                    step_num=review_iteration * 100 + 12,
-                    body=f"## Step 12/13: Fix (iteration {review_iteration})\n\n{s12_report}",
-                    posted_steps=step_comments_set,
-                    cwd=current_work_dir,
-                )
-                state["step_comments"] = sorted(step_comments_set)
-            except Exception as exc:  # pylint: disable=broad-except
-                console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+                    state["step_comments"] = sorted(step_comments_set)
+                except Exception as exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
             save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
         if review_iteration >= MAX_REVIEW_ITERATIONS:

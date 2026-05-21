@@ -9789,6 +9789,119 @@ class TestTrustedStepCommentPosting:
             # The run completes (success may be False due to NOT_A_BUG), but
             # the helper exception must not propagate.
             run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+    def test_step10_ci_path_posts_trusted_comment(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Regression for Greg's PR review (round 2).
+
+        Step 10 (CI validation) runs OUTSIDE the linear `for step_num in
+        range(1, 10)` loop, so it must post its trusted step-comment
+        separately. The composite key follows the same encoding as the
+        in-loop steps: ``current_cycle * 10000 + 10`` (so cycle 1 step 10
+        keys to 10010).
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"<step_report>{label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_cleanup"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.run_ci_validation_loop",
+            return_value=(True, "Required CI checks passed", 0.0),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._find_open_pr_number",
+            return_value=77,
+            create=True,
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._fetch_pr_head_sha",
+            return_value="aaaaaaaa",
+            create=True,
+        ), patch(
+            "pdd.agentic_checkup.run_agentic_checkup",
+            return_value=(True, "checkup ok", 0.0, "fake-model"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_nums = [c.kwargs.get("step_num") for c in mock_post_once.call_args_list]
+        assert 10010 in step_nums, (
+            "Step 10 CI-validation trusted post (cycle 1 * 10000 + 10) was "
+            f"not made. Saw keys: {step_nums}"
+        )
+        # Confirm the body uses the orchestrator-format header so we know it
+        # came through the trusted path and not from a stray legacy site.
+        assert any(
+            c.kwargs.get("step_num") == 10010
+            and c.kwargs.get("body", "").startswith("## Step 10/11:")
+            for c in mock_post_once.call_args_list
+        ), "Step 10 trusted post is missing the '## Step 10/11:' header"
+
+    def test_step11_cleanup_path_posts_trusted_comment(
+        self, e2e_fix_mock_dependencies, e2e_fix_default_args
+    ):
+        """Regression for Greg's PR review (round 2).
+
+        Step 11 (code cleanup) is a post-loop helper. Its trusted
+        step-comment must be posted from the call site once the helper
+        returns, keyed by ``current_cycle * 10000 + 11`` (so cycle 1
+        keys to 10011), and must use the ``## Step 11/11:`` header so
+        downstream tooling can recognize it as orchestrator-owned.
+        """
+        mock_run, _, _ = e2e_fix_mock_dependencies
+
+        def side_effect(*args, **kwargs):
+            label = kwargs.get("label", "")
+            if "step9" in label:
+                return (True, "ALL_TESTS_PASS", 0.1, "gpt-4")
+            return (True, f"<step_report>{label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect
+        e2e_fix_default_args["issue_url"] = "https://github.com/owner/repo/issues/1"
+        e2e_fix_default_args["skip_ci"] = True
+
+        with patch(
+            "pdd.agentic_e2e_fix_orchestrator._verify_tests_independently",
+            return_value=(True, "1 passed"),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._extract_test_files",
+            return_value=["tests/test_foo.py"],
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator._run_step11_code_cleanup",
+            return_value=(0.0, ["module.py"]),
+        ), patch(
+            "pdd.agentic_e2e_fix_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_e2e_fix_orchestrator(**e2e_fix_default_args)
+
+        step_nums = [c.kwargs.get("step_num") for c in mock_post_once.call_args_list]
+        assert 10011 in step_nums, (
+            "Step 11 cleanup trusted post (cycle 1 * 10000 + 11) was not "
+            f"made. Saw keys: {step_nums}"
+        )
+        assert any(
+            c.kwargs.get("step_num") == 10011
+            and c.kwargs.get("body", "").startswith("## Step 11/11:")
+            for c in mock_post_once.call_args_list
+        ), "Step 11 trusted post is missing the '## Step 11/11:' header"
+
+
 class TestFinalCheckupForwardsCwd:
     def test_run_final_checkup_passes_cwd_to_run_agentic_checkup(self, tmp_path):
         from pdd.agentic_e2e_fix_orchestrator import _run_final_checkup_on_pr

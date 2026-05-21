@@ -5460,3 +5460,147 @@ class TestTrustedStepCommentPosting:
             )
 
         assert success is True
+
+    def test_step11_failure_does_not_post_or_mark_iter_key(
+        self, mock_dependencies, temp_cwd
+    ):
+        """Regression for Greg's PR review (round 2).
+
+        Step 11 (review) inside the iterated review-loop must NOT post a
+        trusted step-comment nor add its composite key to
+        ``state["step_comments"]`` when ``s11_success`` is False. Otherwise
+        a later successful retry of the same iteration's Step 11 would be
+        deduped against the failed run's fallback "Step 11 completed" key
+        and the user would see no real Step 11 report.
+        """
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                # Step 11 FAILS — provider exhausted, raw text still returned.
+                # The output deliberately includes "No Issues Found" so the
+                # legacy review-loop short-circuits and we don't need to mock
+                # downstream steps. Even with that sentinel, the trusted post
+                # must be skipped because s11_success is False.
+                return (False, "Provider failure; No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        # Composite key for review_iteration=1, step=11 is 111. It MUST NOT
+        # appear in any post_step_comment_once call because Step 11 failed.
+        step_nums = [
+            c.kwargs.get("step_num")
+            for c in mock_post_once.call_args_list
+        ]
+        assert 111 not in step_nums, (
+            "Failed Step 11 should not have posted a fallback comment "
+            f"or burned composite key 111. Saw: {step_nums}"
+        )
+
+    def test_step12_failure_does_not_post_or_mark_iter_key(
+        self, mock_dependencies, temp_cwd
+    ):
+        """Same regression as above but for Step 12 (fix).
+
+        When ``s12_success`` is False the fix task didn't actually complete,
+        so the trusted Step 12 post must be skipped and key
+        ``review_iteration*100 + 12`` must remain unposted.
+        """
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                # Step 11 succeeds but reports issues, driving the loop into
+                # Step 12 where the failure happens.
+                return (
+                    True,
+                    "<step_report>step 11 found issues</step_report>\nIssues Found",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step12"):
+                return (False, "Provider failure during fix", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        step_nums = [
+            c.kwargs.get("step_num")
+            for c in mock_post_once.call_args_list
+        ]
+        assert 112 not in step_nums, (
+            "Failed Step 12 should not have posted a fallback comment "
+            f"or burned composite key 112. Saw: {step_nums}"
+        )
