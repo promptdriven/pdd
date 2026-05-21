@@ -425,6 +425,49 @@ class TestCycleScheduling:
         # (b). m must therefore be reported as blocked.
         assert runner._get_blocked_modules() == ["m"]
 
+    def test_cycle_member_waits_for_peers_external_dep(self):
+        """A cycle member must wait for any external dep reached through
+        another cycle peer. Graph: a->b, b->[a,x], x->[]. SCC {a,b} effectively
+        depends on x (via b), so neither cycle member is ready until x is.
+        """
+        runner = self._make_runner(
+            ["a", "b", "x"],
+            {"a": ["b"], "b": ["a", "x"], "x": []},
+        )
+        ready = runner._get_ready_modules()
+        # Only x has no deps and is not in a cycle; cycle members must wait
+        # for x to succeed before either can start.
+        assert ready == ["x"], (
+            f"cycle members must not be ready while x is pending; got {ready}"
+        )
+        runner.module_states["x"].status = "success"
+        ready = runner._get_ready_modules()
+        # SCC {a,b} is now unblocked; pick one (basenames order -> a) and
+        # serialize the other.
+        assert ready == ["a"], f"expected ['a'], got {ready}"
+        runner.module_states["a"].status = "success"
+        assert runner._get_ready_modules() == ["b"]
+
+    def test_cycle_member_blocked_by_peers_external_failed_dep(self):
+        """If a cycle peer's external dep failed, no cycle member may run.
+        Graph: a->b, b->[a,x], x failed. {a,b} is blocked via b->x; neither
+        cycle member must be reported as ready.
+        """
+        runner = self._make_runner(
+            ["a", "b", "x"],
+            {"a": ["b"], "b": ["a", "x"], "x": []},
+        )
+        runner.module_states["x"].status = "failed"
+        ready = runner._get_ready_modules()
+        assert ready == [], (
+            f"cycle members must be blocked when a peer's external dep is "
+            f"failed; got ready={ready}"
+        )
+        blocked = runner._get_blocked_modules()
+        assert sorted(blocked) == ["a", "b"], (
+            f"both cycle members must be classified blocked; got {blocked}"
+        )
+
     @patch.object(AsyncSyncRunner, "_sync_one_module")
     @patch.object(AsyncSyncRunner, "_update_github_comment")
     def test_run_completes_with_cycle(self, mock_comment, mock_sync):

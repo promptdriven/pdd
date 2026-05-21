@@ -1017,12 +1017,19 @@ class AsyncSyncRunner:
     def _get_ready_modules(self) -> List[str]:
         """Pending modules whose deps are all satisfied.
 
-        For modules participating in a multi-node SCC (a true dependency
-        cycle in the target set), intra-SCC dep edges are treated as
-        **soft**: they don't block readiness, only a failed peer
-        does. Execution within a single SCC is serialized — at most one
-        member of a multi-node SCC may be running or scheduled per pass.
-        Cross-SCC dep edges remain hard ordering constraints.
+        For modules participating in a cyclic SCC (size > 1, or 1-node with
+        a self-loop), intra-SCC dep edges are treated as **soft** — only a
+        failed peer blocks readiness — and the union of cross-SCC deps over
+        ALL members of the SCC must be satisfied before any member can
+        start. Otherwise an SCC could begin work while a transitive
+        dependency reached through a cycle peer was still pending or
+        failed, weakening dependency ordering. Cycle execution is
+        serialized: at most one member of a cyclic SCC may be running or
+        scheduled per pass.
+
+        Cross-SCC dep edges remain hard ordering constraints, and a consumer
+        outside the SCC must wait until every member of the dep's SCC has
+        succeeded.
         """
         ready: List[str] = []
         with self.lock:
@@ -1047,41 +1054,49 @@ class AsyncSyncRunner:
                     if own in running_cyclic_sccs or own in picked_cyclic_sccs:
                         continue
 
-                deps = self.dep_graph.get(basename, [])
+                # For a cycle member, the SCC's effective dependencies are
+                # the union of every member's cross-SCC deps; intra-SCC
+                # edges are soft. For non-cycle members, just walk the
+                # module's own deps.
+                if in_cycle:
+                    members_to_walk = list(own)
+                else:
+                    members_to_walk = [basename]
+
                 deps_ok = True
-                for d in deps:
-                    dep_state = self.module_states.get(d)
-                    if dep_state is None:
-                        # Out-of-target deps assumed already synced
-                        continue
-                    # Intra-SCC edges (including a self-loop) are soft when the
-                    # SCC is cyclic; only a failed peer blocks readiness.
-                    intra_scc = in_cycle and d in own
-                    if intra_scc:
-                        if dep_state.status == "failed":
-                            deps_ok = False
-                            break
-                        continue
-                    # Cross-SCC edge: depend on the WHOLE upstream SCC.
-                    # A consumer outside an SCC must wait until every member
-                    # of the dep's SCC has succeeded, otherwise we'd schedule
-                    # the consumer before a pending cycle peer is finished
-                    # (and a failed peer would silently advance the consumer).
-                    dep_scc = self._scc_of.get(d)
-                    if dep_scc is None or dep_scc is own:
-                        if dep_state.status != "success":
-                            deps_ok = False
-                            break
-                    else:
-                        all_success = True
-                        for peer in dep_scc:
-                            peer_state = self.module_states.get(peer)
-                            if peer_state is None or peer_state.status != "success":
-                                all_success = False
+                for member in members_to_walk:
+                    if not deps_ok:
+                        break
+                    for d in self.dep_graph.get(member, []):
+                        dep_state = self.module_states.get(d)
+                        if dep_state is None:
+                            # Out-of-target deps assumed already synced
+                            continue
+                        # Intra-SCC edges (including a self-loop) are soft
+                        # when the SCC is cyclic; only a failed peer blocks
+                        # readiness.
+                        intra_scc = in_cycle and d in own
+                        if intra_scc:
+                            if dep_state.status == "failed":
+                                deps_ok = False
                                 break
-                        if not all_success:
-                            deps_ok = False
-                            break
+                            continue
+                        # Cross-SCC edge: depend on the WHOLE upstream SCC.
+                        dep_scc = self._scc_of.get(d)
+                        if dep_scc is None or dep_scc is own:
+                            if dep_state.status != "success":
+                                deps_ok = False
+                                break
+                        else:
+                            all_success = True
+                            for peer in dep_scc:
+                                peer_state = self.module_states.get(peer)
+                                if peer_state is None or peer_state.status != "success":
+                                    all_success = False
+                                    break
+                            if not all_success:
+                                deps_ok = False
+                                break
                 if deps_ok:
                     ready.append(basename)
                     if in_cycle:
