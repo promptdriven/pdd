@@ -47,6 +47,13 @@ from ..core.errors import handle_error
     help="Additional seconds to add to each step's timeout.",
 )
 @click.option(
+    "--start-step",
+    "start_step",
+    type=click.Choice(["1", "2", "3", "4", "5", "6.1", "6.2", "6.3", "7", "8"]),
+    default=None,
+    help="Recovery override: start the legacy checkup workflow from this step.",
+)
+@click.option(
     "--no-github-state",
     is_flag=True,
     default=False,
@@ -229,6 +236,7 @@ def checkup(
     strict: bool,
     no_fix: bool,
     timeout_adder: float,
+    start_step: Optional[str],
     no_github_state: bool,
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
@@ -282,6 +290,11 @@ def checkup(
         raise click.BadParameter(
             "--review-loop requires --pr and --issue.",
             param_hint="'--review-loop'",
+        )
+    if review_loop and start_step is not None:
+        raise click.BadParameter(
+            "--start-step applies to the legacy checkup workflow, not --review-loop.",
+            param_hint="'--start-step'",
         )
     if review_only and not review_loop:
         raise click.BadParameter(
@@ -352,6 +365,11 @@ def checkup(
 
     quiet = ctx.obj.get("quiet", False)
     verbose = ctx.obj.get("verbose", False)
+    start_step_override = None
+    if start_step is not None:
+        start_step_override = float(start_step)
+        if start_step_override.is_integer():
+            start_step_override = int(start_step_override)
 
     try:
         success, message, cost, model = run_agentic_checkup(
@@ -363,6 +381,7 @@ def checkup(
             use_github_state=not no_github_state,
             reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             pr_url=pr_url,
+            start_step_override=start_step_override,
             review_loop=review_loop,
             review_only=review_only,
             reviewers=reviewers,

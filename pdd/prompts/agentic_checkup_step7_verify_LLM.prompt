@@ -20,6 +20,10 @@ If issues remain after this verification, the workflow may loop back to steps 3-
 - PR URL (PR mode only): {pr_url}
 - PR Number (PR mode only): {pr_number}
 - PR Repo (PR mode only): {pr_owner}/{pr_repo}
+- PR changed files (PR mode only):
+<pr_changed_files>
+{pr_changed_files}
+</pr_changed_files>
 
 % User Request
 <issue_content>
@@ -69,9 +73,11 @@ If issues remain after this verification, the workflow may loop back to steps 3-
    - Use the same build commands from Step 3
    - Capture the full output
 
-2. **Re-run ALL tests** — unit, integration, and e2e tests (both existing and any new regression/e2e tests from Steps 6a-6c)
-   - Use the same test command discovered in Step 5
-   - Capture the full output
+2. **Re-run tests appropriate for the mode**:
+   - In issue mode, re-run the full discovered suite: unit, integration, and e2e tests, including any new regression/e2e tests from Steps 6a-6c.
+   - In PR mode, re-run the PR-scoped tests tied to `<pr_changed_files>`, plus any regression/e2e tests created in Steps 6a-6c, and any targeted build or contract tests needed to verify issue alignment.
+   - In PR mode, run the full suite only if it is expected to fit within this step's budget. If it is too large, report the exact full-suite command as not run due to time budget and do not claim full-suite coverage.
+   - Capture the full output for every command you do run.
 
 3. **Compare results** with previous steps:
    - Which previously failing tests now pass?
@@ -113,7 +119,7 @@ The JSON report MUST be the LAST thing you output, on its own, wrapped in a mark
 In **issue mode**, omit `issue_aligned` (or set it to `null`) — it only applies when verifying an existing PR.
 In **PR mode**, `issue_aligned` is REQUIRED.
 
-Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode) `issue_aligned` is true AND no critical findings remain in the PR's diff.
+Set `"success": true` if (issue mode) all critical issues are fixed, or (PR mode) `issue_aligned` is true AND no critical findings remain in the PR's diff. In PR mode, do not set `"success": true` solely from targeted tests if a required full-suite command was skipped or timed out; either cite an authoritative full-suite/CI result or set `"success": false` with a partial-verification finding.
 Set `"success": false` otherwise.
 
 6. **Prepare the final summary** — route by mode:
@@ -165,8 +171,9 @@ Your markdown summary should follow this format:
 
 - The JSON report MUST be the last `{...}` object in your output — this is parsed programmatically by walking the text from start to end and taking the LAST successfully-parsed JSON object. Intermediate reasoning blocks (fenced or unfenced) that contain `{...}` MUST NOT appear after the final verdict, or the parser will mistake them for the verdict.
 - Always re-run tests even in --no-fix mode to confirm the baseline
+- In PR mode, targeted tests are acceptable for time-bounded evidence, but the final report must explicitly label them as targeted and must not imply that the full suite passed unless it actually ran or an authoritative CI/full-suite result is available
 - Report ALL issues found across all steps, whether fixed or not
 - In issue mode, post your findings as a GitHub comment before outputting the JSON
 - In PR mode, do NOT post GitHub comments from Step 7; output the markdown summary and JSON only
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"
-- **Exit signal**: If ALL tests pass (unit + integration + e2e) AND the build succeeds with no remaining issues, you MUST include the exact text "All Issues Fixed" in your output. If ANY test fails or build issues remain, do NOT output "All Issues Fixed" — instead clearly list remaining issues so the next iteration can fix them
+- **Exit signal**: If the required verification for the active mode passes AND the build succeeds with no remaining issues, you MUST include the exact text "All Issues Fixed" in your output. In issue mode, required verification means ALL tests pass (unit + integration + e2e). In PR mode, required verification means PR-scoped tests plus any required regression/e2e/contract tests pass, and either the full suite/CI is clean or the report truthfully states that verification was targeted only. If any required test fails, build issues remain, or full-suite evidence is required but missing, do NOT output "All Issues Fixed" — instead clearly list remaining issues so the next iteration can fix them

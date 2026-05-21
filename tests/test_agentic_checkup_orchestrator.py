@@ -15,7 +15,10 @@ from pdd.agentic_checkup_orchestrator import (
     STEP_ORDER,
     TOTAL_STEPS,
     _copy_uncommitted_changes,
+    _format_pr_changed_files_for_prompt,
+    _format_step_abort_message,
     _get_state_dir,
+    _is_step_timeout_failure,
     _next_step,
     _parse_changed_files,
     run_agentic_checkup_orchestrator,
@@ -216,10 +219,10 @@ class TestNoFixMode:
 
         mock_worktree.assert_not_called()
 
-    def test_provider_failure_on_step_5_aborts_no_fix_before_step_7(
+    def test_timeout_on_step_5_aborts_no_fix_before_step_7_with_timeout_message(
         self, mock_dependencies, default_args, tmp_path
     ):
-        """A provider failure in step 5 should stop --no-fix before step 7."""
+        """A Step 5 agent timeout should not be reported as provider outage."""
         mock_run, _, _, _ = mock_dependencies
         default_args["no_fix"] = True
         default_args["cwd"] = tmp_path
@@ -245,7 +248,8 @@ class TestNoFixMode:
             success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
 
         assert success is False
-        assert "agent providers unavailable" in msg
+        assert "timed out" in msg
+        assert "agent providers unavailable" not in msg
         assert "Step 5" in msg
         assert mock_run.call_count == 5
 
@@ -258,6 +262,26 @@ class TestNoFixMode:
             "FAILED: All agent providers failed: openai: Timeout expired"
         )
         assert "6_1" not in final_state["step_outputs"]
+
+    def test_start_step_7_runs_verify_without_rerunning_step_5(
+        self, mock_dependencies, default_args
+    ):
+        """Recovery override can jump past a stuck test step to Step 7."""
+        mock_run, mock_load, _, _ = mock_dependencies
+        default_args["no_fix"] = True
+        default_args["start_step_override"] = 7
+        mock_load.return_value = (
+            "step5={step5_output}\n"
+            "step6={step6_1_output}\n"
+            "pr_files={pr_changed_files}"
+        )
+
+        success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+            **default_args
+        )
+
+        assert success is True
+        assert [c.kwargs["label"] for c in mock_run.call_args_list] == ["step7"]
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +424,116 @@ class TestChangedFilesTracking:
         )
         result = _parse_changed_files(output)
         assert result == ["src/new.py", "src/old.py"]
+
+    def test_timeout_detects_runner_timeout_messages(self):
+        """Timeout failures should be classified separately from provider outages."""
+        assert _is_step_timeout_failure(
+            "All agent providers failed: openai: Timeout expired"
+        )
+        assert _is_step_timeout_failure("subprocess.TimeoutExpired after 600s")
+        assert _is_step_timeout_failure("Agent timed out while running tests")
+
+    def test_timeout_abort_message_is_not_provider_outage(self):
+        """A timeout wrapped in provider failure text should get timeout wording."""
+        msg = _format_step_abort_message(
+            5,
+            "All agent providers failed: openai: Timeout expired",
+        )
+
+        assert "timed out" in msg
+        assert "agent providers unavailable" not in msg
+
+    def test_format_pr_changed_files_uses_base_ref_diff(self, tmp_path):
+        """PR-mode prompt context should list merge-base changed files."""
+        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+        )
+        (tmp_path / "app.py").write_text("print('base')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "app.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "branch", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "app.py").write_text("print('feature')\n", encoding="utf-8")
+        (tmp_path / "tests").mkdir()
+        (tmp_path / "tests" / "test_app.py").write_text(
+            "def test_app():\n    assert True\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "base"},
+        )
+
+        assert "Base: base" in result
+        assert "- M: app.py" in result
+        assert "- A: tests/test_app.py" in result
+
+    def test_pr_mode_context_includes_changed_files(self, tmp_path):
+        """Changed-file summary should be passed to PR-mode step prompts."""
+        captured_contexts = []
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def capture_step(step_num, _name, context, **_kw):  # noqa: ANN001
+            captured_contexts.append(dict(context))
+            output = ALL_ISSUES_FIXED if step_num == 7 else f"out-{step_num}"
+            return (True, output, 0.0, "fake")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._format_pr_changed_files_for_prompt",
+            return_value="Base: main\n- M: pdd/example.py",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=capture_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"):
+            success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
+                issue_url="https://github.com/o/r/issues/99",
+                issue_content="stub",
+                repo_owner="o",
+                repo_name="r",
+                issue_number=99,
+                issue_title="stub",
+                architecture_json="{}",
+                pddrc_content="",
+                cwd=tmp_path,
+                verbose=False,
+                quiet=True,
+                no_fix=True,
+                timeout_adder=0.0,
+                use_github_state=False,
+                pr_url="https://github.com/o/r/pull/200",
+                pr_owner="o",
+                pr_repo="r",
+                pr_number=200,
+            )
+
+        assert success is True
+        assert captured_contexts
+        assert captured_contexts[0]["pr_changed_files"] == (
+            "Base: main\n- M: pdd/example.py"
+        )
 
     def test_changed_files_passed_to_step_8(self, mock_dependencies, default_args):
         """Changed files from step 6 should be available to step 8 as files_to_stage."""

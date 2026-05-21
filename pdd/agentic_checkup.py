@@ -11,7 +11,7 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional, Tuple, Union
 
 from rich.console import Console
 
@@ -330,6 +330,7 @@ def run_agentic_checkup(
     blocking_severities: Optional[str] = None,
     clean_reviewer_states: Optional[str] = None,
     fallback_reviewer_on_failure: bool = False,
+    start_step_override: Optional[Union[int, float]] = None,
     cwd: Optional[Path] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
@@ -355,6 +356,9 @@ def run_agentic_checkup(
             primary fixer cannot address the reviewer's findings (e.g. a
             subscription-tier credential is exhausted). Must differ from
             both the primary fixer and the active reviewer.
+        start_step_override: Optional recovery override for the legacy
+            orchestrator resume point. Used to start from a later step when
+            cached state already contains earlier step outputs.
 
     Returns:
         Tuple of (success, message, total_cost, model_used).
@@ -503,6 +507,7 @@ def run_agentic_checkup(
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_number=pr_number,
+            start_step_override=start_step_override,
         )
     except Exception as exc:
         msg = f"Orchestrator failed: {exc}"

@@ -8,6 +8,7 @@
   - `target` arg (positional, optional — required for issue mode)
   - `--no-fix` flag
   - `--timeout-adder` (float, default `0.0`)
+  - `--start-step` recovery override. Accept only `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, or `8`; pass the parsed int/float as `start_step_override` to the legacy `run_agentic_checkup` path.
   - `--no-github-state` flag
   - `--validate-arch-includes` flag (local mode — cross-validates `architecture.json` against module prompt `<include>` tags; mutually exclusive with `target` and `--pr`/`--issue`)
   - `--project-root` (path, used with `--validate-arch-includes`)
@@ -33,6 +34,7 @@
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.
+  - If `--start-step` is combined with `--review-loop`: reject it; the override only applies to the legacy checkup orchestrator.
   - If `--review-loop` is set: require PR mode (`--pr` and `--issue`); reject `--no-fix` unless `--review-only` is also set; validate max-review values are positive (`--max-review-rounds >= 1`, cost/minutes > 0).
   - If `--pr` or `--issue` is set: BOTH must be present; `target` must be `None`; validate `--pr` via `_parse_pr_url(pr_url)` (mention "GitHub pull-request URL" in error); validate `--issue` via `_is_github_issue_url(issue_url_opt)` (mention "GitHub issue URL" in error); use `issue_url_opt` as the effective issue URL.
   - Otherwise (default issue mode): require `target`; validate via `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and message must mention "GitHub issue URL").

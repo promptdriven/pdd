@@ -10,6 +10,12 @@ You are working on step 5 of 8 in an agentic checkup workflow. Previous steps di
 - Repository: {repo_owner}/{repo_name}
 - Issue Number: {issue_number}
 - Project Root: {project_root}
+- PR-verification mode: {pr_mode}
+- PR URL (PR mode only): {pr_url}
+- PR changed files (PR mode only):
+<pr_changed_files>
+{pr_changed_files}
+</pr_changed_files>
 
 % User Request
 <issue_content>
@@ -47,7 +53,10 @@ If this is iteration 2 or later, previous fixes have already been applied — ch
    - Cargo.toml (Rust)
    - go test (Go)
 
-2. **Run ALL tests** — unit tests, integration tests, and end-to-end tests — and capture output
+2. **Run the right tests for this mode** and capture output:
+   - If `PR-verification mode` is `false`, run the full discovered test suite: unit tests, integration tests, and end-to-end tests.
+   - If `PR-verification mode` is `true`, first run the mandatory PR-scoped tests tied to `<pr_changed_files>`: direct tests for changed modules, adjacent tests, and tests that mention the changed module names. Expand beyond that only when project metadata or previous step output shows broader risk.
+   - In PR mode, run the full suite only if it is expected to fit within this step's budget. If it is too large, report the exact full-suite command as **not run due to time budget** and do not claim full-suite coverage.
 
 3. **Collect and categorize failures**:
    - Import errors (missing modules or packages)
@@ -98,6 +107,6 @@ Your comment should follow this format:
 
 - Discover the correct test command from the project — do NOT assume pytest or jest
 - Run the actual tests and capture real output
-- If tests take too long, use a timeout and report partial results
+- If tests take too long, use a timeout and report partial results; never present targeted-only PR-mode tests as a full-suite pass
 - Always post your findings as a GitHub comment before completing
 - IMPORTANT: Use the EXACT iteration number ({fix_verify_iteration}) in your comment header — do NOT hardcode "Iteration 1"

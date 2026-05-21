@@ -709,6 +709,106 @@ def _parse_changed_files(output: str) -> List[str]:
     return files
 
 
+def _is_provider_failure(output: str) -> bool:
+    """Return true when the agent runner exhausted every provider."""
+    return "All agent providers failed" in output
+
+
+def _is_step_timeout_failure(output: str) -> bool:
+    """Return true when a step failed because the agent process timed out."""
+    return bool(
+        re.search(
+            r"(Timeout expired|TimeoutExpired|timed out)",
+            output or "",
+            flags=re.IGNORECASE,
+        )
+    )
+
+
+def _format_step_abort_message(step_num: Union[int, float], output: str) -> str:
+    """Format a no-fix hard-stop message with the real failure class."""
+    if _is_step_timeout_failure(output):
+        return (
+            f"Aborting after Step {step_num}: agent execution timed out "
+            "before the step could complete"
+        )
+    if _is_provider_failure(output):
+        return f"Aborting after Step {step_num}: agent providers unavailable"
+    return f"Aborting after Step {step_num}: step failed"
+
+
+def _format_pr_changed_files_for_prompt(
+    worktree: Path,
+    pr_metadata: Optional[Dict[str, str]] = None,
+) -> str:
+    """Return a concise merge-base changed-file summary for PR-mode prompts."""
+    base_candidates: List[str] = []
+    if pr_metadata:
+        base_ref = str(pr_metadata.get("base_ref") or "").strip()
+        if base_ref:
+            base_candidates.extend([f"origin/{base_ref}", base_ref])
+    base_candidates.extend([
+        "origin/main",
+        "origin/master",
+        "main",
+        "master",
+        "HEAD~1",
+    ])
+
+    seen_bases: Set[str] = set()
+    for base in base_candidates:
+        if not base or base in seen_bases:
+            continue
+        seen_bases.add(base)
+        try:
+            verify = subprocess.run(
+                ["git", "rev-parse", "--verify", base],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if verify.returncode != 0:
+            continue
+
+        try:
+            diff = subprocess.run(
+                [
+                    "git",
+                    "diff",
+                    "--name-status",
+                    "--find-renames",
+                    f"{base}...HEAD",
+                ],
+                cwd=worktree,
+                capture_output=True,
+                text=True,
+            )
+        except (OSError, subprocess.SubprocessError):
+            continue
+        if diff.returncode != 0:
+            continue
+
+        lines: List[str] = []
+        for raw_line in diff.stdout.splitlines():
+            parts = [part.strip() for part in raw_line.split("\t") if part.strip()]
+            if len(parts) < 2:
+                continue
+            status = parts[0]
+            if status.startswith("R") and len(parts) >= 3:
+                path = f"{parts[1]} -> {parts[2]}"
+            else:
+                path = parts[-1]
+            lines.append(f"- {status}: {path}")
+
+        if lines:
+            return "Base: " + base + "\n" + "\n".join(lines)
+        return f"Base: {base}\nNo changed files found against this base."
+
+    return "PR changed files unavailable: no local base ref could be resolved."
+
+
 # ---------------------------------------------------------------------------
 # Internal: run a single step
 # ---------------------------------------------------------------------------
@@ -790,6 +890,7 @@ def run_agentic_checkup_orchestrator(
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
     pr_number: Optional[int] = None,
+    start_step_override: Optional[Union[int, float]] = None,
 ) -> Tuple[bool, str, float, str]:
     """Orchestrate the 8-step agentic checkup workflow.
 
@@ -804,7 +905,10 @@ def run_agentic_checkup_orchestrator(
     """
     pr_mode = pr_url is not None and pr_number is not None
     if not quiet:
-        console.print(f"[bold]Running checkup for issue #{issue_number}: \"{issue_title}\"[/bold]")
+        console.print(
+            f"[bold]Running checkup for issue #{issue_number}: "
+            f"\"{issue_title}\"[/bold]"
+        )
 
     # Context accumulation — grows across steps.
     context: Dict[str, str] = {
@@ -826,7 +930,17 @@ def run_agentic_checkup_orchestrator(
         "pr_repo": pr_repo or "",
         "pr_number": str(pr_number) if pr_number is not None else "",
         "pr_push_output": "",
+        "pr_changed_files": "",
+        "manual_start_step": str(start_step_override or ""),
+        "worktree_path": "",
+        "files_to_stage": "",
+        "fix_verify_iteration": "1",
+        "max_fix_verify_iterations": str(MAX_FIX_VERIFY_ITERATIONS),
+        "previous_fixes": "",
     }
+    for step in STEP_ORDER:
+        step_key = str(step).replace(".", "_")
+        context[f"step{step_key}_output"] = ""
 
     total_cost = 0.0
     last_model_used = "unknown"
@@ -866,6 +980,7 @@ def run_agentic_checkup_orchestrator(
     # different (older) head. Empty/None when metadata is unavailable —
     # callers degrade gracefully rather than block.
     current_pr_head_sha: str = ""
+    metadata_for_guard: Dict[str, str] = {}
     if pr_mode:
         assert pr_owner is not None and pr_repo is not None and pr_number is not None
         try:
@@ -1022,6 +1137,10 @@ def run_agentic_checkup_orchestrator(
             # otherwise audit stale architecture/config.
             if pr_mode:
                 _refresh_pr_context_from_worktree(context, worktree_path)
+                context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
+                    worktree_path,
+                    metadata_for_guard,
+                )
 
         # Restore context from cached step outputs.
         # State keys use underscores (e.g. "6_1"); context keys follow suit.
@@ -1058,6 +1177,15 @@ def run_agentic_checkup_orchestrator(
     _display_step: Dict[float, str] = {6.1: "6a", 6.2: "6b", 6.3: "6c"}
 
     start_step = _next_step(last_completed_step) if last_completed_step > 0 else 1
+    if start_step_override is not None:
+        if start_step_override not in STEP_ORDER:
+            return (
+                False,
+                f"Invalid start step: {start_step_override}",
+                total_cost,
+                last_model_used,
+            )
+        start_step = start_step_override
     last_completed_step_to_save = last_completed_step
     consecutive_provider_failures = 0
 
@@ -1124,9 +1252,6 @@ def run_agentic_checkup_orchestrator(
         except Exception as exc:  # pylint: disable=broad-except
             console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
 
-    def _is_provider_failure(output: str) -> bool:
-        return "All agent providers failed" in output
-
     def _handle_step_result(
         step_num: Union[int, float],
         success: bool,
@@ -1179,10 +1304,15 @@ def run_agentic_checkup_orchestrator(
                 consecutive_provider_failures += 1
                 if consecutive_provider_failures >= 3:
                     _save_state()
+                    failure_kind = (
+                        "agent execution timed out before the steps could complete"
+                        if _is_step_timeout_failure(output)
+                        else "agent providers unavailable"
+                    )
                     return (
                         False,
                         f"Aborting: {consecutive_provider_failures} consecutive "
-                        f"steps failed - agent providers unavailable",
+                        f"steps failed - {failure_kind}",
                         total_cost,
                         last_model_used,
                     )
@@ -1352,7 +1482,12 @@ def run_agentic_checkup_orchestrator(
             cwd, pr_owner, pr_repo, pr_number, quiet, resume_existing=False
         )
         if not wt_path:
-            return False, f"Failed to set up PR worktree: {err}", total_cost, last_model_used
+            return (
+                False,
+                f"Failed to set up PR worktree: {err}",
+                total_cost,
+                last_model_used,
+            )
         worktree_path = wt_path
         current_cwd = worktree_path
         context["worktree_path"] = str(worktree_path)
@@ -1363,6 +1498,10 @@ def run_agentic_checkup_orchestrator(
         # ``cwd``; if the PR modifies either file, the audit otherwise
         # never sees the change.
         _refresh_pr_context_from_worktree(context, worktree_path)
+        context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
+            worktree_path,
+            metadata_for_guard,
+        )
 
         if not quiet:
             console.print(
@@ -1429,7 +1568,10 @@ def run_agentic_checkup_orchestrator(
                 continue
             name, description = step_map[step_num]
             if not quiet:
-                console.print(f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] {description}...")
+                console.print(
+                    f"[bold][Step {step_num}/{TOTAL_STEPS}][/bold] "
+                    f"{description}..."
+                )
 
             result = _run_single_step(
                 step_num, name, context,
@@ -1448,10 +1590,12 @@ def run_agentic_checkup_orchestrator(
             abort = _handle_step_result(step_num, success, output, cost, model, description=description)
             if abort is not None:
                 return abort
-            if not success and _is_provider_failure(output):
+            if not success and (
+                _is_provider_failure(output) or _is_step_timeout_failure(output)
+            ):
                 return (
                     False,
-                    f"Aborting after Step {step_num}: agent providers unavailable",
+                    _format_step_abort_message(step_num, output),
                     total_cost,
                     last_model_used,
                 )
