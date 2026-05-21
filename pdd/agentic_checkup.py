@@ -37,35 +37,34 @@ console = Console()
 
 
 def _extract_json_from_text(text: str) -> Optional[Dict[str, Any]]:
-    """Extract a JSON object from agent output text.
+    """Extract the LAST top-level JSON object from agent output text.
 
-    Handles markdown code blocks and raw JSON.
+    Matches the Step 7 prompt contract ("The JSON report MUST be the
+    last output") so earlier intermediate-reasoning blocks never mask
+    the final verdict. Handles fenced JSON, raw JSON, and the mixed
+    case (fenced earlier blocks followed by an unfenced final verdict)
+    uniformly — ``json.JSONDecoder.raw_decode`` ignores markdown fences
+    and just looks for valid JSON starting at a ``{``.
     """
     if not text or not text.strip():
         return None
 
-    # Try markdown code blocks first
-    json_block_pattern = r"```(?:json)?\s*(\{.*?\})\s*```"
-    match = re.search(json_block_pattern, text, re.DOTALL)
-
-    if match:
-        json_str = match.group(1)
-    else:
-        # Try to find the first opening brace and last closing brace
-        start = text.find("{")
-        end = text.rfind("}")
-        if start != -1 and end != -1 and end > start:
-            json_str = text[start : end + 1]
-        else:
-            return None
-
-    try:
-        result = json.loads(json_str)
-        if isinstance(result, dict):
-            return result
-        return None
-    except json.JSONDecodeError:
-        return None
+    decoder = json.JSONDecoder()
+    last_match: Optional[Dict[str, Any]] = None
+    search_from = 0
+    while True:
+        idx = text.find("{", search_from)
+        if idx == -1:
+            break
+        try:
+            obj, end = decoder.raw_decode(text, idx)
+        except json.JSONDecodeError:
+            search_from = idx + 1
+            continue
+        if isinstance(obj, dict):
+            last_match = obj
+        search_from = end if end > idx else idx + 1
+    return last_match
 
 
 def _load_pddrc_content(project_root: Path) -> str:
@@ -331,6 +330,7 @@ def run_agentic_checkup(
     blocking_severities: Optional[str] = None,
     clean_reviewer_states: Optional[str] = None,
     fallback_reviewer_on_failure: bool = False,
+    cwd: Optional[Path] = None,
 ) -> Tuple[bool, str, float, str]:
     """Run agentic checkup workflow from a GitHub issue URL.
 
@@ -341,6 +341,7 @@ def run_agentic_checkup(
         no_fix: Report only, don't apply fixes.
         timeout_adder: Additional seconds to add to each step timeout.
         use_github_state: Whether to persist state to GitHub comments.
+        cwd: Project working directory to use when loading local context.
         pr_url: When set, verify this existing PR against ``issue_url`` instead
             of creating a new branch/PR. Step 8 (create_pr) is skipped and the
             worktree is based on the PR's head branch.
@@ -417,7 +418,7 @@ def run_agentic_checkup(
     full_content = _escape_format_braces(raw_full_content)
 
     # 4. Load project context
-    project_root = _find_project_root(Path.cwd())
+    project_root = _find_project_root(cwd if cwd is not None else Path.cwd())
     architecture, _ = _load_architecture_json(project_root)
     raw_arch_json_str = (
         json.dumps(architecture, indent=2)
@@ -515,11 +516,9 @@ def run_agentic_checkup(
 
     # 6. Parse JSON report from step 7 output
     step7_output = ""
-    # The orchestrator doesn't return step outputs directly, so we try to
-    # extract JSON from the final message or rely on what the agent posted.
-    # The orchestrator returns "Checkup complete" on success, but the step 7
-    # agent should have posted a comment + output JSON. We treat orchestrator
-    # success as overall success.
+    # The orchestrator returns "Checkup complete" only after enforcing Step 7's
+    # structured verdict. In PR mode it owns the final report comment after a
+    # successful push/reverify, so callers can trust the return tuple.
 
     if not quiet:
         console.print(f"[bold]Checkup complete:[/bold] {orch_message}")

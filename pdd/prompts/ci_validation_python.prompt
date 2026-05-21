@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "run_ci_validation_loop", "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet)", "returns": "Tuple[bool, str, float]"},
+      {"name": "run_ci_validation_loop", "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)", "returns": "Tuple[bool, str, float]", "sideEffects": ["expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"]},
       {"name": "post_ci_failure_comment", "signature": "(repo_owner, repo_name, pr_number, failures, attempts, cwd)", "returns": "bool"},
       {"name": "detect_ci_system", "signature": "(cwd)", "returns": "str"}
     ]
@@ -31,7 +31,7 @@ Write the `pdd/ci_validation.py` module.
 Module providing CI polling, log retrieval, and fix-iteration loop infrastructure for post-push CI validation. This module bridges the gap between external CI systems (GitHub Actions, Cloud Build) and the agentic fix workflow by detecting failures, retrieving logs, and invoking an LLM to apply fixes.
 
 % Requirements
-1. Function: `run_ci_validation_loop(cwd: Path, repo_owner: str, repo_name: str, issue_number: int, max_retries: int, step_template: str, run_agentic_task_fn: Callable, timeout: float, quiet: bool) -> Tuple[bool, str, float]` — returns (ci_passed, message, cost).
+1. Function: `run_ci_validation_loop(cwd: Path, repo_owner: str, repo_name: str, issue_number: int, max_retries: int, step_template: str, run_agentic_task_fn: Callable, timeout: float, quiet: bool, expected_head_sha_override: Optional[str] = None) -> Tuple[bool, str, float]` — returns (ci_passed, message, cost). When `expected_head_sha_override` is provided, the inner poll uses it as the expected PR head SHA instead of inferring from `_get_head_sha(cwd)`. This is required for the post-checkup re-validation gate, where the checkup pushes from its own worktree and `cwd`'s local HEAD is stale relative to the PR remote — without the override, the poll would wait for the remote to match the stale local HEAD and burn the timeout.
 2. Discover the current branch's open PR and capture `pr_number` plus current head SHA; if no PR is found, return success with an informational message.
 3. Poll CI status via `gh pr checks --required --json name,state,bucket,link` with structured output. Handle exit codes: 0=pass, 1=fail, 8=pending. Use the `bucket` field to distinguish pass/fail/pending states and re-query checks after each new push/SHA so the loop does not act on stale results from the previous head.
 4. Handle startup delay: wait 30s initial delay after push, then poll every 30s up to 10 minutes for checks to appear/complete.

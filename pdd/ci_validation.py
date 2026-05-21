@@ -593,8 +593,18 @@ def run_ci_validation_loop(
     run_agentic_task_fn: Callable[..., Tuple[bool, str, float, str]],
     timeout: float,
     quiet: bool,
+    expected_head_sha_override: Optional[str] = None,
 ) -> Tuple[bool, str, float]:
-    """Poll required PR checks and iterate on CI-only failures until they pass."""
+    """Poll required PR checks and iterate on CI-only failures until they pass.
+
+    ``expected_head_sha_override`` lets callers wait for a specific PR head
+    SHA instead of inferring it from ``cwd``'s local HEAD. The final-checkup
+    gate uses this: the checkup pushes from its own worktree, so ``cwd``'s
+    local HEAD is stale relative to the PR remote. Passing the
+    post-checkup PR head SHA via this override makes the poll wait for the
+    correct head and prevents the timeout from burning while ``cwd``'s
+    stale HEAD is compared to the advanced remote.
+    """
     total_cost = 0.0
     max_retries = max(0, int(max_retries))
     pr_number = _find_open_pr_number(repo_owner, repo_name, cwd)
@@ -616,7 +626,7 @@ def run_ci_validation_loop(
     last_summary = "No required CI checks were reported."
 
     while True:
-        head_sha = _get_head_sha(cwd)
+        head_sha = expected_head_sha_override or _get_head_sha(cwd)
         status, checks = _poll_required_checks(
             repo_owner,
             repo_name,

@@ -6174,9 +6174,11 @@
   },
   {
     "reason": "Orchestrates the 11-step agentic E2E fix workflow including post-push CI validation and cleanup.",
-    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, and final verification.",
+    "description": "Coordinates running unit tests, E2E tests, root cause analysis, E2E test fixing, dev unit identification, unit test creation, test verification, pdd fix execution, CI validation, and final full PR-mode checkup.",
     "dependencies": [
-      "agentic_bug_orchestrator_python.prompt"
+      "agentic_bug_orchestrator_python.prompt",
+      "agentic_checkup_python.prompt",
+      "ci_validation_python.prompt"
     ],
     "priority": 183,
     "filename": "agentic_e2e_fix_orchestrator_python.prompt",
@@ -6202,6 +6204,36 @@
             "sideEffects": [
               "Runs git push <remote> <refspec>; retries with --force-with-lease on non-fast-forward only when force_with_lease_on_non_fast_forward is true",
               "On auth failure, reads a token from PDD_GH_TOKEN_FILE, then GH_TOKEN, GITHUB_TOKEN, and PDD_GITHUB_TOKEN, rewrites the remote URL to inject x-access-token, retries once, and restores the original URL in finally"
+            ]
+          },
+          {
+            "name": "_fetch_pr_head_sha",
+            "signature": "(repo_owner: str, repo_name: str, pr_number: int) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Calls gh api repos/{owner}/{repo}/pulls/{n} via the shared _fetch_pr_metadata helper",
+              "Best-effort: returns empty string on any failure so callers can fail closed"
+            ]
+          },
+          {
+            "name": "_read_checkup_worktree_head_sha",
+            "signature": "(cwd: Path, pr_number: int) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "Locates .pdd/worktrees/checkup-pr-{N}/ relative to cwd's git root and runs git rev-parse HEAD inside it",
+              "Returns the SHA the checkup last verified or pushed; comparing against the live PR remote SHA is what distinguishes a checkup self-push from an external party advancing the PR during the checkup",
+              "Best-effort: returns empty string when the worktree is missing or the rev-parse fails"
+            ]
+          },
+          {
+            "name": "_run_final_checkup_on_pr",
+            "signature": "(*, issue_url: str, issue_number: int, repo_owner: str, repo_name: str, cwd: Path, verbose: bool, quiet: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], ci_step_template: str, ci_validation_timeout: float) -> Tuple[bool, str, float, str]",
+            "returns": "Tuple[bool, str, float, str]",
+            "sideEffects": [
+              "Snapshots PR remote head SHA before/after run_agentic_checkup",
+              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup — fail closed without re-validating CI because Step 7 never saw the new code",
+              "When the worktree HEAD matches the post-checkup remote SHA, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
+              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -7450,7 +7482,7 @@
         "functions": [
           {
             "name": "run_agentic_checkup",
-            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, *, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool, reasoning_time: Optional[float], pr_url: Optional[str], review_loop: bool, review_only: bool, reviewers: str, reviewer: Optional[str], fixer: Optional[str], reviewer_fallback: Optional[str], fixer_fallback: Optional[str], max_review_rounds: int, max_review_cost: float, max_review_minutes: float, require_all_reviewers_clean: bool, continue_on_reviewer_limit: bool, require_final_fresh_review: bool, blocking_severities: Optional[str], clean_reviewer_states: Optional[str], fallback_reviewer_on_failure: bool, cwd: Optional[Path]) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "None"
@@ -7601,9 +7633,12 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop and worktree isolation.",
-    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'. Supports resume via workflow state persistence, git worktree isolation, and --no-fix mode.",
-    "dependencies": [],
+    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
+    "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
+    "dependencies": [
+      "agentic_common_python.prompt",
+      "checkup_review_loop_python.prompt"
+    ],
     "priority": 218,
     "filename": "agentic_checkup_orchestrator_python.prompt",
     "filepath": "pdd/agentic_checkup_orchestrator.py",
@@ -7618,10 +7653,14 @@
         "functions": [
           {
             "name": "run_agentic_checkup_orchestrator",
-            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool, quiet: bool, no_fix: bool, timeout_adder: float, use_github_state: bool) -> Tuple[bool, str, float, str]",
+            "signature": "(issue_url: str, issue_content: str, repo_owner: str, repo_name: str, issue_number: int, issue_title: str, architecture_json: str, pddrc_content: str, *, cwd: Path, verbose: bool = False, quiet: bool = False, no_fix: bool = False, timeout_adder: float = 0.0, use_github_state: bool = True, reasoning_time: Optional[float] = None, pr_url: Optional[str] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_number: Optional[int] = None) -> Tuple[bool, str, float, str]",
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
-              "None"
+              "Creates or reuses checkup worktrees",
+              "Runs LLM checkup steps",
+              "Persists workflow state",
+              "In PR mode, may commit and push generated fixes back to the existing PR branch",
+              "In PR mode, may post final PR and issue comments after push/reverify success"
             ]
           },
           {
@@ -7633,6 +7672,30 @@
             ]
           },
           {
+            "name": "_step7_passed",
+            "signature": "(step7_output: str, pr_mode: bool) -> Tuple[bool, str]",
+            "returns": "Tuple[bool, str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_format_pr_mode_final_report",
+            "signature": "(step7_output: str, push_message: str) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_refresh_pr_context_from_worktree",
+            "signature": "(context: Dict[str, str], worktree_path: Path) -> None",
+            "returns": "None",
+            "sideEffects": [
+              "Mutates context in place with PR-worktree architecture.json, .pddrc, and project_root values"
+            ]
+          },
+          {
             "name": "_setup_worktree",
             "signature": "(cwd: Path, issue_number: int, quiet: bool, resume_existing: bool) -> Tuple[Optional[Path], Optional[str]]",
             "returns": "Tuple[Optional[Path], Optional[str]]",
@@ -7641,9 +7704,74 @@
             ]
           },
           {
+            "name": "_setup_pr_worktree",
+            "signature": "(cwd: Path, pr_owner: str, pr_repo: str, pr_number: int, quiet: bool, resume_existing: bool = False) -> Tuple[Optional[Path], Optional[str]]",
+            "returns": "Tuple[Optional[Path], Optional[str]]",
+            "sideEffects": [
+              "Fetches PR head",
+              "Creates git worktree for the existing PR branch"
+            ]
+          },
+          {
+            "name": "_fetch_pr_metadata",
+            "signature": "(owner: str, repo: str, pr_number: int) -> Dict[str, str]",
+            "returns": "Dict[str, str]",
+            "sideEffects": [
+              "Reads pull request metadata through GitHub CLI"
+            ]
+          },
+          {
+            "name": "_commit_and_push_if_changed",
+            "signature": "(worktree: Path, pr_metadata: Dict[str, str], message: str) -> Tuple[bool, str]",
+            "returns": "Tuple[bool, str]",
+            "sideEffects": [
+              "May create a commit and push it to the PR head branch"
+            ]
+          },
+          {
+            "name": "_git_changed_files",
+            "signature": "(worktree: Path) -> List[str]",
+            "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_git_rev_parse_head",
+            "signature": "(worktree: Path) -> str",
+            "returns": "str",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_check_prompt_source_guard",
+            "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_check_architecture_registry_edit_guard",
+            "signature": "(worktree: Path, changed_files: List[str]) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
             "name": "_parse_changed_files",
             "signature": "(output: str) -> List[str]",
             "returns": "List[str]",
+            "sideEffects": [
+              "None"
+            ]
+          },
+          {
+            "name": "_build_state",
+            "signature": "(issue_number: int, issue_url: str, last_completed_step: Union[int, float], step_outputs: Dict[str, str], total_cost: float, model_used: str, github_comment_id: Optional[int], changed_files: Optional[List[str]] = None, worktree_path: Optional[Path] = None, fix_verify_iteration: int = 0, previous_fixes: str = \"\", mode: str = \"issue\", pr_number: Optional[int] = None, pr_owner: Optional[str] = None, pr_repo: Optional[str] = None, pr_head_sha: Optional[str] = None) -> Dict",
+            "returns": "Dict",
             "sideEffects": [
               "None"
             ]
@@ -7723,8 +7851,11 @@
         "functions": [
           {
             "name": "run_ci_validation_loop",
-            "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet)",
-            "returns": "Tuple[bool, str, float]"
+            "signature": "(cwd, repo_owner, repo_name, issue_number, max_retries, step_template, run_agentic_task_fn, timeout, quiet, expected_head_sha_override=None)",
+            "returns": "Tuple[bool, str, float]",
+            "sideEffects": [
+              "expected_head_sha_override forces the poll to wait for a specific PR head SHA instead of _get_head_sha(cwd); used by the post-checkup CI re-validation gate where cwd's local HEAD is stale relative to the PR remote because the checkup pushed from its own worktree"
+            ]
           },
           {
             "name": "post_ci_failure_comment",

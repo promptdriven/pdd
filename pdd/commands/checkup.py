@@ -58,7 +58,9 @@ from ..core.errors import handle_error
     type=str,
     default=None,
     help=(
-        "PR-mode: verify this existing pull request instead of creating a new one. "
+        "PR-mode: run the full checkup against this existing pull request "
+        "instead of creating a new one. Unless --no-fix is set, eligible "
+        "generated fixes are committed and pushed back to the PR head ref. "
         "Requires --issue. TARGET must NOT be passed."
     ),
 )
@@ -252,8 +254,11 @@ def checkup(
 
     \b
     GitHub mode (default): TARGET is an issue URL.
-    PR mode: pass --pr <pr-url> and --issue <issue-url> to verify an existing PR
-             against its source issue without creating a new PR.
+    PR mode: pass --pr <pr-url> and --issue <issue-url> to run the full
+             checkup against an existing PR. Unless --no-fix is set, the
+             fix/verify loop runs against the PR worktree and any eligible
+             generated fixes are committed and pushed back to the PR head
+             ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
     """
@@ -326,22 +331,6 @@ def checkup(
                 "(e.g., https://github.com/org/repo/issues/123).",
                 param_hint="'--issue'",
             )
-        # PR mode without --no-fix would generate fix commits inside the
-        # PR-mode worktree (.pdd/worktrees/checkup-pr-N/) and never push
-        # them back to the PR — silently abandoning the work and confusing
-        # the user (who sees "Checkup complete" with no indication that
-        # fixes exist on a local branch). Push-back is a separate follow-up;
-        # until it lands, force --no-fix when --pr is set and warn so the
-        # user can re-invoke without --pr if they wanted fixes applied.
-        if not no_fix and not review_loop:
-            click.echo(
-                "Warning: --pr forces --no-fix because push-back to the PR "
-                "is not yet implemented. Generated fixes inside the PR "
-                "worktree would not reach the PR. Re-invoke without --pr "
-                "(or with an issue TARGET) to apply fixes.",
-                err=True,
-            )
-            no_fix = True
         effective_issue_url = issue_url_opt
     else:
         if not target:
