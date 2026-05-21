@@ -4948,6 +4948,139 @@ class TestSelectModelCandidates:
             f"boundary; offending rows: {[c['model'] for c in offending]}"
         )
 
+    def _write_vertex_plus_anthropic_csv(self, llm_mod, tmp_path):
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            "Google Vertex AI,vertex_ai/gemini-3-flash-preview,0.5,3.0,1437,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+            "Anthropic,claude-opus-4-7,5.0,25.0,1565,ANTHROPIC_API_KEY,"
+            "True,budget,200000,8192,128000\n"
+        )
+        csv_path = tmp_path / "vertex_plus_anthropic.csv"
+        csv_path.write_text(content)
+        return csv_path
+
+    def test_prefixed_default_crosses_provider_after_transient_with_key(
+        self, llm_mod, tmp_path, monkeypatch, mock_set_llm_cache
+    ):
+        """Cross-provider fallback exists, but only after a transient primary
+        provider failure and only when the fallback credentials are configured."""
+        csv_path = self._write_vertex_plus_anthropic_csv(llm_mod, tmp_path)
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3.5-flash")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/adc.json")
+        monkeypatch.setenv("VERTEXAI_PROJECT", "project")
+        monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+        attempted = []
+
+        def completion_side_effect(**kwargs):
+            attempted.append(kwargs["model"])
+            if kwargs["model"].startswith("vertex_ai/"):
+                raise Exception("rate limit exceeded")
+            return create_mock_litellm_response("fallback ok", model_name=kwargs["model"])
+
+        with patch("pdd.llm_invoke.litellm.completion", side_effect=completion_side_effect):
+            with patch("pdd.llm_invoke._LAST_CALLBACK_DATA", {"cost": 0.001}):
+                result = llm_invoke(
+                    prompt="Say {thing}",
+                    input_json={"thing": "ok"},
+                    strength=0.5,
+                    use_cloud=False,
+                )
+
+        assert result["result"] == "fallback ok"
+        assert attempted == ["vertex_ai/gemini-3-flash-preview", "claude-opus-4-7"]
+        assert result["model_name"] == "claude-opus-4-7"
+
+    def test_prefixed_default_does_not_cross_provider_on_non_transient_error(
+        self, llm_mod, tmp_path, monkeypatch, mock_set_llm_cache
+    ):
+        csv_path = self._write_vertex_plus_anthropic_csv(llm_mod, tmp_path)
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3.5-flash")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/adc.json")
+        monkeypatch.setenv("VERTEXAI_PROJECT", "project")
+        monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+        attempted = []
+
+        def completion_side_effect(**kwargs):
+            attempted.append(kwargs["model"])
+            raise Exception("invalid model configuration")
+
+        with patch("pdd.llm_invoke.litellm.completion", side_effect=completion_side_effect):
+            with pytest.raises(RuntimeError) as exc_info:
+                llm_invoke(
+                    prompt="Say {thing}",
+                    input_json={"thing": "ok"},
+                    strength=0.5,
+                    use_cloud=False,
+                )
+
+        assert attempted == ["vertex_ai/gemini-3-flash-preview"]
+        assert getattr(exc_info.value, "attempted_models", []) == [
+            "vertex_ai/gemini-3-flash-preview"
+        ]
+
+    def test_prefixed_default_skips_uncredentialed_cross_provider_after_transient(
+        self, llm_mod, tmp_path, monkeypatch, mock_set_llm_cache
+    ):
+        csv_path = self._write_vertex_plus_anthropic_csv(llm_mod, tmp_path)
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3.5-flash")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/adc.json")
+        monkeypatch.setenv("VERTEXAI_PROJECT", "project")
+        monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+
+        attempted = []
+
+        def completion_side_effect(**kwargs):
+            attempted.append(kwargs["model"])
+            raise Exception("rate limit exceeded")
+
+        with patch("pdd.llm_invoke.litellm.completion", side_effect=completion_side_effect):
+            with pytest.raises(RuntimeError) as exc_info:
+                llm_invoke(
+                    prompt="Say {thing}",
+                    input_json={"thing": "ok"},
+                    strength=0.5,
+                    use_cloud=False,
+                )
+
+        assert attempted == ["vertex_ai/gemini-3-flash-preview"]
+        assert getattr(exc_info.value, "attempted_models", []) == [
+            "vertex_ai/gemini-3-flash-preview"
+        ]
+
+    def test_cross_provider_credentials_allow_vertex_adc_project(
+        self, llm_mod, monkeypatch
+    ):
+        monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+        monkeypatch.delenv("VERTEXAI_PROJECT", raising=False)
+        monkeypatch.delenv("VERTEXAI_LOCATION", raising=False)
+        monkeypatch.setenv("GOOGLE_CLOUD_PROJECT", "project")
+
+        assert llm_mod._candidate_has_configured_credentials(
+            {
+                "model": "vertex_ai/gemini-3-flash-preview",
+                "api_key": (
+                    "GOOGLE_APPLICATION_CREDENTIALS|"
+                    "VERTEXAI_PROJECT|VERTEXAI_LOCATION"
+                ),
+                "location": "global",
+            }
+        )
+
     def _make_vertex_inconsistent_df(self, llm_mod, tmp_path):
         """Mirror the bundled CSV's prefix inconsistency: most Vertex models
         listed with `vertex_ai/` prefix, but Pro listed bare."""

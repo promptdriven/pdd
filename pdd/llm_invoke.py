@@ -2050,6 +2050,8 @@ _PROVIDER_LOCK_ALIASES = {
     "Google Gemini": {"Google Gemini"},
 }
 
+_FALSE_ENV_VALUES = {"0", "false", "no", "off", "none", "disabled"}
+
 
 def _provider_filter(df: pd.DataFrame, provider: str) -> pd.Series:
     """Return a boolean mask for a provider lock.
@@ -2154,6 +2156,195 @@ def _provider_lock_for_base_model(base_model_name: Any) -> Optional[str]:
         if base_model_name.startswith(prefix):
             return provider
     return None
+
+
+def _model_info_matches_provider_lock(
+    model_info: Dict[str, Any],
+    provider: str,
+) -> bool:
+    """Return whether a model-info dict belongs to a provider lock."""
+
+    model_name = str(model_info.get("model", "") or "")
+    matching_prefixes = tuple(
+        prefix
+        for prefix, provider_name in _PROVIDER_PREFIX_TO_PROVIDER.items()
+        if provider_name == provider
+    )
+    other_prefixes = tuple(
+        prefix
+        for prefix in _PROVIDER_PREFIX_TO_PROVIDER
+        if prefix not in matching_prefixes
+    )
+    if matching_prefixes and model_name.startswith(matching_prefixes):
+        return True
+    if other_prefixes and model_name.startswith(other_prefixes):
+        return False
+
+    provider_aliases_lc = {
+        alias.lower()
+        for alias in _PROVIDER_LOCK_ALIASES.get(provider, {provider})
+    }
+    return str(model_info.get("provider", "") or "").lower() in provider_aliases_lc
+
+
+def _cross_provider_fallback_enabled() -> bool:
+    """Return whether transient failures may cross provider boundaries."""
+
+    raw = os.getenv("PDD_CROSS_PROVIDER_FALLBACK", "transient")
+    return str(raw).strip().lower() not in _FALSE_ENV_VALUES
+
+
+def _normalise_provider_token(value: Any) -> str:
+    return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _candidate_allowed_by_cross_provider_config(model_info: Dict[str, Any]) -> bool:
+    """Filter cross-provider candidates by optional operator allowlist."""
+
+    raw = os.getenv("PDD_MODEL_FALLBACK_PROVIDERS", "")
+    if not raw.strip():
+        return True
+    allowed = {
+        _normalise_provider_token(part)
+        for part in raw.split(",")
+        if part.strip()
+    }
+    if not allowed:
+        return True
+
+    provider_token = _normalise_provider_token(model_info.get("provider", ""))
+    model_token = _normalise_provider_token(
+        str(model_info.get("model", "") or "").split("/", 1)[0]
+    )
+    return any(
+        token and (token in provider_token or token == model_token)
+        for token in allowed
+    )
+
+
+def _candidate_has_configured_credentials(model_info: Dict[str, Any]) -> bool:
+    """Return True when a fallback candidate can run without prompting."""
+
+    from pdd.provider_manager import parse_api_key_vars
+
+    api_key_field = str(model_info.get("api_key", "") or "")
+    if not api_key_field.strip() or api_key_field == "EXISTING_KEY":
+        model_name = str(model_info.get("model", "") or "").lower()
+        if model_name.startswith("github_copilot/"):
+            token_dir = Path(
+                os.environ.get(
+                    "GITHUB_COPILOT_TOKEN_DIR",
+                    str(Path.home() / ".config" / "litellm" / "github_copilot"),
+                )
+            ).expanduser()
+            api_key_file = os.environ.get("GITHUB_COPILOT_API_KEY_FILE", "api-key.json")
+            return (token_dir / api_key_file).exists()
+        return True
+
+    env_vars = parse_api_key_vars(api_key_field)
+    if not env_vars:
+        return True
+    if all(bool(os.environ.get(var)) for var in env_vars):
+        return True
+
+    missing = [var for var in env_vars if not os.environ.get(var)]
+    if len(env_vars) > 1 and "GOOGLE_APPLICATION_CREDENTIALS" in env_vars:
+        project = os.getenv("VERTEXAI_PROJECT") or os.getenv("GOOGLE_CLOUD_PROJECT")
+        has_location = (
+            "VERTEXAI_LOCATION" not in missing
+            or bool(model_info.get("location"))
+        )
+        remaining = [
+            var
+            for var in missing
+            if var not in (
+                "GOOGLE_APPLICATION_CREDENTIALS",
+                "VERTEXAI_PROJECT",
+                "VERTEXAI_LOCATION",
+            )
+        ]
+        if project and has_location and not remaining:
+            return True
+
+    if len(env_vars) == 1 and env_vars[0] == "VERTEX_CREDENTIALS":
+        project = (
+            os.getenv("VERTEXAI_PROJECT")
+            or os.getenv("VERTEX_PROJECT")
+            or os.getenv("GOOGLE_CLOUD_PROJECT")
+        )
+        if project:
+            return True
+
+    return False
+
+
+def _is_transient_provider_error(exc: BaseException) -> bool:
+    """Classify errors that justify cross-provider fallback."""
+
+    if isinstance(
+        exc,
+        (
+            openai.RateLimitError,
+            openai.APITimeoutError,
+            openai.APIConnectionError,
+            openai.InternalServerError,
+        ),
+    ):
+        return True
+    if isinstance(exc, openai.APIStatusError):
+        status_code = getattr(exc, "status_code", None)
+        return status_code == 429 or (isinstance(status_code, int) and status_code >= 500)
+
+    text = str(exc).lower()
+    transient_markers = (
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "requests per minute",
+        "temporarily unavailable",
+        "service unavailable",
+        "internal server error",
+        "gateway timeout",
+        "timeout",
+        "timed out",
+        "connection error",
+    )
+    return any(marker in text for marker in transient_markers)
+
+
+def _build_cross_provider_fallback_candidates(
+    strength: float,
+    base_model_name: Any,
+    model_df: pd.DataFrame,
+    primary_candidates: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    """Return lower-priority cross-provider candidates for transient failures."""
+
+    provider_lock = _provider_lock_for_base_model(base_model_name)
+    if not provider_lock or not _cross_provider_fallback_enabled():
+        return []
+
+    try:
+        all_candidates = _select_model_candidates(strength, None, model_df)
+    except Exception:
+        return []
+
+    primary_models = {str(candidate.get("model")) for candidate in primary_candidates}
+    fallback_candidates: List[Dict[str, Any]] = []
+    seen: set[str] = set()
+    for candidate in all_candidates:
+        model_name = str(candidate.get("model"))
+        if model_name in primary_models or model_name in seen:
+            continue
+        if _model_info_matches_provider_lock(candidate, provider_lock):
+            continue
+        if not _candidate_allowed_by_cross_provider_config(candidate):
+            continue
+        copied = dict(candidate)
+        copied["_pdd_cross_provider_fallback"] = True
+        fallback_candidates.append(copied)
+        seen.add(model_name)
+    return fallback_candidates
 
 
 def _select_model_candidates(
@@ -3274,6 +3465,14 @@ def llm_invoke(
     try:
         model_df = _load_model_data(LLM_MODEL_CSV_PATH)
         candidate_models = _select_model_candidates(strength, DEFAULT_BASE_MODEL, model_df)
+        cross_provider_fallback_candidates = _build_cross_provider_fallback_candidates(
+            strength,
+            DEFAULT_BASE_MODEL,
+            model_df,
+            candidate_models,
+        )
+        if cross_provider_fallback_candidates:
+            candidate_models = candidate_models + cross_provider_fallback_candidates
     except (FileNotFoundError, ValueError, RuntimeError) as e:
         logger.error(f"Failed during model loading or selection: {e}")
         _emit_llm_attribution(
@@ -3370,11 +3569,33 @@ def llm_invoke(
         pass
 
     attempt_counter = 0
+    cross_provider_fallback_unlocked = False
 
     for model_info in candidate_models:
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+        is_cross_provider_fallback = bool(model_info.get("_pdd_cross_provider_fallback"))
+
+        if is_cross_provider_fallback:
+            if not cross_provider_fallback_unlocked:
+                continue
+            if not _candidate_has_configured_credentials(model_info):
+                _emit_llm_attribution(
+                    attribution_context,
+                    "llm_invoke.model_skipped",
+                    model=str(model_name_litellm),
+                    provider=str(provider),
+                    api_key_env_names=_api_key_field_names(api_key_name),
+                    reason="cross_provider_credentials_unavailable",
+                )
+                if verbose:
+                    logger.info(
+                        "[SKIP] Skipping cross-provider fallback %s because "
+                        "its credentials are not configured.",
+                        model_name_litellm,
+                    )
+                continue
 
         # Record this candidate before any pre-call validation/skip logic so
         # models skipped mid-call (context window pre-check, missing api_key,
@@ -4700,6 +4921,12 @@ def llm_invoke(
                     if verbose:
                         logger.debug(f"Retrying {model_name_litellm} with adjusted temperature {current_temperature}")
                     continue
+
+                if (
+                    not is_cross_provider_fallback
+                    and _is_transient_provider_error(e)
+                ):
+                    cross_provider_fallback_unlocked = True
 
                 _emit_llm_attribution(
                     attribution_context,

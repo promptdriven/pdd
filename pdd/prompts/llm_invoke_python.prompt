@@ -107,14 +107,15 @@
     - 'attempted_models': Chronological list[str] of every model name that was attempted during this `llm_invoke` call, in the order attempted, ending with the successful model. Includes (1) any cloud attempt that recoverably failed via `CloudFallbackError` / `CloudInvocationError` and fell back to local, recorded as the cloud-routed model name (e.g. `"cloud:<base_model>"` or the cloud-reported model when known), and (2) every local candidate model that was tried, whether it succeeded or was skipped due to context-window overflow, schema validation failure, or other fallback-eligible errors. For a single-attempt successful call this is a one-element list containing the successful model. The successful model is always the LAST entry and equals `model_name`. Never empty on success; always present in the return dict.
 
 % Model Selection:
-    - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate). See "Provider lock" below for the prefixed case.
-    - Provider lock: when `$PDD_MODEL_DEFAULT` carries a known LiteLLM routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, `azure_ai/`), the implied provider is a hard boundary — base lookup, alias resolution, surrogate fallback, and strength interpolation are all scoped to rows that route through that provider. This prevents single-provider environments (e.g., Cloud Run with only Vertex credentials) from silently falling through to a higher-ELO row whose credentials are unavailable. Raise `ValueError` if the CSV has no rows that match the lock.
+    - Base model: `$PDD_MODEL_DEFAULT` env var, or None (first available model in CSV used as surrogate). See "Provider-first lock" below for the prefixed case.
+    - Provider-first lock: when `$PDD_MODEL_DEFAULT` carries a known LiteLLM routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, `azure_ai/`), the implied provider is the primary boundary — base lookup, alias resolution, surrogate fallback, and strength interpolation are all scoped to rows that route through that provider. This prevents single-provider environments (e.g., Cloud Run with only Vertex credentials) from silently falling through to a higher-ELO row whose credentials are unavailable. Raise `ValueError` if the CSV has no rows that match the lock.
+    - Transient cross-provider fallback: for provider-prefixed defaults, append lower-priority candidates from other providers, but attempt them only after the primary provider fails with a transient provider error (rate limit, timeout/connection error, 429, or 5xx). Before attempting a cross-provider candidate, require its CSV `api_key` requirements to already be satisfied by the same non-interactive auth rules as normal local invocation, including Vertex ADC/project fallback; otherwise skip it without prompting and without recording it as attempted. Disable this behavior with `PDD_CROSS_PROVIDER_FALLBACK=0|false|no|off|none|disabled`. Restrict allowed fallback providers with comma-delimited `PDD_MODEL_FALLBACK_PROVIDERS`.
     - CSV columns: model, provider, input/output costs ($/M tokens), coding_arena_elo, api_key, structured_output, reasoning_type, max_reasoning_tokens, optional 'location' for Vertex AI override, optional 'base_url' for custom API endpoints.
     - Filter by api_key presence. Skip interactive check if api_key is empty or "EXISTING_KEY".
     - strength < 0.5: Interpolate by cost from base down to cheapest.
     - strength > 0.5: Interpolate by ELO from base up to highest.
     - strength = 0.5: Use base model, fallback to next highest ELO on failure.
-    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning). When a provider lock is active, the surrogate is the first available row inside the locked provider, not the first available row overall.
+    - Soft fallback: If base model not in CSV, use first available model as surrogate (silently, no warning). When a provider-first lock is active, the surrogate is the first available row inside the locked provider, not the first available row overall.
 
 % API Key Management:
     - The CSV `api_key` column may be pipe-delimited (e.g. "VAR1|VAR2|VAR3").
@@ -227,6 +228,8 @@
       of whether it ultimately succeeds, is skipped (context window overflow, missing api_key with
       PDD_FORCE, github_copilot OAuth token missing), or fails with a fallback-eligible error
       (SchemaValidationError, ContextWindowExceededError, recoverable API errors).
+      Deferred cross-provider fallback candidates are not appended until transient fallback is
+      unlocked and their credentials are configured.
     - Include `attempted_models` (a copy of the list) in the returned dictionary on success.
     - On every exception path that raises after `_record_attempt` has run at least once,
       attach the per-call attempt list to the raised exception via
