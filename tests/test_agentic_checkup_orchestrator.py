@@ -22,6 +22,20 @@ from pdd.agentic_checkup_orchestrator import (
 )
 
 
+# Round-4 Finding 1: Step 7 must emit structured JSON for `_step7_passed`
+# to permit the orchestrator to push or create a PR. Tests that previously
+# only emitted the "All Issues Fixed" loop-exit sentinel now must include
+# this JSON payload too. Trailing it on every step output is harmless —
+# the JSON gate only consults the step-7 output.
+STEP7_VERDICT_JSON = (
+    '```json\n'
+    '{"success": true, "message": "ok", "issue_aligned": true, '
+    '"issues": [], "changed_files": []}\n'
+    '```'
+)
+ALL_ISSUES_FIXED = f"All Issues Fixed\n{STEP7_VERDICT_JSON}"
+
+
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
@@ -39,7 +53,7 @@ def mock_dependencies():
          patch("pdd.agentic_checkup_orchestrator.console") as mock_console, \
          patch("pdd.agentic_checkup_orchestrator._setup_worktree") as mock_worktree:
 
-        mock_run.return_value = (True, "Step output. All Issues Fixed", 0.1, "gpt-4")
+        mock_run.return_value = (True, f"Step output. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
         mock_load.return_value = "Prompt for {issue_number}"
         mock_worktree.return_value = (Path("/tmp/worktree"), None)
 
@@ -94,7 +108,7 @@ class TestHappyPath:
 
         def side_effect(*args, **kwargs):
             call_counter[0] += 1
-            return (True, f"Output {call_counter[0]}. All Issues Fixed", call_counter[0] * 0.1, "gpt-4")
+            return (True, f"Output {call_counter[0]}. {ALL_ISSUES_FIXED}", call_counter[0] * 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -121,7 +135,7 @@ class TestHappyPath:
             label = kwargs.get("label", "")
             if label == "step1":
                 return (True, step1_out, 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -261,7 +275,7 @@ class TestWorktreeHandling:
         def side_effect_run(*args, **kwargs):
             label = kwargs.get("label", "")
             executed_labels.append(label)
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -396,7 +410,7 @@ class TestChangedFilesTracking:
             if "step6" in label:
                 return (True, "FILES_CREATED: src/fix.py\nFILES_MODIFIED: src/main.py", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -426,7 +440,7 @@ class TestChangedFilesTracking:
             if "step6" in label:
                 return (True, "FILES_CREATED: src/fix.py\nFILES_MODIFIED: src/fix.py", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -462,7 +476,7 @@ class TestSoftFailures:
             label = kwargs.get("label", "")
             if label == "step2":
                 return (False, "Agent had a problem but no hard stop", 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -483,7 +497,7 @@ class TestSoftFailures:
             if "step3" in label:
                 return (False, "Build check failed somehow", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -609,7 +623,7 @@ class TestProviderFailureAbort:
             label = kwargs.get("label", "")
             if label in ("step1", "step2"):
                 return (False, "Some other error", 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -629,7 +643,7 @@ class TestProviderFailureAbort:
                 return (False, "All agent providers failed", 0.0, "")
             if label == "step2":
                 return (False, "All agent providers failed", 0.0, "")
-            return (True, f"ok. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"ok. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -716,7 +730,7 @@ class TestResume:
 
         def side_effect_run(instruction, **kwargs):
             formatted_prompts.append(instruction)
-            return (True, f"Output for {kwargs.get('label', '')}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {kwargs.get('label', '')}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -811,7 +825,7 @@ class TestResume:
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
             executed_steps.append(label)
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -857,7 +871,7 @@ class TestResume:
         def side_effect(*args, **kwargs):
             label = kwargs.get("label", "")
             executed_steps.append(label)
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
 
@@ -993,7 +1007,7 @@ class TestFormatStringInjection:
             label = kwargs.get("label", "")
             if label == "step1":
                 return (True, "The error is in {url} config", 0.1, "gpt-4")
-            return (True, f"Output for {label}. All Issues Fixed", 0.1, "gpt-4")
+            return (True, f"Output for {label}. {ALL_ISSUES_FIXED}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
 
@@ -1210,7 +1224,7 @@ class TestBuildState:
             if "step6_1" in label:
                 return (True, "FILES_CREATED: src/fix.py", 0.1, "gpt-4")
             if "step7" in label:
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -1306,7 +1320,7 @@ class TestFixVerifyLoop:
             if label == "step7_iter1":
                 return (True, "Issues remain: 2 tests failing", 0.1, "gpt-4")
             if label == "step7_iter2":
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect
@@ -1325,7 +1339,7 @@ class TestFixVerifyLoop:
         assert "step8" in called_labels
 
     def test_max_iterations_reached(self, mock_dependencies, default_args):
-        """Step 7 never returns clean -> 3 iterations, then step 8 with warning."""
+        """Step 7 never returns clean -> 3 iterations, then fail closed."""
         mock_run, _, _, mock_console = mock_dependencies
 
         def side_effect(*args, **kwargs):
@@ -1339,14 +1353,15 @@ class TestFixVerifyLoop:
 
         success, msg, cost, model = run_agentic_checkup_orchestrator(**default_args)
 
-        assert success is True
-        # 2 (steps 1-2) + 3*7 (3 iterations) + 1 (step 8) = 24
-        assert mock_run.call_count == 24
+        assert success is False
+        assert "did not verify all issues fixed" in msg.lower()
+        # 2 (steps 1-2) + 3*7 (3 iterations), then no step 8.
+        assert mock_run.call_count == 23
 
         called_labels = [c.kwargs["label"] for c in mock_run.call_args_list]
         assert "step3_iter3" in called_labels
         assert "step7_iter3" in called_labels
-        assert "step8" in called_labels
+        assert "step8" not in called_labels
 
     def test_labels_have_iteration_suffix(self, mock_dependencies, default_args):
         """Loop steps should have iteration-suffixed labels like step3_iter1."""
@@ -1383,7 +1398,7 @@ class TestFixVerifyLoop:
             if label == "step7_iter1":
                 return (True, "Issues remain", 0.1, "gpt-4")
             if label == "step7_iter2":
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
@@ -1421,7 +1436,7 @@ class TestFixVerifyLoop:
             if label == "step6_1_iter2":
                 return (True, "FILES_CREATED: src/fix2.py", 0.1, "gpt-4")
             if label == "step7_iter2":
-                return (True, "All Issues Fixed", 0.1, "gpt-4")
+                return (True, ALL_ISSUES_FIXED, 0.1, "gpt-4")
             return (True, f"Output for {label}", 0.1, "gpt-4")
 
         mock_run.side_effect = side_effect_run
