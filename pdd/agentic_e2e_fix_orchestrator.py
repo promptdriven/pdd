@@ -3167,6 +3167,23 @@ def run_agentic_e2e_fix_orchestrator(
                         posted_steps=step_comments_set,
                         cwd=cwd,
                     )
+                    # Round-3 of Greg's review (idempotency requirement):
+                    # persist `step_comments` *immediately* after the post so
+                    # the composite key (`current_cycle * 10000 + 11`)
+                    # survives the failure-return paths below — specifically
+                    # the `ci_success=False` branch which returns without
+                    # touching workflow state. Without this save, a later
+                    # resume would rehydrate `step_comments_set` from disk,
+                    # miss the post, and emit a duplicate Step 11 comment.
+                    state_data["step_comments"] = sorted(step_comments_set)
+                    state_data["total_cost"] = total_cost
+                    state_data["changed_files"] = list(changed_files)
+                    state_data["last_saved_at"] = datetime.now().isoformat()
+                    save_workflow_state(
+                        cwd, issue_number, workflow_name, state_data,
+                        state_dir, repo_owner, repo_name,
+                        use_github_state, github_comment_id,
+                    )
                 except Exception as _exc:  # pylint: disable=broad-except
                     console.print(f"[yellow]post_step_comment_once failed (step 11): {_exc}[/yellow]")
 
@@ -3215,6 +3232,26 @@ def run_agentic_e2e_fix_orchestrator(
                         body=_step10_body,
                         posted_steps=step_comments_set,
                         cwd=cwd,
+                    )
+                    # Round-3 of Greg's review (idempotency requirement):
+                    # persist `step_comments` *immediately* after the post so
+                    # the composite key (`current_cycle * 10000 + 10`)
+                    # survives the failure-return path below — specifically
+                    # when `_run_final_checkup_on_pr` returns
+                    # `checkup_success=False` and the orchestrator returns
+                    # without clearing or saving state. Without this save, a
+                    # later resume would rehydrate `step_comments_set` from
+                    # disk, miss the post, and emit a duplicate Step 10
+                    # comment (and likely a duplicate Step 11 as well, since
+                    # the cleanup helper also runs again on resume).
+                    state_data["step_comments"] = sorted(step_comments_set)
+                    state_data["total_cost"] = total_cost
+                    state_data["changed_files"] = list(changed_files)
+                    state_data["last_saved_at"] = datetime.now().isoformat()
+                    save_workflow_state(
+                        cwd, issue_number, workflow_name, state_data,
+                        state_dir, repo_owner, repo_name,
+                        use_github_state, github_comment_id,
                     )
                 except Exception as _exc:  # pylint: disable=broad-except
                     console.print(f"[yellow]post_step_comment_once failed (step 10): {_exc}[/yellow]")
