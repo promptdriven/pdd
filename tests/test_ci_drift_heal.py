@@ -815,6 +815,13 @@ class TestHealModule:
         `.pddrc` context strength (e.g. 0.818) that would otherwise push
         model selection to Sonnet/Opus-class models and defeat the env-var
         pin to Gemini Pro.
+
+        Issue #1106: stub `Path.exists` so the new preset-but-missing
+        fail-close at `_heal_update` does not trip on the fake `/repo/...`
+        prompt path; this test is about command shape, not real disk
+        state. The dedicated regression
+        `test_heal_update_fails_when_preset_prompt_path_is_missing`
+        covers the missing-prompt fail-close path.
         """
         drift = DriftInfo(
             "auth",
@@ -826,7 +833,9 @@ class TestHealModule:
         )
         mock_result = MagicMock(returncode=0, stderr="")
 
-        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
             result = heal_module(drift, self._make_env())
 
         assert result is True
@@ -913,7 +922,13 @@ class TestHealModule:
             r.stderr = "" if call_count[0] == 1 else "example error"
             return r
 
-        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_subprocess:
+        # Issue #1106: stub `Path.exists` and `_run_metadata_sync_safe` so the
+        # new preset-but-missing fail-close and metadata sync stage don't trip
+        # on the fake `/repo/...` prompt path; this test exercises the
+        # example-step revert flow, not the missing-prompt path.
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run) as mock_subprocess, \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
             result = heal_module(drift, self._make_env())
 
         assert result is False
@@ -952,7 +967,13 @@ class TestHealModule:
             r.stderr = "" if call_count[0] == 1 else "sync error"
             return r
 
-        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run):
+        # Issue #1106: stub `Path.exists` and `_run_metadata_sync_safe` so the
+        # new preset-but-missing fail-close and metadata sync stage don't trip
+        # on the fake `/repo/...` prompt path; this test exercises the revert
+        # failure raising path, not the missing-prompt path.
+        with patch("pdd.ci_drift_heal.subprocess.run", side_effect=mock_run), \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
             with pytest.raises(PromptRevertError):
                 heal_module(drift, self._make_env())
 
@@ -986,7 +1007,13 @@ class TestHealModule:
         assert ["git", "status", "--porcelain", "--", "prompts/auth_python.prompt"] in calls
 
     def test_update_does_not_skip_follow_up_example_by_default(self):
-        """agentic_change_orchestrator example step runs normally once the default skip is removed."""
+        """agentic_change_orchestrator example step runs normally once the default skip is removed.
+
+        Issue #1106: stub `Path.exists` and `_run_metadata_sync_safe` so the
+        new preset-but-missing fail-close and metadata sync stage don't trip
+        on the fake `/repo/...` prompt path; this test exercises the
+        follow-up example command shape, not the missing-prompt path.
+        """
         drift = DriftInfo(
             "agentic_change_orchestrator",
             "python",
@@ -997,7 +1024,9 @@ class TestHealModule:
         )
         mock_result = MagicMock(returncode=0, stderr="")
 
-        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+        with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
             result = heal_module(drift, self._make_env())
 
         assert result is True
@@ -1016,7 +1045,13 @@ class TestHealModule:
         ]
 
     def test_update_skip_env_runs_update_but_skips_follow_up_example(self):
-        """Explicit skip env still bypasses the follow-up example step for operational recovery."""
+        """Explicit skip env still bypasses the follow-up example step for operational recovery.
+
+        Issue #1106: stub `Path.exists` and `_run_metadata_sync_safe` so the
+        new preset-but-missing fail-close and metadata sync stage don't trip
+        on the fake `/repo/...` prompt path; this test exercises the
+        skip-env follow-up behavior, not the missing-prompt path.
+        """
         drift = DriftInfo(
             "agentic_change_orchestrator",
             "python",
@@ -1031,7 +1066,9 @@ class TestHealModule:
             os.environ,
             {"PDD_HEAL_SYNC_SKIP_MODULES": "agentic_change_orchestrator"},
             clear=False,
-        ), patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run:
+        ), patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run, \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
             result = heal_module(drift, self._make_env())
 
         assert result is True
@@ -1236,6 +1273,13 @@ class TestHealModule:
 
         This is the `reason='Code exists without prompt — needs pdd update'`
         drift created by detect_drift when scanning modules without a prompt.
+
+        Issue #1106: stub `Path.exists` and `_run_metadata_sync_safe` so the
+        new preset-but-missing fail-close (which applies after the lazy
+        block resolves `prompt_path` to a real string) and the metadata
+        sync stage do not trip on the fake `/repo/...` prompt path; this
+        test exercises the lazy-resolution + follow-up example shape, not
+        the missing-prompt path.
         """
         drift = DriftInfo(
             "newmod",
@@ -1257,7 +1301,9 @@ class TestHealModule:
         }
 
         with patch("pdd.ci_drift_heal.subprocess.run", return_value=mock_result) as mock_run, \
-             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=fake_paths):
+             patch("pdd.sync_determine_operation.get_pdd_file_paths", return_value=fake_paths), \
+             patch("pdd.ci_drift_heal.Path.exists", return_value=True), \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True):
             result = heal_module(drift, self._make_env())
 
         assert result is True
@@ -1273,6 +1319,80 @@ class TestHealModule:
             "/repo/prompts/newmod_python.prompt",
             "/repo/newmod.py",
         ]
+
+    def test_heal_update_lazy_resolution_with_real_file_passes_new_gate(self, tmp_path):
+        """Issue #1106 sibling regression: prove the new preset-but-missing
+        existence gate accepts lazy-resolved prompts whose file actually
+        exists on disk.
+
+        The patched test above (`test_update_without_prompt_path_resolves_after_update`)
+        keeps its fake `/repo/...` path for command-shape coverage by
+        stubbing `Path.exists`. That stub makes the gate trivially happy,
+        so it no longer proves the gate accepts a real lazy-resolved file.
+        This sibling exercises that contract end-to-end: real `tmp_path`
+        prompt + code, no `Path.exists` patch, mock `_resolve_paths` to
+        return the real Path. The heal must reach `_run_metadata_sync_safe`
+        and complete successfully without tripping the new gate.
+        """
+        from pdd.ci_drift_heal import _heal_update
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        real_prompt = prompts_dir / "lazymod_python.prompt"
+        real_prompt.write_text("Prompt body for lazymod\n")
+        real_code = tmp_path / "lazymod.py"
+        real_code.write_text("def lazymod(): return 1\n")
+
+        drift = DriftInfo(
+            "lazymod",
+            "python",
+            "update",
+            "Code exists without prompt — needs pdd update",
+            code_path=str(real_code),
+            prompt_path=None,  # forces the lazy block to resolve from disk
+        )
+
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True) as mock_pdd, \
+             patch(
+                 "pdd.ci_drift_heal._resolve_paths",
+                 return_value={"prompt": real_prompt, "code": real_code},
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._enforce_prompt_churn_gate", return_value=True,
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._enforce_structural_invariants", return_value=True,
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._snapshot_metadata_state_for", return_value={},
+             ), \
+             patch(
+                 "pdd.ci_drift_heal._run_metadata_sync_safe", return_value=True,
+             ) as mock_sync:
+            result = _heal_update(drift, env={}, skip_set=set())
+
+        # Heal proceeded past the new fail-close gate (the real file exists)
+        # AND reached metadata sync — the contract we want.
+        assert result is True, (
+            "Lazy-resolved prompt that actually exists on disk must pass "
+            "the new preset-but-missing gate and proceed to metadata sync."
+        )
+        assert mock_sync.called, (
+            "metadata_sync must be invoked after the gate accepts the "
+            "lazy-resolved real file — otherwise the gate is too strict."
+        )
+        # First positional arg is the resolved prompt path (str form).
+        assert mock_sync.call_args.args[0] == str(real_prompt)
+        # No fail-close flags set — this is the happy lazy-resolution path.
+        assert drift.metadata_finalization_failed is False
+        assert drift.metadata_finalized is True
+        # Follow-up `pdd example` ran with the freshly-resolved real path.
+        example_calls = [
+            c for c in mock_pdd.call_args_list
+            if len(c[0]) >= 1 and len(c[0][0]) >= 5 and c[0][0][4] == "example"
+        ]
+        assert len(example_calls) == 1
+        assert example_calls[0][0][0][-2] == str(real_prompt)
+        assert example_calls[0][0][0][-1] == str(real_code)
 
     def test_example_drift_missing_prompt_path_fails_closed(self):
         """example drift without a resolved prompt path fails without running pdd."""
@@ -1334,6 +1454,95 @@ class TestHealModule:
         assert drift.metadata_finalization_error == "prompt_path unresolvable post-update"
         pdd_cmds = [c[0][0] for c in mock_run.call_args_list if c[0][0][:1] == ["pdd"]]
         assert pdd_cmds == [["pdd", "--force", "--strength", "0.5", "update", "/repo/auth.py"]]
+
+    def test_heal_update_fails_when_preset_prompt_path_is_missing(self):
+        """Issue #1106 Gap 2: when `drift.prompt_path` is already set but the
+        file does not exist on disk after `pdd update`, `_heal_update` must
+        fail-close — set `metadata_finalization_failed=True`, return False,
+        skip `_run_metadata_sync_safe`, and skip the follow-up `pdd example`.
+
+        On `upstream/main` this branch silently skips `_run_metadata_sync_safe`
+        (because of `if prompt_exists:` at ci_drift_heal.py:1266) but then
+        falls through to run `pdd example`, so the heal can return True with
+        `metadata_finalized=False` AND no metadata_finalization_failed flag —
+        the exact silent-skip class the issue calls out.
+
+        The lazy-resolution `prompt_path=None` branch already fail-closes
+        (see `test_update_with_unresolvable_prompt_fails_closed`); this test
+        covers the preset-but-missing branch.
+        """
+        from pdd.ci_drift_heal import _heal_update
+        drift = DriftInfo(
+            "auth",
+            "python",
+            "update",
+            "changed",
+            code_path="/repo/auth.py",
+            prompt_path="prompts/never_existed.prompt",  # set but missing
+        )
+
+        # `_run_pdd_command` reports `pdd update` succeeded — we want to be
+        # sure the missing-prompt gate fires AFTER a "successful" update
+        # subprocess, not before, because that's the exact failure mode the
+        # issue describes. Patch `_snapshot_metadata_state_for` too so a
+        # future regression that moves the snapshot above the existence
+        # gate is caught — the snapshot writes per-module bytes and must
+        # not run when we're about to fail-close.
+        with patch("pdd.ci_drift_heal._run_pdd_command", return_value=True) as mock_pdd, \
+             patch("pdd.ci_drift_heal._run_metadata_sync_safe") as mock_sync, \
+             patch("pdd.ci_drift_heal._snapshot_metadata_state_for") as mock_snap:
+            result = _heal_update(drift, env={}, skip_set=set())
+
+        assert result is False, (
+            "Preset-but-missing prompt_path must fail-close like the lazy "
+            "unresolvable branch, not silently proceed."
+        )
+        assert drift.metadata_finalization_failed is True, (
+            "metadata_finalization_failed must be set so the CI workflow "
+            "boundary surfaces this as a hard heal failure, not a silent "
+            "skip."
+        )
+        # Lock down the exact error string so any future drift in the
+        # message gets caught — downstream log surfaces and CI failure
+        # messages key off this exact string per the prompt-encoded
+        # Requirement 8 contract.
+        assert drift.metadata_finalization_error == (
+            "prompt_path set but missing on disk post-update"
+        ), (
+            f"metadata_finalization_error must match the prompt-encoded "
+            f"Requirement-8 contract verbatim; got "
+            f"{drift.metadata_finalization_error!r}"
+        )
+        # Sibling state: must NOT be marked finalized when we fail-closed.
+        assert getattr(drift, "metadata_finalized", False) is False, (
+            "metadata_finalized must remain False when fail-closing on a "
+            "missing prompt — the contract is failed, not finalized."
+        )
+        # _run_metadata_sync_safe must NOT be called: it would silently
+        # return False on the missing prompt and obscure the fail-close
+        # reason. The gate must catch it explicitly first.
+        mock_sync.assert_not_called()
+        # _snapshot_metadata_state_for must NOT be called either — a
+        # snapshot taken before a fail-close would write per-module bytes
+        # that the heal has no obligation to restore. Catches a future
+        # regression that moves the snapshot above the existence gate.
+        mock_snap.assert_not_called()
+        # Only `pdd update` ran — the follow-up `pdd example` must NOT.
+        update_calls = [
+            c for c in mock_pdd.call_args_list
+            if len(c[0]) >= 1 and len(c[0][0]) >= 5 and c[0][0][4] == "update"
+        ]
+        example_calls = [
+            c for c in mock_pdd.call_args_list
+            if len(c[0]) >= 1 and len(c[0][0]) >= 5 and c[0][0][4] == "example"
+        ]
+        assert len(update_calls) == 1, (
+            f"Expected exactly one `pdd update` call; got {mock_pdd.call_args_list}"
+        )
+        assert len(example_calls) == 0, (
+            f"`pdd example` must NOT run after a preset-but-missing prompt "
+            f"fail-close; got {mock_pdd.call_args_list}"
+        )
 
     def test_example_skip_env_returns_none_without_running(self):
         """Explicit skip env bypasses a module's heal step without failing CI."""
