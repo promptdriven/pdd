@@ -14,7 +14,7 @@ import re
 import random
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Tuple, Dict, Any, Union
+from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from dataclasses import dataclass
 
 from rich.console import Console
@@ -3501,6 +3501,130 @@ def _extract_step_report(text: Optional[str]) -> Optional[str]:
     if not matches:
         return None
     return matches[-1].strip()
+
+
+# Public alias for orchestrator callers; same semantics as ``_extract_step_report``.
+extract_step_report = _extract_step_report
+
+
+def normalize_step_comments_state(raw: Any) -> Set[int]:
+    """Coerce a persisted ``state["step_comments"]`` value into ``Set[int]``.
+
+    Accepts every shape that has ever been persisted:
+
+    * ``None`` / missing key            -> empty set.
+    * ``list`` / ``tuple`` of ints      -> set of those ints.
+    * ``set`` / ``frozenset``           -> defensive copy of int members.
+    * Legacy bug-orchestrator dict, e.g.
+      ``{"1": {"posted": True}, "2": {"failed_posted": True}}``
+      -> set of int step numbers whose ``posted`` *or* ``failed_posted`` flag
+      is truthy. Pending shapes (``fallback_pending`` / ``failed_pending``)
+      are skipped so the orchestrator retries them on resume.
+    * Malformed or unexpected inputs    -> empty set (never raises).
+
+    ``bool`` is rejected even though it's an ``int`` subclass — the legacy
+    dict shape uses booleans as flag values, not step numbers. ``float`` is
+    rejected too — orchestrators with fractional steps must project them
+    through a composite-key helper before storing.
+    """
+    if raw is None:
+        return set()
+    if isinstance(raw, dict):
+        out: Set[int] = set()
+        for key, value in raw.items():
+            try:
+                step = int(key)
+            except (TypeError, ValueError):
+                continue
+            if isinstance(value, dict):
+                if value.get("posted") is True or value.get("failed_posted") is True:
+                    out.add(step)
+            elif value is True:
+                out.add(step)
+        return out
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        out = set()
+        for item in raw:
+            if isinstance(item, bool):
+                continue
+            if isinstance(item, int):
+                out.add(item)
+                continue
+            if isinstance(item, str):
+                try:
+                    out.add(int(item))
+                except ValueError:
+                    continue
+        return out
+    return set()
+
+
+def post_step_comment_once(
+    *,
+    repo_owner: str,
+    repo_name: str,
+    issue_number: int,
+    step_num: int,
+    body: str,
+    posted_steps: Set[int],
+    cwd: Path,
+) -> bool:
+    """Post a per-step success comment via ``gh issue comment``, exactly once.
+
+    Idempotent: if ``step_num`` is already in ``posted_steps``, returns
+    ``True`` immediately without invoking ``gh``. On a successful new post
+    it mutates ``posted_steps`` in place (adds ``step_num``).
+
+    Args:
+        repo_owner: GitHub owner / org slug.
+        repo_name: GitHub repository name.
+        issue_number: Target issue number.
+        step_num: Integer key that uniquely identifies this step within the
+            workflow. Orchestrators with fractional or iterated steps must
+            project their (step_num, iteration) tuples to a deterministic
+            int before calling — the helper is ``Set[int]``-typed.
+        body: Pre-built comment body. The helper applies its own redaction
+            and truncation pass before shelling out; callers don't need to
+            sanitize first.
+        posted_steps: In-memory ``Set[int]`` of step keys already posted.
+            Mutated in place on a successful new post.
+        cwd: Working directory for the ``gh`` subprocess.
+
+    Returns:
+        ``True`` on success-or-already-posted, ``False`` on missing CLI or
+        ``gh`` non-zero exit. Never raises; transient failures are logged
+        via ``console.print`` and surfaced as ``False``.
+    """
+    if step_num in posted_steps:
+        return True
+    if not _find_cli_binary("gh"):
+        return False
+    final_body = _sanitize_comment_body(body)
+    try:
+        result = subprocess.run(
+            [
+                "gh", "issue", "comment", str(issue_number),
+                "--repo", f"{repo_owner}/{repo_name}",
+                "--body", final_body,
+            ],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            console.print(
+                f"[yellow]Warning: Failed to post step comment for step {step_num}: "
+                f"{result.stderr}[/yellow]"
+            )
+            return False
+    except Exception as exc:  # pylint: disable=broad-except
+        console.print(
+            f"[yellow]Warning: Failed to post step comment for step {step_num}: "
+            f"{exc}[/yellow]"
+        )
+        return False
+    posted_steps.add(step_num)
+    return True
 
 
 def _sanitize_comment_body(

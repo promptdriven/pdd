@@ -30,6 +30,9 @@ from .agentic_common import (
     GITHUB_STATE_MARKER_START,
     GITHUB_STATE_MARKER_END,
     _revert_out_of_scope_changes,
+    extract_step_report,
+    normalize_step_comments_state,
+    post_step_comment_once,
 )
 from .get_test_command import get_test_command_for_file
 from .load_prompt_template import load_prompt_template
@@ -1960,6 +1963,73 @@ def _run_step11_code_cleanup(
     return total_cost, changed_files
 
 
+def _build_post_loop_state(
+    *,
+    workflow_name: str,
+    issue_url: str,
+    issue_number: int,
+    current_cycle: int,
+    last_completed_step: int,
+    step_outputs: Dict[str, str],
+    dev_unit_states: Dict[str, Any],
+    skipped_steps: Dict[int, str],
+    total_cost: float,
+    model_used: str,
+    changed_files: List[str],
+    github_comment_id: Optional[int],
+    step_comments_set: Set[int],
+    initial_file_hashes: Optional[Dict[str, Optional[str]]],
+    initial_sha: Optional[str],
+) -> Dict[str, Any]:
+    """Build a workflow-state dict from function-scope locals only.
+
+    The orchestrator's main ``state_data`` dict is first assigned inside the
+    inner ``for step_num in range(1, 10)`` loop. The
+    SUCCESS_FALL_THROUGH / resume-terminal-success resume paths skip that
+    loop entirely (Step 9 already declared success on the prior run, so
+    control flows directly into the post-loop cleanup + CI sites). On
+    those paths, any reference to the inner-loop ``state_data`` raises
+    ``UnboundLocalError`` and the broad ``try/except`` around the
+    post-loop Step 10/11 trusted-comment saves swallows it as a
+    ``post_step_comment_once failed`` warning, leaving the composite key
+    unpersisted. A later resume would then re-post the same Step 10/11
+    visible comment.
+
+    This helper assembles the same shape as the inner-loop save using
+    only locals that are unconditionally initialized at function entry
+    (``step_outputs``, ``step_comments_set``, ``changed_files``, etc.) so
+    the post-loop saves work identically on the linear-execution path,
+    the SUCCESS_FALL_THROUGH resume path, and the
+    resume-terminal-success path.
+
+    Snapshot fields (``initial_file_hashes``, ``initial_sha``) accept
+    ``None`` so callers can pass through the resume-time restored values
+    without normalizing first.
+    """
+    return {
+        "workflow": workflow_name,
+        "issue_url": issue_url,
+        "issue_number": issue_number,
+        "current_cycle": current_cycle,
+        "last_completed_step": last_completed_step,
+        "step_outputs": dict(step_outputs),
+        "dev_unit_states": dict(dev_unit_states),
+        "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
+        "total_cost": total_cost,
+        "model_used": model_used,
+        "changed_files": list(changed_files) if changed_files else [],
+        "last_saved_at": datetime.now().isoformat(),
+        "github_comment_id": github_comment_id,
+        "step_comments": sorted(step_comments_set),
+        "initial_file_hashes": (
+            dict(initial_file_hashes)
+            if isinstance(initial_file_hashes, dict)
+            else None
+        ),
+        "initial_sha": initial_sha if isinstance(initial_sha, str) else None,
+    }
+
+
 def run_agentic_e2e_fix_orchestrator(
     issue_url: str,
     issue_content: str,
@@ -2002,6 +2072,7 @@ def run_agentic_e2e_fix_orchestrator(
     dev_unit_states: Dict[str, Any] = {}
     skipped_steps: Dict[int, str] = {}
     github_comment_id: Optional[int] = None
+    step_comments_set: Set[int] = set()
     resumed_from_state = False
     # On resume, restore the workflow-start file snapshot so guards that diff
     # against it (e.g. NOT_A_BUG direct-edit suppression) keep working.
@@ -2057,6 +2128,10 @@ def run_agentic_e2e_fix_orchestrator(
             saved_sha = loaded_state.get("initial_sha")
             if isinstance(saved_sha, str) and saved_sha:
                 resumed_initial_sha = saved_sha
+
+            step_comments_set = normalize_step_comments_state(
+                loaded_state.get("step_comments")
+            )
 
             # Issue #1034 (codex P2 follow-up): restore the current cycle's
             # start snapshot so the resume-time cycle-waste-breaker can prove
@@ -2258,6 +2333,7 @@ def run_agentic_e2e_fix_orchestrator(
             "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
             "last_saved_at": datetime.now().isoformat(),
             "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
             "initial_file_hashes": dict(initial_file_hashes),
             "initial_sha": initial_sha,
             # Persist None when the resumed cycle's baseline is unverified
@@ -2690,6 +2766,29 @@ def run_agentic_e2e_fix_orchestrator(
                 if step_success:
                     step_outputs[str(step_num)] = step_output
                     last_completed_step = step_num
+                    try:
+                        _report_body = extract_step_report(step_output)
+                        if not _report_body:
+                            _report_body = (
+                                f"_Step {step_num} completed; no `<step_report>` "
+                                "block returned by agent. Raw output retained in "
+                                "workflow state._"
+                            )
+                        _step_desc = STEP_DESCRIPTIONS.get(step_num, "")
+                        _comment_body = (
+                            f"## Step {step_num}/11: {_step_desc}\n\n{_report_body}"
+                        )
+                        post_step_comment_once(
+                            repo_owner=repo_owner,
+                            repo_name=repo_name,
+                            issue_number=issue_number,
+                            step_num=current_cycle * 10000 + step_num,
+                            body=_comment_body,
+                            posted_steps=step_comments_set,
+                            cwd=cwd,
+                        )
+                    except Exception as _exc:  # pylint: disable=broad-except
+                        console.print(f"[yellow]post_step_comment_once failed: {_exc}[/yellow]")
                 else:
                     step_outputs[str(step_num)] = f"FAILED: {step_output}"
                     # Don't update last_completed_step - keep it at previous value
@@ -2752,6 +2851,7 @@ def run_agentic_e2e_fix_orchestrator(
                     "skipped_steps": {str(k): v for k, v in skipped_steps.items()},
                     "last_saved_at": datetime.now().isoformat(),
                     "github_comment_id": github_comment_id,
+                    "step_comments": sorted(step_comments_set),
                     # Workflow-start snapshot — restored on resume so direct-edit
                     # detection survives interruption.
                     "initial_file_hashes": dict(initial_file_hashes),
@@ -3086,6 +3186,7 @@ def run_agentic_e2e_fix_orchestrator(
 
             # Step 11: Code Cleanup (runs BEFORE CI so cleanup is CI-validated)
             if not skip_cleanup:
+                _pre_cleanup_files = set(changed_files or [])
                 total_cost, changed_files = _run_step11_code_cleanup(
                     cwd=cwd,
                     issue_number=issue_number,
@@ -3102,6 +3203,76 @@ def run_agentic_e2e_fix_orchestrator(
                     quiet=quiet,
                     reasoning_time=reasoning_time,
                 )
+                # Round-2 of Greg's review: extend trusted step-comment
+                # coverage to the post-loop Step 11 (cleanup) path. The
+                # helper does its own console output but did not post a
+                # visible per-step comment through trusted credentials.
+                # The encoding matches the in-loop scheme:
+                # `current_cycle * 10000 + 11` so resume/dedup remains
+                # consistent across cycles.
+                try:
+                    _post_cleanup_files = set(changed_files or [])
+                    _cleanup_changed = sorted(_post_cleanup_files - _pre_cleanup_files)
+                    if _cleanup_changed:
+                        _step11_summary = (
+                            "_Step 11 cleanup pass applied changes to: "
+                            f"{', '.join(_cleanup_changed)}._"
+                        )
+                    else:
+                        _step11_summary = (
+                            "_Step 11 cleanup pass completed; no additional "
+                            "files were modified (cleanup found nothing to do "
+                            "or reverted itself when verification failed)._"
+                        )
+                    _step11_desc = STEP_DESCRIPTIONS.get(11, "Code cleanup")
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=current_cycle * 10000 + 11,
+                        body=f"## Step 11/11: {_step11_desc}\n\n{_step11_summary}",
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                    # Round-3/4 of Greg's review (idempotency across resume):
+                    # persist `step_comments` *immediately* after the post so
+                    # the composite key (`current_cycle * 10000 + 11`)
+                    # survives the failure-return paths below — specifically
+                    # the `ci_success=False` branch which returns without
+                    # touching workflow state.
+                    #
+                    # Round-4 fix: do NOT mutate the inner-loop `state_data`
+                    # local — on the SUCCESS_FALL_THROUGH / resume-terminal-
+                    # success paths the inner `for step_num in range(1, 10)`
+                    # loop never runs, so `state_data` is never assigned in
+                    # this invocation and the mutation would raise
+                    # `UnboundLocalError` inside the broad try/except. Build
+                    # a fresh post-loop state dict from function-scope
+                    # locals so the save works on every entry path.
+                    save_workflow_state(
+                        cwd, issue_number, workflow_name,
+                        _build_post_loop_state(
+                            workflow_name=workflow_name,
+                            issue_url=issue_url,
+                            issue_number=issue_number,
+                            current_cycle=current_cycle,
+                            last_completed_step=last_completed_step,
+                            step_outputs=step_outputs,
+                            dev_unit_states=dev_unit_states,
+                            skipped_steps=skipped_steps,
+                            total_cost=total_cost,
+                            model_used=model_used,
+                            changed_files=changed_files,
+                            github_comment_id=github_comment_id,
+                            step_comments_set=step_comments_set,
+                            initial_file_hashes=initial_file_hashes,
+                            initial_sha=initial_sha,
+                        ),
+                        state_dir, repo_owner, repo_name,
+                        use_github_state, github_comment_id,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed (step 11): {_exc}[/yellow]")
 
             if skip_ci:
                 if not quiet:
@@ -3127,7 +3298,67 @@ def run_agentic_e2e_fix_orchestrator(
             )
             total_cost += ci_cost
             changed_files = _detect_changed_files(cwd, initial_file_hashes) or changed_files
+            # Round-2 of Greg's review: extend trusted step-comment coverage
+            # past the linear `range(1, 10)` loop. Step 10 (CI validation)
+            # runs outside the loop and must also post a visible per-step
+            # comment via trusted PDD credentials, keyed by
+            # `current_cycle * 10000 + 10` so the composite-key scheme matches
+            # the in-loop encoding and dedup survives resume/retry.
             if ci_success:
+                try:
+                    _step10_desc = STEP_DESCRIPTIONS.get(10, "CI validation")
+                    _step10_body = (
+                        f"## Step 10/11: {_step10_desc}\n\n"
+                        f"_Step 10 completed; CI validation finished: {ci_message}_"
+                    )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=current_cycle * 10000 + 10,
+                        body=_step10_body,
+                        posted_steps=step_comments_set,
+                        cwd=cwd,
+                    )
+                    # Round-3/4 of Greg's review (idempotency across resume):
+                    # persist `step_comments` *immediately* after the post so
+                    # the composite key (`current_cycle * 10000 + 10`)
+                    # survives the failure-return path below — specifically
+                    # when `_run_final_checkup_on_pr` returns
+                    # `checkup_success=False` and the orchestrator returns
+                    # without clearing or saving state.
+                    #
+                    # Round-4 fix: do NOT mutate the inner-loop `state_data`
+                    # local — on the SUCCESS_FALL_THROUGH / resume-terminal-
+                    # success paths the inner step loop never runs, so
+                    # `state_data` is never assigned and the mutation would
+                    # raise UnboundLocalError. Build a fresh post-loop state
+                    # dict from function-scope locals so the save works on
+                    # every entry path.
+                    save_workflow_state(
+                        cwd, issue_number, workflow_name,
+                        _build_post_loop_state(
+                            workflow_name=workflow_name,
+                            issue_url=issue_url,
+                            issue_number=issue_number,
+                            current_cycle=current_cycle,
+                            last_completed_step=last_completed_step,
+                            step_outputs=step_outputs,
+                            dev_unit_states=dev_unit_states,
+                            skipped_steps=skipped_steps,
+                            total_cost=total_cost,
+                            model_used=model_used,
+                            changed_files=changed_files,
+                            github_comment_id=github_comment_id,
+                            step_comments_set=step_comments_set,
+                            initial_file_hashes=initial_file_hashes,
+                            initial_sha=initial_sha,
+                        ),
+                        state_dir, repo_owner, repo_name,
+                        use_github_state, github_comment_id,
+                    )
+                except Exception as _exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed (step 10): {_exc}[/yellow]")
                 if ci_message not in {
                     "No open PR found for current branch; skipping CI validation",
                     "No CI checks detected",
@@ -3212,6 +3443,7 @@ def run_agentic_e2e_fix_orchestrator(
             "changed_files": changed_files,
             "last_saved_at": datetime.now().isoformat(),
             "github_comment_id": github_comment_id,
+            "step_comments": sorted(step_comments_set),
             # Issue #1034 codex P2 follow-up: persist workflow-start and
             # cycle-start snapshots so resume after an interrupt still has
             # the data needed for direct-edit detection and the cycle-waste-
@@ -3263,6 +3495,7 @@ def run_agentic_e2e_fix_orchestrator(
                 "changed_files": changed_files,
                 "last_saved_at": datetime.now().isoformat(),
                 "github_comment_id": github_comment_id,
+                "step_comments": sorted(step_comments_set),
                 # Issue #1034 codex P2 follow-up: persist workflow-start and
                 # cycle-start snapshots so resume after a fatal exception
                 # still has the data needed for direct-edit detection and
