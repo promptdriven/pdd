@@ -759,14 +759,18 @@ def _extract_section(text: str, heading: str, level: int = 3) -> str:
     """Return the body of a Markdown section, bounded by the next same-or-higher
     level heading. Empty string if not found.
 
-    `level` is the number of `#` characters in the section heading.
+    `level` is the number of `#` characters in the section heading. The
+    heading match itself is case-insensitive — LLMs occasionally drop or
+    flip capitalization (``Dev units to MODIFY`` instead of
+    ``Dev Units to MODIFY``) and silently losing the whole allowlist
+    section over that is worse than a one-line regex flag.
     """
     hashes = "#" * level
     # Stop at the next heading of the same level or any higher level (fewer #).
     # We approximate "higher level" by matching `#{1..level}` followed by space.
     stop = rf"(?=^#{{1,{level}}} )"
     pattern = rf"^{re.escape(hashes)} {re.escape(heading)}\s*\n(.*?)(?:{stop}|\Z)"
-    match = re.search(pattern, text, re.MULTILINE | re.DOTALL)
+    match = re.search(pattern, text, re.MULTILINE | re.DOTALL | re.IGNORECASE)
     return match.group(1) if match else ""
 
 
@@ -799,7 +803,9 @@ def _parse_md_table_column(section: str, column_index: int) -> List[str]:
             continue
         if column_index - 1 >= len(cells):
             continue
-        cell = cells[column_index - 1].strip().strip("`").strip()
+        # Strip markdown emphasis (``**`` / ``*``) and code-ticks so the
+        # parser tolerates LLM variants like ``| **prompts/foo.prompt** | …``.
+        cell = cells[column_index - 1].strip().strip("*`").strip()
         if cell:
             values.append(cell)
     return values
@@ -889,15 +895,24 @@ def _parse_step5_doc_paths(step5_output: str) -> List[str]:
     Includes paths under `### Files to Update`, `### Files to Create`, and
     `### Associated Documents`. Excludes `### Conflicts` and
     `### No Changes Needed`. Only `.md`, `.rst`, `.txt` paths are returned.
+
+    Markdown emphasis (``**path**``) and surrounding backticks are stripped so
+    LLM variants like ``#### **README.md**`` and
+    ``- **docs/foo.md** - purpose`` are recognized.
     """
     docs: List[str] = []
     # Files to Update + Associated Documents: `#### path` headers.
+    # Tolerate any combination of surrounding markdown emphasis (``*``,
+    # ``**``) and code-ticks (``` ` ```) — strip them after capture rather
+    # than baking them into the pattern. ``str.strip("*`")`` peels off
+    # both characters in any order, so ``**`name`**`` collapses to
+    # ``name`` in a single call.
     for heading in ("Files to Update", "Associated Documents"):
         section = _extract_section(step5_output, heading, level=3)
         if not section:
             continue
-        for match in re.finditer(r"^####\s+`?([^`\n]+?)`?\s*$", section, re.MULTILINE):
-            candidate = match.group(1).strip()
+        for match in re.finditer(r"^####\s+(.+?)\s*$", section, re.MULTILINE):
+            candidate = match.group(1).strip().strip("*`").strip()
             if candidate.endswith((".md", ".rst", ".txt")):
                 docs.append(candidate)
     # Files to Create: `- path - purpose` bullets.
@@ -911,10 +926,46 @@ def _parse_step5_doc_paths(step5_output: str) -> List[str]:
             # Path is the first backticked or whitespace-separated token.
             match = re.match(r"`([^`]+)`", body)
             candidate = match.group(1).strip() if match else body.split(" - ", 1)[0].strip()
-            candidate = candidate.strip("`").strip()
+            candidate = candidate.strip("*`").strip()
             if candidate.endswith((".md", ".rst", ".txt")):
                 docs.append(candidate)
     return docs
+
+
+def _snapshot_worktree_status(worktree_path: Path) -> Dict[str, str]:
+    """Snapshot the current ``git status --porcelain=v1 -z`` state of *worktree_path*.
+
+    Returns a dict mapping POSIX-relative path → two-character ``XY`` status
+    code. Used by the Step 9 scope guard as a delta baseline: entries whose
+    ``(path, status)`` match this baseline are skipped during enforcement
+    because they pre-date the Step 9 LLM run (Step 8.5 drift-heal artifacts,
+    earlier resume-state writes, etc.).
+
+    Best-effort — returns ``{}`` on any error (no worktree, no git, etc.) so
+    callers always get a usable mapping.
+    """
+    if not worktree_path or not worktree_path.exists():
+        return {}
+    if not (worktree_path / ".git").exists():
+        return {}
+    try:
+        from pdd.git_porcelain import parse_porcelain_z
+        result = subprocess.run(
+            ["git", "status", "--porcelain=v1", "-z", "-u"],
+            cwd=str(worktree_path),
+            capture_output=True,
+            timeout=30,
+        )
+        if result.returncode != 0:
+            return {}
+        snapshot: Dict[str, str] = {}
+        for entry in parse_porcelain_z(result.stdout):
+            snapshot[entry.path] = entry.status
+        return snapshot
+    except (subprocess.TimeoutExpired, OSError):
+        return {}
+    except Exception:
+        return {}
 
 
 def _build_step9_allowlist(
@@ -929,7 +980,10 @@ def _build_step9_allowlist(
       * Step 6 dev-unit prompts (MODIFY + CREATE + dependencies + integration + frontend)
       * Step 6 Direct Edit Candidates
       * Step 5 doc paths (Update + Create + Associated; excludes Conflicts)
-      * Preflight-healed prompts plus their `.pdd/meta/<basename>.json` companions
+      * Preflight-healed prompts (the companion `.pdd/meta/*.json` and
+        `.pdd/meta/*_run.json` files are NOT in the allowlist; their
+        Step 8.5 mutations are protected via the pre-snapshot delta check
+        in `_enforce_step9_scope` instead — see issue #1123 round-2.)
 
     No directory prefixes are returned — paths only, exact match.
     """
@@ -972,17 +1026,17 @@ def _build_step9_allowlist(
         if not prompt_str.endswith(".prompt"):
             continue
         # Resolve healed prompt against the worktree if it's relative.
+        # Companion `.pdd/meta/*.json` and `.pdd/meta/*_run.json` files
+        # are NOT added here; they are protected via the pre-snapshot delta
+        # check in `_enforce_step9_scope` so that nested-directory and
+        # `--sync-metadata` side-effects (architecture.json, *_run.json)
+        # are all covered without having to mirror PDD's meta-path
+        # derivation logic in this allowlist.
         prompt_path = Path(prompt_str)
         if prompt_path.is_absolute():
             allowed_files.add(prompt_path.resolve())
-            basename = prompt_path.name
         else:
             allowed_files.add((worktree_root / prompt_path).resolve())
-            basename = prompt_path.name
-        # Companion meta JSON: .pdd/meta/<basename-without-suffix>.json.
-        meta_stem = basename[: -len(".prompt")] if basename.endswith(".prompt") else basename
-        meta_rel = f".pdd/meta/{meta_stem}.json"
-        allowed_files.add((worktree_root / meta_rel).resolve())
 
     return allowed_files, set()
 
@@ -991,12 +1045,23 @@ def _enforce_step9_scope(
     worktree_path: Path,
     context: Dict[str, Any],
     state: Dict[str, Any],
+    pre_status: Optional[Dict[str, str]] = None,
     quiet: bool = False,
 ) -> List[str]:
     """Revert any Step 9 file change that is not in the allowlist.
 
     Returns the list of reverted relative paths (POSIX strings). Returns ``[]``
-    when the worktree is missing or git is unavailable — never raises.
+    when the worktree is missing or git is unavailable.
+
+    On enforcement errors (helper raises, e.g. permission denied on
+    ``os.remove`` or OSError on ``git reset``), the exception propagates —
+    the orchestrator call site treats a failed guard as a workflow-stopping
+    scope violation rather than silently fail-open.
+
+    *pre_status* is the snapshot of ``git status`` BEFORE the Step 9 LLM ran
+    (captured right after preflight drift-heal). Entries whose ``(path,
+    status)`` match the snapshot are skipped during enforcement: their
+    existing state is a Step 8.5 artifact, not a Step 9 mutation.
     """
     if not worktree_path or not worktree_path.exists():
         return []
@@ -1005,10 +1070,7 @@ def _enforce_step9_scope(
     # guard is a no-op rather than a spurious failure.
     if not (worktree_path / ".git").exists():
         return []
-    try:
-        from pdd.agentic_common_worktree import revert_out_of_scope_changes_with_dirs
-    except Exception:
-        return []
+    from pdd.agentic_common_worktree import revert_out_of_scope_changes_with_dirs
 
     step5_output = context.get("step5_output", "") or ""
     step6_output = context.get("step6_output", "") or ""
@@ -1016,12 +1078,9 @@ def _enforce_step9_scope(
     allowed_files, allowed_dirs = _build_step9_allowlist(
         worktree_path, step5_output, step6_output, healed
     )
-    try:
-        reverted_paths = revert_out_of_scope_changes_with_dirs(
-            worktree_path, allowed_dirs, allowed_files
-        )
-    except Exception:
-        return []
+    reverted_paths = revert_out_of_scope_changes_with_dirs(
+        worktree_path, allowed_dirs, allowed_files, pre_snapshot=pre_status
+    )
     return [Path(p).as_posix() for p in reverted_paths]
 
 
@@ -1044,7 +1103,12 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
             capture_output=True, check=True
         )
         files = []
-        allowed_extensions = {".prompt", ".md"}
+        # Mirror the doc extensions Step 5/9 may legitimately edit. If this
+        # set drifts from `_parse_step5_doc_paths`, the scope guard will
+        # correctly preserve an in-scope `.rst`/`.txt` edit but this
+        # fallback returns [] — the workflow then aborts with "produced
+        # no file changes" even though the LLM did the right thing.
+        allowed_extensions = {".prompt", ".md", ".rst", ".txt"}
         direct_edit_set = set(direct_edit_candidates or [])
         for entry in parse_porcelain_z(result.stdout):
             # Use the new-side path verbatim — callers want current path.
@@ -1876,6 +1940,18 @@ def run_agentic_change_orchestrator(
                     ", ".join(failed_heal) if failed_heal else "None"
                 )
 
+            # Issue #1123: snapshot worktree state right BEFORE Step 9's
+            # LLM runs (and AFTER Step 8.5's drift-heal). The Step 9 scope
+            # guard uses this as a delta baseline so heal artifacts —
+            # `.pdd/meta/<nested>_<lang>.json`, `.pdd/meta/<basename>_run.json`,
+            # architecture.json mutations, etc. — are NOT misread as Step 9
+            # scope violations. Captured unconditionally (whenever the
+            # worktree exists), not just on the heal path: on resume after
+            # a violation, preflight already ran in a prior invocation and
+            # its mutations are on disk and must still be in the snapshot.
+            if worktree_path and worktree_path.exists():
+                context["_step9_pre_status"] = _snapshot_worktree_status(worktree_path)
+
         if not quiet:
             console.print(f"[bold][Step {step_num}/13][/bold] {description}...")
 
@@ -2041,22 +2117,60 @@ def run_agentic_change_orchestrator(
             # docs, and explicitly-listed Direct Edit Candidates. The LLM
             # does not reliably honor this; the guard enforces it.
             scope_reverted: List[str] = []
+            scope_guard_error: Optional[str] = None
             if worktree_path:
-                scope_reverted = _enforce_step9_scope(
-                    worktree_path=worktree_path,
-                    context=context,
-                    state=state,
-                    quiet=quiet,
-                )
-            if scope_reverted:
-                violation_block = (
-                    "SCOPE_VIOLATION:\n"
-                    + "\n".join(f"- {p}" for p in scope_reverted)
-                    + "\n\nThis indicates the Step 9 agent attempted edits outside "
-                    "the issue's contract. Review and refine the issue, then resume."
-                )
+                pre_status = context.get("_step9_pre_status")
+                try:
+                    scope_reverted = _enforce_step9_scope(
+                        worktree_path=worktree_path,
+                        context=context,
+                        state=state,
+                        pre_status=pre_status,
+                        quiet=quiet,
+                    )
+                except Exception as exc:
+                    # Round-2 fail-closed: the guard is a workflow-stopping
+                    # safety net. If it raised (permission denied on a
+                    # revert, OSError on a git reset, etc.), do NOT
+                    # silently advance — surface the failure as a
+                    # scope-violation-equivalent stop so the user knows
+                    # the contract was never enforced. See issue #1123.
+                    scope_guard_error = (
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    if not quiet:
+                        console.print(
+                            f"[red]Step 9 scope guard FAILED to enforce: "
+                            f"{escape(scope_guard_error)}[/red]"
+                        )
+            if scope_reverted or scope_guard_error:
+                if scope_guard_error:
+                    violation_block = (
+                        "SCOPE_VIOLATION:\n"
+                        + f"- <scope guard enforcement error: {scope_guard_error}>\n"
+                        + "\nThe Step 9 scope guard raised an error and could "
+                        "not enforce the allowlist. Treating this as a "
+                        "workflow-stopping scope violation. Inspect the "
+                        "worktree state, address the underlying issue, then "
+                        "resume."
+                    )
+                    return_msg = (
+                        "Stopped at step 9: Scope guard error — "
+                        f"{scope_guard_error}"
+                    )
+                else:
+                    violation_block = (
+                        "SCOPE_VIOLATION:\n"
+                        + "\n".join(f"- {p}" for p in scope_reverted)
+                        + "\n\nThis indicates the Step 9 agent attempted edits outside "
+                        "the issue's contract. Review and refine the issue, then resume."
+                    )
+                    return_msg = (
+                        f"Stopped at step 9: Scope violation — agent modified "
+                        f"{len(scope_reverted)} file(s) outside allowlist"
+                    )
                 step_output = step_output.rstrip() + "\n\n" + violation_block
-                if not quiet:
+                if not quiet and scope_reverted:
                     console.print(
                         f"[red]Step 9 scope violation: reverted "
                         f"{len(scope_reverted)} file(s) outside allowlist[/red]"
@@ -2079,8 +2193,7 @@ def run_agentic_change_orchestrator(
                 )
                 return (
                     False,
-                    f"Stopped at step 9: Scope violation — agent modified "
-                    f"{len(scope_reverted)} file(s) outside allowlist",
+                    return_msg,
                     total_cost, model_used, [],
                 )
 

@@ -34,7 +34,25 @@ from z3 import Solver, Int, Bool, Implies, And, Or, Not, unsat
 pytestmark = pytest.mark.timeout(450)
 
 # Adjust import path to ensure we can import the module under test
-from pdd.agentic_change_orchestrator import run_agentic_change_orchestrator, _parse_changed_files, _detect_worktree_changes, _parse_direct_edit_candidates, _check_existing_pr, _review_loop_no_issues, _scope_architecture_to_changed_files, _validate_architecture_filepaths
+from pdd.agentic_change_orchestrator import (
+    run_agentic_change_orchestrator,
+    _parse_changed_files,
+    _detect_worktree_changes,
+    _parse_direct_edit_candidates,
+    _check_existing_pr,
+    _review_loop_no_issues,
+    _scope_architecture_to_changed_files,
+    _validate_architecture_filepaths,
+    # Issue #1123 — Step 9 scope guard helpers.
+    _parse_step6_devunit_prompts,
+    _parse_step6_dependency_prompts,
+    _parse_step6_integration_prompts,
+    _parse_step6_frontend_prompts,
+    _parse_step5_doc_paths,
+    _build_step9_allowlist,
+    _enforce_step9_scope,
+    _snapshot_worktree_status,
+)
 
 # -----------------------------------------------------------------------------
 # Fixtures
@@ -1981,8 +1999,14 @@ def test_step9_fallback_detects_worktree_changes(mock_dependencies, temp_cwd):
 
 def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
     """
-    _detect_worktree_changes only picks up .prompt and .md files,
-    not .py, .txt, or .agentic_prompt_* temp files.
+    _detect_worktree_changes picks up `.prompt`, `.md`, `.rst`, `.txt`
+    docs (Step 5 Associated Docs include all four), but not `.py` source
+    or `.agentic_prompt_*` temp files.
+
+    Round-2 (#1123): `.rst`/`.txt` were added to the allowed extensions so
+    Step 9 can legitimately edit `.txt` notes / `.rst` docs without the
+    fallback emitting an empty list and failing with "produced no file
+    changes." A literal `notes.txt` at the repo root therefore IS picked up.
     """
     # Create a real git repo with tracked prompts/ directory (like downstream_project)
     subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True, check=True)
@@ -2010,8 +2034,10 @@ def test_step9_worktree_fallback_filters_prompt_files(tmp_path):
     assert "prompts/existing.prompt" in files
     assert "README.md" in files
     assert "random.py" not in files
+    # .agentic_prompt_* temps are still filtered even though .txt is allowed.
     assert ".agentic_prompt_abc12345.txt" not in files
-    assert "notes.txt" not in files
+    # `.txt` is a Step 5 doc extension → included in the fallback.
+    assert "notes.txt" in files
 
 
 def test_step9_output_saved_on_failure(mock_dependencies, temp_cwd):
@@ -5620,16 +5646,6 @@ class TestTrustedStepCommentPosting:
 
 import textwrap as _textwrap
 
-from pdd.agentic_change_orchestrator import (
-    _parse_step6_devunit_prompts,
-    _parse_step6_dependency_prompts,
-    _parse_step6_integration_prompts,
-    _parse_step6_frontend_prompts,
-    _parse_step5_doc_paths,
-    _build_step9_allowlist,
-    _enforce_step9_scope,
-)
-
 
 def _scope_git_env() -> dict:
     return {
@@ -5903,18 +5919,26 @@ def test_build_step9_allowlist_excludes_step6_code_example_test_columns(tmp_path
     assert resolved_forbidden.isdisjoint(allowed_files)
 
 
-def test_build_step9_allowlist_includes_preflight_healed_prompts_and_meta(tmp_path):
+def test_build_step9_allowlist_includes_preflight_healed_prompts(tmp_path):
+    """Round-2 (issue #1123): healed prompts go in the allowlist but their
+    `.pdd/meta/*.json` and `.pdd/meta/*_run.json` companions DO NOT —
+    those are protected via the pre-snapshot delta check in
+    ``_enforce_step9_scope``, not the allowlist. This sidesteps PDD's
+    nested-directory meta-path naming (`backend_foo_python.json` vs
+    `foo_python.json`) and `--sync-metadata` side-effect files."""
     healed = ["prompts/healed_python.prompt"]
     allowed_files, _ = _build_step9_allowlist(
         tmp_path, _STEP5_SAMPLE, _STEP6_SAMPLE, healed
     )
     healed_abs = (tmp_path / "prompts/healed_python.prompt").resolve()
-    meta_abs = (tmp_path / ".pdd/meta/healed_python.json").resolve()
     assert healed_abs in allowed_files
-    assert meta_abs in allowed_files
-    # Unrelated prompts get NO meta-file allowance.
-    unrelated_meta = (tmp_path / ".pdd/meta/unrelated.json").resolve()
-    assert unrelated_meta not in allowed_files
+    # Companion meta files are NOT in the allowlist any more — the snapshot
+    # delta in the guard preserves them by virtue of pre-existing in
+    # `git status` before Step 9 ran.
+    meta_abs = (tmp_path / ".pdd/meta/healed_python.json").resolve()
+    run_meta_abs = (tmp_path / ".pdd/meta/healed_python_run.json").resolve()
+    assert meta_abs not in allowed_files
+    assert run_meta_abs not in allowed_files
 
 
 def test_build_step9_allowlist_excludes_step5_conflicts(tmp_path):
@@ -6086,14 +6110,13 @@ def test_step9_scope_guard_preserves_associated_document(tmp_path):
 
 
 @pytest.mark.timeout(60)
-def test_step9_scope_guard_preserves_healed_prompt_and_meta(tmp_path):
+def test_step9_scope_guard_preserves_healed_prompt_via_allowlist(tmp_path):
+    """The healed prompt itself is allowlisted (and rewritten further by
+    Step 9 here, mirroring `_preflight_drift_heal` → step-9 LLM follow-on
+    edits)."""
     repo = tmp_path / "repo"
-    _scope_git_init(repo, {
-        "prompts/healed_python.prompt": "old",
-        ".pdd/meta/healed_python.json": "{}",
-    })
+    _scope_git_init(repo, {"prompts/healed_python.prompt": "old"})
     (repo / "prompts" / "healed_python.prompt").write_text("rewritten")
-    (repo / ".pdd" / "meta" / "healed_python.json").write_text('{"hash": "abc"}')
 
     reverted = _enforce_step9_scope(
         repo,
@@ -6105,7 +6128,6 @@ def test_step9_scope_guard_preserves_healed_prompt_and_meta(tmp_path):
 
     assert reverted == []
     assert (repo / "prompts" / "healed_python.prompt").read_text() == "rewritten"
-    assert (repo / ".pdd" / "meta" / "healed_python.json").read_text() == '{"hash": "abc"}'
 
 
 @pytest.mark.timeout(60)
@@ -6347,3 +6369,330 @@ def test_orchestrator_step9_no_violations_proceeds_normally(temp_cwd):
     # And the message should NOT report a scope violation.
     assert "Scope violation" not in msg
 
+
+# =============================================================================
+# Issue #1123 — Round-2: snapshot-based scope guard
+#
+# Step 8.5 drift-heal writes `.pdd/meta/<basename>_<lang>.json` (nested-aware)
+# AND `.pdd/meta/<basename>_<lang>_run.json` for `pdd update --sync-metadata`
+# operations, plus possibly architecture.json. An allowlist alone can't cover
+# every such path because module identity (`infer_module_identity`)
+# reconstructs subdir context. The snapshot-based delta check sidesteps
+# the naming problem: anything that already changed BEFORE Step 9 ran is by
+# construction pre-existing context, not a Step 9 mutation.
+# =============================================================================
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_preflight_meta_writes(tmp_path):
+    """Step 8.5 added a nested `.pdd/meta/backend_foo_python.json`; the
+    pre-snapshot must capture this so the guard doesn't revert it."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    # Simulate Step 8.5 heal: a new meta file appears in the worktree before
+    # Step 9 runs. Snapshot is taken here.
+    meta_dir = repo / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "backend_foo_python.json").write_text("{}")
+
+    pre_status = _snapshot_worktree_status(repo)
+    assert pre_status.get(".pdd/meta/backend_foo_python.json") == "??"
+
+    # No further changes — Step 9 is a no-op here. The guard must NOT
+    # revert the meta file even though it isn't in the allowlist.
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/backend/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (meta_dir / "backend_foo_python.json").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_preflight_run_report(tmp_path):
+    """Same as above but for the `--sync-metadata` run-report variant
+    (`.pdd/meta/<basename>_run.json`)."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    meta_dir = repo / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True, exist_ok=True)
+    (meta_dir / "backend_foo_python_run.json").write_text(
+        '{"status": "passed"}'
+    )
+
+    pre_status = _snapshot_worktree_status(repo)
+    assert pre_status.get(".pdd/meta/backend_foo_python_run.json") == "??"
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/backend/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert reverted == []
+    assert (meta_dir / "backend_foo_python_run.json").exists()
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_preserves_preflight_architecture_json_mutation(tmp_path):
+    """Step 8.5 may legitimately update architecture.json (e.g. registering
+    a healed prompt). architecture.json is explicitly EXCLUDED from the
+    allowlist, but the pre-snapshot must still preserve the mutation."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modified arch.json.
+    (repo / "architecture.json").write_text('{"modules": ["healed"]}\n')
+
+    pre_status = _snapshot_worktree_status(repo)
+    assert pre_status.get("architecture.json") == " M"
+
+    # Step 9 was a no-op (arch.json was already at "healed" before Step 9).
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert reverted == []
+    # arch.json must be untouched (still has the heal-time content).
+    assert (repo / "architecture.json").read_text() == '{"modules": ["healed"]}\n'
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_step9_arch_json_modification_when_no_preflight(tmp_path):
+    """Control case for the preceding test: without a preflight snapshot
+    capturing the arch.json mutation, Step 9 modifying it must still be
+    treated as a scope violation."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    # No pre_status (or empty pre_status) — Step 9's arch.json mutation
+    # MUST be reverted.
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        pre_status={},
+        quiet=True,
+    )
+
+    assert "architecture.json" in reverted
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_reverts_step9_new_arch_modification_even_with_snapshot(tmp_path):
+    """Snapshotting only protects the EXACT (path, status) pair from before
+    Step 9. If Step 9 changes a file whose pre-status was unchanged ("" /
+    missing), the guard still enforces the allowlist."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Pre-snapshot has no arch.json mutation (clean state at heal time).
+    pre_status = _snapshot_worktree_status(repo)
+    assert "architecture.json" not in pre_status
+
+    # Step 9 then modifies arch.json — must be reverted.
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    assert "architecture.json" in reverted
+    assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+# -----------------------------------------------------------------------------
+# Blocker 2 — fallback worktree-change detection must include `.rst`/`.txt`
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(30)
+def test_detect_worktree_changes_returns_rst_and_txt_docs(tmp_path):
+    """Step 5 allows `.rst` and `.txt` docs. If Step 9 modifies one and
+    forgets `FILES_MODIFIED:`, `_detect_worktree_changes` is the fallback —
+    and it MUST return those extensions, or the workflow aborts with
+    'produced no file changes' even though the LLM did the right thing."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "docs/manual.rst": "old rst\n",
+        "docs/notes.txt": "old txt\n",
+        "prompts/foo_python.prompt": "p\n",
+    })
+    (repo / "docs" / "manual.rst").write_text("new rst content\n")
+    (repo / "docs" / "notes.txt").write_text("new txt content\n")
+
+    files = _detect_worktree_changes(repo)
+
+    assert "docs/manual.rst" in files
+    assert "docs/notes.txt" in files
+
+
+# -----------------------------------------------------------------------------
+# Blocker 3 — scope-guard exceptions must stop the workflow (fail closed)
+# -----------------------------------------------------------------------------
+
+
+@pytest.mark.timeout(60)
+def test_enforce_step9_scope_propagates_helper_exceptions(tmp_path):
+    """`_enforce_step9_scope` no longer wraps the helper in a broad
+    `try/except`. Permission/OS errors surface to the orchestrator, which
+    treats them as workflow-stopping scope violations."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+
+    with patch(
+        "pdd.agentic_common_worktree.revert_out_of_scope_changes_with_dirs",
+        side_effect=OSError("Permission denied"),
+    ):
+        with pytest.raises(OSError):
+            _enforce_step9_scope(
+                repo,
+                context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                         "direct_edit_candidates": []},
+                state={},
+                quiet=True,
+            )
+
+
+@pytest.mark.timeout(120)
+def test_orchestrator_step9_guard_exception_stops_workflow(temp_cwd):
+    """When `_enforce_step9_scope` raises, the orchestrator MUST treat it
+    as a scope-violation-equivalent stop: no advance past step 9, return
+    False with a clear message that mentions the guard error."""
+    repo, worktree = _make_real_worktree_for_step9(temp_cwd)
+
+    with patch("pdd.agentic_change_orchestrator.run_agentic_task") as mock_run, \
+         patch("pdd.agentic_change_orchestrator.load_prompt_template",
+               return_value="tmpl"), \
+         patch("pdd.agentic_change_orchestrator.load_workflow_state",
+               return_value=(None, None)), \
+         patch("pdd.agentic_change_orchestrator.save_workflow_state") as mock_save, \
+         patch("pdd.agentic_change_orchestrator.clear_workflow_state"), \
+         patch("pdd.agentic_change_orchestrator.post_step_comment",
+               return_value=True), \
+         patch("pdd.agentic_change_orchestrator._check_existing_pr",
+               return_value=None), \
+         patch("pdd.agentic_change_orchestrator._setup_worktree",
+               return_value=(worktree, None)), \
+         patch("pdd.agentic_change_orchestrator._preflight_drift_heal",
+               return_value=([], [], [])), \
+         patch("pdd.agentic_change_orchestrator.preprocess",
+               side_effect=lambda p, **kw: p), \
+         patch("pdd.agentic_change_orchestrator._enforce_step9_scope",
+               side_effect=OSError("simulated guard failure")):
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step5":
+                return (True, _STEP5_SAMPLE, 0.1, "gpt-4")
+            if label == "step6":
+                return (True, _STEP6_SAMPLE, 0.1, "gpt-4")
+            if label == "step9":
+                # Step 9 reports success; the guard is what fails.
+                return (True, "FILES_MODIFIED: prompts/foo_python.prompt",
+                        0.5, "gpt-4")
+            return (True, f"out {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        success, msg, _cost, _model, _files = run_agentic_change_orchestrator(
+            issue_url="http://url",
+            issue_content="x",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=1126,
+            issue_author="me",
+            issue_title="t",
+            cwd=repo,
+            quiet=True,
+        )
+
+    assert success is False
+    assert "Scope guard error" in msg or "scope guard" in msg.lower()
+    # last_completed_step must NOT advance to 9.
+    assert mock_save.called
+    saved_state = mock_save.call_args[0][3]
+    assert saved_state["last_completed_step"] < 9
+    # State output should mention the guard failure for debugging.
+    s9_output = saved_state["step_outputs"].get("9", "")
+    assert "SCOPE_VIOLATION" in s9_output
+    assert "scope guard enforcement error" in s9_output.lower()
+
+
+# -----------------------------------------------------------------------------
+# Nit N1 — case-insensitive section heading
+# -----------------------------------------------------------------------------
+
+
+def test_parse_step6_devunit_prompts_case_insensitive_heading():
+    """LLMs occasionally lowercase part of the heading; the parser must
+    still find the section instead of silently returning an empty list
+    (which collapses the allowlist)."""
+    weird_case = _STEP6_SAMPLE.replace(
+        "### Dev Units to MODIFY",
+        "### Dev units to MODIFY",
+    )
+    result = _parse_step6_devunit_prompts(weird_case)
+    assert "prompts/foo_python.prompt" in result
+    assert "prompts/bar_python.prompt" in result
+
+
+# -----------------------------------------------------------------------------
+# Nit N2 — strip markdown emphasis in path parsers
+# -----------------------------------------------------------------------------
+
+
+def test_parse_step5_doc_paths_strips_markdown_emphasis():
+    """`#### **README.md**` and `- **docs/foo.md** - purpose` are real LLM
+    outputs. They must round-trip to the plain path."""
+    sample = _textwrap.dedent("""
+        ## Step 5: Documentation Changes
+
+        ### Files to Update
+
+        #### **README.md**
+        **Change:** add
+
+        #### **`docs/usage.md`**
+        **Change:** add
+
+        ### Files to Create
+        - **docs/new_guide.md** - tutorial
+        - **`docs/reference.rst`** - reference
+    """)
+    result = _parse_step5_doc_paths(sample)
+    assert "README.md" in result
+    assert "docs/usage.md" in result
+    assert "docs/new_guide.md" in result
+    assert "docs/reference.rst" in result
+    # No emphasis markers leaked into the parsed paths.
+    assert not any("*" in p for p in result)
+    assert not any("`" in p for p in result)

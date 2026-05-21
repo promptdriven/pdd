@@ -707,3 +707,71 @@ class TestRevertWithDirsRename1080:
         assert any(
             str(p).endswith("bogus -> file.txt") for p in result
         ), f"Reverted list missing real path: {result!r}"
+
+
+# =========================================================================
+# Issue #1123: pre-snapshot skip in revert_out_of_scope_changes_with_dirs
+# =========================================================================
+
+
+def test_revert_out_of_scope_changes_with_dirs_skips_unchanged_pre_snapshot():
+    """When the caller supplies a pre-snapshot, entries whose (path, status)
+    match the baseline must be skipped. Only NEW or CHANGED entries are
+    subject to the allowlist enforcement.
+
+    This is how the Step 9 scope guard distinguishes Step 8.5 drift-heal
+    mutations (in the snapshot) from Step 9 LLM mutations (not in the
+    snapshot or with a different status).
+    """
+    # Two out-of-scope entries: one in the snapshot (heal artifact),
+    # one fresh (Step 9 leak). Only the fresh one should be reverted.
+    porcelain = b"?? .pdd/meta/x.json\x00?? tests/leak.py\x00"
+    pre_snapshot = {".pdd/meta/x.json": "??"}
+    with patch(f"{MODULE}.subprocess.run") as mock_run, \
+         patch(f"{MODULE}.os.remove") as mock_remove:
+        mock_run.side_effect = [_cp(stdout=porcelain)]
+        result = revert_out_of_scope_changes_with_dirs(
+            Path("/repo"),
+            allowed_dirs=set(),
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        # The snapshotted entry is skipped; only the new leak is removed.
+        assert result == [Path("tests/leak.py")]
+        mock_remove.assert_called_once()
+        removed_arg = mock_remove.call_args[0][0]
+        assert removed_arg.endswith("tests/leak.py")
+
+
+def test_revert_out_of_scope_changes_with_dirs_reverts_when_status_changed():
+    """A snapshotted entry whose status CHANGED since the snapshot is a
+    new mutation and must still be subject to the allowlist."""
+    # In the snapshot the file was ``A`` (added/untracked-staged);
+    # post-snapshot git reports ``M`` — Step 9 modified the file further.
+    porcelain = b" M outside.py\x00"
+    pre_snapshot = {"outside.py": "A "}
+    with patch(f"{MODULE}.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            _cp(stdout=porcelain),
+            _cp(),  # checkout
+        ]
+        result = revert_out_of_scope_changes_with_dirs(
+            Path("/repo"),
+            allowed_dirs={"pdd/"},
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        assert Path("outside.py") in result
+
+
+def test_revert_out_of_scope_changes_with_dirs_existing_two_arg_callers_unchanged():
+    """The new param is optional with a None default. Existing two-arg
+    call sites must continue to enforce the allowlist over every entry."""
+    porcelain = b"?? leak.py\x00"
+    with patch(f"{MODULE}.subprocess.run", return_value=_cp(stdout=porcelain)), \
+         patch(f"{MODULE}.os.remove") as mock_remove:
+        result = revert_out_of_scope_changes_with_dirs(
+            Path("/repo"), allowed_dirs=set(), allowed_files=set()
+        )
+        assert Path("leak.py") in result
+        mock_remove.assert_called_once()

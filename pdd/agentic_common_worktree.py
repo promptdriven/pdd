@@ -11,7 +11,7 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import List, Optional, Set, Tuple
+from typing import List, Mapping, Optional, Set, Tuple
 
 from rich.console import Console
 
@@ -376,6 +376,7 @@ def revert_out_of_scope_changes_with_dirs(
     cwd: Path,
     allowed_dirs: set[str],
     allowed_files: set[Path],
+    pre_snapshot: Optional[Mapping[str, str]] = None,
 ) -> List[Path]:
     """Revert/remove any changed or new files that fall outside *allowed_dirs*
     and *allowed_files*.
@@ -383,6 +384,14 @@ def revert_out_of_scope_changes_with_dirs(
     * Tracked out-of-scope changes are reverted via
       ``git checkout HEAD -- <file>``.
     * Untracked out-of-scope files are removed via :func:`os.remove`.
+
+    When *pre_snapshot* is provided, it maps POSIX-relative path → porcelain
+    ``XY`` status code captured BEFORE the caller's "change of interest" began
+    (e.g. before Step 9's LLM ran). Any current entry whose ``(path, status)``
+    matches the snapshot is skipped — its existing state is by-construction
+    the contract, so it is not part of the change set the caller wants to
+    enforce. New entries, removed entries, and status-changed entries are
+    still subject to the allowlist.
 
     Returns the list of reverted / removed paths (relative to *cwd*).
     """
@@ -427,6 +436,15 @@ def revert_out_of_scope_changes_with_dirs(
         status = entry.status
         new_rel = entry.path
         old_rel = entry.old_path
+
+        # Pre-snapshot pass-through: if the caller supplied a baseline and
+        # this entry's (path, status) matches the baseline exactly, the
+        # change predates the window the caller wants enforced — skip it.
+        # Status-code mismatches DO fall through to the allowlist check
+        # because a status change (e.g. ``A`` → ``M`` from a later edit,
+        # ``M`` → `` `` from a reversion) is itself a new mutation.
+        if pre_snapshot is not None and pre_snapshot.get(new_rel) == status:
+            continue
 
         is_rename = old_rel is not None and "R" in status
         is_copy = old_rel is not None and "C" in status
