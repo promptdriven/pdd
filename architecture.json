@@ -7722,7 +7722,8 @@
             "returns": "Tuple[Optional[Path], Optional[str]]",
             "sideEffects": [
               "Fetches PR head",
-              "Creates git worktree for the existing PR branch"
+              "Creates git worktree for the existing PR branch",
+              "Round-8 Finding 3: on resume_existing=True with the local checkup/pr-N branch still present, SKIPS the `git fetch --force` so unpushed local fix commits from an interrupted previous run are not destroyed; the fetch still runs when resume_existing=True but the branch is also missing (no local work to preserve)"
             ]
           },
           {

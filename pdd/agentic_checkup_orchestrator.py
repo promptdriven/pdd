@@ -586,34 +586,48 @@ def _setup_pr_worktree(
     if _branch_exists(git_root, branch_name) and not resume_existing:
         _delete_branch(git_root, branch_name)
 
-    # Resolve which remote actually has this PR. Prefer a configured remote
-    # (uses the user's auth + caching); fall back to the explicit GitHub URL
-    # so fork-PR verification works even when no matching remote is wired.
-    remote_target = _resolve_pr_remote(git_root, pr_owner, pr_repo)
-    if remote_target is None:
-        remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
+    # Codex round-8 Finding 3: on resume_existing when the local branch
+    # still exists, SKIP the force-fetch. Force-fetching overwrites the
+    # branch ref with the remote PR head, destroying any local-only
+    # commits — e.g. a successful ``_commit_and_push_if_changed`` commit
+    # whose subsequent push failed in the previous (interrupted) run.
+    # The resume contract is "preserve the in-progress state"; force-
+    # fetching is the opposite of that. Remote advances are picked up
+    # later by ``_commit_and_push_if_changed``'s rebase-on-push helper
+    # when this run reaches its push step.
+    skip_fetch = resume_existing and _branch_exists(git_root, branch_name)
 
-    try:
-        subprocess.run(
-            ["git", "fetch", remote_target, f"pull/{pr_number}/head:{branch_name}", "--force"],
-            cwd=git_root,
-            capture_output=True,
-            check=True,
-        )
-    except subprocess.CalledProcessError as e:
-        err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
-        # Redact any GH token that git may echo back from a tokenized remote
-        # URL (e.g. when callers seed ``https://x-access-token:...@github.com``
-        # into the resolved remote). Matches the push-failure redaction at
-        # ``checkup_review_loop._commit_and_push_if_changed``.
-        token = _github_token_from_env()
-        safe_err = _redact_secret(err_msg.strip(), token) if token else err_msg.strip()
-        safe_remote = _redact_secret(remote_target, token) if token else remote_target
-        return None, (
-            f"Failed to fetch PR #{pr_number} from {safe_remote}: {safe_err}. "
-            f"Confirm the PR exists and you have read access to "
-            f"{pr_owner}/{pr_repo}."
-        )
+    if not skip_fetch:
+        # Resolve which remote actually has this PR. Prefer a configured
+        # remote (uses the user's auth + caching); fall back to the explicit
+        # GitHub URL so fork-PR verification works even when no matching
+        # remote is wired.
+        remote_target = _resolve_pr_remote(git_root, pr_owner, pr_repo)
+        if remote_target is None:
+            remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
+
+        try:
+            subprocess.run(
+                ["git", "fetch", remote_target, f"pull/{pr_number}/head:{branch_name}", "--force"],
+                cwd=git_root,
+                capture_output=True,
+                check=True,
+            )
+        except subprocess.CalledProcessError as e:
+            err_msg = e.stderr.decode("utf-8") if isinstance(e.stderr, bytes) else str(e.stderr)
+            # Redact any GH token that git may echo back from a tokenized
+            # remote URL (e.g. when callers seed
+            # ``https://x-access-token:...@github.com`` into the resolved
+            # remote). Matches the push-failure redaction at
+            # ``checkup_review_loop._commit_and_push_if_changed``.
+            token = _github_token_from_env()
+            safe_err = _redact_secret(err_msg.strip(), token) if token else err_msg.strip()
+            safe_remote = _redact_secret(remote_target, token) if token else remote_target
+            return None, (
+                f"Failed to fetch PR #{pr_number} from {safe_remote}: {safe_err}. "
+                f"Confirm the PR exists and you have read access to "
+                f"{pr_owner}/{pr_repo}."
+            )
 
     # 3. Create worktree on the fetched branch.
     try:

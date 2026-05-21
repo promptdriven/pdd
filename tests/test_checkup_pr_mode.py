@@ -1033,6 +1033,161 @@ class TestPrResumeWorktreeRecreation:
 
 
 # ---------------------------------------------------------------------------
+# Codex round-8 Finding 3: resume must not force-fetch over a local branch
+# that has unpushed commits. The previous run may have committed a fix
+# locally without successfully pushing; force-fetching --force overrides
+# the branch ref with the remote PR head and silently destroys that work.
+# ---------------------------------------------------------------------------
+
+
+class TestSetupPrWorktreeResumePreservesLocalCommits:
+    """`_setup_pr_worktree(resume_existing=True)` must not force-fetch over
+    a still-existing local branch. The fetch step is what destroys the
+    unpushed local commit; skipping it preserves the in-progress state.
+    """
+
+    def test_resume_existing_with_branch_skips_force_fetch(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        captured_cmds: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            captured_cmds.append(list(args))
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout=b"", stderr=b""
+            )
+
+        # _branch_exists -> True, _get_git_root -> tmp_path, no existing wt dir
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._worktree_exists",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._delete_branch",
+        ) as delete_branch_mock, patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            wt_path, err = _setup_pr_worktree(
+                tmp_path, "acme", "repo", 42, quiet=True, resume_existing=True
+            )
+
+        assert err is None, err
+        # The delete-branch path is gated on `not resume_existing` — must
+        # not fire when we're resuming.
+        delete_branch_mock.assert_not_called()
+        # No `git fetch ... --force` should have run. The only subprocess
+        # call we should see is `git worktree add` for the worktree itself.
+        fetch_calls = [
+            c for c in captured_cmds
+            if len(c) >= 2 and c[0] == "git" and c[1] == "fetch"
+        ]
+        assert fetch_calls == [], (
+            "Round-8 Finding 3: resume_existing must skip the force-fetch "
+            f"so local-only commits are preserved. Got fetches: {fetch_calls}"
+        )
+
+    def test_resume_existing_without_branch_still_fetches(
+        self, tmp_path: Path
+    ) -> None:
+        """When the branch is also missing (e.g. worktree AND branch were
+        cleaned up), there's no local work to preserve — fetch is required
+        to materialize the branch.
+        """
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        captured_cmds: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            captured_cmds.append(list(args))
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout=b"", stderr=b""
+            )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._worktree_exists",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            _setup_pr_worktree(
+                tmp_path, "acme", "repo", 42, quiet=True, resume_existing=True
+            )
+
+        fetch_calls = [
+            c for c in captured_cmds
+            if len(c) >= 2 and c[0] == "git" and c[1] == "fetch"
+        ]
+        assert len(fetch_calls) == 1, (
+            "When no local branch exists, the fetch must run to create it; "
+            f"got: {fetch_calls}"
+        )
+
+    def test_non_resume_still_force_fetches_to_pick_up_remote(
+        self, tmp_path: Path
+    ) -> None:
+        """Default (resume_existing=False) behavior is unchanged: delete the
+        local branch and force-fetch the remote head. This is what
+        first-time runs and explicit re-runs need."""
+        from pdd.agentic_checkup_orchestrator import _setup_pr_worktree
+
+        captured_cmds: list[list[str]] = []
+
+        def fake_run(args, **_kwargs):
+            captured_cmds.append(list(args))
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout=b"", stderr=b""
+            )
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._worktree_exists",
+            return_value=False,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._branch_exists",
+            return_value=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._delete_branch",
+        ) as delete_branch_mock, patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            _setup_pr_worktree(
+                tmp_path, "acme", "repo", 42, quiet=True, resume_existing=False
+            )
+
+        delete_branch_mock.assert_called_once()
+        fetch_calls = [
+            c for c in captured_cmds
+            if len(c) >= 2 and c[0] == "git" and c[1] == "fetch"
+        ]
+        assert len(fetch_calls) == 1
+        assert "--force" in fetch_calls[0]
+
+
+# ---------------------------------------------------------------------------
 # Blocker #1 (codex round-1): pr_head_sha axis in state identity guard.
 # Cached step outputs are stale if the PR branch advanced between runs.
 # ---------------------------------------------------------------------------
