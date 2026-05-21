@@ -279,6 +279,16 @@ class TestOrchestratorPrMode:
             return_value=None,
         ), patch(
             "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            # Round-6 stale-head guard: keep worktree HEAD == fresh PR head.
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={"head_sha": "deadbeef"},
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
         ):
             (tmp_path / "wt").mkdir()
 
@@ -760,9 +770,13 @@ class TestPrModeFixPushBack:
                 "head_ref": "change/test",
                 "head_owner": "o",
                 "head_repo": "r",
+                "head_sha": "deadbeef",
             },
             create=True,
         ) as metadata_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, "Pushed fixes to PR branch."),
             create=True,
@@ -853,6 +867,9 @@ class TestPrModeFixPushBack:
                 "head_repo": "r",
                 "head_sha": "deadbeef",
             },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             side_effect=fake_push,
@@ -979,6 +996,9 @@ class TestPrResumeWorktreeRecreation:
                 "head_sha": "aaaaaaaa",
             },
             create=True,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa",
         ), patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, "No changes to push."),
@@ -1316,8 +1336,12 @@ class TestStateIdentityPrHeadSha:
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, "No changes to push."),
         ), patch(
+            # Mirror current_sha so the round-6 stale-head guard's
+            # behavior matches whatever the cached-state guard already
+            # established: when current_sha is empty, both guards fail
+            # closed.
             "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
-            return_value="deadbeef",
+            return_value=current_sha,
         ):
             success, _msg, _cost, _model = run_agentic_checkup_orchestrator(
                 issue_url="https://github.com/o/r/issues/99",
@@ -1340,7 +1364,22 @@ class TestStateIdentityPrHeadSha:
                 pr_number=200,
             )
 
-        assert success is True
+        # The state-identity guard discards cache when either side's SHA
+        # is missing (this test's focus), then steps 1-5 re-execute. The
+        # final round-6 stale-head guard then also fails closed when the
+        # current SHA is unavailable — that's an orthogonal safety net,
+        # not a regression. The point of this test is that steps RE-RAN
+        # (cache was discarded), so assert on step execution. The overall
+        # return value depends on whether the round-6 guard can verify
+        # the PR head, which is parametrized.
+        if current_sha:
+            assert success is True
+        else:
+            assert success is False, (
+                "Empty current_sha must fail closed at the round-6 "
+                "stale-head guard — same fail-closed posture as the "
+                "state-identity guard tested here"
+            )
         # Fail-closed invalidation. With cache discarded, steps 1-5 MUST
         # re-execute. Without the tightening they'd be replayed from cache
         # and never appear.
@@ -2339,6 +2378,11 @@ def _run_orch_with_fake_step7(
     ), patch(
         "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
         return_value=None,
+    ), patch(
+        # Round-6 stale-head guard: worktree HEAD must match the
+        # fresh remote head returned by _fetch_pr_metadata above.
+        "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+        return_value="deadbeef",
     ):
         success, msg, _cost, _model = run_agentic_checkup_orchestrator(
             issue_url="https://github.com/o/r/issues/99",
@@ -2606,6 +2650,14 @@ class TestCanonicalReportOnEveryPRModeReturnPath:
                     "head_repo": "r",
                     "head_sha": "deadbeef",
                 },
+            ),
+            # Round-6 stale-head guard reads worktree HEAD; default it to
+            # match the fresh remote head so the standard success-path tests
+            # don't trip the guard. Tests of the guard itself should override
+            # this in their own ``patch`` list to introduce a mismatch.
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="deadbeef",
             ),
         ]
 
@@ -3118,6 +3170,12 @@ def _run_fix_mode_pr_with_post_returns(
         "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
         return_value=None,
     ), patch(
+        # Round-6 stale-head guard: worktree HEAD must match the fresh
+        # remote head so the success path completes (these tests focus
+        # on comment-post failure surfacing, not the head invariant).
+        "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+        return_value="deadbeef",
+    ), patch(
         "pdd.agentic_checkup_orchestrator.post_pr_comment",
         return_value=pr_comment_return,
     ) as pr_comment_mock, patch(
@@ -3417,3 +3475,337 @@ class TestPrModeRefreshesContextFromWorktree:
                 f"Pre-PR-worktree .pddrc leaked when worktree was empty. "
                 f"Saw: {pddrc!r}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Codex round-6 Finding #1: standalone `pdd checkup --pr` stale-head guard.
+#
+# The pdd-issue final gate (`_run_final_checkup_on_pr`) already enforces this
+# invariant. Standalone `pdd checkup --pr` invocations need the same: if the
+# PR head advances externally during the checkup, Step 7's verdict applies
+# to stale code and returning success would green-light an unverified head.
+# ---------------------------------------------------------------------------
+
+
+class TestStandaloneStaleHeadGuard:
+    """Standalone `pdd checkup --pr` must fail closed when the PR head
+    moves out from under the checkup worktree.
+
+    The guard fires at the very end of the orchestrator, comparing the
+    worktree HEAD SHA to a fresh `_fetch_pr_metadata` head_sha. It catches:
+      - no-fix mode + external advance during checkup
+      - fix-mode + no changes + external advance during checkup
+      - fix-mode + push succeeded + external advance after the push
+
+    Tests below patch `_git_rev_parse_head` and the second `_fetch_pr_metadata`
+    call to produce each scenario.
+    """
+
+    _GATE_PASS_STEP7 = (
+        "## Verification\n"
+        "issue_aligned: true\n"
+        "All Issues Fixed\n"
+        '```json\n{"success": true, "issue_aligned": true, "issues": []}\n```'
+    )
+
+    def _common_kwargs(self, tmp_path: Path) -> dict:
+        return dict(
+            issue_url="https://github.com/o/r/issues/99",
+            issue_content="stub",
+            repo_owner="o",
+            repo_name="r",
+            issue_number=99,
+            issue_title="stub",
+            architecture_json="{}",
+            pddrc_content="",
+            cwd=tmp_path,
+            verbose=False,
+            quiet=True,
+            timeout_adder=0.0,
+            use_github_state=False,
+            pr_url="https://github.com/o/r/pull/200",
+            pr_owner="o",
+            pr_repo="r",
+            pr_number=200,
+        )
+
+    def _common_patches(self, tmp_path: Path, step_side_effect, push_message="Pushed."):
+        wt = tmp_path / "wt"
+        wt.mkdir(exist_ok=True)
+        return [
+            patch(
+                "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+                return_value=(wt, None),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._run_single_step",
+                side_effect=step_side_effect,
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.load_workflow_state",
+                return_value=(None, None),
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator.save_workflow_state",
+                return_value=None,
+            ),
+            patch("pdd.agentic_checkup_orchestrator.clear_workflow_state"),
+            patch(
+                "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+                return_value=(True, push_message),
+            ),
+            patch("pdd.agentic_checkup_orchestrator.post_pr_comment"),
+            patch("pdd.agentic_checkup_orchestrator.post_step_comment"),
+        ]
+
+    @staticmethod
+    def _enter_all(patchers):
+        return [p.__enter__() for p in patchers]
+
+    @staticmethod
+    def _exit_all(patchers):
+        for p in patchers:
+            p.__exit__(None, None, None)
+
+    def test_no_fix_external_advance_fails_closed(self, tmp_path: Path) -> None:
+        """No-fix mode + external PR head advance during Step 7 -> fail closed."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._common_patches(tmp_path, step_side_effect)
+        patchers += [
+            patch(
+                # Worktree HEAD is at the SHA the checkup verified (A).
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="worktree_head_aaaa",
+            ),
+            patch(
+                # Fresh remote PR head has moved (external push).
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={"head_sha": "external_head_xxxx"},
+            ),
+        ]
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = True
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False, (
+            "Standalone pdd checkup --pr must fail closed on external "
+            "advance — same posture as the pdd-issue final gate"
+        )
+        assert "external_head_xxxx"[:8] in msg
+        assert "worktree_head_aaaa"[:8] in msg
+
+    def test_fix_mode_external_advance_after_push_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """Fix mode + clean push + external advance AFTER -> fail closed.
+
+        Even when the checkup successfully pushed (and the post-push
+        reverify confirmed the rebased head), a fresh metadata fetch at
+        the very end can still catch an advance that landed after we
+        finished re-verifying.
+        """
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._common_patches(tmp_path, step_side_effect)
+        patchers += [
+            patch(
+                # Worktree HEAD after push is at the pushed SHA (B).
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="pushed_head_bbbb",
+            ),
+            patch(
+                # Remote PR head has moved past B to C.
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={"head_sha": "external_head_cccc"},
+            ),
+        ]
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = False
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        assert "pushed_head_bbbb"[:8] in msg
+        assert "external_head_cccc"[:8] in msg
+
+    def test_matching_sha_passes_guard(self, tmp_path: Path) -> None:
+        """Worktree HEAD == remote PR head -> success."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._common_patches(tmp_path, step_side_effect)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="matching_sha_aaaa",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={"head_sha": "matching_sha_aaaa"},
+            ),
+        ]
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = True
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is True, msg
+
+    def test_empty_worktree_head_fails_closed(self, tmp_path: Path) -> None:
+        """Cannot read worktree HEAD (e.g., worktree gone) -> fail closed."""
+        from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
+
+        def step_side_effect(step_num, *_args, **_kwargs):
+            if step_num == 7:
+                return (True, self._GATE_PASS_STEP7, 0.0, "fake-model")
+            return (True, f"Step {step_num} output", 0.0, "fake-model")
+
+        patchers = self._common_patches(tmp_path, step_side_effect)
+        patchers += [
+            patch(
+                "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+                return_value="",
+            ),
+            patch(
+                "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+                return_value={"head_sha": "remote_sha"},
+            ),
+        ]
+        try:
+            self._enter_all(patchers)
+            kwargs = self._common_kwargs(tmp_path)
+            kwargs["no_fix"] = True
+            success, msg, _cost, _model = run_agentic_checkup_orchestrator(**kwargs)
+        finally:
+            self._exit_all(patchers)
+
+        assert success is False
+        assert "Cannot prove" in msg
+
+
+# ---------------------------------------------------------------------------
+# Codex round-6 Finding #2: _resolve_pr_remote substring boundary bug.
+#
+# `acme/repo` must NOT match `acme/repo-old`. Use the URL's last two path
+# components, not substring matching.
+# ---------------------------------------------------------------------------
+
+
+class TestResolvePrRemoteBoundaryMatch:
+    def _make_remote_v(self, *remotes: tuple[str, str]) -> str:
+        """Render `git remote -v` output: each tuple is (name, url)."""
+        lines = []
+        for name, url in remotes:
+            lines.append(f"{name}\t{url} (fetch)")
+            lines.append(f"{name}\t{url} (push)")
+        return "\n".join(lines)
+
+    def _patch_git_remote_v(self, stdout: str):
+        """Scoped patch — only intercept subprocess.run inside the
+        orchestrator module, so unrelated subprocess.run calls elsewhere
+        aren't masked. Future refactors that extract _resolve_pr_remote
+        to a helper without subprocess will fail the test rather than
+        silently passing."""
+        def fake_run(args, **_kwargs):
+            assert args[:3] == ["git", "remote", "-v"], (
+                f"Test patches only `git remote -v`; got {args!r}"
+            )
+            return subprocess.CompletedProcess(
+                args=args, returncode=0, stdout=stdout, stderr=""
+            )
+        return patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        )
+
+    def test_exact_match_returns_remote(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import _resolve_pr_remote
+
+        stdout = self._make_remote_v(
+            ("upstream", "https://github.com/acme/repo.git"),
+        )
+        with self._patch_git_remote_v(stdout):
+            name = _resolve_pr_remote(tmp_path, "acme", "repo")
+        assert name == "upstream"
+
+    def test_substring_lookalike_does_not_match(self, tmp_path: Path) -> None:
+        """Round-6 fix: `acme/repo` MUST NOT match `acme/repo-old`."""
+        from pdd.agentic_checkup_orchestrator import _resolve_pr_remote
+
+        stdout = self._make_remote_v(
+            ("origin", "https://github.com/acme/repo-old.git"),
+        )
+        with self._patch_git_remote_v(stdout):
+            name = _resolve_pr_remote(tmp_path, "acme", "repo")
+        assert name is None, (
+            "acme/repo must not be a substring match for acme/repo-old; "
+            "returning the wrong remote would fail the fetch silently"
+        )
+
+    def test_prefix_lookalike_does_not_match(self, tmp_path: Path) -> None:
+        """`me/repo` must not match `acme/repo` (owner prefix collision)."""
+        from pdd.agentic_checkup_orchestrator import _resolve_pr_remote
+
+        stdout = self._make_remote_v(
+            ("origin", "https://github.com/acme/repo.git"),
+        )
+        with self._patch_git_remote_v(stdout):
+            name = _resolve_pr_remote(tmp_path, "me", "repo")
+        assert name is None
+
+    def test_ssh_url_form_matches(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import _resolve_pr_remote
+
+        stdout = self._make_remote_v(
+            ("upstream", "git@github.com:acme/repo.git"),
+        )
+        with self._patch_git_remote_v(stdout):
+            name = _resolve_pr_remote(tmp_path, "acme", "repo")
+        assert name == "upstream"
+
+    def test_no_dotgit_suffix_matches(self, tmp_path: Path) -> None:
+        from pdd.agentic_checkup_orchestrator import _resolve_pr_remote
+
+        stdout = self._make_remote_v(
+            ("upstream", "https://github.com/acme/repo"),
+        )
+        with self._patch_git_remote_v(stdout):
+            name = _resolve_pr_remote(tmp_path, "acme", "repo")
+        assert name == "upstream"
+
+    def test_prefers_exact_match_over_lookalike(self, tmp_path: Path) -> None:
+        """When two remotes exist, only the exact one returns."""
+        from pdd.agentic_checkup_orchestrator import _resolve_pr_remote
+
+        stdout = self._make_remote_v(
+            ("origin", "https://github.com/acme/repo-old.git"),
+            ("upstream", "https://github.com/acme/repo.git"),
+        )
+        with self._patch_git_remote_v(stdout):
+            name = _resolve_pr_remote(tmp_path, "acme", "repo")
+        assert name == "upstream"

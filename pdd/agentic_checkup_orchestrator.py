@@ -256,8 +256,18 @@ def _resolve_pr_remote(
     except subprocess.CalledProcessError:
         return None
 
-    needle = f"{pr_owner.lower()}/{pr_repo.lower()}"
-    # Match `.git` and non-`.git` suffixes, http(s) and ssh forms.
+    target_owner = pr_owner.lower()
+    target_repo = pr_repo.lower()
+    # Boundary-aware matching: substring matching turned ``acme/repo`` into
+    # a false match for ``acme/repo-old`` (codex round-6 finding #2). Split
+    # the URL on ``/`` and ``:`` and require the last two path components
+    # to equal ``<owner>`` and ``<repo>`` exactly. Handles every common
+    # GitHub URL form:
+    #   https://github.com/acme/repo  -> ['https', '', 'github.com', 'acme', 'repo']
+    #   https://github.com/acme/repo.git -> stripped to above before split
+    #   git@github.com:acme/repo.git -> ['git@github.com', 'acme', 'repo']
+    # Returning ``None`` on no match lets the caller fall back to the
+    # explicit GitHub URL rather than fetching from the wrong remote.
     seen: set[str] = set()
     for line in result.stdout.splitlines():
         # Each line: "<name>\t<url> (<fetch|push>)"
@@ -267,12 +277,17 @@ def _resolve_pr_remote(
         name, url = parts[0], parts[1].lower()
         if name in seen:
             continue
+        seen.add(name)
         # Strip optional ``.git`` for comparison.
         if url.endswith(".git"):
             url = url[:-4]
-        if needle in url:
+        path_parts = re.split(r"[/:]", url)
+        if (
+            len(path_parts) >= 2
+            and path_parts[-2] == target_owner
+            and path_parts[-1] == target_repo
+        ):
             return name
-        seen.add(name)
     return None
 
 
@@ -1857,6 +1872,60 @@ def run_agentic_checkup_orchestrator(
             abort = _handle_step_result(8, success, output, cost, model)
             if abort is not None:
                 return abort
+
+    # Round-6 finding #1: standalone `pdd checkup --pr` stale-head guard.
+    #
+    # Step 7's verdict (and any pushed fixes) applies to the worktree's
+    # HEAD. If the PR head has advanced past that SHA — by an external
+    # push during this checkup, a maintainer rebase, another bot — Step 7
+    # never saw the new code, and returning success would green-light an
+    # unverified head.
+    #
+    # The pdd-issue final gate (``_run_final_checkup_on_pr``) enforces
+    # this for its caller, but standalone ``pdd checkup --pr`` invocations
+    # need the same guarantee. Both the no-fix gate-pass path and the
+    # fix-mode + push-success + post-push-reverify path reach this point;
+    # fail closed when worktree HEAD != fresh remote PR head.
+    if pr_mode and worktree_path is not None:
+        assert pr_owner is not None
+        assert pr_repo is not None
+        assert pr_number is not None
+        worktree_head = _git_rev_parse_head(worktree_path)
+        try:
+            fresh_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+            fresh_pr_head = str(fresh_metadata.get("head_sha", "") or "")
+        except Exception:  # noqa: BLE001 — best-effort
+            fresh_pr_head = ""
+
+        if not worktree_head or not fresh_pr_head:
+            stale_msg = (
+                "Cannot prove the PR remote head matches what the checkup "
+                "worktree verified — failing closed to avoid green-lighting "
+                "an unverified head."
+            )
+            if not quiet:
+                console.print(f"[red]{stale_msg}[/red]")
+            return False, stale_msg, total_cost, last_model_used
+
+        if worktree_head != fresh_pr_head:
+            stale_msg = (
+                f"PR head advanced to {fresh_pr_head[:8]} during checkup "
+                f"but verification was against worktree HEAD "
+                f"{worktree_head[:8]}. External push during checkup "
+                f"detected — re-run `pdd checkup --pr` so the new head is "
+                f"verified by Step 7."
+            )
+            if not quiet:
+                console.print(f"[red]{stale_msg}[/red]")
+            # Surface the warning in any subsequent canonical report.
+            existing_push_output = context.get("pr_push_output", "")
+            stale_section = f"STALE HEAD: {stale_msg}"
+            context["pr_push_output"] = (
+                f"{existing_push_output}\n\n{stale_section}".strip()
+                if existing_push_output
+                else stale_section
+            )
+            return False, stale_msg, total_cost, last_model_used
 
     # All steps complete — clear state.
     clear_workflow_state(

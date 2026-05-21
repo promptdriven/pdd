@@ -7660,7 +7660,18 @@
               "Runs LLM checkup steps",
               "Persists workflow state",
               "In PR mode, may commit and push generated fixes back to the existing PR branch",
-              "In PR mode, may post final PR and issue comments after push/reverify success"
+              "In PR mode, may post final PR and issue comments after push/reverify success",
+              "Before declaring PR-mode success, runs the round-6 stale-head guard: compares the worktree's HEAD SHA (via _git_rev_parse_head) to a fresh PR head SHA (via _fetch_pr_metadata); divergence or missing SHA fails closed because Step 7's verdict only applies to the worktree HEAD"
+            ]
+          },
+          {
+            "name": "_resolve_pr_remote",
+            "signature": "(git_root: Path, pr_owner: str, pr_repo: str) -> Optional[str]",
+            "returns": "Optional[str]",
+            "sideEffects": [
+              "Walks `git remote -v` output to find a remote whose URL points at pr_owner/pr_repo",
+              "Boundary-aware matching: strips optional `.git` and requires the LAST TWO path components to equal owner/repo (substring matching incorrectly accepted `acme/repo-old` for `acme/repo`)",
+              "Returns the remote name on match, or None so callers can fall back to the explicit GitHub URL"
             ]
           },
           {
