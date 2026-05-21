@@ -743,3 +743,72 @@ class TestCheckupCommand:
         )
 
         assert result.exit_code == 1
+
+
+class TestRunAgenticCheckupCwdParameter:
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_cwd_forwarded_to_find_project_root(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+        tmp_path,
+    ):
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps({"title": "t", "body": "b"})),
+            (True, "[]"),
+        ]
+        mock_orchestrator.return_value = (True, "ok", 0.0, "fake-model")
+
+        run_agentic_checkup(
+            "https://github.com/owner/repo/issues/1",
+            quiet=True,
+            cwd=tmp_path,
+            use_github_state=False,
+        )
+
+        assert mock_find_root.call_args.args[0] == tmp_path
+
+    @patch("pdd.agentic_checkup.run_agentic_checkup_orchestrator")
+    @patch("pdd.agentic_checkup._load_pddrc_content", return_value="pddrc: test")
+    @patch(
+        "pdd.agentic_checkup._load_architecture_json",
+        return_value=([], Path("/tmp/arch.json")),
+    )
+    @patch("pdd.agentic_checkup._find_project_root", return_value=Path("/tmp/project"))
+    @patch("pdd.agentic_checkup._run_gh_command")
+    @patch("pdd.agentic_checkup._check_gh_cli", return_value=True)
+    def test_cwd_none_falls_back_to_path_cwd(
+        self,
+        mock_gh_cli,
+        mock_gh_cmd,
+        mock_find_root,
+        mock_load_arch,
+        mock_load_pddrc,
+        mock_orchestrator,
+    ):
+        mock_gh_cmd.side_effect = [
+            (True, json.dumps({"title": "t", "body": "b"})),
+            (True, "[]"),
+        ]
+        mock_orchestrator.return_value = (True, "ok", 0.0, "fake-model")
+
+        with patch("pdd.agentic_checkup.Path.cwd", return_value=Path("/fallback/cwd")):
+            run_agentic_checkup(
+                "https://github.com/owner/repo/issues/1",
+                quiet=True,
+                use_github_state=False,
+            )
+
+        assert mock_find_root.call_args.args[0] == Path("/fallback/cwd")
