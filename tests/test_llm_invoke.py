@@ -43,6 +43,36 @@ MockModelInfoData = namedtuple("MockModelInfoData", [
     "reasoning_type", "max_reasoning_tokens"
 ])
 
+# ---------------------------------------------------------------------------
+# Hermetic isolation of PDD_MODEL_DEFAULT / DEFAULT_BASE_MODEL (issue #1113).
+# ---------------------------------------------------------------------------
+# ``pdd/llm_invoke.py:873`` captures
+#     DEFAULT_BASE_MODEL = os.getenv("PDD_MODEL_DEFAULT", None)
+# at *module import time*. The provider-lock added by #1113 makes a prefixed
+# default (e.g. ``vertex_ai/...``) a hard provider boundary, so any test in
+# this module that mocks ``_load_model_data`` to return an OpenAI/Anthropic/
+# Google-only fixture will raise
+#     ValueError: Base model '...' is routed to provider 'Google Vertex AI',
+#     but no models for that provider are available in the LLM model CSV.
+# the moment selection runs, before the test's actual behaviour-under-test
+# fires. The autouse fixture below clears ``PDD_MODEL_DEFAULT`` from the env
+# and resets the module-level ``DEFAULT_BASE_MODEL`` constant to ``None``,
+# matching the supported "no default" production code path (see
+# ``test_default_base_model_is_none_when_env_var_not_set`` below for the
+# behavioural pin). Tests that explicitly exercise default-model behaviour
+# override this fixture by calling ``monkeypatch.setenv("PDD_MODEL_DEFAULT",
+# ...)`` and/or ``monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", ...)``
+# in their own setup — per-test monkeypatch runs *after* autouse, so the
+# override wins. See the regression test
+# ``test_prefixed_model_default_env_does_not_poison_mocked_tests`` for an
+# end-to-end pin of this contract.
+@pytest.fixture(autouse=True)
+def _isolate_pdd_model_default(monkeypatch):
+    monkeypatch.delenv("PDD_MODEL_DEFAULT", raising=False)
+    import pdd.llm_invoke as _llm_mod
+    monkeypatch.setattr(_llm_mod, "DEFAULT_BASE_MODEL", None)
+
+
 # Define a sample Pydantic model for testing
 class SampleOutputModel(BaseModel):
     field1: str
@@ -3324,6 +3354,62 @@ def test_default_base_model_can_be_none():
         os.environ.clear()
         os.environ.update(original_env)
         importlib.reload(llm_invoke_module)
+
+
+def test_prefixed_model_default_env_does_not_poison_mocked_tests(
+    mock_load_models, mock_set_llm_cache, monkeypatch
+):
+    """Issue #1113 follow-up — Greg's blocker on the test isolation gap.
+
+    Before the autouse ``_isolate_pdd_model_default`` fixture in this
+    module, an external shell with ``PDD_MODEL_DEFAULT=vertex_ai/...``
+    (the exact Cloud Run configuration this PR hardens) leaked into the
+    module-level ``DEFAULT_BASE_MODEL`` constant captured at import time.
+    The new provider lock then engaged against the OpenAI/Anthropic/
+    Google-only mocked CSV used by most tests in this file, raising
+    ``ValueError: Base model 'vertex_ai/...' is routed to provider
+    'Google Vertex AI', but no models for that provider are available in
+    the LLM model CSV.`` — failing 39 unrelated tests before the
+    behaviour under test could run.
+
+    This test deliberately re-injects the prefixed default that the
+    autouse fixture clears, asserts the autouse fixture also reset
+    ``DEFAULT_BASE_MODEL`` (so the env var alone cannot reach the
+    selection path), and confirms ``llm_invoke()`` picks a candidate
+    from the mocked Vertex-free CSV without the provider lock firing.
+    """
+    import pdd.llm_invoke as _llm_mod
+
+    # Re-inject the env var the autouse fixture cleared. This simulates a
+    # developer (or CI runner) with the Cloud Run shell variable still set.
+    monkeypatch.setenv("PDD_MODEL_DEFAULT", "vertex_ai/gemini-3-flash-preview")
+    # The autouse fixture must have already pinned DEFAULT_BASE_MODEL to
+    # None — env-set-after-autouse does not re-bind the module constant.
+    assert _llm_mod.DEFAULT_BASE_MODEL is None, (
+        "Autouse isolation fixture must reset DEFAULT_BASE_MODEL to None "
+        f"so the provider lock does not fire on mocked CSVs; got {_llm_mod.DEFAULT_BASE_MODEL!r}"
+    )
+
+    # Sanity: call llm_invoke against a Vertex-free mocked CSV and confirm
+    # selection succeeds. Without the autouse fixture this raised ValueError
+    # at _select_model_candidates before reaching the mocked completion.
+    target_api_key = "OPENAI_API_KEY"
+    with patch.dict(os.environ, {target_api_key: "fake_key_value"}):
+        with patch("pdd.llm_invoke.litellm.completion") as mock_completion:
+            mock_response = create_mock_litellm_response(
+                "OK", model_name="gpt-5-nano"
+            )
+            mock_completion.return_value = mock_response
+            with patch(
+                "pdd.llm_invoke._LAST_CALLBACK_DATA",
+                {"cost": 0.0001, "input_tokens": 5, "output_tokens": 5},
+            ):
+                response = llm_invoke(prompt="Hi {topic}", input_json={"topic": "world"})
+
+    # Selection must have picked a row from the mocked CSV — never the
+    # external env's vertex_ai/ default.
+    assert response["model_name"] != "vertex_ai/gemini-3-flash-preview"
+    assert response["model_name"] in {"gpt-5-nano", "cheap-model", "claude-3", "gemini-pro"}
 
 
 # =============================================================================
