@@ -242,8 +242,13 @@ def summarize_directory(
         real = os.path.realpath(file_path)
         return os.path.relpath(real, base_dir) if base_dir else real
 
-    def _process_file(i: int, file_path: str) -> Tuple[float, str]:
-        """Process a single file and accumulate results."""
+    def _process_file(i: int, file_path: str) -> Tuple[float, str, List[str]]:
+        """Process a single file and accumulate results.
+
+        Returns (cost, model_name, attempted_models). Single-thread callers
+        ignore the third element because llm_invoke publishes its own attempts
+        via click.get_current_context() in the main thread.
+        """
         rel_path = _compute_rel_path(file_path)
         return _process_single_file_logic(
             file_path,
@@ -257,16 +262,68 @@ def summarize_directory(
             results_data
         )
 
+    def _append_attempts_to_ctx_obj(attempts: List[str]) -> None:
+        """Append a list of model attempts to the main thread's Click
+        context's `attempted_models` list, creating it if necessary.
+
+        Used only by the threaded path: worker threads cannot publish via
+        llm_invoke's native `click.get_current_context()` channel (Click
+        context is thread-local), so we collect per-worker attempts and
+        publish them from the main thread after workers complete. The
+        single-thread path doesn't need this helper because llm_invoke is
+        called from the main thread, where its incremental publish lands
+        attempts on ctx.obj as they happen (including failed substeps —
+        llm_invoke no longer rewinds on failure).
+        """
+        if not attempts:
+            return
+        try:
+            import click as _click_for_publish
+            click_ctx = _click_for_publish.get_current_context(silent=True)
+        except Exception:
+            return
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                existing = click_ctx.obj.get('attempted_models')
+                if isinstance(existing, list):
+                    click_ctx.obj['attempted_models'] = existing + list(attempts)
+                else:
+                    click_ctx.obj['attempted_models'] = list(attempts)
+        except Exception:
+            pass
+
     if max_workers > 1:
         import threading
         from concurrent.futures import ThreadPoolExecutor, as_completed
         cost_lock = threading.Lock()
 
-        def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str]:
+        # Per-worker llm_invoke results carry their own `attempted_models`
+        # because Click's context is thread-local and worker threads cannot
+        # publish to the main thread's ctx.obj. Collect (submission_idx,
+        # attempts) tuples here, sort by submission_idx after all workers
+        # finish, then publish the flattened chronological history to the
+        # main thread's Click context for track_cost to read.
+        worker_attempts: List[Tuple[int, List[str]]] = []
+        # last_model_name tracks the model from the highest-submission-idx
+        # worker that actually produced output (`model != "cached"`).
+        # Terminal-failure workers (model == "cached" with recovered
+        # attempts) do NOT bump this — the CSV `model` column is meant to
+        # name "the AI model used for the operation" (README), so leaving
+        # a failed candidate name there would be misleading. The audit
+        # log in `attempted_models` may still end with a failed entry —
+        # that's an honest record of what was tried, distinct from the
+        # success identity of the operation.
+        last_summarized_idx = -1
+
+        def _threaded_process(i: int, file_path: str) -> Tuple[int, float, str, Optional[Dict[str, str]], List[str]]:
             """Thread-safe wrapper that returns index for ordering."""
             rel_path = _compute_rel_path(file_path)
             local_results: List[Dict[str, str]] = []
-            cost, model = _process_single_file_logic(
+            cost, model, attempted = _process_single_file_logic(
                 file_path,
                 rel_path,
                 existing_data,
@@ -277,7 +334,7 @@ def summarize_directory(
                 verbose,
                 local_results
             )
-            return i, cost, model, local_results[0] if local_results else None
+            return i, cost, model, local_results[0] if local_results else None, attempted
 
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
@@ -286,22 +343,36 @@ def summarize_directory(
             }
             completed = 0
             for future in as_completed(futures):
-                idx, cost, model, result_row = future.result()
+                idx, cost, model, result_row, attempted = future.result()
                 with cost_lock:
                     total_cost += cost
-                    if model != "cached":
+                    if model != "cached" and idx > last_summarized_idx:
                         last_model_name = model
+                        last_summarized_idx = idx
                     if result_row:
                         results_data.append(result_row)
                     if csv_path:
                         _flush_csv_to_disk(results_data, csv_path)
+                    if attempted:
+                        worker_attempts.append((idx, attempted))
                 completed += 1
                 if progress_callback:
                     progress_callback(completed, total_files)
+
+        # Publish aggregated worker attempts to the main thread's Click
+        # context. Order by submission index so the chronological list reads
+        # in file-submission order (inter-worker ordering is otherwise
+        # ambiguous because as_completed returns in completion order).
+        if worker_attempts:
+            worker_attempts.sort(key=lambda item: item[0])
+            flattened: List[str] = []
+            for _idx, models in worker_attempts:
+                flattened.extend(models)
+            _append_attempts_to_ctx_obj(flattened)
     elif progress_callback:
         for i, file_path in enumerate(files):
             progress_callback(i + 1, total_files)
-            cost, model = _process_file(i, file_path)
+            cost, model, _file_attempts = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
@@ -318,7 +389,7 @@ def summarize_directory(
         ) as progress:
             task = progress.add_task("[cyan]Processing files...", total=len(files))
             for i, file_path in enumerate(files):
-                cost, model = _process_file(i, file_path)
+                cost, model, _file_attempts = _process_file(i, file_path)
                 total_cost += cost
                 if model != "cached":
                     last_model_name = model
@@ -327,7 +398,7 @@ def summarize_directory(
                 progress.advance(task)
     else:
         for i, file_path in enumerate(files):
-            cost, model = _process_file(i, file_path)
+            cost, model, _file_attempts = _process_file(i, file_path)
             total_cost += cost
             if model != "cached":
                 last_model_name = model
@@ -374,13 +445,18 @@ def _process_single_file_logic(
     time: float,
     verbose: bool,
     results_data: List[Dict[str, str]]
-) -> Tuple[float, str]:
+) -> Tuple[float, str, List[str]]:
     """
     Helper function to process a single file: read, hash, check cache, summarize if needed.
-    Returns (cost, model_name).
+    Returns (cost, model_name, attempted_models).
+    The third element carries the per-call `attempted_models` list from llm_invoke
+    so that callers running this function in worker threads can surface the
+    fallback history to the main thread's Click context (workers cannot publish
+    via click.get_current_context() because Click's context is thread-local).
     """
     cost = 0.0
     model_name = "cached"
+    attempted_models: List[str] = []
 
     try:
         # Step 6a: Read file
@@ -449,6 +525,11 @@ def _process_single_file_logic(
             
             cost = llm_result.get('cost', 0.0)
             model_name = llm_result.get('model_name', "unknown")
+            raw_attempts = llm_result.get('attempted_models') or []
+            if isinstance(raw_attempts, list):
+                attempted_models = [str(m) for m in raw_attempts]
+            if not attempted_models and model_name and model_name != "unknown":
+                attempted_models = [model_name]
 
         # Print verbose per-file summary (only for freshly summarized files)
         if verbose and not cache_hit:
@@ -475,5 +556,19 @@ def _process_single_file_logic(
             'dependencies': "[]",
             'content_hash': "error"
         })
-        
-    return cost, model_name
+        # llm_invoke attaches its per-call attempt history to the terminal
+        # RuntimeError it raises when all candidates are exhausted. Recover
+        # those attempts so a terminally-failed worker still contributes
+        # its fallback history to the command-level attempted_models list
+        # — otherwise the data we promised in cost.csv gets silently
+        # dropped for the exact failure mode users most want to investigate.
+        # The isinstance check below guarantees iterability at runtime,
+        # but `getattr(e, ..., None)` returns `Any | None` and pylint's
+        # flow analysis doesn't carry the narrowing through to the
+        # comprehension, so we explicitly materialize via `list(...)` —
+        # pylint sees a `list` constructor and stops flagging E1133.
+        err_attempts = getattr(e, "attempted_models", None)
+        if isinstance(err_attempts, list):
+            attempted_models = [str(m) for m in list(err_attempts)]
+
+    return cost, model_name, attempted_models

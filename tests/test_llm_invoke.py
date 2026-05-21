@@ -1562,6 +1562,558 @@ def test_llm_invoke_responses_api_valid_json_parses_correctly(mock_load_models, 
                     assert response['result'].field2 == 42
 
 
+def test_llm_invoke_accumulates_attempted_models_across_calls_in_ctx_obj(
+    mock_set_llm_cache,
+):
+    """Regression for issue #897 / PR #1056.
+
+    A single tracked CLI command (e.g. `pdd generate`) can invoke
+    `llm_invoke` multiple times — for example code generation followed by
+    postprocess, or trace + extract. Each `llm_invoke` call must ACCUMULATE
+    its model attempts onto the running `ctx.obj['attempted_models']` list
+    rather than overwrite it, so the resulting `cost.csv` reflects every
+    fallback that happened during the command, not just the last call's
+    history.
+    """
+    import click
+
+    # Custom mock data: every model uses the LiteLLM completion path
+    # (structured_output=False) so we can drive the test with a single
+    # `litellm.completion` mock without dragging in the Responses-API path.
+    mock_data = [
+        MockModelInfoData(  # Base model at strength=0.5
+            provider='Anthropic', model='claude-3', input=0.025, output=0.035,
+            coding_arena_elo=1500, structured_output=False, base_url="",
+            api_key="ANTHROPIC_API_KEY", max_tokens="", max_completion_tokens="",
+            reasoning_type='none', max_reasoning_tokens=0,
+        ),
+        MockModelInfoData(  # Fallback candidate
+            provider='Google', model='gemini-pro', input=0.015, output=0.025,
+            coding_arena_elo=1400, structured_output=False, base_url="",
+            api_key="GOOGLE_API_KEY", max_tokens="", max_completion_tokens="",
+            reasoning_type='none', max_reasoning_tokens=0,
+        ),
+    ]
+    mock_df = pd.DataFrame([m._asdict() for m in mock_data])
+    numeric_cols = ['input', 'output', 'coding_arena_elo', 'max_tokens',
+                    'max_completion_tokens', 'max_reasoning_tokens']
+    for col in numeric_cols:
+        if col in mock_df.columns:
+            mock_df[col] = pd.to_numeric(mock_df[col], errors='coerce')
+    mock_df['input'] = mock_df['input'].fillna(0.0)
+    mock_df['output'] = mock_df['output'].fillna(0.0)
+    mock_df['coding_arena_elo'] = mock_df['coding_arena_elo'].fillna(0)
+    mock_df['max_reasoning_tokens'] = mock_df['max_reasoning_tokens'].fillna(0).astype(int)
+    mock_df['avg_cost'] = (mock_df['input'] + mock_df['output']) / 2
+    mock_df['structured_output'] = mock_df['structured_output'].fillna(False).astype(bool)
+    mock_df['reasoning_type'] = mock_df['reasoning_type'].fillna('none').astype(str).str.lower()
+    mock_df['api_key'] = mock_df['api_key'].fillna('').astype(str)
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+        "PDD_FORCE_LOCAL": "1",
+    }
+
+    # Stand-alone Click context — at runtime `track_cost` provides this with
+    # an empty `attempted_models` slot; we let llm_invoke fill it via
+    # `click.get_current_context(silent=True)`.
+    cmd = click.Command(name="generate")
+    ctx = click.Context(cmd, obj={})
+
+    with patch('pdd.llm_invoke._load_model_data', return_value=mock_df), \
+         patch.dict(os.environ, all_keys), \
+         ctx:
+        with patch('pdd.llm_invoke.litellm.completion') as mock_completion:
+            # Call 1: first model raises AuthenticationError -> fallback to next.
+            call1_first_error = openai.AuthenticationError(
+                message="Mocked auth failure on claude-3",
+                response=httpx.Response(
+                    status_code=401,
+                    request=httpx.Request("POST", "http://test"),
+                ),
+                body=None,
+            )
+            call1_second_response = create_mock_litellm_response(
+                "fallback ok", model_name='gemini-pro',
+            )
+            # Call 2: single-attempt success on claude-3 (the base model).
+            call2_response = create_mock_litellm_response(
+                "ok", model_name='claude-3',
+            )
+
+            mock_completion.side_effect = [
+                call1_first_error,
+                call1_second_response,
+                call2_response,
+            ]
+
+            with patch('pdd.llm_invoke._LAST_CALLBACK_DATA',
+                       {"cost": 0.0001, "input_tokens": 10, "output_tokens": 10}):
+                first = llm_invoke(
+                    prompt="First {topic}",
+                    input_json={"topic": "a"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+                second = llm_invoke(
+                    prompt="Second {topic}",
+                    input_json={"topic": "b"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+
+    # Each call's return dict carries its own local history (this still works).
+    assert first['attempted_models'][-1] == first['model_name']
+    assert second['attempted_models'] == [second['model_name']]
+    assert len(first['attempted_models']) >= 2, (
+        f"First call should have at least 2 attempts (failed + retry), got: "
+        f"{first['attempted_models']!r}"
+    )
+
+    # The ctx.obj history is what `track_cost` reads to populate the
+    # `attempted_models` CSV column. It must contain BOTH calls' attempts in
+    # chronological order — overwriting it would hide call 1's fallback.
+    accumulated = ctx.obj.get('attempted_models')
+    assert isinstance(accumulated, list), (
+        f"ctx.obj['attempted_models'] should be a list after llm_invoke, "
+        f"got {accumulated!r}"
+    )
+
+    expected_minimum_length = len(first['attempted_models']) + len(second['attempted_models'])
+    assert len(accumulated) >= expected_minimum_length, (
+        f"Expected ctx.obj['attempted_models'] to accumulate >= "
+        f"{expected_minimum_length} entries across both calls, got "
+        f"{len(accumulated)}: {accumulated!r}"
+    )
+
+    # First call's local history must be a prefix of the accumulated list.
+    first_len = len(first['attempted_models'])
+    assert accumulated[:first_len] == first['attempted_models'], (
+        f"First call's attempts must come first in the accumulated history; "
+        f"prefix was {accumulated[:first_len]!r}, expected "
+        f"{first['attempted_models']!r}"
+    )
+
+    # Second call's local history must be the suffix.
+    second_len = len(second['attempted_models'])
+    assert accumulated[-second_len:] == second['attempted_models'], (
+        f"Second call's attempts must come last in the accumulated history; "
+        f"suffix was {accumulated[-second_len:]!r}, expected "
+        f"{second['attempted_models']!r}"
+    )
+
+
+def test_llm_invoke_terminal_failure_preserves_attempts_in_ctx_obj(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F14 regression (PR #1056 7th-round review) — SUPERSEDES round-4 F7.
+
+    Issue #897 wants `attempted_models` to record "models that were
+    attempted and then abandoned." Rounds 4-6 added a rewind on terminal
+    failure to defend a since-relaxed "ends with model column" invariant;
+    round 7 surfaced that the rewind silently drops the very rows users
+    asked for when an outer caller (e.g. `auto_include` catching the
+    final auto_include_LLM error) recovers with a different model. Round
+    7 removes the rewind entirely.
+
+    Contract now: terminal RuntimeError must LEAVE the failed attempts on
+    `ctx.obj['attempted_models']` (appended to whatever prior history
+    existed) AND attach the per-call attempts to the exception so worker
+    threads that can't see ctx.obj still recover them via getattr.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="auto_include_LLM_caller")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised_exception: Optional[RuntimeError] = None
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="terminal failure",
+                       request=mock_request,
+                   )):
+            try:
+                llm_invoke(
+                    prompt="some prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+            except RuntimeError as exc:
+                raised_exception = exc
+
+    assert raised_exception is not None, (
+        "llm_invoke must raise RuntimeError when all candidates are exhausted"
+    )
+    published = ctx.obj.get('attempted_models')
+    assert isinstance(published, list), (
+        f"ctx.obj['attempted_models'] should remain a list after terminal "
+        f"failure, got {published!r}"
+    )
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must be preserved at the head of the audit log. "
+        f"Expected prefix {prior_attempts!r}, got {published!r}"
+    )
+    assert len(published) > len(prior_attempts), (
+        f"Failed attempts from this call must remain appended to ctx.obj — "
+        f"that's the whole point of `attempted_models` per issue #897. "
+        f"Got {published!r}"
+    )
+    # The failed attempts are also attached to the exception for worker
+    # threads (Click context is thread-local; workers can't read ctx.obj).
+    exc_attempts = getattr(raised_exception, "attempted_models", None)
+    assert isinstance(exc_attempts, list) and len(exc_attempts) > 0, (
+        f"Failed attempts must remain on the exception's attempted_models "
+        f"attribute for worker-thread recovery. Got: {exc_attempts!r}"
+    )
+
+
+def test_llm_invoke_insufficient_credits_preserves_cloud_attempt_in_ctx_obj(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F14/F15 regression (PR #1056 7th-round review) — SUPERSEDES F10.
+
+    Round 5 added a rewind on `InsufficientCreditsError` re-raise to
+    defend the since-relaxed "ends with model column" invariant. Round 7
+    surfaced that the rewind silently deletes the cloud attempt the user
+    explicitly wants to see ("models that were attempted and then
+    abandoned" per issue #897). With invariant relaxed, the rewind has
+    no purpose and is removed.
+
+    Contract now: `InsufficientCreditsError` LEAVES the cloud placeholder
+    on `ctx.obj['attempted_models']` so a caller that recovers (e.g.
+    `auto_include` returning `summary_model`) still has the audit trail
+    of the cloud attempt. The exception also carries the attempts as an
+    attribute for worker-thread recovery (parity with terminal
+    RuntimeError).
+
+    NOTE: Use `pdd.llm_invoke` references dynamically (not the top-of-
+    file `from ... import ...` aliases) because an earlier test
+    (`test_llm_invoke_csv_path_hierarchy`) calls `importlib.reload` on
+    the module. After reload, the file-scope aliases become stale —
+    the `except InsufficientCreditsError:` inside the reloaded
+    llm_invoke checks against the NEW class, so an OLD-class instance
+    sails right past it.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="caller_using_cloud")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.InsufficientCreditsError("HTTP 402 from cloud"),
+        ):
+            try:
+                _llm_mod.llm_invoke(
+                    prompt="hi",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                    use_cloud=True,
+                )
+            except _llm_mod.InsufficientCreditsError as exc:
+                raised = exc
+
+    assert isinstance(raised, _llm_mod.InsufficientCreditsError), (
+        "llm_invoke must propagate InsufficientCreditsError so callers know"
+    )
+    published = ctx.obj.get('attempted_models') or []
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must remain at the head of the audit log. "
+        f"Got: {published!r}"
+    )
+    assert len(published) > len(prior_attempts), (
+        f"Cloud placeholder must remain in ctx.obj after credit error so "
+        f"recovered callers can record the abandoned attempt. Got: "
+        f"{published!r}"
+    )
+    assert any('cloud' in str(m) for m in published[len(prior_attempts):]), (
+        f"Appended entries should include the cloud placeholder. Got: "
+        f"{published!r}"
+    )
+
+
+def test_llm_invoke_model_loading_failure_preserves_cloud_attempt_and_attaches(
+    mock_set_llm_cache,
+):
+    """F15 regression (PR #1056 7th-round review) — SUPERSEDES round-6 F13.
+
+    Round 6 added a try/finally rewind to clear ctx.obj on bare-raise
+    paths. Round 7 surfaced that the rewind drops audit-log data the
+    user explicitly wants; the rewind is now removed entirely.
+
+    What MUST remain true: when cloud fails recoverably (CloudFallbackError
+    falls through to local) and then `_load_model_data` raises, the
+    cloud placeholder recorded before the cloud request stays on
+    ctx.obj — the recovered caller can still see "PDD tried cloud
+    first" in the cost.csv audit log. Additionally, the raised
+    exception now carries `attempted_models` as an attribute so worker
+    threads (which can't read ctx.obj) recover the same history via
+    getattr.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+
+    prior_attempts = ['prior-fallback', 'prior-success']
+    cmd = click.Command(name="caller_with_model_loading_failure")
+    ctx = click.Context(cmd, obj={'attempted_models': list(prior_attempts)})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.CloudFallbackError("cloud unavailable"),
+        ):
+            with patch.object(
+                _llm_mod, "_load_model_data",
+                side_effect=FileNotFoundError("simulated missing CSV"),
+            ):
+                try:
+                    _llm_mod.llm_invoke(
+                        prompt="hi",
+                        input_json={"x": "y"},
+                        strength=0.5,
+                        temperature=0.0,
+                        use_cloud=True,  # Triggers cloud placeholder
+                                         # recording BEFORE model loading
+                                         # is attempted.
+                    )
+                except FileNotFoundError as exc:
+                    raised = exc
+
+    assert isinstance(raised, FileNotFoundError), (
+        "Model-loading failure must propagate FileNotFoundError"
+    )
+    published = ctx.obj.get('attempted_models') or []
+    assert published[:len(prior_attempts)] == prior_attempts, (
+        f"Prior attempts must remain at head of audit log. Got: {published!r}"
+    )
+    assert any('cloud' in str(m) for m in published[len(prior_attempts):]), (
+        f"Cloud placeholder must remain visible in ctx.obj after the "
+        f"cloud-fallback-then-load-failure sequence so a recovered caller "
+        f"can audit the cloud attempt. Got: {published!r}"
+    )
+    # Worker-thread recovery channel: the raised exception carries the
+    # attempts as an attribute, parity with terminal RuntimeError and
+    # InsufficientCreditsError.
+    exc_attempts = getattr(raised, "attempted_models", None)
+    assert isinstance(exc_attempts, list) and len(exc_attempts) > 0, (
+        f"Model-loading raise must attach attempted_models to the "
+        f"exception (F15) so worker threads can recover via getattr. "
+        f"Got: {exc_attempts!r}"
+    )
+
+
+def test_llm_invoke_insufficient_credits_attaches_attempts_to_exception(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F12 regression (PR #1056 6th-round review).
+
+    The terminal RuntimeError path has always done
+    ``setattr(exc, "attempted_models", list(attempted_models))`` so worker
+    threads can recover the per-call attempt history via getattr (Click
+    context is thread-local; workers can't read ctx.obj). The
+    InsufficientCreditsError re-raise was missing this — workers caught
+    the credit error and got nothing back, silently dropping the
+    fallback record.
+
+    After F12: InsufficientCreditsError carries the same attribute,
+    parity with the terminal-RuntimeError path.
+    """
+    import click
+    import pdd.llm_invoke as _llm_mod
+
+    cmd = click.Command(name="caller_for_credit_check")
+    ctx = click.Context(cmd, obj={})
+
+    raised: Optional[Exception] = None
+    with ctx:
+        with patch.object(
+            _llm_mod, "_llm_invoke_cloud",
+            side_effect=_llm_mod.InsufficientCreditsError("HTTP 402"),
+        ):
+            try:
+                _llm_mod.llm_invoke(
+                    prompt="hi",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                    use_cloud=True,
+                )
+            except _llm_mod.InsufficientCreditsError as exc:
+                raised = exc
+
+    assert raised is not None
+    attached = getattr(raised, "attempted_models", None)
+    assert isinstance(attached, list) and len(attached) > 0, (
+        f"InsufficientCreditsError must carry the per-call attempts as "
+        f"an `attempted_models` attribute (parity with terminal "
+        f"RuntimeError) so worker threads can recover the history via "
+        f"getattr. Got: {attached!r}"
+    )
+    assert any('cloud' in str(m) for m in attached), (
+        f"Attached attempts should include the cloud placeholder that "
+        f"was recorded before the cloud request. Got: {attached!r}"
+    )
+
+
+def test_llm_invoke_terminal_failure_populates_ctx_obj_when_no_prior_key(
+    mock_load_models, mock_set_llm_cache,
+):
+    """When the `attempted_models` KEY did not exist on ctx.obj before
+    the failing `llm_invoke` call, the failure path must POPULATE the
+    key with this call's attempts — not leave it absent. The audit log
+    is the whole point of the feature; a missing key after a failed
+    call would be the same data loss as the round-6 rewind we backed
+    out.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    cmd = click.Command(name="standalone_caller")
+    ctx = click.Context(cmd, obj={})  # No attempted_models key
+
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="terminal failure",
+                       request=mock_request,
+                   )):
+            with pytest.raises(RuntimeError):
+                llm_invoke(
+                    prompt="some prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+
+    published = ctx.obj.get('attempted_models')
+    assert isinstance(published, list) and len(published) > 0, (
+        f"Terminal failure with no prior key must populate ctx.obj with "
+        f"this call's attempts so the audit log reaches track_cost. "
+        f"Got ctx.obj: {ctx.obj!r}"
+    )
+
+
+def test_failed_substep_attempts_visible_to_recovered_caller(
+    mock_load_models, mock_set_llm_cache,
+):
+    """F14 contract pin (PR #1056 7th-round review).
+
+    The round-7 deletion of the rewind machinery is justified by issue
+    #897's intent: `attempted_models` is an audit log of "models that
+    were attempted and then abandoned." Concretely, this means a caller
+    pattern like `auto_include` — which catches a final auto_include_LLM
+    terminal failure and recovers by returning `summary_model` — must
+    leave the failed selector-stage attempts visible to the outer
+    `track_cost`, even though the `model` column will end up being the
+    summary model. This test simulates that pattern directly.
+
+    If a round-8 ever reintroduces a rewind under any name, this test
+    should fail loudly.
+    """
+    import click
+    mock_request = MagicMock(spec=httpx.Request)
+    mock_request.url = "http://fakeurl.com/api"
+
+    all_keys = {
+        "OPENAI_API_KEY": "fake_key_long_enough_for_validation",
+        "ANTHROPIC_API_KEY": "fake_key_long_enough_for_validation",
+        "GOOGLE_API_KEY": "fake_key_long_enough_for_validation",
+    }
+    # Simulate `summarize_directory` having already pushed its
+    # successful summary-stage attempts onto ctx.obj before the failing
+    # selector-stage call runs.
+    summary_attempts = ['summarize-fallback-1', 'summary-success']
+    cmd = click.Command(name="auto_include_LLM_caller")
+    ctx = click.Context(cmd, obj={'attempted_models': list(summary_attempts)})
+
+    with patch.dict(os.environ, all_keys), ctx:
+        with patch('pdd.llm_invoke.litellm.completion',
+                   side_effect=openai.APIConnectionError(
+                       message="selector-stage exhausted",
+                       request=mock_request,
+                   )):
+            # Outer caller behaves like auto_include: catches the
+            # terminal failure and recovers with summary_model. We just
+            # want the audit-log entries to survive that recovery.
+            try:
+                llm_invoke(
+                    prompt="selector prompt",
+                    input_json={"x": "y"},
+                    strength=0.5,
+                    temperature=0.0,
+                )
+            except RuntimeError:
+                pass  # Recovered.
+
+    published = ctx.obj.get('attempted_models') or []
+    # Summary attempts must still be present at the head.
+    assert published[:len(summary_attempts)] == summary_attempts, (
+        f"Earlier successful summary-stage attempts must remain at the "
+        f"head of the audit log. Got: {published!r}"
+    )
+    # Failed selector-stage attempts must be appended afterward.
+    assert len(published) > len(summary_attempts), (
+        f"Failed selector-stage attempts were dropped from ctx.obj — "
+        f"that's the round-7 regression (rewind reintroduced). Audit "
+        f"log: {published!r}"
+    )
+
+
+def test_llm_invoke_responses_api_returns_attempted_models(mock_load_models, mock_set_llm_cache):
+    """The OpenAI Responses API success path must include `attempted_models`
+    in the returned dict and the last entry must equal `model_name`."""
+    model_key_name = "OPENAI_API_KEY"
+
+    valid_json = '{"field1": "test_value", "field2": 42}'
+
+    with patch.dict(os.environ, {model_key_name: "fake_key_value"}):
+        mock_responses_return = create_mock_openai_responses_api_response(valid_json)
+
+        with patch('pdd.llm_invoke.litellm.responses', return_value=mock_responses_return):
+            with patch('pdd.llm_invoke.litellm.completion'):
+                mock_cost = 0.0001
+                with patch('pdd.llm_invoke._LAST_CALLBACK_DATA', {"cost": mock_cost, "input_tokens": 10, "output_tokens": 10}):
+                    response = llm_invoke(
+                        prompt="Test prompt {text}",
+                        input_json={"text": "test"},
+                        strength=0.5,
+                        temperature=0.0,
+                        verbose=False,
+                        output_pydantic=SampleOutputModel,
+                    )
+
+                    assert 'attempted_models' in response, \
+                        "Responses API success path must include 'attempted_models' in the return dict"
+                    attempted = response['attempted_models']
+                    assert isinstance(attempted, list) and attempted, \
+                        f"'attempted_models' must be a non-empty list, got: {attempted!r}"
+                    assert attempted[-1] == response['model_name'], \
+                        f"Last attempted model {attempted[-1]!r} must equal model_name {response['model_name']!r}"
+
+
 # --- Tests for Multi-Credential Provider (Vertex AI) ---
 
 def test_vertex_multi_credential_no_api_key_passed(mock_set_llm_cache):
