@@ -1,8 +1,8 @@
 """Example showing how to use the `track_cost` decorator from `pdd.track_cost`.
 
 The decorator wraps a Click command function, records the per-command cost,
-the model that succeeded, and the chronological list of attempted models, then
-appends a row to the CSV file specified via `--output-cost` (or the
+the model that succeeded, and the audit log of attempted models, then appends
+a row to the CSV file specified via `--output-cost` (or the
 `PDD_OUTPUT_COST_PATH` environment variable).
 
 Each CSV row contains:
@@ -12,8 +12,12 @@ Each CSV row contains:
     - cost:             cost in USD (float, e.g. 0.05 means $0.05)
     - input_files:      semicolon-separated input file paths
     - output_files:     semicolon-separated output file paths
-    - attempted_models: semicolon-separated chronological list of models tried
-                        (e.g. "vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat")
+    - attempted_models: semicolon-separated audit log of models tried
+                        (e.g. "vertex_ai/gemini-2.5-pro;deepseek/deepseek-chat").
+                        Sequential paths emit wall-clock attempt order;
+                        concurrent paths (e.g. auto-deps --concurrency > 1)
+                        sort by file-submission index for deterministic
+                        output across runs.
 """
 
 import csv

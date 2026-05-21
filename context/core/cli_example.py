@@ -181,15 +181,18 @@ def example_cost_tracking_setup():
         - cost: Estimated cost in USD (e.g., 0.05 for 5 cents)
         - input_files: List of input files involved
         - output_files: List of output files generated/modified
-        - attempted_models: Semicolon-delimited chronological audit log of
-          every model PDD attempted across all LLM calls the command made
-          (multi-substep commands like generate run code-gen + postprocess
-          and both substeps contribute). The `model` column names the
-          model that produced the operation's output; this column is the
-          full record of what was tried, including substeps that failed
-          and were recovered. The two may legitimately differ. Shows
-          fallback history when a default model fails and PDD switches
-          providers (e.g. Vertex AI -> DeepSeek).
+        - attempted_models: Semicolon-delimited audit log of every model
+          PDD attempted across all LLM calls the command made (multi-
+          substep commands like generate run code-gen + postprocess and
+          both substeps contribute). The `model` column names the model
+          that produced the operation's output; this column is the full
+          record of what was tried, including substeps that failed and
+          were recovered. The two may legitimately differ. Shows fallback
+          history when a default model fails and PDD switches providers
+          (e.g. Vertex AI -> DeepSeek). Ordering: sequential paths emit
+          attempts in wall-clock order; concurrent paths (e.g. auto-deps
+          --concurrency > 1) sort by file-submission index for
+          deterministic output across runs.
     
     Args:
         None
