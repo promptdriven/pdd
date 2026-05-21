@@ -5857,6 +5857,24 @@ def test_parse_direct_edit_candidates_handles_real_template_format():
     ]
 
 
+def test_parse_direct_edit_candidates_no_redos_on_blank_lines():
+    """Regression for CodeQL py/redos alert (PR #1133): blank lines after
+    the heading must not cause catastrophic backtracking.
+
+    The pre-fix regex's inner group ``(?:[^|#\\n][^\\n]*\\n|\\s*\\n)*`` had
+    overlapping alternatives — a whitespace-only line matched BOTH branches,
+    so N blank lines produced 2^N backtrack states. Vulnerable input on
+    Python 3.12 stalled for >>>1s; the fixed line-walker is sub-millisecond.
+    """
+    import time
+    output = "### Direct Edit Candidates\n" + "\n" * 200 + "no table here"
+    start = time.monotonic()
+    result = _parse_direct_edit_candidates(output)
+    elapsed = time.monotonic() - start
+    assert result == []
+    assert elapsed < 1.0, f"parser took {elapsed:.3f}s — possible ReDoS"
+
+
 def test_parse_step5_doc_paths_includes_update_create_associated_excludes_conflicts():
     result = _parse_step5_doc_paths(_STEP5_SAMPLE)
     # Update list
@@ -5870,6 +5888,75 @@ def test_parse_step5_doc_paths_includes_update_create_associated_excludes_confli
     # Conflicts and No Changes Needed must be excluded.
     assert "docs/conflicted.md" not in result
     assert "docs/unrelated.md" not in result
+
+
+_STEP5_SAMPLE_UNRECONCILED_ASSOC = _textwrap.dedent("""
+## Step 5: Documentation Changes
+
+### Files to Update
+
+#### `README.md`
+**Change:** add bullet
+
+### Files to Create
+- `docs/new.md` - tutorial
+
+### Associated Documents
+
+#### `docs/from_confirmed.md`
+**Discovered via:** `prompts/foo_python.prompt`
+**Section:** request
+**Change:** update
+
+#### `docs/from_unconfirmed.md`
+**Discovered via:** `prompts/unconfirmed_python.prompt`
+**Section:** something
+**Change:** update
+""")
+
+
+def test_parse_step5_doc_paths_excludes_associated_doc_when_originating_prompt_not_confirmed():
+    """Round-5: Associated Documents must be reconciled against Step 6's
+    confirmed dev-unit prompt set. A doc whose ``Discovered via`` prompt
+    isn't in the confirmed set is a stale carryover and must be excluded
+    from the allowlist (matches the Step 9 prompt's reconciliation rule)."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_UNRECONCILED_ASSOC,
+        confirmed_prompts={"prompts/foo_python.prompt"},
+    )
+    assert "docs/from_confirmed.md" in result
+    assert "docs/from_unconfirmed.md" not in result
+
+
+def test_parse_step5_doc_paths_includes_associated_doc_when_originating_prompt_confirmed():
+    """Round-5: when the ``Discovered via`` prompt IS in the confirmed set,
+    the associated doc must be included."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_UNRECONCILED_ASSOC,
+        confirmed_prompts={
+            "prompts/foo_python.prompt",
+            "prompts/unconfirmed_python.prompt",
+        },
+    )
+    assert "docs/from_confirmed.md" in result
+    assert "docs/from_unconfirmed.md" in result
+
+
+def test_parse_step5_doc_paths_files_to_update_not_reconciled():
+    """Round-5: Step 5 owns Files to Update and Files to Create directly —
+    those buckets are NEVER reconciled against the confirmed prompt set
+    (they aren't discovered through the include graph and carry no
+    `Discovered via` line). Even with an empty confirmed set, they must
+    still pass through."""
+    result = _parse_step5_doc_paths(
+        _STEP5_SAMPLE_UNRECONCILED_ASSOC,
+        confirmed_prompts=set(),
+    )
+    assert "README.md" in result
+    assert "docs/new.md" in result
+    # But the Associated Documents are filtered out by the empty set.
+    assert "docs/from_confirmed.md" not in result
+    assert "docs/from_unconfirmed.md" not in result
 
 
 # 7-11: Allowlist builder tests ----------------------------------------------
@@ -5959,6 +6046,49 @@ def test_build_step9_allowlist_excludes_architecture_json(tmp_path):
     nested_arch = (tmp_path / "extensions/foo/architecture.json").resolve()
     assert arch not in allowed_files
     assert nested_arch not in allowed_files
+
+
+def test_build_step9_allowlist_excludes_unreconciled_associated_documents(tmp_path):
+    """Round-5 integration test: ``_build_step9_allowlist`` must pass the
+    Step 6 confirmed dev-unit prompt set into ``_parse_step5_doc_paths``
+    so a Step 5 Associated Document whose `Discovered via` prompt isn't
+    in Step 6 stays out of the allowlist (defense-in-depth matching the
+    Step 9 prompt's reconciliation rule)."""
+    step6_min = _textwrap.dedent("""
+        ## Step 6
+
+        ### Dev Units to MODIFY
+        | Prompt | Code | Example | Test |
+        |--------|------|---------|------|
+        | `prompts/foo_python.prompt` | `pdd/foo.py` | `context/foo_example.py` | `tests/test_foo.py` |
+    """)
+    step5_with_stale_assoc = _textwrap.dedent("""
+        ## Step 5
+
+        ### Files to Update
+
+        #### `README.md`
+        **Change:** add bullet
+
+        ### Associated Documents
+
+        #### `docs/from_foo.md`
+        **Discovered via:** `prompts/foo_python.prompt`
+        **Change:** update
+
+        #### `docs/from_unconfirmed.md`
+        **Discovered via:** `prompts/orphan_python.prompt`
+        **Change:** update
+    """)
+    allowed_files, _ = _build_step9_allowlist(
+        tmp_path, step5_with_stale_assoc, step6_min, []
+    )
+    readme = (tmp_path / "README.md").resolve()
+    from_foo = (tmp_path / "docs/from_foo.md").resolve()
+    from_unconfirmed = (tmp_path / "docs/from_unconfirmed.md").resolve()
+    assert readme in allowed_files  # Files to Update — never reconciled
+    assert from_foo in allowed_files  # discovered via a confirmed prompt
+    assert from_unconfirmed not in allowed_files  # stale carryover
 
 
 # 12-21: Scope-guard tests over a REAL git worktree --------------------------

@@ -13,7 +13,7 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Set, Tuple, Any
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple, Any
 
 from rich.console import Console
 from rich.markup import escape
@@ -735,24 +735,46 @@ def _parse_direct_edit_candidates(step6_output: str) -> List[str]:
     `### Direct Edit Candidates...` heading and the markdown table (this
     matches the actual `agentic_change_step6_devunits_LLM.prompt` template
     which emits a `*Files that need scoped...*` line plus a blank line).
+
+    Implemented as a line-walker rather than a regex to avoid catastrophic
+    backtracking. The previous pattern's inner group
+    ``(?:[^|#\\n][^\\n]*\\n|\\s*\\n)*`` had overlapping alternatives — a
+    whitespace-only line matched BOTH branches, so N blank lines after the
+    heading produced 2^N backtrack states (CodeQL py/redos alert, PR #1133).
     """
-    section_pattern = (
-        r"### Direct Edit Candidates[^\n]*\n"
-        r"(?:[^|#\n][^\n]*\n|\s*\n)*"  # optional non-table, non-heading lines
-        r"\|[^\n]+\n\|[-\s|]+\n((?:\|[^\n]+(?:\n|$))*)"
-    )
-    table_match = re.search(section_pattern, step6_output, re.IGNORECASE)
-    if not table_match:
-        return []
+    heading_re = re.compile(r"^###\s+Direct Edit Candidates", re.IGNORECASE)
+    separator_chars = set("-: ")
     candidates: List[str] = []
-    for row in table_match.group(1).splitlines():
-        if not row.strip().startswith("|"):
+    found_heading = False
+    found_header = False
+    found_separator = False
+    for raw_line in step6_output.splitlines():
+        stripped = raw_line.strip()
+        if not found_heading:
+            if heading_re.match(raw_line.rstrip()):
+                found_heading = True
             continue
-        cols = [c.strip() for c in row.split("|")]
-        if len(cols) >= 2 and cols[1]:  # cols[0] is empty due to leading |
-            file_path = cols[1].strip().strip("`")
-            if file_path and not file_path.startswith("-"):
-                candidates.append(file_path)
+        if not found_header:
+            # Skip non-table content (italic description, blank lines) until
+            # we see the first pipe line. Abort if we hit another markdown
+            # heading at the same or higher level before the table — the
+            # section ended without a table.
+            if stripped.startswith("#"):
+                return candidates
+            if stripped.startswith("|"):
+                found_header = True  # header row, separator next
+            continue
+        if not stripped.startswith("|"):
+            break  # end of table
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if not found_separator:
+            if cells and all(c and set(c) <= separator_chars for c in cells):
+                found_separator = True
+            continue
+        if cells and cells[0]:
+            cell = cells[0].strip("`").strip("*").strip()
+            if cell and not cell.startswith("-"):
+                candidates.append(cell)
     return candidates
 
 def _extract_section(text: str, heading: str, level: int = 3) -> str:
@@ -889,7 +911,10 @@ def _parse_step6_frontend_prompts(step6_output: str) -> List[str]:
     return prompts
 
 
-def _parse_step5_doc_paths(step5_output: str) -> List[str]:
+def _parse_step5_doc_paths(
+    step5_output: str,
+    confirmed_prompts: Optional[Iterable[str]] = None,
+) -> List[str]:
     """Extract documentation file paths from Step 5 output.
 
     Includes paths under `### Files to Update`, `### Files to Create`, and
@@ -899,22 +924,81 @@ def _parse_step5_doc_paths(step5_output: str) -> List[str]:
     Markdown emphasis (``**path**``) and surrounding backticks are stripped so
     LLM variants like ``#### **README.md**`` and
     ``- **docs/foo.md** - purpose`` are recognized.
+
+    *confirmed_prompts* (when supplied) is the Step 6 confirmed dev-unit
+    prompt set — the union of MODIFY/CREATE/dependencies/integration/frontend
+    prompts. Each ``Associated Documents`` sub-entry carries a
+    ``**Discovered via:** prompts/...`` line identifying the prompt whose
+    ``<include>`` graph surfaced the doc. If that originating prompt is NOT
+    in *confirmed_prompts*, the doc is a stale carryover: Step 6 dropped the
+    prompt from the dev-unit list (or never confirmed it), so Step 9 is
+    required to skip the doc per the Step 9 prompt's reconciliation rule
+    (``prompts/agentic_change_step9_implement_LLM.prompt`` §2).
+
+    Files to Update and Files to Create entries are NEVER reconciled —
+    Step 5 owns those buckets directly, they aren't discovered through the
+    include graph, and a `Discovered via` line is not even emitted for them.
+    Only ``Associated Documents`` is subject to reconciliation.
+
+    When *confirmed_prompts* is ``None`` the previous (unfiltered) behavior
+    is preserved — callers that don't have a Step 6 set available still get
+    the union of all three buckets.
     """
+    confirmed_set: Optional[Set[str]] = (
+        {str(p).replace("\\", "/").strip().strip("`").strip()
+         for p in confirmed_prompts if p}
+        if confirmed_prompts is not None
+        else None
+    )
+
     docs: List[str] = []
-    # Files to Update + Associated Documents: `#### path` headers.
-    # Tolerate any combination of surrounding markdown emphasis (``*``,
-    # ``**``) and code-ticks (``` ` ```) — strip them after capture rather
-    # than baking them into the pattern. ``str.strip("*`")`` peels off
-    # both characters in any order, so ``**`name`**`` collapses to
-    # ``name`` in a single call.
-    for heading in ("Files to Update", "Associated Documents"):
-        section = _extract_section(step5_output, heading, level=3)
-        if not section:
-            continue
-        for match in re.finditer(r"^####\s+(.+?)\s*$", section, re.MULTILINE):
+    # Files to Update: `#### path` headers. Tolerate any combination of
+    # surrounding markdown emphasis (``*``, ``**``) and code-ticks (``` ` ```)
+    # — strip them after capture rather than baking them into the pattern.
+    # ``str.strip("*`")`` peels off both characters in any order, so
+    # ``**`name`**`` collapses to ``name`` in a single call.
+    update_section = _extract_section(step5_output, "Files to Update", level=3)
+    if update_section:
+        for match in re.finditer(r"^####\s+(.+?)\s*$", update_section, re.MULTILINE):
             candidate = match.group(1).strip().strip("*`").strip()
             if candidate.endswith((".md", ".rst", ".txt")):
                 docs.append(candidate)
+
+    # Associated Documents: `#### path` sub-headings, each followed by a
+    # ``**Discovered via:** `prompts/...` `` line. Split per-sub-heading so
+    # each doc can be reconciled against its own originating prompt.
+    assoc_section = _extract_section(step5_output, "Associated Documents", level=3)
+    if assoc_section:
+        # ``re.split`` returns alternating non-match / match chunks; the
+        # first chunk is anything before the first ``####`` (intro text,
+        # usually italic description). Skip it.
+        sub_sections = re.split(r"(?m)^####\s+", assoc_section)
+        for sub in sub_sections[1:]:
+            first_line, _, body = sub.partition("\n")
+            candidate = first_line.strip().strip("*`").strip()
+            if not candidate.endswith((".md", ".rst", ".txt")):
+                continue
+            if confirmed_set is not None:
+                discovered = re.search(
+                    r"\*\*Discovered via:\*\*\s*`?([^`\n]+?)`?\s*$",
+                    body,
+                    re.MULTILINE,
+                )
+                if discovered:
+                    origin = discovered.group(1).strip().strip("`").strip("*").strip()
+                    origin_norm = origin.replace("\\", "/")
+                    if origin_norm not in confirmed_set:
+                        # Originating prompt was not confirmed by Step 6;
+                        # Step 9 must skip this doc, so the scope guard
+                        # refuses to allowlist it.
+                        continue
+                # If no `Discovered via` line is present we cannot
+                # reconcile — include conservatively so legitimate Step 5
+                # output without the field still gets allowlisted. The
+                # Step 5 prompt requires the field; this branch only
+                # protects against minor LLM omissions.
+            docs.append(candidate)
+
     # Files to Create: `- path - purpose` bullets.
     create_section = _extract_section(step5_output, "Files to Create", level=3)
     if create_section:
@@ -1020,17 +1104,36 @@ def _build_step9_allowlist(
         seen_rel.add(normalized)
         allowed_files.add(_resolve(normalized))
 
-    for path in _parse_step6_devunit_prompts(step6_output):
+    devunit_prompts = _parse_step6_devunit_prompts(step6_output)
+    dependency_prompts = _parse_step6_dependency_prompts(step6_output)
+    integration_prompts = _parse_step6_integration_prompts(step6_output)
+    frontend_prompts = _parse_step6_frontend_prompts(step6_output)
+
+    for path in devunit_prompts:
         _add(path)
-    for path in _parse_step6_dependency_prompts(step6_output):
+    for path in dependency_prompts:
         _add(path)
-    for path in _parse_step6_integration_prompts(step6_output):
+    for path in integration_prompts:
         _add(path)
-    for path in _parse_step6_frontend_prompts(step6_output):
+    for path in frontend_prompts:
         _add(path)
     for path in _parse_direct_edit_candidates(step6_output):
         _add(path)
-    for path in _parse_step5_doc_paths(step5_output):
+
+    # Reconcile Associated Documents against Step 6's confirmed dev-unit
+    # prompt set: a doc whose "Discovered via" originating prompt is not in
+    # this set is a stale carryover that Step 9 is required to skip
+    # (`prompts/agentic_change_step9_implement_LLM.prompt` §2). The Step 9
+    # prompt already enforces this rule; mirroring it in the scope guard
+    # closes a defense-in-depth gap where a misbehaving LLM could edit a
+    # stale doc and slip past the guard.
+    confirmed_prompts = (
+        set(devunit_prompts)
+        | set(dependency_prompts)
+        | set(integration_prompts)
+        | set(frontend_prompts)
+    )
+    for path in _parse_step5_doc_paths(step5_output, confirmed_prompts=confirmed_prompts):
         _add(path)
 
     for raw in healed_prompt_paths or []:
