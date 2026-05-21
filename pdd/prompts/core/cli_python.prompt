@@ -58,7 +58,7 @@
   4. **Result Callback (`process_commands`)**:
      - Normalize results (handle None, single 3-tuples, or lists).
      - Command Tracking: Get `invoked_subcommands` from `ctx` or `ctx.obj` (skip `ctx.obj` if `PYTEST_CURRENT_TEST` is set).
-     - Summary: Print per-step status, cost, model, and `examplesUsed` (slug/title).
+     - Summary: Print per-step status, cost, model, and `examplesUsed` (slug/title). When the per-step `model_name` is empty or one of `"unknown"`, `"n/a"`, `"none"`, `"skipped"` (case-insensitive), suppress the `, Model: …` segment entirely — print just `Cost: ${cost:.6f}` to avoid rendering a trailing blank `Model: ` label for zero-cost no-ops (#1103).
      - **Duplicate Guard Recording**: Call `record_after_guarded_command(ctx, success=_derive_success_from_normalized_results(normalized_results))`. The helper pins the contract in one place: a run counts as successful only when `normalized_results` is non-empty AND no element is `None` (the existing convention that a `None` result indicates command failure). Failed invocations are NOT persisted to the dedup store and can be retried immediately. Implement `_derive_success_from_normalized_results(normalized_results: List[Any]) -> bool` as a module-level helper (before `process_commands`) with a docstring that spells out the None-is-failure convention so the logic is unit-testable in isolation and the contract survives future refactors.
      - Core Dump: Collect captured output (stripped of ANSI), restore streams, and call `_write_core_dump`.
      - Exit code 1 if `ctx.obj.get("_fatal_exception")` is set.

@@ -369,6 +369,28 @@ def test_cli_result_callback_single_tuple_normalization():
     assert "Command Execution Summary" in summary
     assert f"Step 1 (generate):[/info] Cost: ${0.0040675:.6f}, Model: gpt-5.1-codex-mini" in summary
 
+
+@pytest.mark.parametrize("model_name", ["", "unknown", "Unknown", "N/A", "n/a", "none", "skipped"])
+def test_cli_summary_suppresses_blank_or_placeholder_model(model_name):
+    """#1103: zero-cost no-ops (e.g. an all_synced sync) return an empty or
+    placeholder model name; the summary must not render a trailing blank
+    'Model: ' label or a meaningless 'Model: unknown' string."""
+    lines = _capture_summary(['sync'], ('aggregated', 0.0, model_name))
+    summary = "\n".join(lines)
+    assert "Step 1 (sync):[/info] Cost: $0.000000" in summary
+    # Whichever placeholder model is returned must be suppressed entirely.
+    assert f"Model: {model_name}" not in summary
+    # And we must not emit a trailing-space "Model: " literal either.
+    assert "Model: \n" not in summary
+    assert not any(line.rstrip().endswith("Model:") for line in lines)
+
+
+def test_cli_summary_renders_real_model_name():
+    """Sanity guard for the suppression rule: a real model name still renders."""
+    lines = _capture_summary(['generate'], ('generated', 0.05, 'claude-opus-4-7'))
+    summary = "\n".join(lines)
+    assert "Cost: $0.050000, Model: claude-opus-4-7" in summary
+
 def test_cli_result_callback_non_tuple_result_warning():
     lines = _capture_summary(['generate'], "unexpected string result")
     summary = "\n".join(lines)

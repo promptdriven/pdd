@@ -1573,6 +1573,116 @@ class TestOneSessionSyncOutputFromConfig:
         assert os.environ.get("PDD_REPAIR_DIRECTIVE") == "STALE-OUTER"
 
 
+# --- Tests for the two early-out sync_result branches (#1103) ---
+
+
+class TestSyncMainEarlyOutSummaryKeys:
+    """sync_main builds two ``sync_result`` dicts in early-out branches:
+    (a) one-session sync sees ``decision.operation == "nothing"`` and skips,
+    (b) generate phase failed to produce a code file. Both branches MUST
+    set a ``summary`` so the final Details column does not collapse to
+    ``"No details."``. Codex review pointer: sync_main.py:931 + :1043."""
+
+    @pytest.mark.timeout(30)
+    def test_one_session_already_synced_sets_summary(
+        self, mock_project_dir, mock_construct_paths
+    ):
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% already-synced module"
+        )
+
+        fake_decision = MagicMock()
+        fake_decision.operation = "nothing"
+
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "src" / "tinymod.py",
+        }
+        fake_pdd_files["code"].parent.mkdir(parents=True, exist_ok=True)
+        fake_pdd_files["code"].write_text("def tiny():\n    pass\n")
+
+        with patch(
+            "pdd.sync_main.get_pdd_file_paths", return_value=fake_pdd_files
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ):
+            ctx = create_mock_context({"local": True})
+            results, _total, _model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        lang_result = results["results_by_language"]["python"]
+        assert lang_result["success"] is True
+        summary = lang_result.get("summary")
+        assert summary, (
+            "one-session already-synced path MUST set a non-empty summary; "
+            f"got result: {lang_result}"
+        )
+        assert "already synchronized" in summary.lower()
+
+    @pytest.mark.timeout(30)
+    def test_one_session_generate_failed_sets_summary(
+        self, mock_project_dir, mock_construct_paths
+    ):
+        (mock_project_dir / "prompts" / "tinymod_python.prompt").write_text(
+            "% module whose generate phase fails"
+        )
+
+        fake_decision = MagicMock()
+        fake_decision.operation = "generate"
+
+        fake_pdd_files = {
+            "prompt": mock_project_dir / "prompts" / "tinymod_python.prompt",
+            "code": mock_project_dir / "src" / "tinymod.py",
+        }
+
+        # codegen runs but never writes the code file -> generate-failed branch.
+        def fake_codegen(*_args, **_kwargs):
+            return ("", False, 0.0, "mock-model")
+
+        with patch(
+            "pdd.code_generator_main.code_generator_main",
+            side_effect=fake_codegen,
+        ), patch(
+            "pdd.sync_main.get_pdd_file_paths", return_value=fake_pdd_files
+        ), patch(
+            "pdd.sync_determine_operation.sync_determine_operation",
+            return_value=fake_decision,
+        ):
+            ctx = create_mock_context({"local": True})
+            results, _total, _model = sync_main(
+                ctx,
+                "tinymod",
+                max_attempts=1,
+                budget=1.0,
+                skip_verify=False,
+                skip_tests=False,
+                target_coverage=90.0,
+                dry_run=False,
+                one_session=True,
+            )
+
+        lang_result = results["results_by_language"]["python"]
+        assert lang_result["success"] is False
+        summary = lang_result.get("summary")
+        assert summary, (
+            "generate-failed branch MUST set a non-empty summary; "
+            f"got result: {lang_result}"
+        )
+        # Surfaces both the step and the original reason.
+        assert "generate" in summary.lower()
+        assert "code generation failed" in summary.lower()
+
+
 # --- Tests for sync skipping LLM-only basenames ---
 
 

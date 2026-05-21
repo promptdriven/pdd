@@ -934,6 +934,10 @@ def sync_main(
                             "model_name": "",
                             "operations_completed": [],
                             "errors": [],
+                            "summary": (
+                                "No sync operations required; selected target "
+                                "is already synchronized."
+                            ),
                         }
                         _one_session_skipped = True
 
@@ -1107,6 +1111,7 @@ def sync_main(
                             "model_name": "",
                             "operations_completed": [],
                             "errors": ["Code generation failed"],
+                            "summary": "Step generate failed: Code generation failed",
                         }
                     else:
                         # Phase 2: Hand off to one-session agent for example + crash + verify + test
@@ -1227,11 +1232,27 @@ def sync_main(
         for lang, result in aggregated_results["results_by_language"].items():
             status = "[green]Success[/green]" if result.get("success") else "[red]Failed[/red]"
             cost_str = f"${result.get('total_cost', 0.0):.4f}"
-            details = (
-                result.get("summary")
-                or result.get("error")
-                or "No details."
+            # Prompt forbids "No details." / "None" placeholders in this column
+            # (sync_main_python.prompt §11). Pick the first truthy candidate
+            # whose string form is not a forbidden literal, then fall back to a
+            # status-scoped phrase so the row never carries a placeholder.
+            forbidden = {"none", "no details.", "no details"}
+            candidates = (result.get("summary"), result.get("error"))
+            details = next(
+                (
+                    str(value)
+                    for value in candidates
+                    if value is not None and str(value).strip()
+                    and str(value).strip().lower() not in forbidden
+                ),
+                None,
             )
+            if details is None:
+                details = (
+                    "No sync operations required; selected target is already synchronized."
+                    if result.get("success")
+                    else "Step failed"
+                )
             final_table.add_row(lang, status, cost_str, str(details))
 
         rprint(final_table)
