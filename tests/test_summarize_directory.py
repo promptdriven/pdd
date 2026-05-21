@@ -2017,46 +2017,69 @@ class TestMaxWorkers:
             ['worker-failed', 'worker-success'] * 2
         ), f"Worker contributions missing or wrong, got: {published}"
 
-    def test_max_workers_model_name_matches_attempted_models_tail(
+    def test_max_workers_model_name_uses_highest_idx_success(
         self, tmp_path, mock_load_prompt_template
     ):
-        """F5 regression (PR #1056 4th-round review): when workers use
-        different final models AND a lower-submission-index file completes
-        AFTER a higher-index one, the returned `model_name` must still
-        match `attempted_models[-1]` (which is sorted by submission idx,
-        not completion order). With completion-order tracking, model_name
-        would be whichever worker finished last in wall-clock — silently
-        disagreeing with the published list's tail.
+        """F5 contract (PR #1056 4th-round review, revised for round 7).
+
+        When max_workers > 1 workers all succeed but with different
+        models, and a lower-submission-index file completes AFTER a
+        higher-index one, the returned `model_name` must reflect the
+        HIGHEST-submission-index worker (not completion order). This
+        keeps `model_name` deterministic across runs — without it,
+        the column would silently flip based on wall-clock timing of
+        the thread pool.
+
+        NOTE: this test only covers the all-success happy path. The
+        wider invariant tested in round 4 ("model_name equals
+        attempted_models[-1]") was walked back in round 6 — README and
+        the prompt now state that `model` and `attempted_models[-1]`
+        may diverge in error-recovery paths
+        (test_max_workers_failed_last_file_returns_earlier_success_model
+        covers the failure case).
         """
         import click
         import threading
         import time as _time
 
-        for i in range(3):
-            (tmp_path / f"f{i}.py").write_text(f"c{i}")
+        files = [tmp_path / f"f{i}.py" for i in range(3)]
+        for fp in files:
+            fp.write_text(fp.name)
 
-        # Force completion order to be REVERSE of submission order so the
-        # bug would manifest: idx=2 finishes first, idx=0 finishes last.
-        call_order = {'count': 0}
-        order_lock = threading.Lock()
+        # Pin the discovered-files order so submission idx is
+        # deterministic (glob order is filesystem-dependent on macOS).
+        # The mock returns model name keyed off the file content, so
+        # we know exactly which model the highest-idx worker produced.
+        sorted_paths = sorted(str(p) for p in files)
 
         def fake_llm_invoke(**kwargs):
-            with order_lock:
-                this_call = call_order['count']
-                call_order['count'] += 1
-            # Last-submitted finishes first, first-submitted finishes last.
-            _time.sleep(0.05 * (2 - this_call))
+            content = kwargs.get('input_json', {}).get('file_contents', '')
+            # Delay highest-content files MORE so completion order is
+            # REVERSE of submission order — the F5 bug would surface as
+            # model_name being the lowest-idx file's model (which
+            # finishes last).
+            _time.sleep(0.05 * (3 - len(content.replace('.py', '').replace('f', ''))))
             return {
                 'result': FileSummary(
                     file_summary="s", key_exports=[], dependencies=[]
                 ),
                 'cost': 0.01,
-                # Distinct model per call so the assertion catches the bug.
-                'model_name': f'model-{this_call}',
-                'attempted_models': [f'failed-{this_call}', f'model-{this_call}'],
+                'model_name': f'success-from-{content}',
+                'attempted_models': [f'success-from-{content}'],
             }
 
-        with patch('pdd.summarize_directory.llm_invoke', side_effect=fake_llm_invoke):
+        # Patch glob to return files in known-sorted order so submission
+        # idx maps to file content unambiguously.
+        with patch(
+            'pdd.summarize_directory._get_files_from_git',
+            return_value=None,  # Force glob fallback.
+        ), patch(
+            'pdd.summarize_directory._get_files_from_glob',
+            return_value=sorted_paths,  # Deterministic ordering.
+        ), patch(
+            'pdd.summarize_directory.llm_invoke',
+            side_effect=fake_llm_invoke,
+        ):
             with click.Context(click.Command('test-cmd')) as ctx:
                 ctx.obj = {}
                 _, _, returned_model = summarize_directory(
@@ -2065,13 +2088,13 @@ class TestMaxWorkers:
                     temperature=0.0,
                     max_workers=3,
                 )
-                tail = ctx.obj['attempted_models'][-1]
 
-        assert returned_model == tail, (
-            f"model_name ({returned_model!r}) must equal attempted_models "
-            f"tail ({tail!r}) so the cost.csv `model` column matches the "
-            f"final entry of `attempted_models`. Full list: "
-            f"{ctx.obj['attempted_models']}"
+        # Highest-submission-idx file is sorted_paths[-1] = .../f2.py
+        # → content "f2.py" → model "success-from-f2.py".
+        assert returned_model == 'success-from-f2.py', (
+            f"model_name must be the model from the highest-submission-idx "
+            f"successful worker (deterministic across thread completion "
+            f"timing). Got {returned_model!r}"
         )
 
     def test_max_workers_recovers_attempts_from_terminal_failure(
