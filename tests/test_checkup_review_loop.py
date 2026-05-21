@@ -193,6 +193,32 @@ class TestCheckupReviewLoopCli:
 
 
 class TestPrMetadataFetch:
+    def test_format_pr_api_changed_files_truncates_large_lists(self) -> None:
+        import pdd.checkup_review_loop as mod
+
+        output = "\n".join(
+            f"modified\tpdd/file_{idx}.py\t" for idx in range(5)
+        )
+
+        formatted = mod._format_pr_api_changed_files(output, max_lines=3)
+
+        assert "- MODIFIED: pdd/file_0.py" in formatted
+        assert "- MODIFIED: pdd/file_2.py" in formatted
+        assert "pdd/file_3.py" not in formatted
+        assert "showing 3 of 5 files" in formatted
+        assert "prompt context bounded" in formatted
+
+    def test_format_pr_api_changed_files_truncates_by_character_budget(self) -> None:
+        import pdd.checkup_review_loop as mod
+
+        output = "modified\tpdd/short.py\t\nmodified\tpdd/very_long_name.py\t"
+
+        formatted = mod._format_pr_api_changed_files(output, max_chars=25)
+
+        assert formatted.startswith("- MODIFIED: pdd/short.py")
+        assert "very_long_name.py" not in formatted
+        assert "showing 1 of 2 files" in formatted
+
     def test_fetch_pr_metadata_can_include_api_changed_files(
         self, monkeypatch: Any
     ) -> None:

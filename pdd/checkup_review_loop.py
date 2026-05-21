@@ -62,6 +62,8 @@ ROLE_TO_PROVIDER: Dict[str, str] = {
 
 DEFAULT_BLOCKING_SEVERITIES: Tuple[str, ...] = ("blocker", "critical", "medium")
 DEFAULT_CLEAN_REVIEWER_STATES: Tuple[str, ...] = ("clean",)
+PR_API_CHANGED_FILES_MAX_LINES = 300
+PR_API_CHANGED_FILES_MAX_CHARS = 20000
 # R8: cover every suffix Python can import as a module under ``pdd/``.
 # A sourceless ``.pyc``, native ``.so``/``.pyd``, or legacy ``.pyo`` can be
 # imported as ``pdd.<name>`` with no prompt source, just like a ``.py``
@@ -3812,9 +3814,16 @@ def _summary_from_output(output: str) -> str:
     return text.splitlines()[0][:500]
 
 
-def _format_pr_api_changed_files(output: str) -> str:
+def _format_pr_api_changed_files(
+    output: str,
+    *,
+    max_lines: int = PR_API_CHANGED_FILES_MAX_LINES,
+    max_chars: int = PR_API_CHANGED_FILES_MAX_CHARS,
+) -> str:
     """Format ``gh api pulls/{n}/files --jq ...`` rows for prompt context."""
     lines: List[str] = []
+    total = 0
+    char_count = 0
     for raw_line in (output or "").splitlines():
         parts = raw_line.split("\t")
         if len(parts) < 2:
@@ -3830,7 +3839,21 @@ def _format_pr_api_changed_files(output: str) -> str:
             path = f"{previous_filename} -> {filename}"
         else:
             path = filename
-        lines.append(f"- {status_label}: {path}")
+        total += 1
+
+        line = f"- {status_label}: {path}"
+        next_char_count = char_count + len(line) + (1 if lines else 0)
+        if len(lines) >= max_lines or next_char_count > max_chars:
+            continue
+        lines.append(line)
+        char_count = next_char_count
+
+    if total > len(lines):
+        lines.append(
+            "NOTE: GitHub PR files API list truncated; showing "
+            f"{len(lines)} of {total} files to keep checkup prompt context bounded. "
+            "Refresh the local PR base ref for the complete git diff."
+        )
     return "\n".join(lines)
 
 
