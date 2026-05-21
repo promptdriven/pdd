@@ -47,6 +47,36 @@
 
 % The decorator should be robust and ensure that the main command functionality is not adversely affected by the cost tracking. Use the `functools.wraps` decorator to preserve the metadata of the original function.
 
+% CSV Reader Contract (consumed by external watchers, e.g. `cost_budget_watcher`)
+This module is the sole writer of the PDD cost CSV. External consumers (the
+GitHub App / executor budget watcher, `cost_budget_watcher`) read the same
+file concurrently and rely on the following stable, append-only contract.
+Changing this contract is a breaking change.
+
+1. **Header columns (current, in order):** `timestamp`, `model`, `command`,
+   `cost`, `input_files`, `output_files`, `attempted_models`. Legacy files
+   missing the last column are read by appending rows without that column;
+   new files always include all columns.
+2. **`timestamp`:** ISO 8601 UTC string (`datetime.now(timezone.utc).isoformat()`).
+   Readers parse with `datetime.fromisoformat` and compare against a stored
+   `job.started_at` to compute spend-since-job-start.
+3. **`command`:** the bare command name as recognised by the Click context
+   (e.g. `generate`, `sync`, `fix`, `change`, `bug`). Watchers filter the CSV
+   by `command` and by `timestamp >= job.started_at` to attribute cost to a
+   specific job. When multiple jobs run the same command concurrently, the
+   filter is best-effort; the GitHub App constrains this by serialising
+   per-issue work.
+4. **`cost`:** a string-formatted positive `float` in USD. Missing/blank/
+   non-numeric values MUST be treated by readers as `0.0` rather than raising.
+5. **Append-only:** rows are written by `track_cost` only on command exit
+   (success or recoverable failure). The file is never truncated or rewritten
+   in-place outside the legacy-header migration path. Readers MAY safely tail
+   the file by line count or by `csv.DictReader`.
+6. **Concurrency:** writers append a single row per command invocation under
+   the OS's default open-append semantics. Readers MUST tolerate transient
+   parse errors on a partially-flushed final row (treat as `0.0` and re-read
+   on the next poll).
+
 % Here is an example of how the `track_cost` decorator will be used in the `pdd` program:
 ```@cli.command()
 @track_cost

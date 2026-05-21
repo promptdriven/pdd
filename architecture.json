@@ -465,7 +465,7 @@
     }
   },
   {
-    "reason": "Daily Rising Stars resurface check — Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
+    "reason": "Daily Rising Stars resurface check \u2014 Cloud Scheduler function scanning contribution thresholds to identify high-potential nurtured candidates and detect churned candidates",
     "description": "Cloud Function entry point recruiting_resurface_check triggered by Cloud Scheduler (daily). Scans all recruiting/candidates with crmFunnelStage in ('nurture', 'contributing'). For each candidate, evaluates four resurface criteria from config thresholds: (1) merged_prs >= threshold (e.g., 3 merged PRs), (2) hackathon_score >= threshold (e.g., top 25%), (3) platform_usage_days >= threshold (power user), (4) marketplace_examples >= threshold (marketplace contributor). Candidates meeting any criterion are marked resurfaced=true with appropriate ResurfaceReason, CrmFunnelStage updated to 'resurfaced', and CRM GitHub Issue label updated from recruiting-nurture to recruiting-resurfaced. Also detects churned candidates: if last_activity_at > 60 days ago and no contributions, sets crmFunnelStage='churned' and updates CRM label to recruiting-churned. Verifies merged PR counts via GitHub API to prevent gaming. Logs all resurface and churn transitions. Returns summary counts.",
     "dependencies": [],
     "priority": 18,
@@ -1955,7 +1955,7 @@
   },
   {
     "reason": "CLI entry point for the code generator command.",
-    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method — declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter — declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift — annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default).",
+    "description": "Command-line interface for code generator. Parses arguments, orchestrates the workflow, and formats output. Raises structured ArchitectureConformanceError failures with output/expected/found/missing fields plus failed-attempt total_cost/model_name (constructor accepts an optional repair_directive override for the <pdd-interface> signature check whose source of truth is the prompt, not architecture.json), and injects a non-empty PDD_REPAIR_DIRECTIVE into the generation prompt inside an <architecture_repair_directive> block so sync retry attempts receive concrete missing-export instructions. Architecture conformance now also enforces the prompt's <pdd-interface> signature across module/cli/command interface types in three categories: (1) missing function/method \u2014 declared callables (including dotted methods like ContentSelector.select) absent from the generated code surface as bare names in missing_symbols; (2) missing parameter \u2014 declared parameter names absent from a matching function/method signature surface as dotted funcname.paramname entries; (3) signature drift \u2014 annotation drift is conservative (raises only when both sides specify and differ) while default drift is strict (raises when the prompt declares a default and the generated code drops or changes it, since callers omitting an optional kwarg would otherwise break with TypeError). Each category emits a distinct error sentence so the agentic_sync_runner repair loop can build a targeted directive (add missing function/method, add missing parameter, or update parameter to match the prompt's annotation/default).",
     "dependencies": [
       "auto_include_python.prompt",
       "agentic_langtest_python.prompt",
@@ -5802,7 +5802,7 @@
   },
   {
     "reason": "Orchestrates the 13-step agentic change workflow for implementing GitHub issues.",
-    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) — detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) — before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
+    "description": "Orchestrates the 13-step agentic change workflow. Includes Step 8.5 (pre-flight drift heal) \u2014 detects prompts whose code has drifted and runs `pdd update` per module inside the worktree before Step 9 rewrites the prompts. Includes Step 10.5 (doc-sync contract verifier) \u2014 before Step 10, calls pdd.sync_order.discover_associated_documents to populate the LLM's associated_documents context, using the authoritative changed-file set so Step 9's worktree fallback path cannot bypass discovery when FILES_* markers are missing; after Step 10, enforces that every discovered doc appears in exactly one of ASSOCIATED_DOCS_MODIFIED / ASSOCIATED_DOCS_CONFLICTS / ASSOCIATED_DOCS_UNCHANGED. Silent drops and bucket overlaps are appended as ORCHESTRATOR_POSTCHECK_WARNINGS and routed to Step 11 via step10_output; PDD_STRICT_DOC_SYNC=1 turns violations into hard workflow aborts (issue #739).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "agentic_common_python.prompt",
@@ -6240,9 +6240,9 @@
             "returns": "Tuple[bool, str, float, str]",
             "sideEffects": [
               "Snapshots PR remote head SHA before/after run_agentic_checkup",
-              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup — fail closed without re-validating CI because Step 7 never saw the new code",
+              "When pre and post SHAs differ, reads the checkup worktree HEAD via _read_checkup_worktree_head_sha; if it doesn't equal the post-checkup remote SHA, an external push raced the checkup \u2014 fail closed without re-validating CI because Step 7 never saw the new code",
               "When the worktree HEAD matches the post-checkup remote SHA, re-runs run_ci_validation_loop with max_retries=0 and expected_head_sha_override=<post-checkup SHA>",
-              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched — silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
+              "Fails closed when any of pre-checkup SHA, post-checkup SHA, or checkup-worktree HEAD SHA cannot be fetched \u2014 silent success there would re-introduce the post-CI mutation hole closed in PR #1112"
             ]
           }
         ]
@@ -7309,7 +7309,7 @@
   },
   {
     "reason": "Global and GitHub issue-driven module identification plus parallel sync orchestration.",
-    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner — or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
+    "description": "Entry point for no-argument global sync and agentic issue sync. Global sync scans architecture.json for stale/missing modules and dispatches AsyncSyncRunner in dependency order; issue sync parses a GitHub issue URL, identifies modules, validates dependencies, and dispatches AsyncSyncRunner \u2014 or DurableSyncRunner when invoked with durable=True. Issue sync uses build_dep_graph_from_architecture_data against in-memory combined architecture so nested-architecture edges are preserved (Phase 0 of #1328).",
     "dependencies": [
       "architecture_sync_python.prompt",
       "auto_deps_main_python.prompt",
@@ -7471,7 +7471,7 @@
     }
   },
   {
-    "reason": "Entry point for the agentic checkup workflow — fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
+    "reason": "Entry point for the agentic checkup workflow \u2014 fetches GitHub issue, loads project context, and dispatches to the checkup orchestrator or PR review-loop.",
     "description": "Accepts a GitHub issue URL, fetches issue content and comments, loads architecture.json and .pddrc, then invokes either the multi-step checkup orchestrator or the PR-mode primary-reviewer/fixer review loop. PR review-loop context is bounded and includes PR body, changed files, comments, and submitted reviews.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7576,7 +7576,7 @@
               "When a budget cap is crossed during a successful fixer turn, still commits and pushes the completed fixes before stopping prior to verifier execution",
               "Feeds fixer rejections back to the primary reviewer and keeps reviewer-rejected findings open until fixed or max rounds",
               "Issue #1088 SHA-backed verification trust boundary: captures the post-push HEAD SHA via _git_rev_parse_head (never inferred from fixer prose), populates FixResult.push_status (pushed | push_failed | not_attempted), FixResult.local_fixer_commit_sha, and FixResult.pushed_head_sha after every fix turn, and rewrites the per-round fix findings.json artifact so the on-disk audit trail carries those fields. The verifier only runs when push_status == pushed AND a non-empty pushed_head_sha was observed; otherwise the round is marked skipped/unverified and the loop stops without claiming the findings as fixed. A clean verify pass pins state.verified_head_sha to that pushed SHA",
-              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify — state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
+              "Issue #1088 final stale-head re-fetch: _finalize calls _fetch_pr_metadata exactly once at render to read the live remote head_sha whenever there is anything to verify \u2014 state.verified_head_sha is set (a verifier pinned a SHA), state.fresh_final_status == clean (a reviewer cleared the actual worktree HEAD without a subsequent fixer push), any fix was pushed, or any finding is marked fixed. The comparison target is state.verified_head_sha when a verifier ran clean, otherwise the most recent FixResult.pushed_head_sha for partial verifier acceptance, otherwise state.reviewed_head_sha captured from git rev-parse HEAD in the worktree the reviewer inspected (never from later PR metadata). If the remote head differs from the comparison target, the comparison target was never observed, or the re-fetch returned no head_sha, downgrades fresh_final_status to missing, downgrades every verification_status_by_round entry from verified to stale, and reverts every findings_by_key entry from fixed to open so final-state.json cannot present a stale verdict. state.final_refetch_attempted is set so the render layer can distinguish a failed re-fetch (remote-pr-head-sha: unknown) from no re-fetch at all (remote-pr-head-sha: none)",
               "Qualifies all unverified fixer rationale prose in the final report as fixer=<role> fixer_disposition=<value> / fixer_rationale=<value> and appends verification=unverified, so bare fixer claims such as 'claude: fixed - ...' never appear as verifier evidence",
               "Writes per-round prompt/output/normalized-findings/dedup-state artifacts and a final-state.json under .pdd/checkup-review-loop/issue-{N}-pr-{M}/. final-state.json includes verified_head_sha, remote_pr_head_sha, reviewed_head_sha, and verification_status_by_round so downstream consumers can re-verify the trust boundary",
               "Posts the final report to the source issue and PR only when use_github_state=True (writes-only suppression flag)"
@@ -7642,7 +7642,7 @@
     }
   },
   {
-    "reason": "Multi-step orchestrator for pdd checkup — 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
+    "reason": "Multi-step orchestrator for pdd checkup \u2014 8 steps with iterative fix-verify loop, worktree isolation, and fix-capable PR mode that pushes back to the same PR.",
     "description": "Orchestrates the 8-step agentic checkup workflow: discover, deps, build, interfaces, test, fix (6.1/6.2/6.3), verify, create PR. Steps 3-7 run in an iterative while loop (max 3 iterations) with exit on 'All Issues Fixed'; exhausting the loop without that exact signal returns failure and does not push fixes or create/skip through a successful PR gate. Supports resume via workflow state persistence, git worktree isolation, --no-fix mode, and PR verification mode. In PR mode it checks out the PR head in a dedicated worktree, runs the full fix-capable checkup on that PR code, commits eligible generated fixes, pushes them back to the same PR branch, re-runs Step 7 after a rebase-on-updated-head push, posts final PR/issue reports only after the pushed PR head is verified, and skips Step 8 because the PR already exists.",
     "dependencies": [
       "agentic_common_python.prompt",
@@ -7795,7 +7795,7 @@
   },
   {
     "reason": "Agentic instruction for assigning logical graph positions to modules in an\narchitecture file. The agent reads the file and an optional PRD/README, reasons about the\nlogical structure of the system, groups modules into functional swimlanes, and writes the\nupdated file in-place so pdd connect shows a graph that makes the architecture easy to\nunderstand at a glance.",
-    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth × 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
+    "description": "Takes {project_root} and {architecture_path} as inputs. Agent reads the architecture file and any PRD/README. Reasons about functional groupings, pipeline stages, and dependency relationships. Places modules in swimlane columns (one per major functional area, shared/hub modules in center). Dependency depth drives y-axis (depth \u00d7 500px). Writes updated file in-place with position: {x, y} on every module. Outputs a one-line summary.",
     "dependencies": [],
     "priority": 219,
     "filename": "arrange_graph_layout_LLM.prompt",
@@ -8872,7 +8872,12 @@
   {
     "reason": "Job queue manager for async PDD command execution via subprocesses.",
     "description": "Async job queue manager that executes PDD commands as subprocesses with concurrency control (semaphore), real-time output streaming, and robust cancellation (SIGTERM/SIGKILL). Surfaces architecture-conformance failures (markers 'Architecture conformance error for ' or '=== architecture conformance failure ===') in job.error with the structured block, 'Reproduce locally:' line, and '--- env ---' fingerprint instead of the generic 'Sync operation failed' so the GitHub App can show missing symbols and a repro command.",
-    "dependencies": [],
+    "dependencies": [
+      "models_python.prompt",
+      "budget_settings_python.prompt",
+      "cost_budget_watcher_python.prompt",
+      "track_cost_python.prompt"
+    ],
     "priority": 220,
     "filename": "server/jobs_python.prompt",
     "filepath": "pdd/server/jobs.py",
@@ -8887,7 +8892,7 @@
         "functions": [
           {
             "name": "Job",
-            "signature": "(id, command, args, options, status, result, error, cost, ...)",
+            "signature": "(id, command, args, options, status, result, error, cost, budget_cap, node_budget, max_total_cap, node_count, ...)",
             "returns": "Job"
           },
           {
@@ -8902,13 +8907,23 @@
           },
           {
             "name": "JobManager.submit",
-            "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job",
+            "signature": "async (command, args=None, options=None, budget_cap=None, node_budget=None, max_total_cap=None) -> Job",
             "returns": "Job"
           },
           {
             "name": "JobManager.cancel",
             "signature": "async (job_id: str) -> bool",
             "returns": "bool"
+          },
+          {
+            "name": "JobManager.update_budget",
+            "signature": "async (job_id, *, budget_cap=None, node_budget=None, max_total_cap=None) -> Job",
+            "returns": "Job"
+          },
+          {
+            "name": "JobManager.get_budget",
+            "signature": "(job_id: str) -> BudgetSettings",
+            "returns": "BudgetSettings"
           },
           {
             "name": "JobManager.cleanup_old_jobs",
@@ -9031,6 +9046,320 @@
             "name": "set_quiet_logging",
             "signature": "()",
             "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Polling watcher that tails the PDD cost CSV and fires once when per-job spend reaches the active cap.",
+    "description": "Reusable utility that polls the PDD cost CSV at a fixed interval and invokes a callback exactly once when cumulative spend since the job started reaches the active cap. Supports mid-flight cap updates via .update_cap(). Used by server/jobs.py around each subprocess and by the GitHub App executor.",
+    "dependencies": [
+      "track_cost_python.prompt"
+    ],
+    "priority": 246,
+    "filename": "cost_budget_watcher_python.prompt",
+    "filepath": "pdd/cost_budget_watcher.py",
+    "tags": [
+      "module",
+      "python",
+      "cost",
+      "budget"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "watch",
+            "signature": "(csv_path, cap, on_exceeded, *, command=None, started_at=None, poll_interval=2.0) -> Watcher",
+            "returns": "Watcher"
+          },
+          {
+            "name": "Watcher.spent",
+            "signature": "() -> float",
+            "returns": "float"
+          },
+          {
+            "name": "Watcher.update_cap",
+            "signature": "(new_cap: Optional[float]) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "Watcher.stop",
+            "signature": "() -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Per-job budget settings store, effective-cap formula, and pdd-issue defaults for GitHub App control comments.",
+    "description": "In-process per-job budget settings store, plus the pure effective_cap(...) formula and the pdd-issue defaults (node=$80, max=$400). Consumed by pdd/server/jobs.py and the /commands/jobs/{job_id}/budget REST endpoints.",
+    "dependencies": [
+      "models_python.prompt"
+    ],
+    "priority": 247,
+    "filename": "server/budget_settings_python.prompt",
+    "filepath": "pdd/server/budget_settings.py",
+    "tags": [
+      "module",
+      "python",
+      "server",
+      "budget"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "pdd_issue_defaults",
+            "signature": "() -> Tuple[float, float]",
+            "returns": "Tuple[float, float]"
+          },
+          {
+            "name": "effective_cap",
+            "signature": "(command, *, budget_cap=None, node_budget=None, max_total_cap=None, node_count=None) -> Optional[float]",
+            "returns": "Optional[float]"
+          },
+          {
+            "name": "validate_amount",
+            "signature": "(value: Any) -> float",
+            "returns": "float"
+          },
+          {
+            "name": "BudgetStore.get",
+            "signature": "(job_id) -> Optional[BudgetSettings]",
+            "returns": "Optional[BudgetSettings]"
+          },
+          {
+            "name": "BudgetStore.set",
+            "signature": "(job_id, settings) -> None",
+            "returns": "None"
+          },
+          {
+            "name": "BudgetStore.update",
+            "signature": "(job_id, **kwargs) -> BudgetSettings",
+            "returns": "BudgetSettings"
+          },
+          {
+            "name": "BudgetStore.delete",
+            "signature": "(job_id) -> None",
+            "returns": "None"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Pure parser for /pdd slash commands posted as GitHub issue comments on an active App run.",
+    "description": "Pure functions that parse /pdd ... slash commands from issue_comment.created payloads, validate them, and return a SlashCommandResult. Recognises /pdd budget, /pdd budget node, /pdd budget max, /pdd settings, /pdd stop. Handles fenced-block skipping, bot-comment skipping, and dedupe by comment id.",
+    "dependencies": [
+      "models_python.prompt",
+      "budget_settings_python.prompt"
+    ],
+    "priority": 248,
+    "filename": "server/slash_command_parser_python.prompt",
+    "filepath": "pdd/server/slash_command_parser.py",
+    "tags": [
+      "module",
+      "python",
+      "server",
+      "github-app"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "parse_comment",
+            "signature": "(comment, *, active_command=None) -> SlashCommandResult",
+            "returns": "SlashCommandResult"
+          },
+          {
+            "name": "is_authorized",
+            "signature": "(commenter_login, *, issue_author_login=None, repo_collaborators=None, commenter_association=None) -> bool",
+            "returns": "bool"
+          },
+          {
+            "name": "is_duplicate",
+            "signature": "(comment_id, *, seen) -> bool",
+            "returns": "bool"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Pure Markdown renderers for the GitHub App's startup, settings, stop, ack, and invalid-command replies.",
+    "description": "Pure functions that render the Markdown bodies the GitHub App posts back to an issue in response to /pdd budget, /pdd settings, /pdd stop, invalid commands, unauthorised commenters, and budget-exceeded events. Exact wording matches the issue's acceptance criteria.",
+    "dependencies": [
+      "models_python.prompt"
+    ],
+    "priority": 249,
+    "filename": "server/budget_comments_python.prompt",
+    "filepath": "pdd/server/budget_comments.py",
+    "tags": [
+      "module",
+      "python",
+      "server",
+      "github-app"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "render_startup",
+            "signature": "(settings: BudgetSettings) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "render_settings",
+            "signature": "(settings: BudgetSettings) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "render_ack",
+            "signature": "(kind, *, amount, settings) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "render_stop",
+            "signature": "(settings) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "render_invalid",
+            "signature": "(reason=None) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "render_unauthorized",
+            "signature": "(commenter_login) -> str",
+            "returns": "str"
+          },
+          {
+            "name": "render_budget_exceeded",
+            "signature": "(settings) -> str",
+            "returns": "str"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Pydantic v2 models for PDD server REST API: file, command, job, budget control, and WebSocket schemas.",
+    "description": "Defines Pydantic v2 models for the PDD server REST API including file operations, command execution, job management, budget control (BudgetSettings/BudgetUpdateRequest/BudgetExceededMessage/SlashCommandResult), and WebSocket messages.",
+    "dependencies": [],
+    "priority": 250,
+    "filename": "server/models_python.prompt",
+    "filepath": "pdd/server/models.py",
+    "tags": [
+      "module",
+      "python",
+      "server",
+      "pydantic"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "JobStatus",
+            "signature": "(Enum)",
+            "returns": "Enum"
+          },
+          {
+            "name": "JobHandle",
+            "signature": "(job_id, status, created_at)",
+            "returns": "JobHandle"
+          },
+          {
+            "name": "JobResult",
+            "signature": "(job_id, status, result, error, cost, duration_seconds, completed_at)",
+            "returns": "JobResult"
+          },
+          {
+            "name": "BudgetSettings",
+            "signature": "(command, node_budget, max_total_cap, budget_cap, effective_cap, spent_so_far, status, node_count)",
+            "returns": "BudgetSettings"
+          },
+          {
+            "name": "BudgetUpdateRequest",
+            "signature": "(budget_cap?, node_budget?, max_total_cap?)",
+            "returns": "BudgetUpdateRequest"
+          },
+          {
+            "name": "BudgetExceededMessage",
+            "signature": "(job_id, command, spent, effective_cap, node_budget?, max_total_cap?, node_count?)",
+            "returns": "BudgetExceededMessage"
+          },
+          {
+            "name": "SlashCommandResult",
+            "signature": "(kind, message, settings?, original_comment_id?)",
+            "returns": "SlashCommandResult"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "FastAPI REST endpoints for async/sync PDD command execution, job lifecycle, and budget control.",
+    "description": "FastAPI router providing REST endpoints for asynchronous (JobManager) and synchronous PDD command execution, plus GET/POST /commands/jobs/{job_id}/budget endpoints powering the GitHub App's /pdd budget control comments. Applies pdd-issue defaults ($80/node, $400 max) when no explicit budget is supplied.",
+    "dependencies": [
+      "models_python.prompt",
+      "jobs_python.prompt",
+      "budget_settings_python.prompt"
+    ],
+    "priority": 251,
+    "filename": "server/routes/commands_python.prompt",
+    "filepath": "pdd/server/routes/commands.py",
+    "tags": [
+      "module",
+      "python",
+      "server",
+      "fastapi"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "commands_router",
+            "signature": "APIRouter(prefix='/api/v1/commands')",
+            "returns": "APIRouter"
+          },
+          {
+            "name": "POST /commands/execute",
+            "signature": "(CommandRequest with optional budget fields)",
+            "returns": "JobHandle"
+          },
+          {
+            "name": "GET /commands/jobs/{job_id}/budget",
+            "signature": "(job_id)",
+            "returns": "BudgetSettings"
+          },
+          {
+            "name": "POST /commands/jobs/{job_id}/budget",
+            "signature": "(job_id, BudgetUpdateRequest)",
+            "returns": "BudgetSettings"
+          },
+          {
+            "name": "POST /commands/jobs/{job_id}/cancel",
+            "signature": "(job_id)",
+            "returns": "dict"
+          },
+          {
+            "name": "POST /commands/run",
+            "signature": "(subprocess execution)",
+            "returns": "RunResult"
+          },
+          {
+            "name": "POST /commands/spawn-terminal",
+            "signature": "()",
+            "returns": "SpawnTerminalResponse"
           }
         ]
       }

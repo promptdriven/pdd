@@ -1,0 +1,125 @@
+<pdd-reason>Polling watcher that tails the PDD cost CSV and fires once when per-job spend reaches the active cap.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "watch", "signature": "(csv_path: pathlib.Path, cap: Optional[float], on_exceeded: Callable[[float], None], *, command: Optional[str] = None, started_at: Optional[datetime] = None, poll_interval: float = 2.0) -> Watcher", "returns": "Watcher"},
+      {"name": "Watcher.spent", "signature": "() -> float", "returns": "float"},
+      {"name": "Watcher.update_cap", "signature": "(new_cap: Optional[float]) -> None", "returns": "None"},
+      {"name": "Watcher.stop", "signature": "() -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>track_cost_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write `pdd/cost_budget_watcher.py`.
+
+% Role & Scope
+  A small, reusable utility that polls the PDD cost CSV (written by
+  `track_cost`) at a fixed interval and invokes a callback exactly once when
+  cumulative spend since the job started reaches the active cap. Designed to
+  be called by `pdd/server/jobs.py` around each subprocess and by the GitHub
+  App executor. It does NOT terminate processes itself; the cancel path is
+  the caller's responsibility (the callback decides what to do).
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  - Open and tail an append-only CSV using `csv.DictReader`.
+  - Sum the `cost` column for rows where `command` matches the filter (if
+    provided) and `timestamp >= started_at` (if provided).
+  - Compare cumulative spend to the active cap on every poll.
+  - Fire `on_exceeded(spent)` exactly once, then stay quiet until `.stop()`.
+  - Support mid-flight cap updates via `.update_cap(new_cap)` so the GitHub
+    App can apply `/pdd budget` comments to an active job.
+
+% Non-Responsibilities
+  - Does NOT write or modify the CSV.
+  - Does NOT kill subprocesses (caller's job; the callback receives the
+    spend amount).
+  - Does NOT parse slash commands or post GitHub comments (those live in
+    `server/slash_command_parser.py` and `server/budget_comments.py`).
+
+% Vocabulary
+  - **Cap**: a positive float USD value, or `None` meaning "no cap" (the
+    watcher becomes a no-op poller that still reports `.spent()`).
+  - **Spent**: cumulative `cost` for rows matching `command` (if filter set)
+    and `timestamp >= started_at`. Missing or malformed `cost` cells are
+    treated as `0.0`.
+  - **Cap reached**: `spent >= cap` with `cap is not None`.
+
+% Contract Rules
+  R1 - Fire-once.
+  For every `watch(...)` instance, `on_exceeded` MUST be invoked at most once
+  for the entire lifetime of that watcher, even if subsequent polls also see
+  `spent >= cap`.
+
+  R2 - Cap-update fires only on next crossing.
+  When `update_cap(new_cap)` lowers the cap below current spend on a watcher
+  that has NOT yet fired, the watcher MUST fire `on_exceeded` on the next
+  poll. If the watcher has already fired, `update_cap` MUST NOT re-fire.
+
+  R3 - No-cap is a no-op.
+  When `cap is None` (and remains `None` across updates), the watcher MUST
+  poll only enough to maintain `.spent()` for read-only access; it MUST NOT
+  fire `on_exceeded`.
+
+  R4 - Missing CSV is `$0`.
+  When the CSV file does not exist or is empty, `.spent()` MUST return
+  `0.0`. The watcher MUST tolerate the file appearing later without
+  restarting.
+
+  R5 - Idempotent stop.
+  `.stop()` MUST be safe to call multiple times. After `.stop()`, the
+  watcher thread MUST exit promptly (within `poll_interval`) and MUST NOT
+  invoke `on_exceeded` again.
+
+  R6 - No mid-call kill.
+  The watcher MUST NOT interrupt the caller's subprocess directly. It only
+  fires `on_exceeded`; the caller decides whether to cancel.
+
+  R7 - Tolerant parsing.
+  Partial/transient CSV rows (e.g. a row being flushed) MUST NOT raise out
+  of the watcher; treat unparseable rows as `cost=0.0` and recover on the
+  next poll.
+
+% Inputs and Outputs
+  - **`csv_path`**: `pathlib.Path` to the cost CSV (the file `track_cost`
+    appends to).
+  - **`cap`**: `Optional[float]` USD, validated `> 0` and `<= 10000` when
+    not `None`.
+  - **`on_exceeded`**: `Callable[[float], None]` invoked from the watcher
+    thread with the spent amount at the moment of crossing.
+  - **`command`** (optional): restrict the spend sum to rows whose `command`
+    column matches.
+  - **`started_at`** (optional): a timezone-aware `datetime` UTC; restrict
+    the spend sum to rows with `timestamp >= started_at`.
+  - **`poll_interval`**: seconds (default `2.0`).
+  - **Returns**: a `Watcher` object with `.spent()`, `.update_cap(...)`, and
+    `.stop()`.
+
+% Capabilities
+  - MAY read the cost CSV.
+  - MAY start a daemon thread.
+  - MUST NOT write any files.
+  - MUST NOT send signals to processes.
+  - MUST NOT log raw row content at INFO+ (debug only).
+
+% Dependencies
+  Reads CSV written by `pdd/track_cost.py` — see its prompt for the column
+  contract. No code-level import dependency.
+
+% Instructions
+  - Implement `watch(...)` as a small factory that returns a `Watcher`
+    instance and starts its daemon thread immediately.
+  - Use `threading.Event` for stop signalling so `.stop()` wakes the poll
+    loop promptly.
+  - Use a `threading.Lock` around `cap` updates to keep `update_cap` safe.
+  - Use `csv.DictReader`; tolerate legacy files missing `attempted_models`.
+
+% Deliverables
+  - Code: `pdd/cost_budget_watcher.py`

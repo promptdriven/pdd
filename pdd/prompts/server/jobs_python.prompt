@@ -5,17 +5,24 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "Job", "signature": "(id, command, args, options, status, result, error, cost, ...)", "returns": "Job"},
+      {"name": "Job", "signature": "(id, command, args, options, status, result, error, cost, budget_cap, node_budget, max_total_cap, node_count, ...)", "returns": "Job"},
       {"name": "JobCallbacks", "signature": "()", "returns": "JobCallbacks"},
       {"name": "JobManager", "signature": "(max_concurrent: int = 1, executor=None, project_root=None)", "returns": "JobManager"},
-      {"name": "JobManager.submit", "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None) -> Job", "returns": "Job"},
+      {"name": "JobManager.submit", "signature": "async (command: str, args: Dict[str, Any] = None, options: Dict[str, Any] = None, budget_cap: Optional[float] = None, node_budget: Optional[float] = None, max_total_cap: Optional[float] = None) -> Job", "returns": "Job"},
       {"name": "JobManager.cancel", "signature": "async (job_id: str) -> bool", "returns": "bool"},
+      {"name": "JobManager.update_budget", "signature": "async (job_id: str, *, budget_cap: Optional[float] = None, node_budget: Optional[float] = None, max_total_cap: Optional[float] = None) -> Job", "returns": "Job"},
+      {"name": "JobManager.get_budget", "signature": "(job_id: str) -> BudgetSettings", "returns": "BudgetSettings"},
       {"name": "JobManager.cleanup_old_jobs", "signature": "(max_age_seconds: float = 3600) -> int", "returns": "int"},
       {"name": "JobManager.shutdown", "signature": "async () -> None", "returns": "None"}
     ]
   }
 }
 </pdd-interface>
+
+<pdd-dependency>models_python.prompt</pdd-dependency>
+<pdd-dependency>budget_settings_python.prompt</pdd-dependency>
+<pdd-dependency>cost_budget_watcher_python.prompt</pdd-dependency>
+<pdd-dependency>track_cost_python.prompt</pdd-dependency>
 
 % You are an expert Python engineer. Your goal is to write `pdd/server/jobs.py`.
 
@@ -29,15 +36,57 @@
 % Requirements
   1. **Job dataclass**: id, command, args, options, status (JobStatus), result,
      error, cost, timestamps (created/started/completed). Includes `live_stdout`
-     and `live_stderr` for real-time polling.
+     and `live_stderr` for real-time polling. Also includes optional
+     budget-control fields: `budget_cap` (total USD cap for normal commands),
+     `node_budget` (per-node USD for `pdd-issue`), `max_total_cap` (tree-wide
+     ceiling for `pdd-issue`), and `node_count` (current solving-tree node
+     count, updated as the tree grows). All budget fields default to `None`
+     meaning "no cap" until set. Negative values, zero, NaN, and values above
+     a hard ceiling (`$10000`) are rejected at the API boundary.
 
   2. **JobCallbacks class**: Async callbacks for `on_start`, `on_output`
-     (handles stream_type and text), `on_progress`, and `on_complete`.
+     (handles stream_type and text), `on_progress`, `on_complete`, and
+     `on_budget_exceeded` (called once when spend crosses the active cap;
+     receives `(job_id, spent, cap)`).
 
   3. **JobManager class**:
      - `__init__`: Initialize semaphore, thread pool, and process tracking.
-     - `submit`: Create background task using `asyncio.create_task`.
-     - `cancel`: Robustly terminate/kill subprocess and cancel task.
+     - `submit`: Create background task using `asyncio.create_task`. Accepts
+       optional `budget_cap`, `node_budget`, `max_total_cap` keyword arguments
+       and stores them on the `Job`. Starts a `cost_budget_watcher` around the
+       subprocess when an effective cap is active. The effective cap is
+       computed by `budget_settings.effective_cap(...)`: for `pdd-issue` it is
+       `min(node_budget * max(node_count or 1, 1), max_total_cap)`; for other
+       commands it is `budget_cap`. If no cap is set, no watcher is started
+       and enforcement is skipped.
+     - `cancel`: Robustly terminate/kill subprocess and cancel task. Sets
+       `JobStatus.CANCELLED`.
+     - `update_budget`: Mutate the active job's budget settings mid-run.
+       Validates inputs, updates `Job.budget_cap` / `Job.node_budget` /
+       `Job.max_total_cap`, and calls `watcher.update_cap(new_effective_cap)`
+       on the active watcher so the next poll uses the new value. Returns the
+       updated `Job`. Exceptions:
+       - Raises `KeyError` (with the missing `job_id` as `args[0]`) when the
+         job is not known to the manager. The `commands` route maps this to
+         HTTP 404.
+       - Raises `RuntimeError` with a message starting `"job not active: "`
+         when the job exists but is in a terminal status (`completed`,
+         `failed`, `cancelled`, or `budget_exceeded`). The `commands` route
+         maps this to HTTP 409.
+       - Raises `ValueError` when any provided amount fails
+         `budget_settings.validate_amount(...)`. The route maps this to
+         HTTP 400.
+       These exception types are part of the public contract; routes
+       discriminate solely on type, not on message text.
+     - `get_budget`: Read-only accessor returning a `BudgetSettings` snapshot
+       (command, node_budget, max_total_cap, budget_cap, effective_cap,
+       spent_so_far, status) suitable for the `/pdd settings` reply.
+     - When the watcher fires `on_exceeded`, the manager triggers the existing
+       cancel path (same path `/pdd stop` drives), sets `Job.status` to the
+       new `JobStatus.BUDGET_EXCEEDED` value (defined in `models.py`), records
+       the final spend on `Job.cost`, and invokes
+       `JobCallbacks.on_budget_exceeded` once. The watcher is always stopped
+       in a `finally` block so it never outlives the job.
      - `cleanup_old_jobs`, `shutdown`, and query methods.
 
   4. **Subprocess Executor (`_run_click_command`)**:
@@ -81,7 +130,15 @@
 % Instructions
   - Locate `pdd` executable or fallback to `sys.executable -c`.
   - Use `asyncio.run_coroutine_threadsafe` for reader thread callbacks.
-  - Import `JobStatus` from `.models`. Robust fallback for `rich.console`.
+  - Import `JobStatus` from `.models` (includes new `BUDGET_EXCEEDED` value).
+  - Import `BudgetSettings`, `effective_cap`, and `pdd_issue_defaults` from
+    `.budget_settings` for the effective-cap computation and `pdd-issue`
+    defaults (`node=$80`, `max=$400`).
+  - Import `cost_budget_watcher.watch` for the polling watcher; pass the
+    project's cost-CSV path (resolved via `track_cost`'s configured output
+    path, falling back to `PDD_OUTPUT_COST_PATH`), the effective cap, an
+    `on_exceeded(spent)` callback, and `command` (for CSV row filtering).
+  - Robust fallback for `rich.console`.
   - Export: Job, JobManager, JobCallbacks.
 
 % Deliverables

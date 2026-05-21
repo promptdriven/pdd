@@ -1,0 +1,123 @@
+<pdd-reason>Per-job budget settings store, effective-cap formula, and pdd-issue defaults for GitHub App control comments.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "pdd_issue_defaults", "signature": "() -> Tuple[float, float]", "returns": "Tuple[float, float]"},
+      {"name": "effective_cap", "signature": "(command: str, *, budget_cap: Optional[float] = None, node_budget: Optional[float] = None, max_total_cap: Optional[float] = None, node_count: Optional[int] = None) -> Optional[float]", "returns": "Optional[float]"},
+      {"name": "validate_amount", "signature": "(value: Any) -> float", "returns": "float"},
+      {"name": "BudgetStore", "signature": "()", "returns": "BudgetStore"},
+      {"name": "BudgetStore.get", "signature": "(job_id: str) -> Optional[BudgetSettings]", "returns": "Optional[BudgetSettings]"},
+      {"name": "BudgetStore.set", "signature": "(job_id: str, settings: BudgetSettings) -> None", "returns": "None"},
+      {"name": "BudgetStore.update", "signature": "(job_id: str, *, budget_cap=..., node_budget=..., max_total_cap=..., node_count=...) -> BudgetSettings", "returns": "BudgetSettings"},
+      {"name": "BudgetStore.delete", "signature": "(job_id: str) -> None", "returns": "None"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>models_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write
+  `pdd/server/budget_settings.py`.
+
+% Role & Scope
+  In-process per-job budget settings store, plus the pure
+  `effective_cap(...)` formula and the `pdd-issue` default amounts
+  (`node=$80`, `max=$400`). Consumed by `pdd/server/jobs.py` (to compute the
+  cap the watcher enforces), the `/commands/jobs/{job_id}/budget` REST
+  endpoints, and the GitHub App's slash-command webhook handler (which lives
+  in the private App repo and imports this module).
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  - Hold a thread-safe mapping `job_id -> BudgetSettings`.
+  - Compute the effective cap from the active settings and command.
+  - Validate amounts at the API boundary (positive, finite, <= $10000).
+  - Provide the hard-coded `pdd-issue` defaults.
+
+% Non-Responsibilities
+  - Does NOT parse comment bodies (see `slash_command_parser.py`).
+  - Does NOT render reply Markdown (see `budget_comments.py`).
+  - Does NOT poll the cost CSV (see `cost_budget_watcher.py`).
+  - Does NOT persist to disk; the store is in-process and lives for the
+    server's lifetime. The GitHub App reconciles on restart by re-reading
+    the active issue's comment history.
+
+% Vocabulary
+  - **`pdd-issue` command**: a job whose `command` field is `"issue"` (the
+    label-triggered autonomous solving run).
+  - **Effective cap**: the single USD ceiling the watcher enforces. For
+    `pdd-issue`: `min(node_budget * max(node_count or 1, 1), max_total_cap)`
+    when both are set; for other commands: `budget_cap`. `None` means "no
+    cap".
+  - **Hard ceiling**: `$10000`. Any single field above this is rejected.
+
+% Contract Rules
+  R1 - Defaults are stable.
+  `pdd_issue_defaults()` MUST return `(80.0, 400.0)` — node budget then max
+  total cap — matching the issue's acceptance criteria. Other commands have
+  no defaults (their effective cap is `None` until `/pdd budget N` is set).
+
+  R2 - Effective-cap formula.
+  For `command == "issue"`:
+    - Let `n = max(node_count or 1, 1)`. When `node_count is None` (the
+      default before the solving tree has been expanded), `n` is `1`. This
+      guarantees the multiplication is well-defined even when `node_count`
+      has not yet been reported by the executor.
+    - If `node_budget is None` and `max_total_cap is None`, return `None`.
+    - If only `max_total_cap` is set, return `max_total_cap`.
+    - If only `node_budget` is set, return `node_budget * n`.
+    - If both are set, return `min(node_budget * n, max_total_cap)`.
+  For all other commands, return `budget_cap` (which may be `None`).
+
+  R3 - Alias for non-issue.
+  Callers that pass `budget_cap` for a non-issue command MUST get that exact
+  value back through `effective_cap`. For `pdd-issue` callers, a bare
+  `budget_cap` is treated as an alias for `max_total_cap` by the route
+  handler before calling `effective_cap` (this module never silently
+  re-aliases).
+
+  R4 - Validation.
+  `validate_amount(value)` accepts `int`, `float`, or `str` (`"$30"`,
+  `"30.00"`, `"30"`); strips a leading `"$"` and surrounding whitespace;
+  parses as `float`. It MUST raise `ValueError` for: negatives, zero, NaN,
+  infinity, non-numeric strings, and values strictly greater than `10000.0`.
+
+  R5 - Thread-safe store.
+  `BudgetStore.get/set/update/delete` MUST be safe under concurrent access
+  from FastAPI request workers and the job-manager background tasks. Use a
+  `threading.Lock`.
+
+  R6 - Update returns the new snapshot.
+  `BudgetStore.update(...)` MUST return the updated `BudgetSettings` (with
+  the recomputed `effective_cap`). Unset keyword arguments leave the
+  corresponding field unchanged. Passing an explicit `None` clears that
+  field.
+
+  R7 - Capabilities.
+  - MAY hold in-memory state.
+  - MUST NOT read or write the filesystem.
+  - MUST NOT call any external service.
+
+% Inputs and Outputs
+  - `pdd_issue_defaults()` -> `(node_budget, max_total_cap)` tuple of floats.
+  - `effective_cap(command, *, budget_cap, node_budget, max_total_cap,
+    node_count)` -> `Optional[float]`.
+  - `validate_amount(value)` -> `float` or raises `ValueError`.
+  - `BudgetStore` methods as in the interface block.
+
+% Dependencies
+  Uses `BudgetSettings` from `pdd.server.models`. No other imports.
+
+% Instructions
+  - Make `BudgetStore` instantiable so tests can construct a fresh store; the
+    server app holds one singleton.
+  - Keep all functions pure where possible; only the store carries state.
+  - Use `math.isfinite` for NaN/inf rejection.
+
+% Deliverables
+  - Code: `pdd/server/budget_settings.py`

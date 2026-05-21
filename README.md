@@ -826,6 +826,70 @@ pdd [GLOBAL OPTIONS] fix --budget 5.0 [OTHER OPTIONS] [ARGS]...
 ```
 This sets a maximum budget of $5.00 for the fix operation.
 
+### GitHub App control comments
+
+When PDD is triggered through the GitHub App via the existing `pdd-bug`, `pdd-change`, `pdd-fix`, `pdd-sync`, or `pdd-issue` labels, the App posts a **startup settings comment** to the issue summarising the active run's budget and the comment-driven controls available during the run. No new labels are required — budget is controlled entirely by `/pdd` slash commands in issue comments.
+
+**Startup comment — commands with no default cap** (e.g. `pdd bug`):
+
+```md
+PDD is starting `pdd bug`.
+
+Budget cap: none
+
+You can add a cap by commenting:
+/pdd budget 30
+
+Other controls:
+/pdd settings
+/pdd stop
+```
+
+**Startup comment — `pdd-issue`** (autonomous solving has defaults `$80` per node and `$400` total):
+
+```md
+PDD is starting autonomous solving.
+
+Budget:
+- node budget: $80 per node
+- max total cap: $400
+- effective cap: min($80 x node count, $400)
+
+You can change this run by commenting:
+/pdd budget node 50
+/pdd budget max 200
+```
+
+**Available `/pdd` commands** (post these as new issue comments while a run is active — the App parses the first non-fenced line of each comment):
+
+| Command | Applies to | Effect |
+|---------|------------|--------|
+| `/pdd budget N` | Normal commands | Sets the total cap for the current run to `$N`. |
+| `/pdd budget N` | `pdd-issue` | Alias for `/pdd budget max N` (updates the tree-wide cap). |
+| `/pdd budget node N` | `pdd-issue` | Updates the per-node budget. Effective cap recomputes as `min(node_budget x node_count, max_total_cap)`. |
+| `/pdd budget max N` | `pdd-issue` | Updates the tree-wide ceiling. Effective cap recomputes as above. |
+| `/pdd settings` | Any command | Read-only. Replies with the current command, budgets, effective cap, spend so far, and run status. |
+| `/pdd stop` | Any command | Terminates the active run and posts a final spend summary. |
+
+**Defaults and `Budget cap: none`:**
+
+- For `pdd-bug`, `pdd-change`, `pdd-fix`, and `pdd-sync`, the startup comment shows `Budget cap: none` until a `/pdd budget N` comment is posted.
+- For `pdd-issue`, the defaults are `node budget = $80` and `max total cap = $400`, yielding `effective cap = min($80 x node count, $400)`.
+- All amounts are positive USD values; valid forms include `30`, `30.5`, `$30`, `30.00`. Negatives, zero, NaN, and values above the project's hard ceiling (`$10000`) are rejected with a usage hint.
+
+**Parser rules:**
+
+- The App only matches `/pdd ...` on the first non-fenced, non-blank line of an `issue_comment.created` event; fenced code blocks (so the startup comment's own examples cannot re-trigger commands) and bot-authored comments are skipped, and repeated webhook deliveries are de-duplicated by comment ID.
+- Only comments authored by the issue author or by users with `OWNER` / `MEMBER` / `COLLABORATOR` association on the repo can change settings; other commenters can use `/pdd settings` for a read-only view.
+- Invalid `/pdd` commands get a single helpful reply and do not change settings.
+
+**Enforcement:**
+
+- Budget enforcement watches the same cost CSV that `track_cost` writes for every PDD command (the `--output-cost` / `PDD_OUTPUT_COST_PATH` file).
+- The watcher polls between LLM/tool calls, not mid-call — the in-flight call is allowed to finish so spend never goes backwards and state is never corrupted by a mid-call kill.
+- When cumulative spend on the run reaches the active effective cap, the executor terminates the run via the same path `/pdd stop` uses and the App posts a final `budget_exceeded` comment.
+- `/pdd budget`, `/pdd budget node`, and `/pdd budget max` comments posted *during* an active run apply immediately to the in-flight job — they are not deferred to the next run.
+
 ## Commands
 
 Here are the main commands provided by PDD:

@@ -1,3 +1,26 @@
+<pdd-reason>FastAPI REST endpoints for async/sync PDD command execution, job lifecycle, and budget control.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "commands_router", "signature": "APIRouter(prefix='/api/v1/commands')", "returns": "APIRouter"},
+      {"name": "POST /commands/execute", "signature": "(CommandRequest with optional budget_cap/node_budget/max_total_cap)", "returns": "JobHandle"},
+      {"name": "GET /commands/jobs/{job_id}/budget", "signature": "(job_id: str)", "returns": "BudgetSettings"},
+      {"name": "POST /commands/jobs/{job_id}/budget", "signature": "(job_id: str, BudgetUpdateRequest)", "returns": "BudgetSettings"},
+      {"name": "POST /commands/jobs/{job_id}/cancel", "signature": "(job_id: str)", "returns": "dict"},
+      {"name": "POST /commands/run", "signature": "(subprocess execution)", "returns": "RunResult"},
+      {"name": "POST /commands/spawn-terminal", "signature": "()", "returns": "SpawnTerminalResponse"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>models_python.prompt</pdd-dependency>
+<pdd-dependency>jobs_python.prompt</pdd-dependency>
+<pdd-dependency>budget_settings_python.prompt</pdd-dependency>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/routes/commands.py`.
 
 % Role & Scope
@@ -16,10 +39,34 @@
 
 % Requirements
   1. **Asynchronous Job API** (uses JobManager):
-     - POST /commands/execute: Submit command, returns JobHandle immediately
+     - POST /commands/execute: Submit command, returns JobHandle immediately.
+       Accepts optional `budget_cap`, `node_budget`, `max_total_cap` fields in
+       the request body and threads them through `JobManager.submit`. When the
+       request `command` is `"issue"` (the `pdd-issue` label-triggered
+       command) and the request does not supply explicit budget fields, apply
+       the `pdd-issue` defaults from `budget_settings.pdd_issue_defaults()`
+       (`node_budget=$80`, `max_total_cap=$400`) so every label-triggered run
+       starts with the documented default budget.
      - GET /commands/jobs/{job_id}: Get job status/result (404 if not found)
      - POST /commands/jobs/{job_id}/cancel: Cancel running job (404/409 on error)
      - GET /commands/history: Paginated job history with status filter
+     - GET /commands/jobs/{job_id}/budget: Read-only `BudgetSettings` snapshot
+       (404 if job not found). Powers the `/pdd settings` reply rendered by
+       `budget_comments.render_settings(...)` in the GitHub App.
+     - POST /commands/jobs/{job_id}/budget: Apply a `BudgetUpdateRequest` to
+       the active job. The route MUST map `JobManager.update_budget`'s
+       declared exception types as follows (matching the contract in
+       `jobs_python.prompt`): `KeyError` -> HTTP 404 (job not found);
+       `RuntimeError` -> HTTP 409 (job no longer active —
+       completed/failed/cancelled/budget_exceeded); `ValueError` -> HTTP 400
+       (invalid amount). Discriminate on exception type only, never on
+       message text. On success, returns the updated `BudgetSettings`. This
+       is the endpoint the GitHub App's webhook calls when a `/pdd budget`,
+       `/pdd budget node`, or `/pdd budget max` comment is accepted by the
+       slash-command parser. For a `pdd-issue` job, a bare `budget_cap` is
+       treated as an alias for `max_total_cap` (the App passes it through as
+       `max_total_cap` already, but the route accepts either field name for
+       forward-compatibility).
 
   2. **Synchronous Terminal API** (subprocess-based):
      - POST /commands/run: Execute command as subprocess, block until done

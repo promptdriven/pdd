@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Add
+
+- **github-app**: add `/pdd` budget control comments for GitHub App runs (#1128). The App now posts a startup settings comment for every label-triggered run (`pdd-bug`, `pdd-change`, `pdd-fix`, `pdd-sync`, `pdd-issue`), accepts `/pdd budget N`, `/pdd budget node N`, `/pdd budget max N`, `/pdd settings`, and `/pdd stop` in issue comments, and enforces the active cap between LLM calls by polling the existing `track_cost` CSV. `pdd-issue` defaults to `$80` per node and `$400` total (effective cap `min($80 x node count, $400)`); normal commands show `Budget cap: none` until set. New public modules `cost_budget_watcher`, `server/budget_settings`, `server/slash_command_parser`, and `server/budget_comments`; `Job` / `JobManager.submit` accept `budget_cap` / `node_budget` / `max_total_cap`; new `GET`/`POST /commands/jobs/{job_id}/budget` endpoints; new `BUDGET_EXCEEDED` job status.
+
 ### Fix
 
 - **checkup**: enforce a SHA-backed verification trust boundary in `pdd checkup --pr --review-loop` so unverified fixer attempts are never rendered as completed fixes. `FixResult` now carries `fixer_result`/`push_status`/`local_fixer_commit_sha`/`pushed_head_sha`, `ReviewLoopState` carries `verified_head_sha`/`remote_pr_head_sha`/`verification_status_by_round`, and the final report renders fixed-field `### Fixes Attempted` bullets plus header `verified-head-sha:` / `remote-pr-head-sha:` lines. Before promoting `fresh-final-review: clean` or `verification=verified`, the loop re-fetches the remote PR head and downgrades to `verification=unverified` on mismatch or budget exhaustion (#1088).

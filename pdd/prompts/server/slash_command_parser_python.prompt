@@ -1,0 +1,158 @@
+<pdd-reason>Pure parser for /pdd slash commands posted as GitHub issue comments on an active App run.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "parse_comment", "signature": "(comment: CommentInput, *, active_command: Optional[str] = None) -> SlashCommandResult", "returns": "SlashCommandResult"},
+      {"name": "is_authorized", "signature": "(commenter_login: str, *, issue_author_login: Optional[str] = None, repo_collaborators: Optional[Iterable[str]] = None, commenter_association: Optional[str] = None) -> bool", "returns": "bool"},
+      {"name": "is_duplicate", "signature": "(comment_id: int, *, seen: Set[int]) -> bool", "returns": "bool"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>models_python.prompt</pdd-dependency>
+<pdd-dependency>budget_settings_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write
+  `pdd/server/slash_command_parser.py`.
+
+% Role & Scope
+  Pure functions that parse `/pdd ...` slash commands from
+  `issue_comment.created` payloads, validate them, and return a
+  `SlashCommandResult` describing what to do next. The webhook handler (in
+  the private GitHub App repo) wires this to GitHub by calling
+  `parse_comment(...)`, then applying the resulting action via the public
+  `/commands/jobs/{job_id}/budget` REST endpoints and posting the rendered
+  reply via `budget_comments.py`.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  - Identify the first non-fenced line of a comment body that begins with
+    `/pdd` and tokenise it into a verb plus arguments.
+  - Validate amounts via `budget_settings.validate_amount(...)`.
+  - Return a `SlashCommandResult` whose `kind` is one of:
+    `budget_set`, `budget_node_set`, `budget_max_set`, `settings`, `stop`,
+    `invalid`, `ignored`. (`unauthorized` is rendered by the webhook
+    handler directly via `budget_comments.render_unauthorized(...)` after
+    `is_authorized(...)` returns False; the parser does NOT emit it.)
+  - Provide stateless helpers `is_authorized(...)` and `is_duplicate(...)`
+    so the webhook handler can apply permission and dedupe gates.
+
+% Non-Responsibilities
+  - Does NOT mutate any state (no store writes).
+  - Does NOT call GitHub APIs.
+  - Does NOT render Markdown replies (see `budget_comments.py`).
+  - Does NOT verify webhook signatures (lives in the private App repo).
+
+% Vocabulary
+  - **First non-fenced line**: the first line of the comment body that is
+    not inside a fenced code block (``` ``` ``` or `~~~`) and is not blank.
+  - **Active command**: the `command` field of the job currently running for
+    this issue (`"issue"`, `"bug"`, `"change"`, `"fix"`, `"sync"`, ...).
+    Used to decide whether bare `/pdd budget N` aliases to `max_total_cap`
+    (for `"issue"`) or sets `budget_cap` (for everything else).
+
+% Contract Rules
+  R1 - Recognised verbs.
+  The parser MUST recognise exactly these forms:
+    - `/pdd budget <N>`
+    - `/pdd budget node <N>`
+    - `/pdd budget max <N>`
+    - `/pdd settings`
+    - `/pdd stop`
+  Anything else under `/pdd ...` returns `kind="invalid"` with a one-line
+  usage hint as `message`.
+
+  R2 - First-line-only.
+  Only the first non-fenced, non-blank line is parsed. Subsequent `/pdd`
+  lines in the same comment are ignored.
+
+  R3 - Skip fenced blocks.
+  The parser MUST NOT match `/pdd ...` inside triple-backtick or triple-
+  tilde fenced code blocks. This protects user comments that paste
+  recognised verbs in fenced examples (e.g. a user quoting
+  `\`\`\`/pdd budget 30\`\`\``) from being treated as new commands.
+  Note: this rule does NOT protect against the App's own startup/ack
+  comments re-triggering themselves, because those bodies place the
+  `/pdd ...` examples on bare (non-fenced) lines that match the issue's
+  literal wording (see R1 in `budget_comments_python.prompt`). The real
+  self-loop protection is R4 (bot-author filter); both rules MUST be in
+  place — R3 alone is insufficient and R4 alone allows fenced
+  user-quoted commands to fire.
+
+  R4 - Bot comments are ignored.
+  Callers pass `comment.user_type`; when it is `"Bot"`, the parser MUST
+  return `kind="ignored"` regardless of body content.
+
+  R5 - Authorisation is a separate gate.
+  `parse_comment` does NOT enforce authorisation and does NOT emit a
+  `kind="unauthorized"` result. The webhook handler calls
+  `is_authorized(...)` first; if unauthorised, the handler posts a single
+  rejection reply rendered by `budget_comments.render_unauthorized(...)`
+  and does not call `parse_comment`. If the handler does call
+  `parse_comment` (authorised case), the result kinds are limited to
+  `budget_set`, `budget_node_set`, `budget_max_set`, `settings`, `stop`,
+  `invalid`, and `ignored`.
+
+  R6 - Amount semantics.
+  - `/pdd budget <N>` on an `"issue"` active_command -> kind
+    `budget_max_set`, `amount=N` (alias for `/pdd budget max N`).
+  - `/pdd budget <N>` on any non-issue active_command -> kind
+    `budget_set`, `amount=N`.
+  - `/pdd budget node <N>` -> kind `budget_node_set`, `amount=N`.
+  - `/pdd budget max <N>` -> kind `budget_max_set`, `amount=N`.
+  All amounts are validated by `budget_settings.validate_amount`; on
+  ValueError, kind becomes `invalid` with a usage hint.
+
+  R7 - Read-only verbs.
+  `/pdd settings` and `/pdd stop` MUST set kinds `settings` / `stop` and
+  carry no amount. `/pdd settings` is read-only by contract; callers
+  MUST NOT mutate the store on this kind.
+
+  R8 - Dedupe by comment ID.
+  `is_duplicate(comment_id, seen=...)` returns `True` if the id is in the
+  `seen` set, otherwise adds it and returns `False`. This is the only
+  mutation in this module and is scoped to the caller's own set.
+
+  R9 - Authorisation rules.
+  `is_authorized(...)` returns `True` when ANY of these are true:
+  (a) `commenter_login == issue_author_login` (the issue author),
+  (b) `commenter_login` is in `repo_collaborators`,
+  (c) `commenter_association` is one of `"OWNER"`, `"MEMBER"`,
+      `"COLLABORATOR"` (GitHub's `author_association` enum).
+  Otherwise returns `False`.
+
+% Inputs and Outputs
+  - **`CommentInput`**: a small typed-dict/dataclass exposing the fields the
+    parser needs: `id: int`, `body: str`, `user_login: str`,
+    `user_type: str`, `author_association: Optional[str]`, and optional
+    `created_at`. Define this dataclass at the top of the module.
+  - **Returns**: `SlashCommandResult` from `pdd.server.models`. When the
+    parsed kind is one of `budget_set` / `budget_node_set` /
+    `budget_max_set`, the result carries the validated `amount` as a float
+    on a `metadata` dict (e.g. `{"amount": 30.0}`); the rendered `message`
+    is left empty (the caller renders via `budget_comments.py`).
+
+% Capabilities
+  - MAY parse strings and validate amounts.
+  - MUST NOT read from or write to disk, network, or GitHub.
+  - MUST NOT log raw comment bodies at INFO+ (debug only).
+
+% Dependencies
+  - `validate_amount` from `pdd.server.budget_settings`.
+  - `SlashCommandResult` from `pdd.server.models`.
+
+% Instructions
+  - Implement fenced-block detection with a small line-based state machine
+    (toggle in/out on lines matching `^```` or `^~~~`).
+  - Tokenise the matched `/pdd ...` line by whitespace; lowercase the verb;
+    keep the amount as the literal string for `validate_amount`.
+  - Keep the module pure and side-effect-free apart from the documented
+    `is_duplicate` set mutation.
+
+% Deliverables
+  - Code: `pdd/server/slash_command_parser.py`

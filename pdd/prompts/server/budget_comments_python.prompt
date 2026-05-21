@@ -1,0 +1,149 @@
+<pdd-reason>Pure Markdown renderers for the GitHub App's startup, settings, stop, ack, and invalid-command replies.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "render_startup", "signature": "(settings: BudgetSettings) -> str", "returns": "str"},
+      {"name": "render_settings", "signature": "(settings: BudgetSettings) -> str", "returns": "str"},
+      {"name": "render_ack", "signature": "(kind: str, *, amount: float, settings: BudgetSettings) -> str", "returns": "str"},
+      {"name": "render_stop", "signature": "(settings: BudgetSettings) -> str", "returns": "str"},
+      {"name": "render_invalid", "signature": "(reason: Optional[str] = None) -> str", "returns": "str"},
+      {"name": "render_unauthorized", "signature": "(commenter_login: str) -> str", "returns": "str"},
+      {"name": "render_budget_exceeded", "signature": "(settings: BudgetSettings) -> str", "returns": "str"}
+    ]
+  }
+}
+</pdd-interface>
+
+<pdd-dependency>models_python.prompt</pdd-dependency>
+
+% You are an expert Python engineer. Your goal is to write
+  `pdd/server/budget_comments.py`.
+
+% Role & Scope
+  Pure functions that render the Markdown bodies the GitHub App posts back
+  to an issue in response to `/pdd budget`, `/pdd settings`, `/pdd stop`,
+  invalid commands, unauthorised commenters, and budget-exceeded events.
+  The exact wording matches the issue's acceptance criteria so the App's
+  user-visible UX is anchored in this public module.
+
+<include>context/python_preamble.prompt</include>
+
+% Responsibility
+  Produce stable, exact Markdown strings for each reply kind from a
+  `BudgetSettings` snapshot. No I/O, no API calls, no logging.
+
+% Non-Responsibilities
+  - Does NOT post comments (the App does that).
+  - Does NOT compute the effective cap (read from `settings.effective_cap`).
+  - Does NOT parse slash commands.
+  - Does NOT enforce permissions.
+
+% Vocabulary
+  - **Normal commands**: any command other than `"issue"`. They show
+    `Budget cap: none` until `/pdd budget N` is set.
+  - **`pdd-issue` startup**: posted whenever the App starts a label-
+    triggered autonomous solving run with `command == "issue"`.
+
+% Contract Rules
+
+  R1 - Startup for normal commands.
+  When `settings.command != "issue"`, `render_startup(settings)` MUST
+  produce a body that begins with the line `PDD is starting \`pdd <cmd>\`.`
+  (using the bare command name without the `pdd-` prefix), an empty line,
+  the literal line `Budget cap: none` when `settings.budget_cap is None`,
+  or `Budget cap: $<N>` when set, followed by the example block:
+  ```
+  You can add a cap by commenting:
+  /pdd budget 30
+  ```
+  and an `Other controls:` block listing `/pdd settings` and `/pdd stop`.
+
+  R2 - Startup for `pdd-issue`.
+  When `settings.command == "issue"`, `render_startup(settings)` MUST
+  produce a body matching the issue's `pdd-issue` startup example: a
+  `Budget:` section listing `- node budget: $<N> per node`,
+  `- max total cap: $<N>`, and
+  `- effective cap: min($<node> x node count, $<max>)`, followed by:
+  ```
+  You can change this run by commenting:
+  /pdd budget node 50
+  /pdd budget max 200
+  ```
+
+  R3 - Settings reply is read-only.
+  `render_settings(settings)` MUST render a `Current PDD settings:` block
+  listing `Command`, `Node budget` (only when applicable to the command),
+  `Max total cap`, `Effective cap`, `Spent so far` (as `$<N>` to 2
+  decimals), and `Status`. The literal wording matches the issue's
+  example.
+
+  R4 - Acknowledgement strings.
+  `render_ack(kind, amount=..., settings=...)` MUST return:
+  - For `kind == "budget_set"`: `Updated budget cap to $<N>.`
+  - For `kind == "budget_node_set"`: `Updated node budget to $<N>.`
+  - For `kind == "budget_max_set"`: `Updated max total cap to $<N>.`
+  Followed by a blank line and then `render_settings(settings)` so the
+  reply doubles as a settings echo.
+
+  R5 - Stop reply.
+  `render_stop(settings)` MUST render a one-line summary of final spend
+  (`PDD stopped. Final spend: $<N>`) plus a brief `Status` line.
+
+  R6 - Invalid reply.
+  `render_invalid(reason=...)` MUST produce a single helpful line followed
+  by a usage block listing the five recognised verbs. The reason (when
+  provided) appears as the first line, the usage block as the rest. The
+  reply MUST be self-contained (no Markdown blockquotes pulling in the
+  original comment).
+
+  R7 - Unauthorised reply.
+  `render_unauthorized(commenter_login)` MUST produce a one-line message
+  explaining that only the issue author and repo collaborators may set
+  budgets, and refer the user to `/pdd settings` for a read-only view.
+  This is also safe to omit; the App may suppress it to avoid noise.
+
+  R8 - Budget-exceeded reply.
+  `render_budget_exceeded(settings)` MUST render a final status comment
+  posted automatically when the watcher trips. It includes `Spent`,
+  `Effective cap`, and `Status: budget_exceeded`.
+
+  R9 - Determinism.
+  All renderers MUST be deterministic for the same `settings` input. No
+  timestamps, no random fields, no environment lookups.
+
+  R10 - Money formatting.
+  Use exactly one deterministic style across all renderers so tests can
+  assert exact substrings:
+    - **Caps and budget amounts** (`budget_cap`, `node_budget`,
+      `max_total_cap`, `effective_cap`, and the literal examples like
+      `$80`, `$400`, `$30`, `$200`, `$50`): when the float is an exact
+      integer value (e.g. `80.0`), render as `$<int>` (e.g. `$80`); when
+      it has a fractional part (e.g. `80.5`), render as `$<value:.2f>`
+      (e.g. `$80.50`). Use the helper rule
+      `f"${int(v)}" if float(v).is_integer() else f"${v:.2f}"`.
+    - **Spent so far** values (e.g. `$18.42`): always render with two
+      decimals as `$<value:.2f>`, never trimmed, to match the issue's
+      `Current PDD settings:` example.
+  Apply these two sub-rules consistently in every renderer (startup,
+  settings, ack, stop, budget-exceeded). No other money formats are
+  permitted.
+
+% Capabilities
+  - MAY format strings.
+  - MUST NOT read or write files.
+  - MUST NOT call any network service.
+
+% Dependencies
+  Uses `BudgetSettings` from `pdd.server.models`.
+
+% Instructions
+  - Use plain string formatting or `textwrap.dedent` for multi-line
+    blocks; avoid f-string indentation pitfalls.
+  - Match the wording from the issue body literally for the startup and
+    settings replies — tests will assert exact substrings.
+
+% Deliverables
+  - Code: `pdd/server/budget_comments.py`

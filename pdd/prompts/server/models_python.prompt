@@ -1,3 +1,22 @@
+<pdd-reason>Pydantic v2 models for PDD server REST API: file, command, job, budget control, and WebSocket schemas.</pdd-reason>
+
+<pdd-interface>
+{
+  "type": "module",
+  "module": {
+    "functions": [
+      {"name": "JobStatus", "signature": "(Enum)", "returns": "Enum"},
+      {"name": "JobHandle", "signature": "(job_id, status, created_at)", "returns": "JobHandle"},
+      {"name": "JobResult", "signature": "(job_id, status, result, error, cost, duration_seconds, completed_at)", "returns": "JobResult"},
+      {"name": "BudgetSettings", "signature": "(command, node_budget, max_total_cap, budget_cap, effective_cap, spent_so_far, status, node_count)", "returns": "BudgetSettings"},
+      {"name": "BudgetUpdateRequest", "signature": "(budget_cap?, node_budget?, max_total_cap?)", "returns": "BudgetUpdateRequest"},
+      {"name": "BudgetExceededMessage", "signature": "(job_id, command, spent, effective_cap, node_budget?, max_total_cap?, node_count?)", "returns": "BudgetExceededMessage"},
+      {"name": "SlashCommandResult", "signature": "(kind, message, settings?, original_comment_id?)", "returns": "SlashCommandResult"}
+    ]
+  }
+}
+</pdd-interface>
+
 % You are an expert Python engineer. Your goal is to write `pdd/server/models.py`.
 
 % Role & Scope
@@ -23,7 +42,10 @@
   2. **Command Models**:
      - `CommandRequest`: command name, args dict, options dict
      - `JobHandle`: job_id, status, created_at
-     - `JobStatus`: status enum (queued/running/completed/failed/cancelled)
+     - `JobStatus`: status enum (queued/running/completed/failed/cancelled/
+       **budget_exceeded**). The new `BUDGET_EXCEEDED` value is set by the
+       job manager when the cost-budget watcher trips the active cap and the
+       subprocess is terminated by the existing cancel path.
      - `JobResult`: job_id, status, result, error, cost, duration_seconds, completed_at
 
   3. **WebSocket Message Models**:
@@ -33,6 +55,36 @@
      - `InputRequestMessage`: prompt, password flag
      - `CompleteMessage`: success, result, cost
      - `FileChangeMessage`: path, event type (created/modified/deleted)
+     - `BudgetExceededMessage`: job_id, command, spent (float USD),
+       effective_cap (float USD), node_budget (optional), max_total_cap
+       (optional), node_count (optional). Emitted exactly once when the
+       watcher fires.
+
+  3b. **Budget Control Models** (used by the GitHub App slash-command surface
+      and by the new `/commands/jobs/{job_id}/budget` REST endpoints):
+     - `BudgetSettings`: command (str), node_budget (Optional[float]),
+       max_total_cap (Optional[float]), budget_cap (Optional[float]),
+       effective_cap (Optional[float]), spent_so_far (float, default 0.0),
+       status (JobStatus), node_count (Optional[int]). `effective_cap` is
+       computed: `pdd-issue` => `min(node_budget * max(node_count or 1, 1),
+       max_total_cap)` when both are set (the `node_count or 1` guard
+       handles `node_count is None` before the tree has expanded); other
+       commands => `budget_cap`. `None` for `effective_cap` means "no cap".
+     - `BudgetUpdateRequest`: optional `budget_cap`, optional `node_budget`,
+       optional `max_total_cap`. At least one field must be provided.
+       Validation: each numeric field MUST be > 0 and <= 10000 (the project's
+       hard ceiling); reject negatives, zero, NaN, and overflow. Use
+       `field_validator` to coerce string forms like `"$30"`, `"30.00"`, or
+       `30` to `float`.
+     - `SlashCommandResult`: kind (Literal["budget_set", "budget_node_set",
+       "budget_max_set", "settings", "stop", "invalid", "ignored"]),
+       message (str, the rendered reply body), settings
+       (Optional[BudgetSettings]), original_comment_id (Optional[int],
+       used for dedupe). Note: the `"unauthorized"` reply is rendered by
+       `budget_comments.render_unauthorized(...)` directly by the webhook
+       handler after `is_authorized(...)` returns False; it is NOT a
+       parser-emitted kind, so it is intentionally absent from this
+       Literal.
 
   4. **Server Models**:
      - `ServerStatus`: version, project_root, uptime_seconds, active_jobs, connected_clients
