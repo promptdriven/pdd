@@ -21,6 +21,7 @@ from pdd.agentic_checkup_orchestrator import (
     _is_step_timeout_failure,
     _next_step,
     _parse_changed_files,
+    _pr_base_tracking_ref,
     run_agentic_checkup_orchestrator,
 )
 
@@ -454,6 +455,9 @@ class TestChangedFilesTracking:
         )
         assert _is_step_timeout_failure("subprocess.TimeoutExpired after 600s")
         assert _is_step_timeout_failure("Agent timed out while running tests")
+        assert not _is_step_timeout_failure(
+            "All agent providers failed: openai: request timed out"
+        )
 
     def test_timeout_abort_message_is_not_provider_outage(self):
         """A timeout wrapped in provider failure text should get timeout wording."""
@@ -481,13 +485,19 @@ class TestChangedFilesTracking:
         )
         subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
         subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(
+            ["git", "update-ref", base_ref, "base"],
+            cwd=tmp_path,
+            check=True,
+        )
 
         result = _format_pr_changed_files_for_prompt(
             tmp_path,
-            {"base_ref": "base"},
+            {"base_ref": "base", "base_local_ref": base_ref},
         )
 
-        assert "Base: base" in result
+        assert f"Base: {base_ref}" in result
         assert "- M: app.py" in result
         assert "- A: tests/test_app.py" in result
 
@@ -507,15 +517,115 @@ class TestChangedFilesTracking:
         (tmp_path / "second.py").write_text("print('second')\n", encoding="utf-8")
         subprocess.run(["git", "add", "second.py"], cwd=tmp_path, check=True)
         subprocess.run(["git", "commit", "-m", "second"], cwd=tmp_path, check=True)
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(
+            ["git", "update-ref", base_ref, "base"],
+            cwd=tmp_path,
+            check=True,
+        )
 
         result = _format_pr_changed_files_for_prompt(
             tmp_path,
-            {"base_ref": "base"},
+            {"base_ref": "base", "base_local_ref": base_ref},
         )
 
-        assert "Base: base" in result
+        assert f"Base: {base_ref}" in result
         assert "- A: first.py" in result
         assert "- A: second.py" in result
+
+    def test_format_pr_changed_files_uses_refreshed_base_not_stale_origin(
+        self, tmp_path
+    ):
+        """A stale origin/main must not broaden PR-scoped test context."""
+        self._init_git_repo(tmp_path, initial_branch="main")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "root"], cwd=tmp_path, check=True)
+        root_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", root_sha],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        (tmp_path / "base_only.py").write_text("print('base')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "base_only.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "advance base"], cwd=tmp_path, check=True)
+        base_sha = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=tmp_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+        base_ref = _pr_base_tracking_ref(77)
+        subprocess.run(
+            ["git", "update-ref", base_ref, base_sha],
+            cwd=tmp_path,
+            check=True,
+        )
+
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "feature.py").write_text("print('feature')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "main", "base_local_ref": base_ref},
+        )
+
+        assert "- A: feature.py" in result
+        assert "base_only.py" not in result
+
+    def test_format_pr_changed_files_requires_refreshed_pr_base(self, tmp_path):
+        """PR metadata must not fall back to stale origin/<base>."""
+        self._init_git_repo(tmp_path, initial_branch="main")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "root"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "feature.py").write_text("print('feature')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "main"},
+        )
+
+        assert result.startswith("PR changed files unavailable")
+        assert "Do not use stale origin/main" in result
+        assert "feature.py" not in result
+
+    def test_format_pr_changed_files_missing_pr_metadata_is_unavailable(self, tmp_path):
+        """PR mode with failed metadata fetch must not use conventional fallbacks."""
+        self._init_git_repo(tmp_path, initial_branch="main")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "root"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", "HEAD"],
+            cwd=tmp_path,
+            check=True,
+        )
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+        (tmp_path / "feature.py").write_text("print('feature')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "feature.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "feature"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(tmp_path, {})
+
+        assert result.startswith("PR changed files unavailable")
+        assert "metadata is missing" in result
+        assert "feature.py" not in result
 
     def test_format_pr_changed_files_does_not_use_head_parent_fallback(self, tmp_path):
         """Missing base refs should be explicit instead of diffing only HEAD~1."""

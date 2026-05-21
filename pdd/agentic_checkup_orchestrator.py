@@ -174,6 +174,66 @@ def _pr_worktree_branch_name(git_root: Path, pr_number: int) -> str:
     return f"checkup/pr-{pr_number}-{root_scope}"
 
 
+def _pr_base_tracking_ref(pr_number: int) -> str:
+    """Return the refreshed local ref used for PR merge-base diffs."""
+    return f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
+
+
+def _refresh_pr_base_ref(
+    worktree: Path,
+    pr_owner: str,
+    pr_repo: str,
+    pr_number: int,
+    pr_metadata: Dict[str, str],
+    quiet: bool,
+) -> None:
+    """Fetch the PR base branch into a dedicated local ref for diff scoping."""
+    pr_metadata.pop("base_local_ref", None)
+    pr_metadata.pop("base_ref_fetch_error", None)
+    base_ref = str(pr_metadata.get("base_ref") or "").strip()
+    if not base_ref:
+        return
+
+    git_root = _get_git_root(worktree)
+    if not git_root:
+        pr_metadata["base_ref_fetch_error"] = "worktree is not a git repository"
+        return
+
+    remote_target = _resolve_pr_remote(git_root, pr_owner, pr_repo)
+    if remote_target is None:
+        remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
+
+    base_local_ref = _pr_base_tracking_ref(pr_number)
+    try:
+        subprocess.run(
+            [
+                "git",
+                "fetch",
+                remote_target,
+                f"refs/heads/{base_ref}:{base_local_ref}",
+                "--force",
+            ],
+            cwd=git_root,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except subprocess.CalledProcessError as exc:
+        safe_err = (exc.stderr or str(exc)).strip()
+        token = _github_token_from_env()
+        if token:
+            safe_err = _redact_secret(safe_err, token)
+        pr_metadata["base_ref_fetch_error"] = safe_err or "git fetch failed"
+        if not quiet:
+            console.print(
+                f"[yellow]Warning: failed to refresh PR base ref {base_ref}: "
+                f"{pr_metadata['base_ref_fetch_error']}[/yellow]"
+            )
+        return
+
+    pr_metadata["base_local_ref"] = base_local_ref
+
+
 def _copy_uncommitted_changes(
     git_root: Path,
     worktree_path: Path,
@@ -725,7 +785,7 @@ def _is_step_timeout_failure(output: str) -> bool:
     """Return true when a step failed because the agent process timed out."""
     return bool(
         re.search(
-            r"(Timeout expired|TimeoutExpired|timed out)",
+            r"(Timeout expired|TimeoutExpired|agent(?:ic)? execution timed out|Agent timed out|step \d+(?:\.\d+)? timed out)",
             output or "",
             flags=re.IGNORECASE,
         )
@@ -750,16 +810,34 @@ def _format_pr_changed_files_for_prompt(
 ) -> str:
     """Return a concise merge-base changed-file summary for PR-mode prompts."""
     base_candidates: List[str] = []
-    if pr_metadata:
+    if pr_metadata is not None:
         base_ref = str(pr_metadata.get("base_ref") or "").strip()
         if base_ref:
-            base_candidates.extend([f"origin/{base_ref}", base_ref])
-    base_candidates.extend([
-        "origin/main",
-        "origin/master",
-        "main",
-        "master",
-    ])
+            base_local_ref = str(pr_metadata.get("base_local_ref") or "").strip()
+            if base_local_ref:
+                base_candidates.append(base_local_ref)
+            else:
+                fetch_error = str(pr_metadata.get("base_ref_fetch_error") or "").strip()
+                reason = f" Fetch error: {fetch_error}" if fetch_error else ""
+                return (
+                    "PR changed files unavailable: PR base ref "
+                    f"'{base_ref}' was not refreshed into a local tracking ref."
+                    f"{reason} Do not use stale origin/{base_ref}; run targeted "
+                    "tests conservatively or refresh the PR base ref."
+                )
+        else:
+            return (
+                "PR changed files unavailable: PR base metadata is missing. "
+                "Do not use stale origin/main; run targeted tests conservatively "
+                "or refresh PR metadata."
+            )
+    else:
+        base_candidates.extend([
+            "origin/main",
+            "origin/master",
+            "main",
+            "master",
+        ])
 
     seen_bases: Set[str] = set()
     for base in base_candidates:
@@ -1148,6 +1226,15 @@ def run_agentic_checkup_orchestrator(
             # otherwise audit stale architecture/config.
             if pr_mode:
                 _refresh_pr_context_from_worktree(context, worktree_path)
+                assert pr_owner is not None and pr_repo is not None and pr_number is not None
+                _refresh_pr_base_ref(
+                    worktree_path,
+                    pr_owner,
+                    pr_repo,
+                    pr_number,
+                    metadata_for_guard,
+                    quiet,
+                )
                 context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
                     worktree_path,
                     metadata_for_guard,
@@ -1509,6 +1596,15 @@ def run_agentic_checkup_orchestrator(
         # ``cwd``; if the PR modifies either file, the audit otherwise
         # never sees the change.
         _refresh_pr_context_from_worktree(context, worktree_path)
+        assert pr_owner is not None and pr_repo is not None and pr_number is not None
+        _refresh_pr_base_ref(
+            worktree_path,
+            pr_owner,
+            pr_repo,
+            pr_number,
+            metadata_for_guard,
+            quiet,
+        )
         context["pr_changed_files"] = _format_pr_changed_files_for_prompt(
             worktree_path,
             metadata_for_guard,

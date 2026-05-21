@@ -21,6 +21,7 @@
   - `--reviewer` (explicit primary reviewer role; overrides the first `--reviewers` role)
   - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
   - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
+  - `--fixer-fallback` (optional secondary fixer role invoked once if the primary fixer cannot address reviewer findings; must differ from the resolved fixer, active reviewer, and originally configured reviewer)
   - `--max-review-rounds` (int, default `5`)
   - `--max-review-cost` (float, default `50.0`)
   - `--max-review-minutes` (float, default `90.0`)
