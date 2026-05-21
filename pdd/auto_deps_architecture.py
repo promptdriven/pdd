@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 from .agentic_sync_runner import _basename_from_architecture_filename
 from .architecture_include_validation import resolve_architecture_prompt_path
 from .architecture_registry import extract_modules, find_architecture_for_project, find_project_root
-from .architecture_sync import _normalize_prompt_filename
+from .architecture_sync import _normalize_prompt_filename, build_dependency_resolver
 from .sync_order import extract_module_from_include
 
 
@@ -372,6 +372,7 @@ def _replace_dependencies_in_architecture_text(
 def _architecture_filename_for_module_include(
     include_path: str,
     same_file_arch_entries: List[Dict[str, Any]],
+    resolver=None,
 ) -> Optional[str]:
     """
     Map an include path to an architecture ``dependencies`` string (another entry's
@@ -387,10 +388,33 @@ def _architecture_filename_for_module_include(
     The ``extract_module_from_include`` gate is preserved up front so
     non-module-prompt include paths (e.g. ``pdd/foo.py`` or other source
     files) are still rejected early.
+
+    PR #1073 follow-up finding 1: a bare module-prompt include like
+    ``<include>b_python.prompt</include>`` written from a path-qualified
+    prompt (``commands/a_python.prompt``) used to key to bare ``"b"``
+    while the matching arch entry ``commands/b_python.prompt`` keyed to
+    ``"commands/b"``. The two sides diverged and the writer returned
+    ``None`` (no dep added), then ``pdd checkup --validate-arch-includes``
+    reported drift. Resolving the include through the same
+    ``build_dependency_resolver`` the validator uses (F11) makes the
+    bare/qualified asymmetry collapse before keying, so a bare include
+    that unambiguously names an arch entry now produces the dep. Genuine
+    ambiguity (multiple arch entries with the same bare tail) keeps the
+    resolver returning the input unchanged, the key still mismatches, and
+    auto-deps correctly writes nothing.
+
+    ``resolver`` is the precomputed callable from
+    ``build_dependency_resolver(same_file_arch_entries)``. Callers
+    resolving many includes against the same arch should build it once
+    and pass it (mirrors F11). When ``None``, this function builds one
+    on demand — fine for one-shot calls.
     """
     if not extract_module_from_include(include_path):
         return None
-    include_key = _path_preserving_module_key(include_path)
+    if resolver is None:
+        resolver = build_dependency_resolver(same_file_arch_entries)
+    resolved_inc = resolver(include_path)
+    include_key = _path_preserving_module_key(resolved_inc)
     if not include_key:
         return None
     for entry in same_file_arch_entries:
@@ -453,8 +477,9 @@ def merge_auto_deps_includes_into_architecture(
     existing_deps = list(deps_before_snapshot)
     existing_set = set(existing_deps)
 
+    resolver = build_dependency_resolver(arch_data)
     for inc in sorted(fresh):
-        dep_fn = _architecture_filename_for_module_include(inc, arch_data)
+        dep_fn = _architecture_filename_for_module_include(inc, arch_data, resolver=resolver)
         if not dep_fn:
             continue
         dep_base = _path_preserving_module_key(dep_fn)

@@ -577,6 +577,45 @@ def _normalize_dependency_filenames(
     return normalized_dependencies
 
 
+def _strip_self_edges_from_resolved_deps(
+    deps: List[str],
+    self_filename: Optional[str],
+) -> List[str]:
+    """Drop entries from ``deps`` whose path-preserving module key matches ``self_filename``'s.
+
+    Defense-in-depth complement to the pre-resolver self-include filter in
+    ``_module_prompt_include_dependencies``. The pre-resolver filter sees
+    only the literal include text and misses bare aliases of a path-qualified
+    self (e.g. ``<include>a_python.prompt</include>`` written from
+    ``commands/a_python.prompt``). Once the union has been normalized
+    through ``build_dependency_resolver``, the bare alias becomes
+    ``commands/a_python.prompt`` and matches the self-key here — catching
+    the writer-side bug PR #1073 follow-up finding 2 reported.
+
+    Catches the same shape for ``<pdd-dependency>`` self-edges too, where
+    a bare ``<pdd-dependency>a_python.prompt</pdd-dependency>`` written from
+    ``commands/a_python.prompt`` was also being normalized into a self-edge
+    in arch.dependencies — same root cause as the include case, fixed by
+    the same post-resolver filter.
+
+    Returns the input list when ``self_filename`` is missing or has no
+    derivable key (preserves the brand-new-prompt-registration path).
+    """
+    if not self_filename:
+        return deps
+    from .agentic_sync_runner import _basename_from_architecture_filename
+    self_key = _basename_from_architecture_filename(_normalize_prompt_filename(self_filename))
+    if not self_key:
+        return deps
+    filtered: List[str] = []
+    for dep in deps:
+        dep_key = _basename_from_architecture_filename(_normalize_prompt_filename(dep))
+        if dep_key and dep_key == self_key:
+            continue
+        filtered.append(dep)
+    return filtered
+
+
 def _prompt_dependency_union(
     tags: Dict[str, Any],
     arch_data: List[Dict[str, Any]],
@@ -644,7 +683,16 @@ def _prompt_dependency_union(
         if dep and dep not in seen:
             combined.append(dep)
             seen.add(dep)
-    return _normalize_dependency_filenames(combined, arch_data), True
+    normalized = _normalize_dependency_filenames(combined, arch_data)
+    # PR #1073 follow-up finding 2: the pre-resolver self-edge filter in
+    # ``_module_prompt_include_dependencies`` only sees literal include text,
+    # so a bare alias of a path-qualified self (e.g. ``<include>a_python.prompt``
+    # written from ``commands/a_python.prompt``) slipped through, the resolver
+    # normalized it to ``commands/a_python.prompt`` and arch.dependencies gained
+    # a self-edge. The validator silently hides self-edges so the polluted arch
+    # passed checkup. Filter post-normalization to converge writer and validator
+    # behavior. Same fix also drops bare ``<pdd-dependency>`` self-edges.
+    return _strip_self_edges_from_resolved_deps(normalized, self_filename), True
 
 
 def register_untracked_prompts(

@@ -1941,7 +1941,16 @@ def _declared_prompt_dependencies(
         if dep and dep not in seen:
             combined.append(dep)
             seen.add(dep)
-    return _normalize_dependency_filenames(combined, arch_modules)
+    from .architecture_sync import _strip_self_edges_from_resolved_deps
+    # PR #1073 follow-up finding 2: parallel fix to ``_prompt_dependency_union``.
+    # The pre-resolver self-edge filter in ``_module_prompt_include_dependencies``
+    # missed bare aliases of a path-qualified self; after normalization a bare
+    # ``<include>a_python.prompt`` from ``commands/a_python.prompt`` would
+    # otherwise become a self-edge in ``arch.dependencies`` and the validator
+    # would silently hide it. Same fix catches bare ``<pdd-dependency>`` self-
+    # edges too.
+    normalized = _normalize_dependency_filenames(combined, arch_modules)
+    return _strip_self_edges_from_resolved_deps(normalized, self_filename)
 
 
 def _apply_architecture_corrections(

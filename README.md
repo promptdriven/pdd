@@ -618,7 +618,7 @@ graph TB
 - **[`split`](#7-split)**: Splits large prompt files into smaller, more manageable ones
 - **[`extracts prune`](#21-extracts)**: Garbage-collect orphaned extracts cache entries
 - **[`auto-deps`](#15-auto-deps)**: Analyzes and inserts needed dependencies into a prompt file
-- **[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from prompt metadata tags
+- **[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from `<pdd-dependency>` tags and module-prompt `<include>` targets
 - **[`detect`](#10-detect)**: Analyzes prompts to determine which ones need changes based on a description
 - **[`conflicts`](#11-conflicts)**: Finds and suggests resolutions for conflicts between two prompt files
 - **[`trace`](#13-trace)**: Finds the corresponding line number in a prompt file for a given code line
@@ -1060,7 +1060,7 @@ Options (agentic mode):
 
 ### 1a. sync-architecture
 
-Sync `architecture.json` from prompt metadata tags (`<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`). This is useful after editing prompt metadata directly, or after backfilling prompt tags, so the architecture graph and command metadata stay aligned with the prompts.
+Sync `architecture.json` from prompt metadata tags (`<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`) and from module-prompt `<include>` targets (issue #1061 union semantics: a module-prompt `<include>` is an architecture edge regardless of `mode`/`select`/`query`/`lines` attributes). This is useful after editing prompt metadata directly, or after backfilling prompt tags, so the architecture graph and command metadata stay aligned with the prompts.
 
 ```bash
 # Preview architecture updates for all prompts
@@ -2170,7 +2170,7 @@ This feature works seamlessly with issues processed by `pdd bug`. The typical wo
 
 ### 7. split
 
-Diagnose whether a PDD dev unit has an architectural problem, and if so, split the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. The 15-step agentic workflow classifies intent, surveys the codebase, diagnoses the problem, proposes options with a responsibility-based rubric, extracts children with phase decomposition (and a per-child verify gate as a sub-step within extraction), runs deterministic verification gates (including test-seam resolution and parent-wiring checks), proves the new prompts can regenerate via `pdd sync`, derives `architecture.json` from prompt metadata tags, and checks architecture↔include drift after that derivation.
+Diagnose whether a PDD dev unit has an architectural problem, and if so, split the full dev unit (prompt + code + example + tests) into smaller PDD-native dev units. The 15-step agentic workflow classifies intent, surveys the codebase, diagnoses the problem, proposes options with a responsibility-based rubric, extracts children with phase decomposition (and a per-child verify gate as a sub-step within extraction), runs deterministic verification gates (including test-seam resolution and parent-wiring checks), proves the new prompts can regenerate via `pdd sync`, derives `architecture.json` from prompt metadata tags and module-prompt `<include>` targets, and checks architecture↔include drift after that derivation.
 
 **Agentic Mode (default):**
 ```
@@ -2192,7 +2192,7 @@ The 15-step workflow (with `6v` running as a per-child sub-step inside step 6):
 6v. **Per-Child Verify Gate**: After each child extracts in step 6, run `validate_extraction()` filtered to that child's files only and route any error-severity failures to a bounded step-8 repair sub-loop (max 2 attempts per child). Status is tracked per child in `state["children_extracted_status"]` (`pending` / `extracted` / `verified` / `failed_extract` / `failed_verify` / `failed`) so a crash mid-pipeline never silently re-bills already-verified children.
 7a. **Verify Local**: Final cross-cutting deterministic check across all children — tests, lint, parent line reduction, and test-seam resolution. Catches issues only visible at full-package scope (e.g. circular imports between children).
 7b. **Regen Gate**: Deterministic — `pdd sync` must regenerate each new prompt
-7c. **Arch Sync**: Deterministic — derive `architecture.json` from `<pdd-*>` prompt metadata tags
+7c. **Arch Sync**: Deterministic — derive `architecture.json` from `<pdd-*>` prompt metadata tags and module-prompt `<include>` targets (union semantics — issue #1061)
 7d. **Post-Arch Checkup**: Run `pdd checkup --validate-arch-includes --project-root <worktree>` after 7c so architecture↔include drift is checked against freshly synced metadata.
 7. **Assess**: LLM qualitative verdict; feeds improvement gate alongside 7a/7d metrics
 8. **Repair**: Fix cross-cutting verification failures from 7a/7d (max 5 iterations across the whole plan), re-running arch sync before each checkup retry. Per-child gate failures (6v, max 2 attempts per child) are repaired inline within step 6 and DO NOT enter step 8 — once the per-child budget is exhausted the child enters terminal `failed` status, step 8 is short-circuited entirely (the global loop cannot recover what the per-child gate already gave up on). The improvement gate downgrades AUTO_SHIP to HUMAN_REVIEW_REQUIRED for ANY non-`verified` child (including `failed_extract` from exhausted file-existence retries and `failed` from exhausted per-child repair). Per-child reason strings are persisted in `state["terminal_child_failures"]` (covering both `failed_extract` missing-file detail and `failed` `ValidationFailure.message` detail) and surfaced in the final message + console output so the user knows which child broke and why.

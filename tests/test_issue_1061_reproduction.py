@@ -2556,3 +2556,368 @@ def test_followup_writer_self_include_filtered_from_union(tmp_path: Path) -> Non
         "only the genuine arch edge (a) should remain after self-filter; got "
         f"{entry['dependencies']!r}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Post-PR codex follow-up review (3 findings)
+#
+# Finding 1: ``_architecture_filename_for_module_include`` missed bare
+#            module-prompt includes for path-qualified arch entries
+#            (auto-deps writer side).
+# Finding 2: writer-side self-edge filter ran BEFORE resolver normalization,
+#            so a bare alias of a path-qualified self slipped through; the
+#            validator silently hides self-edges, so the polluted arch
+#            passed ``pdd checkup --validate-arch-includes``.
+# Finding 3: README still described arch sync as metadata-tag-only.
+#
+# These tests directly exercise the helpers (not just end-to-end), per the
+# "direct unit tests for new helper functions" rule.
+# ---------------------------------------------------------------------------
+
+
+def test_post_pr_review_f1_helper_resolves_bare_include_to_path_qualified_arch(
+    tmp_path: Path,
+) -> None:
+    """Direct: ``_architecture_filename_for_module_include`` must map a bare
+    include like ``b_python.prompt`` to the unique path-qualified arch entry
+    ``commands/b_python.prompt`` (mirrors the validator's resolver semantics).
+    """
+    from pdd.auto_deps_architecture import _architecture_filename_for_module_include
+
+    arch = [
+        {"filename": "commands/a_python.prompt", "dependencies": []},
+        {"filename": "commands/b_python.prompt", "dependencies": []},
+    ]
+    assert (
+        _architecture_filename_for_module_include("b_python.prompt", arch)
+        == "commands/b_python.prompt"
+    )
+
+
+def test_post_pr_review_f1_helper_returns_none_when_bare_include_ambiguous(
+    tmp_path: Path,
+) -> None:
+    """Direct: when a bare include name has more than one matching arch entry,
+    the writer must refuse to guess (resolver returns input unchanged, key
+    mismatches every entry, writer returns None — no dep written).
+    """
+    from pdd.auto_deps_architecture import _architecture_filename_for_module_include
+
+    arch = [
+        {"filename": "commands/b_python.prompt", "dependencies": []},
+        {"filename": "server/b_python.prompt", "dependencies": []},
+    ]
+    assert (
+        _architecture_filename_for_module_include("b_python.prompt", arch) is None
+    )
+
+
+def test_post_pr_review_f1_end_to_end_bare_include_writes_qualified_dep(
+    tmp_path: Path,
+) -> None:
+    """E2E: ``commands/a_python.prompt`` newly including ``<include>b_python.prompt</include>``
+    with arch entry ``commands/b_python.prompt`` must add the qualified dep
+    via ``merge_auto_deps_includes_into_architecture``. Closes the post-PR
+    review repro: previously auto-deps wrote nothing and checkup reported drift.
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    arch_path = tmp_path / "architecture.json"
+    arch = [
+        _write_min_arch_entry("commands/a_python.prompt", priority=1),
+        _write_min_arch_entry("commands/b_python.prompt", priority=2),
+    ]
+    arch_path.write_text(json.dumps(arch, indent=2))
+
+    old_prompt = "<pdd-reason>A</pdd-reason>\n% Body\n"
+    new_prompt = "<pdd-reason>A</pdd-reason>\n% Body\n<include>b_python.prompt</include>\n"
+    (prompts / "commands" / "a_python.prompt").write_text(new_prompt)
+
+    report = merge_auto_deps_includes_into_architecture(
+        tmp_path,
+        prompts / "commands" / "a_python.prompt",
+        old_prompt,
+        new_prompt,
+    )
+    assert report["updated"], (
+        "auto-deps must add a dep when a bare include unambiguously resolves; "
+        f"got {report!r}"
+    )
+    assert "commands/b_python.prompt" in report["added_dependencies"], (
+        f"expected qualified dep added; got {report['added_dependencies']!r}"
+    )
+    final = json.loads(arch_path.read_text())
+    a_entry = next(m for m in final if m["filename"] == "commands/a_python.prompt")
+    assert "commands/b_python.prompt" in a_entry["dependencies"], (
+        f"expected qualified dep persisted; got {a_entry['dependencies']!r}"
+    )
+
+
+def test_post_pr_review_f1_end_to_end_ambiguous_bare_include_adds_nothing(
+    tmp_path: Path,
+) -> None:
+    """E2E: when a bare include has multiple matching arch entries, auto-deps
+    must NOT silently pick one. The resolver returns the input unchanged, the
+    keying mismatches every entry, and ``added_dependencies`` is empty.
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    arch_path = tmp_path / "architecture.json"
+    arch = [
+        _write_min_arch_entry("commands/a_python.prompt", priority=1),
+        _write_min_arch_entry("commands/b_python.prompt", priority=2),
+        _write_min_arch_entry("server/b_python.prompt", priority=3),
+    ]
+    arch_path.write_text(json.dumps(arch, indent=2))
+
+    old_prompt = "<pdd-reason>A</pdd-reason>\n% Body\n"
+    new_prompt = "<pdd-reason>A</pdd-reason>\n% Body\n<include>b_python.prompt</include>\n"
+    (prompts / "commands" / "a_python.prompt").write_text(new_prompt)
+
+    report = merge_auto_deps_includes_into_architecture(
+        tmp_path,
+        prompts / "commands" / "a_python.prompt",
+        old_prompt,
+        new_prompt,
+    )
+    assert report["added_dependencies"] == [], (
+        "auto-deps must not silently disambiguate; got "
+        f"{report['added_dependencies']!r}"
+    )
+
+
+def test_post_pr_review_f1_end_to_end_bare_self_include_does_not_write_self_edge(
+    tmp_path: Path,
+) -> None:
+    """E2E: auto-deps must not write a self-edge when a path-qualified prompt
+    newly includes its own bare alias (e.g. ``commands/a_python.prompt`` adds
+    ``<include>a_python.prompt</include>``).
+
+    Once finding-1's fix makes the resolver collapse the bare alias to the
+    qualified self, the existing ``dep_base == current_base`` self-skip in
+    ``merge_auto_deps_includes_into_architecture`` must catch it. Guards
+    against a future refactor that removes that self-skip — without this
+    test the metadata-sync coverage alone wouldn't catch a regression on
+    the auto-deps path.
+    """
+    from pdd.auto_deps_architecture import merge_auto_deps_includes_into_architecture
+
+    (tmp_path / ".git").mkdir()
+    prompts = tmp_path / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(json.dumps([
+        _write_min_arch_entry("commands/a_python.prompt", priority=1),
+    ], indent=2))
+
+    old_prompt = "<pdd-reason>A</pdd-reason>\n% Body\n"
+    new_prompt = (
+        "<pdd-reason>A</pdd-reason>\n% Body\n<include>a_python.prompt</include>\n"
+    )
+    (prompts / "commands" / "a_python.prompt").write_text(new_prompt)
+
+    report = merge_auto_deps_includes_into_architecture(
+        tmp_path,
+        prompts / "commands" / "a_python.prompt",
+        old_prompt,
+        new_prompt,
+    )
+    assert "commands/a_python.prompt" not in report["added_dependencies"], (
+        f"auto-deps must not add a self-edge; got {report['added_dependencies']!r}"
+    )
+    final = json.loads(arch_path.read_text())
+    a_entry = next(m for m in final if m["filename"] == "commands/a_python.prompt")
+    assert "commands/a_python.prompt" not in a_entry["dependencies"], (
+        f"final arch must not contain self-edge; got {a_entry['dependencies']!r}"
+    )
+
+
+def test_post_pr_review_f2_metadata_sync_drops_bare_include_self_edge(
+    tmp_path: Path,
+) -> None:
+    """Repro of post-PR review finding 2 (metadata-sync writer side).
+
+    ``commands/a_python.prompt`` with ``<include>a_python.prompt</include>``
+    (bare alias of the path-qualified self) used to write
+    ``commands/a_python.prompt`` into its own deps after resolver normalization.
+    Validator silently hides self-edges so the polluted arch passed checkup.
+    """
+    from pdd.architecture_sync import update_architecture_from_prompt
+
+    prompts = tmp_path / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps([_write_min_arch_entry("commands/a_python.prompt", priority=1)])
+    )
+    (prompts / "commands" / "a_python.prompt").write_text(
+        "<pdd-reason>A</pdd-reason>\n% Body\n<include>a_python.prompt</include>\n"
+    )
+
+    result = update_architecture_from_prompt(
+        "commands/a_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+    assert result["success"], f"writer failed: {result!r}"
+    written = json.loads(arch_path.read_text())
+    entry = next(m for m in written if m["filename"] == "commands/a_python.prompt")
+    assert "commands/a_python.prompt" not in entry["dependencies"], (
+        "bare self-include must be filtered post-resolver; got "
+        f"{entry['dependencies']!r}"
+    )
+
+
+def test_post_pr_review_f2_metadata_sync_drops_bare_pdd_dependency_self_edge(
+    tmp_path: Path,
+) -> None:
+    """Bonus bug found during finding-2 verification: a bare
+    ``<pdd-dependency>a_python.prompt</pdd-dependency>`` in
+    ``commands/a_python.prompt`` was ALSO normalized into a self-edge in
+    arch.dependencies. Same root cause (filter ran pre-resolver), same fix.
+    """
+    from pdd.architecture_sync import update_architecture_from_prompt
+
+    prompts = tmp_path / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    arch_path = tmp_path / "architecture.json"
+    arch_path.write_text(
+        json.dumps([_write_min_arch_entry("commands/a_python.prompt", priority=1)])
+    )
+    (prompts / "commands" / "a_python.prompt").write_text(
+        "<pdd-reason>A</pdd-reason>\n"
+        "<pdd-dependency>a_python.prompt</pdd-dependency>\n"
+        "% Body\n"
+    )
+
+    result = update_architecture_from_prompt(
+        "commands/a_python.prompt",
+        prompts_dir=prompts,
+        architecture_path=arch_path,
+        dry_run=False,
+    )
+    assert result["success"], f"writer failed: {result!r}"
+    written = json.loads(arch_path.read_text())
+    entry = next(m for m in written if m["filename"] == "commands/a_python.prompt")
+    assert "commands/a_python.prompt" not in entry["dependencies"], (
+        "bare <pdd-dependency> self-edge must be filtered post-resolver; got "
+        f"{entry['dependencies']!r}"
+    )
+
+
+def test_post_pr_review_f2_helper_strip_self_edges_direct() -> None:
+    """Direct: ``_strip_self_edges_from_resolved_deps`` drops every entry
+    whose path-preserving module key matches the self filename's key.
+    """
+    from pdd.architecture_sync import _strip_self_edges_from_resolved_deps
+
+    deps = [
+        "commands/x_python.prompt",
+        "commands/a_python.prompt",
+        "server/a_python.prompt",
+    ]
+    stripped = _strip_self_edges_from_resolved_deps(deps, "commands/a_python.prompt")
+    assert "commands/a_python.prompt" not in stripped
+    # Same-tail entry in a different folder MUST be preserved (no cross-dir
+    # collisions thanks to path-preserving keys).
+    assert "server/a_python.prompt" in stripped
+    assert "commands/x_python.prompt" in stripped
+
+
+def test_post_pr_review_f2_helper_strip_no_self_filename_is_noop() -> None:
+    """Direct: ``_strip_self_edges_from_resolved_deps`` returns input unchanged
+    when ``self_filename`` is None — the brand-new-prompt-registration path
+    that passes no self_filename must not lose deps to the filter.
+    """
+    from pdd.architecture_sync import _strip_self_edges_from_resolved_deps
+
+    deps = ["commands/a_python.prompt", "server/b_python.prompt"]
+    assert _strip_self_edges_from_resolved_deps(deps, None) == deps
+    assert _strip_self_edges_from_resolved_deps(deps, "") == deps
+
+
+def test_post_pr_review_f2_declared_prompt_dependencies_drops_bare_self_edge(
+    tmp_path: Path,
+) -> None:
+    """Parallel code path: ``_declared_prompt_dependencies`` (used by
+    ``_apply_architecture_corrections`` on the agentic-sync side) must also
+    drop bare self-edges after resolver normalization. The bug existed in
+    both writers; both fixes must hold.
+    """
+    from pdd.agentic_sync import _declared_prompt_dependencies
+
+    prompts = tmp_path / "prompts"
+    (prompts / "commands").mkdir(parents=True)
+    prompt_path = prompts / "commands" / "a_python.prompt"
+    prompt_path.write_text(
+        "<pdd-reason>A</pdd-reason>\n"
+        "<pdd-dependency>a_python.prompt</pdd-dependency>\n"
+        "% Body\n"
+        "<include>a_python.prompt</include>\n"
+    )
+    arch = [
+        _write_min_arch_entry("commands/a_python.prompt", priority=1),
+    ]
+
+    deps = _declared_prompt_dependencies(
+        prompt_path, arch, self_filename="commands/a_python.prompt"
+    )
+    assert deps is not None
+    assert "commands/a_python.prompt" not in deps, (
+        f"agentic-sync writer must not produce a self-edge; got {deps!r}"
+    )
+
+
+def test_post_pr_review_f3_readme_mentions_include_targets_in_arch_sync() -> None:
+    """README: every architecture-sync description spot must mention module-
+    prompt ``<include>`` targets as part of the writer contract, not just
+    metadata tags. PR #1073 made includes architecture edges; the docs must
+    reflect that everywhere they describe arch sync, so a partial revert is
+    caught immediately.
+    """
+    readme = Path(__file__).resolve().parent.parent / "README.md"
+    text = readme.read_text(encoding="utf-8")
+
+    # Each known stale phrasing the post-PR review flagged must be replaced —
+    # asserted by-location so a single-line revert at any spot is caught.
+
+    # (1) Command summary bullet (Prompt Management section, ~line 621).
+    stale_summary_only = "**[`sync-architecture`](#1a-sync-architecture)**: Updates `architecture.json` from prompt metadata tags\n"
+    assert stale_summary_only not in text, (
+        "README sync-architecture bullet still says metadata-tag-only — must "
+        "also mention module-prompt <include> targets"
+    )
+
+    # (2) Section 1a body (~line 1063).
+    stale_section_1a = "Sync `architecture.json` from prompt metadata tags (`<pdd-reason>`, `<pdd-interface>`, and `<pdd-dependency>`). This is useful"
+    assert stale_section_1a not in text, (
+        "README section 1a body still says metadata-tag-only — must also "
+        "mention module-prompt <include> targets"
+    )
+
+    # (3) Split-command intro (~line 2173).
+    stale_split_intro = "derives `architecture.json` from prompt metadata tags, and"
+    assert stale_split_intro not in text, (
+        "README split-command intro still says metadata-tag-only — must also "
+        "mention module-prompt <include> targets"
+    )
+
+    # (4) Split workflow step 7c (~line 2195).
+    stale_step_7c = "7c. **Arch Sync**: Deterministic — derive `architecture.json` from `<pdd-*>` prompt metadata tags\n"
+    assert stale_step_7c not in text, (
+        "README split workflow step 7c still says metadata-tag-only — must "
+        "also mention module-prompt <include> targets"
+    )
+
+    # Positive check: the union phrasing is present.
+    assert "module-prompt `<include>` targets" in text, (
+        "README must describe arch sync as the union of metadata tags AND "
+        "module-prompt <include> targets"
+    )
