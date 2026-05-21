@@ -67,7 +67,7 @@ if not logger.handlers:
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
-    
+
     # Only add handler to litellm logger if it doesn't have any
     if not litellm_logger.handlers:
         litellm_logger.addHandler(console_handler)
@@ -77,7 +77,7 @@ def setup_file_logging(log_file_path=None):
     """Configure rotating file handler for logging"""
     if not log_file_path:
         return
-        
+
     try:
         from logging.handlers import RotatingFileHandler
         file_handler = RotatingFileHandler(
@@ -141,7 +141,7 @@ def set_quiet_logging() -> None:
 # Honor process-level quiet mode as early as possible.
 if os.getenv("PDD_QUIET") == "1":
     set_quiet_logging()
-    
+
 # --- End Logging Configuration ---
 
 import json
@@ -683,7 +683,7 @@ def _llm_invoke_cloud(
 def _is_wsl_environment() -> bool:
     """
     Detect if we're running in WSL (Windows Subsystem for Linux) environment.
-    
+
     Returns:
         True if running in WSL, False otherwise
     """
@@ -693,15 +693,15 @@ def _is_wsl_environment() -> bool:
             with open('/proc/version', 'r') as f:
                 version_info = f.read().lower()
                 return 'microsoft' in version_info or 'wsl' in version_info
-        
+
         # Alternative check: WSL_DISTRO_NAME environment variable
         if os.getenv('WSL_DISTRO_NAME'):
             return True
-            
+
         # Check for Windows-style paths in PATH
         path_env = os.getenv('PATH', '')
         return '/mnt/c/' in path_env.lower()
-        
+
     except Exception:
         return False
 
@@ -725,12 +725,12 @@ def _openai_responses_supports_response_format() -> bool:
 def _get_environment_info() -> Dict[str, str]:
     """
     Get environment information for debugging and error reporting.
-    
+
     Returns:
         Dictionary containing environment details
     """
     import platform
-    
+
     info = {
         'platform': platform.system(),
         'platform_release': platform.release(),
@@ -739,12 +739,12 @@ def _get_environment_info() -> Dict[str, str]:
         'is_wsl': str(_is_wsl_environment()),
         'python_version': platform.python_version(),
     }
-    
+
     # Add WSL-specific information
     if _is_wsl_environment():
         info['wsl_distro'] = os.getenv('WSL_DISTRO_NAME', 'unknown')
         info['wsl_interop'] = os.getenv('WSL_INTEROP', 'not_set')
-    
+
     return info
 
 # <<< SET LITELLM DEBUG LOGGING >>>
@@ -1922,10 +1922,10 @@ def _is_malformed_json_response(content: str, threshold: int = 100) -> bool:
 
 def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
     """Loads and preprocesses the LLM model data from CSV.
-    
+
     Args:
         csv_path: Path to CSV file, or None to use package default
-        
+
     Returns:
         DataFrame with model configuration data
     """
@@ -1942,7 +1942,7 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
             except Exception as e:
                 logger.warning(f"Failed to load CSV from {csv_path}: {e}, trying package default")
                 csv_path = None
-    
+
     # If csv_path is None or loading failed, use package default
     if csv_path is None:
         try:
@@ -1953,7 +1953,7 @@ def _load_model_data(csv_path: Optional[Path]) -> pd.DataFrame:
             logger.info("Loaded model data from package default")
         except Exception as e:
             raise FileNotFoundError(f"Failed to load default LLM model CSV from package: {e}")
-    
+
     try:
         # Basic validation and type conversion
         required_cols = ['provider', 'model', 'input', 'output', 'coding_arena_elo', 'api_key', 'structured_output', 'reasoning_type']
@@ -2340,48 +2340,48 @@ def _select_model_candidates(
 def _sanitize_api_key(key_value: str) -> str:
     """
     Sanitize API key by removing whitespace and carriage returns.
-    
+
     This fixes WSL environment issues where API keys may contain trailing \r characters
     that make them invalid for HTTP headers.
-    
+
     Args:
         key_value: The raw API key value from environment
-        
+
     Returns:
         Sanitized API key with whitespace and carriage returns removed
-        
+
     Raises:
         ValueError: If the API key format is invalid after sanitization
     """
     if not key_value:
         return key_value
-    
+
     # Strip all whitespace including carriage returns, newlines, etc.
     sanitized = key_value.strip()
-    
+
     # Additional validation: ensure no remaining control characters
     if any(ord(c) < 32 for c in sanitized):
         logger.warning("API key contains control characters that may cause issues")
         # Remove any remaining control characters
         sanitized = ''.join(c for c in sanitized if ord(c) >= 32)
-    
+
     # Validate API key format (basic checks)
     if sanitized:
         # Check for common API key patterns
         if len(sanitized) < 10:
             logger.warning(f"API key appears too short ({len(sanitized)} characters) - may be invalid")
-        
+
         # Check for invalid characters in API keys (should be printable ASCII)
         if not all(32 <= ord(c) <= 126 for c in sanitized):
             logger.warning("API key contains non-printable characters")
-            
+
         # Check for WSL-specific issues (detect if original had carriage returns)
         if key_value != sanitized and '\r' in key_value:
             if _is_wsl_environment():
                 logger.info("Detected and fixed WSL line ending issue in API key")
             else:
                 logger.info("Detected and fixed line ending issue in API key")
-    
+
     return sanitized
 
 
@@ -3035,7 +3035,7 @@ def llm_invoke(
     """
     # Set verbose logging if requested
     set_verbose_logging(verbose)
-    
+
     if verbose:
         logger.debug("llm_invoke start - Arguments received:")
         logger.debug(f"  prompt: {'provided' if prompt else 'None'}")
@@ -3108,6 +3108,69 @@ def llm_invoke(
         },
     )
 
+    # Track chronological history of every model attempted across cloud and
+    # local fallback so callers (and `track_cost`) can record the full path.
+    attempted_models: List[str] = []
+
+    # Snapshot any attempts already accumulated on `ctx.obj` by earlier
+    # `llm_invoke` calls within the same tracked CLI command (e.g. `pdd
+    # generate` invoking code generation followed by postprocess). Each call
+    # contributes only its own attempts to `attempted_models`; we publish
+    # `_prior_ctx_attempts + list(attempted_models)` to ctx.obj so the
+    # cross-call audit log is the union and earlier-call fallbacks survive
+    # whatever track_cost ultimately reads.
+    #
+    # We intentionally do NOT rewind ctx.obj on failure. Issue #897 frames
+    # `attempted_models` as a chronological audit log of EVERY model the
+    # command tried, including ones that were "attempted and then
+    # abandoned" — that's the whole point of the column. Rewinding on
+    # exception would silently drop the very rows users opened the
+    # feature to investigate (a failed substep recovered by an outer
+    # catch, e.g. `auto_include` falling back to `summary_model` when
+    # the final auto_include_LLM call errors). The `model` column names
+    # the model that produced the output; `attempted_models` is the
+    # record of what was tried — they may legitimately diverge.
+    _prior_ctx_attempts: List[str] = []
+    try:
+        import click as _click_for_prior  # local import; llm_invoke must work without click
+        _ctx_for_prior = _click_for_prior.get_current_context(silent=True)
+        if (
+            _ctx_for_prior is not None
+            and isinstance(_ctx_for_prior.obj, dict)
+        ):
+            _existing = _ctx_for_prior.obj.get('attempted_models')
+            if isinstance(_existing, list):
+                _prior_ctx_attempts = list(_existing)
+    except Exception:
+        pass
+
+    def _publish_attempted_models() -> None:
+        """Best-effort: mirror attempted_models onto Click ctx.obj for track_cost.
+
+        Preserves attempts contributed by earlier llm_invoke calls within the
+        same tracked command by writing `_prior_ctx_attempts + list(attempted_models)`
+        rather than overwriting with just the current call's history.
+        """
+        try:
+            import click as _click  # local import; llm_invoke must work without click
+            click_ctx = _click.get_current_context(silent=True)
+        except Exception:
+            click_ctx = None
+        if click_ctx is None:
+            return
+        try:
+            if click_ctx.obj is None:
+                click_ctx.obj = {}
+            if isinstance(click_ctx.obj, dict):
+                click_ctx.obj['attempted_models'] = _prior_ctx_attempts + list(attempted_models)
+        except Exception:
+            pass
+
+    def _record_attempt(model_label: str) -> None:
+        """Append a model attempt and publish to Click context."""
+        attempted_models.append(model_label)
+        _publish_attempted_models()
+
     if use_cloud:
         from rich.console import Console
         console = Console()
@@ -3117,7 +3180,12 @@ def llm_invoke(
 
         try:
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_dispatch")
-            return _llm_invoke_cloud(
+            # Record the cloud attempt BEFORE the request so cloud-then-local
+            # fallbacks preserve the cloud attempt in attempted_models even
+            # when the cloud raises before returning a model name.
+            _cloud_placeholder = f"cloud:{DEFAULT_BASE_MODEL}" if DEFAULT_BASE_MODEL else "cloud:default"
+            _record_attempt(_cloud_placeholder)
+            cloud_result = _llm_invoke_cloud(
                 prompt=prompt,
                 input_json=input_json,
                 strength=strength,
@@ -3130,6 +3198,18 @@ def llm_invoke(
                 messages=messages,
                 language=language,
             )
+            # On success, replace the placeholder with the cloud-returned
+            # modelName so the history reflects the actual model used.
+            try:
+                cloud_model_name = cloud_result.get("model_name") if isinstance(cloud_result, dict) else None
+            except Exception:
+                cloud_model_name = None
+            if cloud_model_name and attempted_models:
+                attempted_models[-1] = str(cloud_model_name)
+                _publish_attempted_models()
+            if isinstance(cloud_result, dict):
+                cloud_result.setdefault("attempted_models", list(attempted_models))
+            return cloud_result
         except CloudFallbackError as e:
             # Notify user and fall back to local execution
             console.print(f"[yellow]Cloud execution failed ({e}), falling back to local execution...[/yellow]")
@@ -3140,9 +3220,19 @@ def llm_invoke(
                 **_safe_error_fields(e),
             )
             # Continue to local execution below
-        except InsufficientCreditsError:
-            # Re-raise credit errors - user needs to know
+        except InsufficientCreditsError as exc:
+            # Re-raise credit errors - user needs to know. Attach the
+            # per-call attempts to the exception (parity with the terminal
+            # RuntimeError below) — worker threads (Click context is
+            # thread-local; workers can't read ctx.obj) recover the
+            # cloud attempt via getattr(e, "attempted_models", None).
+            # Main-thread callers see the same attempts already on
+            # ctx.obj because we don't rewind on failure.
             _emit_llm_attribution(attribution_context, "llm_invoke.cloud_insufficient_credits")
+            try:
+                setattr(exc, "attempted_models", list(attempted_models))
+            except Exception:
+                pass
             raise
         except CloudInvocationError as e:
             # Non-recoverable cloud error - notify and fall back
@@ -3191,6 +3281,15 @@ def llm_invoke(
             "llm_invoke.model_selection_error",
             **_safe_error_fields(e),
         )
+        # Attach attempts to the exception so worker threads can recover
+        # the cloud placeholder (if cloud was attempted before local
+        # model loading failed) via getattr — parity with the terminal
+        # RuntimeError and InsufficientCreditsError paths. Main-thread
+        # callers see the same attempts already on ctx.obj.
+        try:
+            setattr(e, "attempted_models", list(attempted_models))
+        except Exception:
+            pass
         raise
 
     _emit_llm_attribution(
@@ -3216,7 +3315,7 @@ def llm_invoke(
         max_elo = model_df['coding_arena_elo'].max()
         base_cost = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['avg_cost'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else min_cost
         base_elo = model_df[model_df['model'] == DEFAULT_BASE_MODEL]['coding_arena_elo'].iloc[0] if not model_df[model_df['model'] == DEFAULT_BASE_MODEL].empty else max_elo
-        
+
         def calc_strength(candidate):
             # If strength < 0.5, interpolate by cost (cheaper = 0, base = 0.5)
             # If strength > 0.5, interpolate by ELO (base = 0.5, highest = 1.0)
@@ -3236,7 +3335,7 @@ def llm_invoke(
                 return max(0.5, min(1.0, 0.5 + rel * 0.5))
             else:
                 return 0.5
-        
+
         model_strengths_formatted = [(c['model'], f"{float(calc_strength(c)):.3f}") for c in candidate_models]
         logger.info("Candidate models selected and ordered (with strength): %s", model_strengths_formatted) # CORRECTED
         logger.info(f"Strength: {strength}, Temperature: {temperature}, Time: {time}")
@@ -3248,18 +3347,18 @@ def llm_invoke(
             # Only print input_json if it was actually provided (not when messages were used)
             if input_json is not None:
                 logger.info("Input JSON:")
-                logger.info(input_json) 
+                logger.info(input_json)
             else:
                  logger.info("Input: Using pre-formatted 'messages'.")
         except Exception:
-            logger.info("Input JSON/Messages (fallback print):") 
+            logger.info("Input JSON/Messages (fallback print):")
             logger.info(input_json if input_json is not None else "[Messages provided directly]")
 
 
     # --- 3. Iterate Through Candidates and Invoke LLM ---
     last_exception = None
     newly_acquired_keys: Dict[str, bool] = {} # Track keys obtained in this run
-    
+
     # Initialize variables for retry section
     response_format = None
     time_kwargs = {}
@@ -3276,6 +3375,12 @@ def llm_invoke(
         model_name_litellm = model_info['model']
         api_key_name = model_info.get('api_key')
         provider = model_info.get('provider', '').lower()
+
+        # Record this candidate before any pre-call validation/skip logic so
+        # models skipped mid-call (context window pre-check, missing api_key,
+        # github_copilot OAuth missing, auth-error skip, etc.) are still
+        # captured in the history.
+        _record_attempt(str(model_name_litellm))
 
         if verbose:
             logger.info(f"\n[ATTEMPT] Trying model: {model_name_litellm} (Provider: {provider})")
@@ -3813,6 +3918,7 @@ def llm_invoke(
                             'model_name': model_name_litellm,
                             'thinking_output': None,
                             'finish_reason': finish_reason,
+                            'attempted_models': list(attempted_models),
                         }
                     except Exception as e:
                         last_exception = e
@@ -3998,7 +4104,7 @@ def llm_invoke(
                                 )
                             except Exception:
                                 pass
-                        
+
                         # Check if raw_result is None (likely cached corrupted data)
                         if raw_result is None:
                             logger.warning(f"[WARNING] LLM returned None content for item {i}, likely due to corrupted cache. Retrying with cache bypass...")
@@ -4153,7 +4259,7 @@ def llm_invoke(
                                         except ImportError:
                                             logger.warning("jsonschema not installed, skipping validation")
                                             parsed_result = json.dumps(raw_result)
-                                    
+
                                     if verbose:
                                         logger.debug("[DEBUG] Validated dictionary-like object directly.")
 
@@ -4178,7 +4284,7 @@ def llm_invoke(
                                             try:
                                                 if verbose:
                                                     logger.debug(f"[DEBUG] Attempting to parse candidate JSON block: {cand}")
-                                                
+
                                                 if output_pydantic:
                                                     parsed_result = _validate_pydantic_with_unwrap(cand, output_pydantic)
                                                 else:
@@ -4450,7 +4556,7 @@ def llm_invoke(
                     logger.info("[RESULT] Max Completion Tokens: Provider Default") # Indicate default limit
                     if final_thinking:
                         logger.info("[RESULT] Thinking Output:")
-                        logger.info(final_thinking) 
+                        logger.info(final_thinking)
 
                 # --- Print raw output before returning if verbose ---
                 if verbose:
@@ -4478,6 +4584,7 @@ def llm_invoke(
                     'model_name': model_name_litellm, # Actual model used
                     'thinking_output': final_thinking if final_thinking else None,
                     'finish_reason': _LAST_CALLBACK_DATA.get("finish_reason"),
+                    'attempted_models': list(attempted_models),
                 }
 
             # --- 6b. Handle Invocation Errors ---
@@ -4492,7 +4599,7 @@ def llm_invoke(
                     provider=str(provider),
                     **_safe_error_fields(e),
                 )
-                
+
                 # Check for WSL-specific issues in authentication errors
                 if _is_wsl_environment() and ('Illegal header value' in error_message or '\r' in error_message):
                     logger.warning(f"[WSL AUTH ERROR] Authentication failed for {model_name_litellm} - detected WSL line ending issue")
@@ -4500,7 +4607,7 @@ def llm_invoke(
                     logger.warning("[WSL AUTH ERROR] Try setting your API key again or check your .env file for line ending issues")
                     env_info = _get_environment_info()
                     logger.debug(f"Environment info: {env_info}")
-                    
+
                 if newly_acquired_keys.get(api_key_name):
                     logger.warning(f"[AUTH ERROR] Authentication failed for {model_name_litellm} with the newly provided key for '{api_key_name}'. Please check the key and try again.")
                     # Invalidate the key in env for this session to force re-prompt on retry
@@ -4627,7 +4734,18 @@ def llm_invoke(
         failure_reason="all_candidate_models_failed",
         last_error_type=type(last_exception).__name__ if last_exception else None,
     )
-    raise RuntimeError(error_message) from last_exception
+    # Attach the per-call attempts to the terminal exception so worker
+    # threads (Click context is thread-local; workers can't read ctx.obj)
+    # can recover the full history via getattr(exc, "attempted_models",
+    # None). Main-thread callers see the same attempts already on
+    # ctx.obj because we don't rewind on failure — `attempted_models`
+    # is a chronological audit log per issue #897.
+    terminal_error = RuntimeError(error_message)
+    try:
+        setattr(terminal_error, "attempted_models", list(attempted_models))
+    except Exception:
+        pass
+    raise terminal_error from last_exception
 
 # --- Example Usage (Optional) ---
 if __name__ == "__main__":

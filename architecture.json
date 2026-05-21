@@ -1139,9 +1139,11 @@
     }
   },
   {
-    "reason": "Tracks LLM usage costs across operations.",
-    "description": "Records token usage and calculates costs. Aggregates costs across workflow steps.",
-    "dependencies": [],
+    "reason": "Click decorator that tracks per-command LLM cost, model, and attempted-models history to a CSV file.",
+    "description": "Records token usage and calculates costs. Aggregates costs across workflow steps. Captures chronological attempted-models history (including failed cloud attempts that fell back to local) via ctx.obj['attempted_models'].",
+    "dependencies": [
+      "llm_invoke_python.prompt"
+    ],
     "priority": 33,
     "filename": "track_cost_python.prompt",
     "filepath": "pdd/track_cost.py",
@@ -1156,7 +1158,7 @@
           {
             "name": "track_cost",
             "signature": "(func)",
-            "returns": "None",
+            "returns": "Callable",
             "sideEffects": [
               "None"
             ]
@@ -1171,24 +1173,16 @@
           },
           {
             "name": "collect_files",
-            "signature": "(args, kwargs)",
-            "returns": "None",
-            "sideEffects": [
-              "None"
-            ]
-          },
-          {
-            "name": "wrapper",
-            "signature": "()",
-            "returns": "None",
+            "signature": "(args, kwargs) -> Tuple[List[str], List[str]]",
+            "returns": "Tuple[List[str], List[str]]",
             "sideEffects": [
               "None"
             ]
           },
           {
             "name": "looks_like_file",
-            "signature": "(path_str)",
-            "returns": "None",
+            "signature": "(path_str) -> bool",
+            "returns": "bool",
             "sideEffects": [
               "None"
             ]
@@ -8980,6 +8974,48 @@
             "name": "iter_changed_paths",
             "signature": "(entries: Iterable[PorcelainEntry]) -> Iterator[str]",
             "returns": "Iterator[str]"
+          }
+        ]
+      }
+    }
+  },
+  {
+    "reason": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "description": "Provides unified LLM invocation across all PDD operations with provider abstraction, retries, and context window validation.",
+    "dependencies": [
+      "path_resolution_python.prompt",
+      "server/token_counter_python.prompt"
+    ],
+    "priority": 236,
+    "filename": "llm_invoke_python.prompt",
+    "filepath": "pdd/llm_invoke.py",
+    "tags": [
+      "module",
+      "python"
+    ],
+    "interface": {
+      "type": "module",
+      "module": {
+        "functions": [
+          {
+            "name": "llm_invoke",
+            "signature": "(prompt, input_json, strength, temperature, verbose, output_pydantic, output_schema, time, use_batch_mode, messages, language, use_cloud)",
+            "returns": "Dict[str, Any]"
+          },
+          {
+            "name": "setup_file_logging",
+            "signature": "(log_file_path=None)",
+            "returns": "None"
+          },
+          {
+            "name": "set_verbose_logging",
+            "signature": "(verbose=False)",
+            "returns": "None"
+          },
+          {
+            "name": "set_quiet_logging",
+            "signature": "()",
+            "returns": "None"
           }
         ]
       }
