@@ -1,0 +1,8 @@
+reports/
+.pdd/
+.venv/
+__pycache__/
+*.pyc
+prompts/cost_tracker_work_python.prompt
+src/edit_file_tool/
+tests/test_cost_tracker_work*.py

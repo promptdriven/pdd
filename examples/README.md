@@ -65,6 +65,22 @@ The qrcode_sandwich example demonstrates how PDD can be used to generate code th
 - Leveraging ControlNet QR conditioning in a generated Python script
 - Iterating with PDD to refine parameters and results
 
+### Prompt lint + contracts workflow
+[`prompt_lint_contract_workflow/`](prompt_lint_contract_workflow/) — same `foo_work`
+handler as the contract E2E demo, packaged as a **decomposed command playbook**
+(`guidance/`, `run_phase1.sh`) instead of `demo.sh` orchestration.
+
+### Cost tracker strict A/B pipeline
+[`cost_tracker_strict_ab/`](cost_tracker_strict_ab/) — controlled Experiment A (deterministic
+gate/evidence/drift) and Experiment B (clarify sandwich with `reports/ab_live.json`).
+
+### Contract commands E2E (cost_tracker)
+[`contract_commands_cost_tracker_e2e_demo/`](contract_commands_cost_tracker_e2e_demo/) —
+exercises `pdd gate`, `pdd evidence emit/validate`, `pdd contracts drift`, and
+`pdd contracts author` on the verbatim
+[`cost_tracker_utility_Python.prompt`](template_example/prompts/cost_tracker_utility_Python.prompt)
+from template_example (deterministic CI; optional `--live` author).
+
 More examples will be added to this directory as they are developed.
 
 ## Purpose
