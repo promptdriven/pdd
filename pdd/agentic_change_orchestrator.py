@@ -932,14 +932,24 @@ def _parse_step5_doc_paths(step5_output: str) -> List[str]:
     return docs
 
 
-def _snapshot_worktree_status(worktree_path: Path) -> Dict[str, str]:
+def _snapshot_worktree_status(
+    worktree_path: Path,
+) -> Dict[str, Tuple[str, Optional[str]]]:
     """Snapshot the current ``git status --porcelain=v1 -z`` state of *worktree_path*.
 
-    Returns a dict mapping POSIX-relative path → two-character ``XY`` status
-    code. Used by the Step 9 scope guard as a delta baseline: entries whose
-    ``(path, status)`` match this baseline are skipped during enforcement
-    because they pre-date the Step 9 LLM run (Step 8.5 drift-heal artifacts,
-    earlier resume-state writes, etc.).
+    Returns a dict mapping POSIX-relative path →
+    ``(porcelain_status, content_sha256_hex_or_None)``.
+
+    ``content_sha256`` is the SHA-256 hex digest of the file's bytes at
+    snapshot time, or ``None`` when the file cannot be read (e.g. a staged
+    deletion with porcelain status ``' D'``, or a permission error).
+
+    Used by the Step 9 scope guard as a delta baseline: entries whose
+    ``(status, content_sha256)`` tuple matches this baseline are skipped
+    during enforcement because they pre-date the Step 9 LLM run (Step 8.5
+    drift-heal artifacts, earlier resume-state writes, etc.). Content-hash
+    matching catches the Step-8.5-modified-then-Step-9-modified case that
+    pure status-based matching missed (issue #1123 round-3).
 
     Best-effort — returns ``{}`` on any error (no worktree, no git, etc.) so
     callers always get a usable mapping.
@@ -950,6 +960,7 @@ def _snapshot_worktree_status(worktree_path: Path) -> Dict[str, str]:
         return {}
     try:
         from pdd.git_porcelain import parse_porcelain_z
+        from pdd.agentic_common_worktree import _hash_file_content
         result = subprocess.run(
             ["git", "status", "--porcelain=v1", "-z", "-u"],
             cwd=str(worktree_path),
@@ -958,9 +969,10 @@ def _snapshot_worktree_status(worktree_path: Path) -> Dict[str, str]:
         )
         if result.returncode != 0:
             return {}
-        snapshot: Dict[str, str] = {}
+        snapshot: Dict[str, Tuple[str, Optional[str]]] = {}
         for entry in parse_porcelain_z(result.stdout):
-            snapshot[entry.path] = entry.status
+            content_hash = _hash_file_content(worktree_path / entry.path)
+            snapshot[entry.path] = (entry.status, content_hash)
         return snapshot
     except (subprocess.TimeoutExpired, OSError):
         return {}
@@ -1045,7 +1057,7 @@ def _enforce_step9_scope(
     worktree_path: Path,
     context: Dict[str, Any],
     state: Dict[str, Any],
-    pre_status: Optional[Dict[str, str]] = None,
+    pre_status: Optional[Dict[str, Tuple[str, Optional[str]]]] = None,
     quiet: bool = False,
 ) -> List[str]:
     """Revert any Step 9 file change that is not in the allowlist.
@@ -1059,9 +1071,17 @@ def _enforce_step9_scope(
     scope violation rather than silently fail-open.
 
     *pre_status* is the snapshot of ``git status`` BEFORE the Step 9 LLM ran
-    (captured right after preflight drift-heal). Entries whose ``(path,
-    status)`` match the snapshot are skipped during enforcement: their
-    existing state is a Step 8.5 artifact, not a Step 9 mutation.
+    (captured right after preflight drift-heal), mapping POSIX-relative
+    path → ``(porcelain_status, content_sha256_hex_or_None)``. Entries
+    whose ``(status, content_sha)`` tuple matches the snapshot are skipped
+    during enforcement: their existing state is a Step 8.5 artifact, not a
+    Step 9 mutation.
+
+    The helper is invoked with ``strict=True`` so any internal failure
+    propagates — issue #1123 round-3 (blocker C). Without ``strict``, the
+    helper would swallow subprocess timeouts, non-zero ``git`` returns, and
+    OSErrors and return ``[]``, leaving the orchestrator to advance as if
+    enforcement succeeded.
     """
     if not worktree_path or not worktree_path.exists():
         return []
@@ -1079,7 +1099,11 @@ def _enforce_step9_scope(
         worktree_path, step5_output, step6_output, healed
     )
     reverted_paths = revert_out_of_scope_changes_with_dirs(
-        worktree_path, allowed_dirs, allowed_files, pre_snapshot=pre_status
+        worktree_path,
+        allowed_dirs,
+        allowed_files,
+        pre_snapshot=pre_status,
+        strict=True,
     )
     return [Path(p).as_posix() for p in reverted_paths]
 

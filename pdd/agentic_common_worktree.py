@@ -5,6 +5,7 @@ used by multiple orchestrators (bug, split, change, etc.).
 """
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 import re
@@ -372,11 +373,22 @@ def check_target_file_unchanged(
         return (True, None)
 
 
+def _hash_file_content(path: Path) -> Optional[str]:
+    """Return the SHA-256 hex digest of *path*'s bytes, or ``None`` if the
+    file cannot be read (missing, permission denied, IO error)."""
+    try:
+        with open(str(path), "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except (OSError, FileNotFoundError):
+        return None
+
+
 def revert_out_of_scope_changes_with_dirs(
     cwd: Path,
     allowed_dirs: set[str],
     allowed_files: set[Path],
-    pre_snapshot: Optional[Mapping[str, str]] = None,
+    pre_snapshot: Optional[Mapping[str, Tuple[str, Optional[str]]]] = None,
+    strict: bool = False,
 ) -> List[Path]:
     """Revert/remove any changed or new files that fall outside *allowed_dirs*
     and *allowed_files*.
@@ -385,13 +397,37 @@ def revert_out_of_scope_changes_with_dirs(
       ``git checkout HEAD -- <file>``.
     * Untracked out-of-scope files are removed via :func:`os.remove`.
 
-    When *pre_snapshot* is provided, it maps POSIX-relative path → porcelain
-    ``XY`` status code captured BEFORE the caller's "change of interest" began
-    (e.g. before Step 9's LLM ran). Any current entry whose ``(path, status)``
-    matches the snapshot is skipped — its existing state is by-construction
-    the contract, so it is not part of the change set the caller wants to
-    enforce. New entries, removed entries, and status-changed entries are
-    still subject to the allowlist.
+    When *pre_snapshot* is provided, it maps POSIX-relative path →
+    ``(porcelain_status, content_sha256_hex_or_None)`` captured BEFORE the
+    caller's "change of interest" began (e.g. before Step 9's LLM ran). Any
+    current entry whose ``(status, content_sha256)`` matches the snapshot
+    exactly is skipped — its existing state is by-construction the contract,
+    so it is not part of the change set the caller wants to enforce. A status
+    match with a CHANGED content hash is still treated as a new mutation
+    (e.g. Step 8.5 left a tracked file ``M`` and Step 9 modified it again).
+    New entries, status-changed entries, and content-changed entries are all
+    subject to the allowlist.
+
+    Deletions of pre-snapshot files (paths present in *pre_snapshot* but
+    absent from the current ``git status``) are detected and treated as
+    out-of-scope mutations unless the path is allowlisted. Tracked deletions
+    are restored via ``git checkout HEAD -- <file>``. Untracked deletions
+    (pre-status ``??``) cannot be restored — we have no stored content — so
+    they are added to the returned list with a warning so the caller can
+    surface the violation; Step 8.5 is idempotent and will recreate the file
+    on the next invocation.
+
+    When *strict* is ``False`` (the default), internal failures (subprocess
+    timeouts, non-zero ``git`` returns, OSErrors during ``os.remove`` or
+    ``git`` calls) are logged and the function returns whatever was reverted
+    so far. This preserves the silent-fail behavior callers like ``e2e_fix``
+    rely on.
+
+    When *strict* is ``True``, the same failures are RAISED rather than
+    swallowed so the caller can treat the guard as workflow-stopping (the
+    Step 9 caller in ``agentic_change_orchestrator`` uses this). See issue
+    #1123 round-3 — Codex flagged that returning ``[]`` on an enforcement
+    failure lets the orchestrator advance as if everything was clean.
 
     Returns the list of reverted / removed paths (relative to *cwd*).
     """
@@ -412,17 +448,22 @@ def revert_out_of_scope_changes_with_dirs(
             timeout=30,
         )
         if result.returncode != 0:
-            logger.warning(
-                "git status failed (rc=%d): %s",
-                result.returncode,
-                result.stderr.decode("utf-8", errors="replace").strip(),
-            )
+            stderr_text = result.stderr.decode("utf-8", errors="replace").strip()
+            logger.warning("git status failed (rc=%d): %s", result.returncode, stderr_text)
+            if strict:
+                raise OSError(
+                    f"git status failed (rc={result.returncode}): {stderr_text}"
+                )
             return reverted
     except subprocess.TimeoutExpired:
         logger.warning("git status timed out")
+        if strict:
+            raise
         return reverted
     except OSError as exc:
         logger.warning("OS error running git status: %s", exc)
+        if strict:
+            raise
         return reverted
 
     def _path_in_scope(rel: str) -> bool:
@@ -432,19 +473,34 @@ def revert_out_of_scope_changes_with_dirs(
         abs_path = (cwd / rel).resolve()
         return abs_path in allowed_files
 
+    # Track which pre_snapshot keys we observe in the post-status pass so we
+    # can detect deletions afterwards (entries present pre-Step-9 but absent
+    # from post-status are deletions).
+    seen_in_post: Set[str] = set()
+
     for entry in parse_porcelain_z(result.stdout):
         status = entry.status
         new_rel = entry.path
         old_rel = entry.old_path
 
+        seen_in_post.add(new_rel)
+        if old_rel is not None:
+            seen_in_post.add(old_rel)
+
         # Pre-snapshot pass-through: if the caller supplied a baseline and
-        # this entry's (path, status) matches the baseline exactly, the
-        # change predates the window the caller wants enforced — skip it.
-        # Status-code mismatches DO fall through to the allowlist check
-        # because a status change (e.g. ``A`` → ``M`` from a later edit,
-        # ``M`` → `` `` from a reversion) is itself a new mutation.
-        if pre_snapshot is not None and pre_snapshot.get(new_rel) == status:
-            continue
+        # this entry's (path, status) matches the baseline AND the file's
+        # current content hash matches what was captured at snapshot time,
+        # the change predates the window the caller wants enforced — skip
+        # it. A status match with a DIFFERENT content hash is a Step-9
+        # mutation on top of Step-8.5's work and must still be enforced.
+        #
+        # We hash the file from disk BEFORE any revert action below, so the
+        # value reflects the current state of the file rather than its
+        # post-revert state.
+        if pre_snapshot is not None:
+            current_hash = _hash_file_content(cwd / new_rel)
+            if pre_snapshot.get(new_rel) == (status, current_hash):
+                continue
 
         is_rename = old_rel is not None and "R" in status
         is_copy = old_rel is not None and "C" in status
@@ -475,6 +531,8 @@ def revert_out_of_scope_changes_with_dirs(
                 reverted.append(Path(new_rel))
             except OSError as exc:
                 logger.warning("Failed to remove %s: %s", new_rel, exc)
+                if strict:
+                    raise
         elif is_rename:
             # Rename: unstage both sides, restore the old path from HEAD,
             # and delete the new path so the rename is fully undone.
@@ -498,6 +556,8 @@ def revert_out_of_scope_changes_with_dirs(
                     pass
                 except OSError as exc:
                     logger.warning("Failed to remove rename new-side %s: %s", new_rel, exc)
+                    if strict:
+                        raise
                 if checkout.returncode == 0:
                     logger.info(
                         "Reverted out-of-scope rename: %s -> %s", old_rel, new_rel,
@@ -505,15 +565,23 @@ def revert_out_of_scope_changes_with_dirs(
                     reverted.append(Path(old_rel))
                     reverted.append(Path(new_rel))
                 else:
+                    stderr_text = checkout.stderr.decode("utf-8", errors="replace").strip()
                     logger.warning(
                         "Failed to revert rename %s -> %s: %s",
-                        old_rel, new_rel,
-                        checkout.stderr.decode("utf-8", errors="replace").strip(),
+                        old_rel, new_rel, stderr_text,
                     )
+                    if strict:
+                        raise OSError(
+                            f"git checkout HEAD -- {old_rel} failed: {stderr_text}"
+                        )
             except subprocess.TimeoutExpired:
                 logger.warning("Timed out reverting rename %s -> %s", old_rel, new_rel)
+                if strict:
+                    raise
             except OSError as exc:
                 logger.warning("OS error reverting rename %s -> %s: %s", old_rel, new_rel, exc)
+                if strict:
+                    raise
         elif is_copy:
             # Copy: only the destination is changed. The source path is
             # informational and must not be reset/restored/removed.
@@ -530,12 +598,18 @@ def revert_out_of_scope_changes_with_dirs(
                     pass
                 except OSError as exc:
                     logger.warning("Failed to remove copy destination %s: %s", new_rel, exc)
+                    if strict:
+                        raise
                 logger.info("Reverted out-of-scope copy destination: %s", new_rel)
                 reverted.append(Path(new_rel))
             except subprocess.TimeoutExpired:
                 logger.warning("Timed out reverting copy destination %s", new_rel)
+                if strict:
+                    raise
             except OSError as exc:
                 logger.warning("OS error reverting copy destination %s: %s", new_rel, exc)
+                if strict:
+                    raise
         else:
             try:
                 checkout = subprocess.run(
@@ -551,15 +625,87 @@ def revert_out_of_scope_changes_with_dirs(
                     )
                     reverted.append(Path(new_rel))
                 else:
-                    logger.warning(
-                        "Failed to revert %s: %s",
-                        new_rel,
-                        checkout.stderr.decode("utf-8", errors="replace").strip(),
-                    )
+                    stderr_text = checkout.stderr.decode("utf-8", errors="replace").strip()
+                    logger.warning("Failed to revert %s: %s", new_rel, stderr_text)
+                    if strict:
+                        raise OSError(
+                            f"git checkout HEAD -- {new_rel} failed: {stderr_text}"
+                        )
             except subprocess.TimeoutExpired:
                 logger.warning("Timed out reverting %s", new_rel)
+                if strict:
+                    raise
             except OSError as exc:
                 logger.warning("OS error reverting %s: %s", new_rel, exc)
+                if strict:
+                    raise
+
+    # ------------------------------------------------------------------
+    # Deletion detection (issue #1123 round-3, blocker B)
+    #
+    # Paths present in pre_snapshot but absent from post-status must be
+    # considered: Step 9 may have deleted a file that Step 8.5 created or
+    # modified. Allowlisted deletions are skipped; tracked deletions are
+    # restored from HEAD; untracked deletions cannot be auto-restored
+    # (no stored content) and are surfaced as unrecoverable violations.
+    # ------------------------------------------------------------------
+    if pre_snapshot:
+        for rel in list(pre_snapshot.keys()):
+            if rel in seen_in_post:
+                continue
+            # If the file is on disk, this entry simply went back to clean
+            # (e.g. Step 9 reverted a Step 8.5 modification) — that is a
+            # mutation we already treat via the main-loop iteration on the
+            # POST status. If it's gone, it was deleted.
+            if (cwd / rel).exists():
+                continue
+            if _path_in_scope(rel):
+                # Allowed deletion — skip.
+                continue
+            pre_entry = pre_snapshot.get(rel)
+            pre_status_code = pre_entry[0] if pre_entry is not None else ""
+            if pre_status_code == "??":
+                # Untracked at snapshot time: no content stored, cannot
+                # auto-restore. Surface it so the caller can fail the
+                # workflow; Step 8.5 is idempotent so it will recreate
+                # the file on the next invocation.
+                logger.warning(
+                    "Untracked file deleted out-of-scope: %s "
+                    "(cannot auto-restore — flag as violation)",
+                    rel,
+                )
+                reverted.append(Path(rel))
+            else:
+                # Tracked at snapshot time: restore from HEAD.
+                try:
+                    checkout = subprocess.run(
+                        ["git", "checkout", "HEAD", "--", rel],
+                        cwd=str(cwd),
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    if checkout.returncode == 0:
+                        logger.info(
+                            "Restored out-of-scope deletion: %s", rel,
+                        )
+                        reverted.append(Path(rel))
+                    else:
+                        stderr_text = checkout.stderr.decode("utf-8", errors="replace").strip()
+                        logger.warning(
+                            "Failed to restore deletion %s: %s", rel, stderr_text,
+                        )
+                        if strict:
+                            raise OSError(
+                                f"git checkout HEAD -- {rel} failed: {stderr_text}"
+                            )
+                except subprocess.TimeoutExpired:
+                    logger.warning("Timed out restoring deletion %s", rel)
+                    if strict:
+                        raise
+                except OSError as exc:
+                    logger.warning("OS error restoring deletion %s: %s", rel, exc)
+                    if strict:
+                        raise
 
     return reverted
 

@@ -6396,7 +6396,10 @@ def test_step9_scope_guard_preserves_preflight_meta_writes(tmp_path):
     (meta_dir / "backend_foo_python.json").write_text("{}")
 
     pre_status = _snapshot_worktree_status(repo)
-    assert pre_status.get(".pdd/meta/backend_foo_python.json") == "??"
+    # Round-3 contract: snapshot value is (status, content_sha256).
+    snap_entry = pre_status.get(".pdd/meta/backend_foo_python.json")
+    assert snap_entry is not None and snap_entry[0] == "??"
+    assert snap_entry[1] is not None  # content hash captured
 
     # No further changes — Step 9 is a no-op here. The guard must NOT
     # revert the meta file even though it isn't in the allowlist.
@@ -6426,7 +6429,9 @@ def test_step9_scope_guard_preserves_preflight_run_report(tmp_path):
     )
 
     pre_status = _snapshot_worktree_status(repo)
-    assert pre_status.get(".pdd/meta/backend_foo_python_run.json") == "??"
+    snap_entry = pre_status.get(".pdd/meta/backend_foo_python_run.json")
+    assert snap_entry is not None and snap_entry[0] == "??"
+    assert snap_entry[1] is not None
 
     reverted = _enforce_step9_scope(
         repo,
@@ -6455,7 +6460,9 @@ def test_step9_scope_guard_preserves_preflight_architecture_json_mutation(tmp_pa
     (repo / "architecture.json").write_text('{"modules": ["healed"]}\n')
 
     pre_status = _snapshot_worktree_status(repo)
-    assert pre_status.get("architecture.json") == " M"
+    snap_entry = pre_status.get("architecture.json")
+    assert snap_entry is not None and snap_entry[0] == " M"
+    assert snap_entry[1] is not None
 
     # Step 9 was a no-op (arch.json was already at "healed" before Step 9).
     reverted = _enforce_step9_scope(
@@ -6527,6 +6534,169 @@ def test_step9_scope_guard_reverts_step9_new_arch_modification_even_with_snapsho
 
     assert "architecture.json" in reverted
     assert (repo / "architecture.json").read_text() == '{"modules": []}\n'
+
+
+# =============================================================================
+# Issue #1123 — Round-3: content-aware snapshot + deletion detection
+#
+# Status-only delta matching was insufficient: when Step 8.5 left a file
+# with porcelain status ` M` and Step 9 modified the SAME file again, the
+# post-status was still ` M`, so the guard skipped Step 9's drift.
+# Snapshot value is now (status, content_sha256_hex). Both must match for
+# a skip; a content-only difference triggers enforcement.
+#
+# Deletion of pre-snapshot files is also now detected: tracked deletions
+# restore from HEAD; untracked deletions surface as unrecoverable
+# violations so the workflow stops.
+# =============================================================================
+
+
+@pytest.mark.timeout(60)
+def test_snapshot_worktree_status_includes_content_hash(tmp_path):
+    """`_snapshot_worktree_status` records both status and SHA-256 of file
+    bytes. Modifying the file between two snapshots must yield a different
+    hash for the same path."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"foo.txt": "initial\n"})
+    target = repo / "foo.txt"
+    target.write_text("v1\n")
+
+    snap_1 = _snapshot_worktree_status(repo)
+    entry_1 = snap_1.get("foo.txt")
+    assert entry_1 is not None
+    status_1, hash_1 = entry_1
+    assert status_1 == " M"
+    assert hash_1 is not None and len(hash_1) == 64  # sha256 hex length
+
+    # Modify in place — porcelain status stays " M" but content hash MUST change.
+    target.write_text("v2\n")
+    snap_2 = _snapshot_worktree_status(repo)
+    entry_2 = snap_2.get("foo.txt")
+    assert entry_2 is not None
+    status_2, hash_2 = entry_2
+    assert status_2 == " M"
+    assert hash_2 is not None
+    assert hash_2 != hash_1, (
+        "Content hash did not change after file mutation — pre-snapshot delta "
+        "check would erroneously skip Step-9-on-top-of-Step-8.5 mutations"
+    )
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_enforces_when_preflight_modified_file_changed_again(tmp_path):
+    """Step 8.5 modifies architecture.json (status ` M`, content A). Step 9
+    modifies architecture.json AGAIN (status still ` M`, content B). With
+    the round-2 status-only delta check, the guard skipped this file —
+    Step 9's drift survived. Round-3 content-hash matching must catch it.
+    """
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "architecture.json": '{"modules": []}\n',
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modifies arch.json.
+    (repo / "architecture.json").write_text('{"modules": ["healed"]}\n')
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get("architecture.json")
+    assert pre_entry is not None and pre_entry[0] == " M"
+
+    # Step 9 modifies arch.json on top of Step 8.5's modification.
+    (repo / "architecture.json").write_text('{"modules": ["evil"]}\n')
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # The Step-9 mutation must be detected and reverted to Step-8.5's state.
+    # (`git checkout HEAD -- architecture.json` restores HEAD, but that's
+    # acceptable: we only care that the scope violation was caught and the
+    # workflow will stop.)
+    assert "architecture.json" in reverted
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_detects_deletion_of_tracked_preflight_file(tmp_path):
+    """Step 8.5 modified a tracked file (status ` M`). Step 9 deleted that
+    file. Status-only iteration misses this because the post-status no
+    longer lists the path. Round-3 deletion detection iterates
+    pre_snapshot keys not in post-status and restores tracked deletions
+    from HEAD."""
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {
+        "tracked.txt": "original\n",
+        "prompts/foo_python.prompt": "p",
+    })
+    # Step 8.5 modified tracked.txt — heal-time mutation.
+    (repo / "tracked.txt").write_text("heal mutation\n")
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get("tracked.txt")
+    assert pre_entry is not None and pre_entry[0] == " M"
+
+    # Step 9 deletes the file (off-allowlist).
+    (repo / "tracked.txt").unlink()
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # The deletion must be detected and the file restored from HEAD.
+    assert "tracked.txt" in reverted
+    assert (repo / "tracked.txt").exists(), "Tracked deletion not restored"
+    # Restored to HEAD content (not the Step-8.5 modification; we don't
+    # have that content stored anywhere). That's acceptable — Step 8.5 is
+    # idempotent and will re-modify on the next invocation.
+    assert (repo / "tracked.txt").read_text() == "original\n"
+
+
+@pytest.mark.timeout(60)
+def test_step9_scope_guard_flags_deletion_of_untracked_preflight_file_as_unrecoverable(tmp_path):
+    """Step 8.5 created an untracked file (status ``??``). Step 9 deleted
+    it. We don't have HEAD content to restore from. The guard must still
+    surface the deletion in the reverted list so the orchestrator's
+    SCOPE_VIOLATION path stops the workflow; Step 8.5 is idempotent and
+    will recreate the file on the next invocation.
+    """
+    repo = tmp_path / "repo"
+    _scope_git_init(repo, {"prompts/foo_python.prompt": "p"})
+    meta_dir = repo / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    untracked = meta_dir / "x.json"
+    untracked.write_text('{"step8_5": "wrote me"}')
+
+    pre_status = _snapshot_worktree_status(repo)
+    pre_entry = pre_status.get(".pdd/meta/x.json")
+    assert pre_entry is not None and pre_entry[0] == "??"
+
+    # Step 9 deletes the untracked file.
+    untracked.unlink()
+
+    reverted = _enforce_step9_scope(
+        repo,
+        context={"step5_output": _STEP5_SAMPLE, "step6_output": _STEP6_SAMPLE,
+                 "direct_edit_candidates": []},
+        state={"preflight_healed_prompt_paths": ["prompts/foo_python.prompt"]},
+        pre_status=pre_status,
+        quiet=True,
+    )
+
+    # Workflow-stops path: deletion is in the reverted list, even though we
+    # cannot auto-restore. Line 2146 of agentic_change_orchestrator.py
+    # treats a non-empty reverted list as SCOPE_VIOLATION.
+    assert ".pdd/meta/x.json" in reverted
+    # And we did NOT recreate the file (no HEAD content to restore from).
+    assert not untracked.exists()
 
 
 # -----------------------------------------------------------------------------

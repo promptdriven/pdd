@@ -711,27 +711,48 @@ class TestRevertWithDirsRename1080:
 
 # =========================================================================
 # Issue #1123: pre-snapshot skip in revert_out_of_scope_changes_with_dirs
+#
+# Round 3 contract: pre-snapshot is a Mapping[rel_path,
+# (porcelain_status, content_sha256_hex_or_None)]. The helper skips an
+# entry only when BOTH the status AND the content hash match. Status-only
+# matches with a changed hash (e.g. Step 8.5 staged ` M`, Step 9 modified
+# the same file again) MUST fall through to the allowlist enforcement.
 # =========================================================================
 
 
-def test_revert_out_of_scope_changes_with_dirs_skips_unchanged_pre_snapshot():
-    """When the caller supplies a pre-snapshot, entries whose (path, status)
-    match the baseline must be skipped. Only NEW or CHANGED entries are
-    subject to the allowlist enforcement.
+def test_revert_out_of_scope_changes_with_dirs_pre_snapshot_skips_when_status_and_hash_match(
+    tmp_path,
+):
+    """When the caller supplies a pre-snapshot, entries whose
+    ``(status, content_sha256)`` tuple matches the baseline must be skipped.
+    Only NEW, status-CHANGED, or content-CHANGED entries are subject to the
+    allowlist enforcement.
 
     This is how the Step 9 scope guard distinguishes Step 8.5 drift-heal
     mutations (in the snapshot) from Step 9 LLM mutations (not in the
-    snapshot or with a different status).
+    snapshot or with a different status/hash).
     """
     # Two out-of-scope entries: one in the snapshot (heal artifact),
     # one fresh (Step 9 leak). Only the fresh one should be reverted.
+    import hashlib
+
+    meta_dir = tmp_path / ".pdd" / "meta"
+    meta_dir.mkdir(parents=True)
+    snapshotted = meta_dir / "x.json"
+    snapshotted.write_text("{}")
+    snapshotted_hash = hashlib.sha256(snapshotted.read_bytes()).hexdigest()
+
+    leak_dir = tmp_path / "tests"
+    leak_dir.mkdir()
+    (leak_dir / "leak.py").write_text("x")
+
     porcelain = b"?? .pdd/meta/x.json\x00?? tests/leak.py\x00"
-    pre_snapshot = {".pdd/meta/x.json": "??"}
+    pre_snapshot = {".pdd/meta/x.json": ("??", snapshotted_hash)}
     with patch(f"{MODULE}.subprocess.run") as mock_run, \
          patch(f"{MODULE}.os.remove") as mock_remove:
         mock_run.side_effect = [_cp(stdout=porcelain)]
         result = revert_out_of_scope_changes_with_dirs(
-            Path("/repo"),
+            tmp_path,
             allowed_dirs=set(),
             allowed_files=set(),
             pre_snapshot=pre_snapshot,
@@ -743,20 +764,52 @@ def test_revert_out_of_scope_changes_with_dirs_skips_unchanged_pre_snapshot():
         assert removed_arg.endswith("tests/leak.py")
 
 
-def test_revert_out_of_scope_changes_with_dirs_reverts_when_status_changed():
-    """A snapshotted entry whose status CHANGED since the snapshot is a
-    new mutation and must still be subject to the allowlist."""
-    # In the snapshot the file was ``A`` (added/untracked-staged);
-    # post-snapshot git reports ``M`` — Step 9 modified the file further.
+def test_revert_out_of_scope_changes_with_dirs_pre_snapshot_does_not_skip_when_content_changed(
+    tmp_path,
+):
+    """Status matches but the file's content was modified after the
+    snapshot was taken: this is a Step-9 mutation on top of Step-8.5's
+    work and MUST be enforced against the allowlist."""
+    # Snapshot recorded the file at some prior hash; the file on disk
+    # now has different content (Step 9 modified it).
+    outside = tmp_path / "outside.py"
+    outside.write_text("step9 modified me\n")
+
     porcelain = b" M outside.py\x00"
-    pre_snapshot = {"outside.py": "A "}
+    pre_snapshot = {"outside.py": (" M", "deadbeef" * 8)}  # status matches, hash does not
     with patch(f"{MODULE}.subprocess.run") as mock_run:
         mock_run.side_effect = [
             _cp(stdout=porcelain),
             _cp(),  # checkout
         ]
         result = revert_out_of_scope_changes_with_dirs(
-            Path("/repo"),
+            tmp_path,
+            allowed_dirs={"pdd/"},
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        assert Path("outside.py") in result
+
+
+def test_revert_out_of_scope_changes_with_dirs_reverts_when_status_changed(tmp_path):
+    """A snapshotted entry whose status CHANGED since the snapshot is a
+    new mutation and must still be subject to the allowlist."""
+    # In the snapshot the file was ``A`` (added/untracked-staged) with
+    # some hash; post-snapshot git reports ``M`` — Step 9 modified the
+    # file further. Even if content matched (it doesn't here), the
+    # status difference alone forces enforcement.
+    outside = tmp_path / "outside.py"
+    outside.write_text("modified content\n")
+
+    porcelain = b" M outside.py\x00"
+    pre_snapshot = {"outside.py": ("A ", "deadbeef" * 8)}
+    with patch(f"{MODULE}.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            _cp(stdout=porcelain),
+            _cp(),  # checkout
+        ]
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
             allowed_dirs={"pdd/"},
             allowed_files=set(),
             pre_snapshot=pre_snapshot,
@@ -765,7 +818,7 @@ def test_revert_out_of_scope_changes_with_dirs_reverts_when_status_changed():
 
 
 def test_revert_out_of_scope_changes_with_dirs_existing_two_arg_callers_unchanged():
-    """The new param is optional with a None default. Existing two-arg
+    """The new params are optional with safe defaults. Existing two-arg
     call sites must continue to enforce the allowlist over every entry."""
     porcelain = b"?? leak.py\x00"
     with patch(f"{MODULE}.subprocess.run", return_value=_cp(stdout=porcelain)), \
@@ -775,3 +828,134 @@ def test_revert_out_of_scope_changes_with_dirs_existing_two_arg_callers_unchange
         )
         assert Path("leak.py") in result
         mock_remove.assert_called_once()
+
+
+# -------------------------------------------------------------------------
+# Round-3 deletion detection: pre-snapshot files absent from post-status
+# must be treated as out-of-scope mutations unless they're allowlisted.
+# Tracked deletions restore via `git checkout HEAD --`; untracked
+# deletions cannot be auto-restored and are surfaced as violations so
+# the orchestrator stops the workflow.
+# -------------------------------------------------------------------------
+
+
+def test_revert_out_of_scope_changes_with_dirs_detects_deletion_of_tracked_pre_snapshot_file(
+    tmp_path,
+):
+    """A tracked file present in pre_snapshot but absent from post-status
+    was deleted by Step 9. The guard must restore it via
+    ``git checkout HEAD -- <file>`` and report it in the reverted list."""
+    # Post status: empty (no entries) — the Step-8.5-modified file was
+    # deleted by Step 9 and no other changes remain.
+    porcelain = b""
+    pre_snapshot = {"foo.txt": (" M", "deadbeef" * 8)}
+    with patch(f"{MODULE}.subprocess.run") as mock_run:
+        mock_run.side_effect = [
+            _cp(stdout=porcelain),  # status
+            _cp(),                  # checkout HEAD -- foo.txt
+        ]
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
+            allowed_dirs=set(),
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        assert Path("foo.txt") in result
+        # Second call was the restore.
+        assert mock_run.call_count == 2
+        restore_cmd = mock_run.call_args_list[1][0][0]
+        assert restore_cmd[:4] == ["git", "checkout", "HEAD", "--"]
+        assert "foo.txt" in restore_cmd
+
+
+def test_revert_out_of_scope_changes_with_dirs_flags_untracked_deletion_unrecoverable(
+    tmp_path,
+):
+    """An untracked file (pre-status ``??``) present in pre_snapshot but
+    absent from post-status was deleted by Step 9. We have no stored
+    content so we cannot auto-restore. The guard must still add the path
+    to the reverted list so the orchestrator's SCOPE_VIOLATION path
+    fires; Step 8.5 is idempotent and will recreate the file on the next
+    invocation."""
+    porcelain = b""
+    pre_snapshot = {".pdd/meta/x.json": ("??", "abc123")}
+    with patch(f"{MODULE}.subprocess.run") as mock_run:
+        mock_run.side_effect = [_cp(stdout=porcelain)]  # only status, no restore
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path,
+            allowed_dirs=set(),
+            allowed_files=set(),
+            pre_snapshot=pre_snapshot,
+        )
+        # Reverted list MUST include the deleted path so the workflow stops.
+        assert Path(".pdd/meta/x.json") in result
+        # No git restore was attempted (untracked: no HEAD content).
+        assert mock_run.call_count == 1
+
+
+# -------------------------------------------------------------------------
+# Round-3 strict mode: internal failures raise instead of returning [].
+# Default (strict=False) preserves existing silent-fail semantics for
+# callers like e2e_fix.
+# -------------------------------------------------------------------------
+
+
+def test_revert_out_of_scope_changes_with_dirs_strict_raises_on_git_status_failure():
+    """``strict=True`` causes a non-zero ``git status`` to raise OSError
+    instead of silently returning ``[]``. Default ``strict=False`` keeps
+    the silent-fail behavior."""
+    # Non-zero return:
+    with patch(f"{MODULE}.subprocess.run", return_value=_cp(returncode=1, stderr=b"boom")):
+        # Default: silent fail.
+        result = revert_out_of_scope_changes_with_dirs(
+            Path("/repo"), allowed_dirs=set(), allowed_files=set()
+        )
+        assert result == []
+        # Strict: raises.
+        with pytest.raises(OSError):
+            revert_out_of_scope_changes_with_dirs(
+                Path("/repo"),
+                allowed_dirs=set(),
+                allowed_files=set(),
+                strict=True,
+            )
+
+
+def test_revert_out_of_scope_changes_with_dirs_strict_raises_on_git_status_timeout():
+    """``strict=True`` propagates a subprocess timeout instead of returning ``[]``."""
+    with patch(f"{MODULE}.subprocess.run", side_effect=subprocess.TimeoutExpired("git", 30)):
+        # Default: silent fail.
+        result = revert_out_of_scope_changes_with_dirs(
+            Path("/repo"), allowed_dirs=set(), allowed_files=set()
+        )
+        assert result == []
+        # Strict: raises.
+        with pytest.raises(subprocess.TimeoutExpired):
+            revert_out_of_scope_changes_with_dirs(
+                Path("/repo"),
+                allowed_dirs=set(),
+                allowed_files=set(),
+                strict=True,
+            )
+
+
+def test_revert_out_of_scope_changes_with_dirs_strict_raises_on_remove_failure(tmp_path):
+    """``strict=True`` causes an ``os.remove`` PermissionError to propagate."""
+    junk = tmp_path / "junk.txt"
+    junk.write_text("x")
+    porcelain = b"?? junk.txt\x00"
+    with patch(f"{MODULE}.subprocess.run", return_value=_cp(stdout=porcelain)), \
+         patch(f"{MODULE}.os.remove", side_effect=PermissionError("denied")):
+        # Default: silent fail (returns [] because remove failed).
+        result = revert_out_of_scope_changes_with_dirs(
+            tmp_path, allowed_dirs=set(), allowed_files=set()
+        )
+        assert result == []
+        # Strict: raises.
+        with pytest.raises(PermissionError):
+            revert_out_of_scope_changes_with_dirs(
+                tmp_path,
+                allowed_dirs=set(),
+                allowed_files=set(),
+                strict=True,
+            )
