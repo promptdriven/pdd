@@ -752,7 +752,6 @@ def _format_pr_changed_files_for_prompt(
         "origin/master",
         "main",
         "master",
-        "HEAD~1",
     ])
 
     seen_bases: Set[str] = set()
@@ -806,7 +805,12 @@ def _format_pr_changed_files_for_prompt(
             return "Base: " + base + "\n" + "\n".join(lines)
         return f"Base: {base}\nNo changed files found against this base."
 
-    return "PR changed files unavailable: no local base ref could be resolved."
+    tried = ", ".join(seen_bases) if seen_bases else "none"
+    return (
+        "PR changed files unavailable: no local PR base ref could be resolved "
+        f"(tried: {tried}). Do not infer PR scope from HEAD~1; run targeted "
+        "tests conservatively or fetch the PR base ref."
+    )
 
 
 # ---------------------------------------------------------------------------

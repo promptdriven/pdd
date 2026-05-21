@@ -400,6 +400,28 @@ class TestWorktreeHandling:
 
 
 class TestChangedFilesTracking:
+    @staticmethod
+    def _init_git_repo(path: Path, initial_branch: str = "master") -> None:
+        subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True)
+        subprocess.run(
+            ["git", "branch", "-m", initial_branch],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.email", "test@example.com"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+        subprocess.run(
+            ["git", "config", "user.name", "Test User"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+        )
+
     def test_parse_changed_files_basic(self):
         """_parse_changed_files should extract file paths."""
         output = (
@@ -445,19 +467,7 @@ class TestChangedFilesTracking:
 
     def test_format_pr_changed_files_uses_base_ref_diff(self, tmp_path):
         """PR-mode prompt context should list merge-base changed files."""
-        subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
-        subprocess.run(
-            ["git", "config", "user.email", "test@example.com"],
-            cwd=tmp_path,
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "config", "user.name", "Test User"],
-            cwd=tmp_path,
-            check=True,
-            capture_output=True,
-        )
+        self._init_git_repo(tmp_path)
         (tmp_path / "app.py").write_text("print('base')\n", encoding="utf-8")
         subprocess.run(["git", "add", "app.py"], cwd=tmp_path, check=True)
         subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
@@ -480,6 +490,54 @@ class TestChangedFilesTracking:
         assert "Base: base" in result
         assert "- M: app.py" in result
         assert "- A: tests/test_app.py" in result
+
+    def test_format_pr_changed_files_includes_all_pr_commits(self, tmp_path):
+        """Merge-base diff should not collapse multi-commit PRs to HEAD~1."""
+        self._init_git_repo(tmp_path)
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "branch", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+
+        (tmp_path / "first.py").write_text("print('first')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "first.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "first"], cwd=tmp_path, check=True)
+
+        (tmp_path / "second.py").write_text("print('second')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "second.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "second"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(
+            tmp_path,
+            {"base_ref": "base"},
+        )
+
+        assert "Base: base" in result
+        assert "- A: first.py" in result
+        assert "- A: second.py" in result
+
+    def test_format_pr_changed_files_does_not_use_head_parent_fallback(self, tmp_path):
+        """Missing base refs should be explicit instead of diffing only HEAD~1."""
+        self._init_git_repo(tmp_path, initial_branch="trunk")
+        (tmp_path / "README.md").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "README.md"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "base"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "checkout", "-b", "feature"], cwd=tmp_path, check=True)
+
+        (tmp_path / "first.py").write_text("print('first')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "first.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "first"], cwd=tmp_path, check=True)
+
+        (tmp_path / "second.py").write_text("print('second')\n", encoding="utf-8")
+        subprocess.run(["git", "add", "second.py"], cwd=tmp_path, check=True)
+        subprocess.run(["git", "commit", "-m", "second"], cwd=tmp_path, check=True)
+
+        result = _format_pr_changed_files_for_prompt(tmp_path)
+
+        assert result.startswith("PR changed files unavailable")
+        assert "Do not infer PR scope from HEAD~1" in result
+        assert "second.py" not in result
 
     def test_pr_mode_context_includes_changed_files(self, tmp_path):
         """Changed-file summary should be passed to PR-mode step prompts."""
