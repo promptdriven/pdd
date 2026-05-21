@@ -4963,11 +4963,9 @@ class TestSelectModelCandidates:
         csv_path.write_text(content)
         return csv_path
 
-    def test_prefixed_default_crosses_provider_after_transient_with_key(
+    def test_prefixed_default_does_not_cross_provider_by_default_after_transient(
         self, llm_mod, tmp_path, monkeypatch, mock_set_llm_cache
     ):
-        """Cross-provider fallback exists, but only after a transient primary
-        provider failure and only when the fallback credentials are configured."""
         csv_path = self._write_vertex_plus_anthropic_csv(llm_mod, tmp_path)
         monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
         monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3.5-flash")
@@ -4976,6 +4974,43 @@ class TestSelectModelCandidates:
         monkeypatch.setenv("VERTEXAI_PROJECT", "project")
         monkeypatch.setenv("VERTEXAI_LOCATION", "global")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+        monkeypatch.delenv("PDD_CROSS_PROVIDER_FALLBACK", raising=False)
+
+        attempted = []
+
+        def completion_side_effect(**kwargs):
+            attempted.append(kwargs["model"])
+            raise Exception("rate limit exceeded")
+
+        with patch("pdd.llm_invoke.litellm.completion", side_effect=completion_side_effect):
+            with pytest.raises(RuntimeError) as exc_info:
+                llm_invoke(
+                    prompt="Say {thing}",
+                    input_json={"thing": "ok"},
+                    strength=0.5,
+                    use_cloud=False,
+                )
+
+        assert attempted == ["vertex_ai/gemini-3-flash-preview"]
+        assert getattr(exc_info.value, "attempted_models", []) == [
+            "vertex_ai/gemini-3-flash-preview"
+        ]
+
+    def test_prefixed_default_crosses_provider_after_transient_when_opted_in(
+        self, llm_mod, tmp_path, monkeypatch, mock_set_llm_cache
+    ):
+        """Cross-provider fallback exists only when explicitly enabled, after
+        a transient primary provider failure, and only when fallback
+        credentials are configured."""
+        csv_path = self._write_vertex_plus_anthropic_csv(llm_mod, tmp_path)
+        monkeypatch.setattr(llm_mod, "LLM_MODEL_CSV_PATH", csv_path)
+        monkeypatch.setattr(llm_mod, "DEFAULT_BASE_MODEL", "vertex_ai/gemini-3.5-flash")
+        monkeypatch.setenv("PDD_FORCE_LOCAL", "1")
+        monkeypatch.setenv("GOOGLE_APPLICATION_CREDENTIALS", "/tmp/adc.json")
+        monkeypatch.setenv("VERTEXAI_PROJECT", "project")
+        monkeypatch.setenv("VERTEXAI_LOCATION", "global")
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+        monkeypatch.setenv("PDD_CROSS_PROVIDER_FALLBACK", "1")
 
         attempted = []
 
@@ -5009,6 +5044,7 @@ class TestSelectModelCandidates:
         monkeypatch.setenv("VERTEXAI_PROJECT", "project")
         monkeypatch.setenv("VERTEXAI_LOCATION", "global")
         monkeypatch.setenv("ANTHROPIC_API_KEY", "anthropic-key")
+        monkeypatch.setenv("PDD_CROSS_PROVIDER_FALLBACK", "1")
 
         attempted = []
 
@@ -5041,6 +5077,7 @@ class TestSelectModelCandidates:
         monkeypatch.setenv("VERTEXAI_PROJECT", "project")
         monkeypatch.setenv("VERTEXAI_LOCATION", "global")
         monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("PDD_CROSS_PROVIDER_FALLBACK", "1")
 
         attempted = []
 

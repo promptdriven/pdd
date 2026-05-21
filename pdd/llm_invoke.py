@@ -2051,6 +2051,7 @@ _PROVIDER_LOCK_ALIASES = {
 }
 
 _FALSE_ENV_VALUES = {"0", "false", "no", "off", "none", "disabled"}
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on", "enabled", "transient"}
 
 
 def _provider_filter(df: pd.DataFrame, provider: str) -> pd.Series:
@@ -2190,8 +2191,13 @@ def _model_info_matches_provider_lock(
 def _cross_provider_fallback_enabled() -> bool:
     """Return whether transient failures may cross provider boundaries."""
 
-    raw = os.getenv("PDD_CROSS_PROVIDER_FALLBACK", "transient")
-    return str(raw).strip().lower() not in _FALSE_ENV_VALUES
+    raw = os.getenv("PDD_CROSS_PROVIDER_FALLBACK")
+    if raw is None:
+        return False
+    token = str(raw).strip().lower()
+    if token in _FALSE_ENV_VALUES:
+        return False
+    return token in _TRUE_ENV_VALUES
 
 
 def _normalise_provider_token(value: Any) -> str:

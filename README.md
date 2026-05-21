@@ -340,7 +340,9 @@ For proper model identifiers to use in your custom configuration, refer to the [
 
 ### Pinning the default model
 
-Set `PDD_MODEL_DEFAULT` to choose the base model (e.g. `PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash`). When the value carries a known LiteLLM routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, or `azure_ai/`), PDD locks the fallback to that provider — base lookup, surrogate selection, and strength interpolation all stay inside that provider, so a single-provider deployment (e.g. Cloud Run with only Vertex credentials) will not silently jump to a higher-ELO row whose credentials are missing. A bare CSV `provider=google` column is not enough on its own to enable a Vertex or Gemini lock; the routing prefix on `PDD_MODEL_DEFAULT` is what authorises the cross-row match.
+Set `PDD_MODEL_DEFAULT` to choose the base model (e.g. `PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash`). When the value carries a known LiteLLM routing prefix (`vertex_ai/`, `gemini/`, `anthropic/`, or `azure_ai/`), PDD locks the fallback to that provider by default — base lookup, surrogate selection, and strength interpolation all stay inside that provider, so a single-provider deployment (e.g. Cloud Run with only Vertex credentials) will not silently jump to a higher-ELO row whose credentials are missing. A bare CSV `provider=google` column is not enough on its own to enable a Vertex or Gemini lock; the routing prefix on `PDD_MODEL_DEFAULT` is what authorises the cross-row match.
+
+Operators who intentionally want a rate-limit/timeout escape hatch can opt in with `PDD_CROSS_PROVIDER_FALLBACK=1`. In that mode PDD still tries the prefixed provider first, only unlocks other providers after a transient provider error, and skips any fallback provider whose credentials are not already configured. Use `PDD_MODEL_FALLBACK_PROVIDERS=anthropic,fireworks` to restrict which providers are allowed.
 
 ## Troubleshooting Common Installation Issues
 
