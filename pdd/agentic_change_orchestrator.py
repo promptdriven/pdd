@@ -29,6 +29,9 @@ from pdd.agentic_common import (
     post_step_comment,
     set_agentic_progress,
     clear_agentic_progress,
+    extract_step_report,
+    normalize_step_comments_state,
+    post_step_comment_once,
 )
 from pdd.load_prompt_template import load_prompt_template
 from pdd.sync_order import (
@@ -752,20 +755,23 @@ def _detect_worktree_changes(worktree_path: Path, direct_edit_candidates: Option
     Only returns prompt and documentation files (matching step 9 scope),
     plus any files in the direct_edit_candidates list.
     """
+    # Use the structured ``--porcelain=v1 -z`` parser so paths with
+    # spaces, embedded quotes, or a literal " -> " substring round-trip
+    # verbatim (the old text-mode parser was lossy in all three cases).
+    # See issue #1080.
+    from pdd.git_porcelain import parse_porcelain_z
     try:
         result = subprocess.run(
-            ["git", "status", "--porcelain"],
+            ["git", "status", "--porcelain=v1", "-z", "--untracked-files=all"],
             cwd=worktree_path,
-            capture_output=True, text=True, check=True
+            capture_output=True, check=True
         )
         files = []
         allowed_extensions = {".prompt", ".md"}
         direct_edit_set = set(direct_edit_candidates or [])
-        for line in result.stdout.splitlines():
-            if not line.strip():
-                continue
-            # git status --porcelain format: "XY filename" (2 status chars + space + path)
-            filepath = line[3:].strip().split(" -> ")[-1]
+        for entry in parse_porcelain_z(result.stdout):
+            # Use the new-side path verbatim — callers want current path.
+            filepath = entry.path
             # Skip temp files from run_agentic_task
             if filepath.startswith(".agentic_prompt_"):
                 continue
@@ -1414,7 +1420,10 @@ def run_agentic_change_orchestrator(
         model_used = "unknown"
         github_comment_id = None
         worktree_path = None
-    
+
+    step_comments_set: Set[int] = normalize_step_comments_state(state.get("step_comments"))
+    state["step_comments"] = sorted(step_comments_set)
+
     pddrc_context = _load_pddrc_context(cwd)
 
     context = {
@@ -1691,6 +1700,7 @@ def run_agentic_change_orchestrator(
                         output=step_output, cwd=cwd,
                     )
                     state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
+                    state["step_comments"] = sorted(step_comments_set)
                     save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                     return False, f"Aborting: {consecutive_provider_failures} consecutive steps failed — agent providers unavailable", total_cost, model_used, []
             else:
@@ -1714,6 +1724,7 @@ def run_agentic_change_orchestrator(
                     refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
                     if refreshed:
                         state["issue_updated_at"] = refreshed
+                state["step_comments"] = sorted(step_comments_set)
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
             console.print(f"[yellow]Warning: Step {step_num} reported failure but continuing...[/yellow]")
@@ -1736,6 +1747,7 @@ def run_agentic_change_orchestrator(
                 refreshed = _fetch_issue_updated_at(repo_owner, repo_name, issue_number)
                 if refreshed:
                     state["issue_updated_at"] = refreshed
+            state["step_comments"] = sorted(step_comments_set)
             save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             return False, f"Stopped at step {step_num}: {stop_reason}", total_cost, model_used, changed_files
 
@@ -1768,6 +1780,7 @@ def run_agentic_change_orchestrator(
                 # Issue #467: Mark as FAILED instead of using step_num - 1
                 state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
                 # Don't advance last_completed_step — keep it at its current value
+                state["step_comments"] = sorted(step_comments_set)
                 save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
                 return False, "Stopped at step 9: Implementation produced no file changes", total_cost, model_used, []
 
@@ -1922,6 +1935,28 @@ def run_agentic_change_orchestrator(
             consecutive_provider_failures = 0
             state["step_outputs"][str(step_num)] = step_output
             state["last_completed_step"] = step_num
+            try:
+                report_body = extract_step_report(step_output)
+                if not report_body:
+                    report_body = (
+                        f"_Step {step_num} completed; no `<step_report>` block "
+                        "returned by agent. Raw output retained in workflow state._"
+                    )
+                comment_body = (
+                    f"## Step {step_num}/13: {description}\n\n{report_body}"
+                )
+                post_step_comment_once(
+                    repo_owner=repo_owner,
+                    repo_name=repo_name,
+                    issue_number=issue_number,
+                    step_num=step_num,
+                    body=comment_body,
+                    posted_steps=step_comments_set,
+                    cwd=current_work_dir,
+                )
+            except Exception as exc:  # pylint: disable=broad-except
+                console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
+            state["step_comments"] = sorted(step_comments_set)
         else:
             state["step_outputs"][str(step_num)] = f"FAILED: {step_output}"
 
@@ -1967,6 +2002,33 @@ def run_agentic_change_orchestrator(
                 instruction=s11_prompt, cwd=current_work_dir, verbose=verbose, quiet=quiet, timeout=timeout11, label=f"step11_iter{review_iteration}", max_retries=DEFAULT_MAX_RETRIES, reasoning_time=reasoning_time,
             )
             total_cost += s11_cost; model_used = s11_model; state["total_cost"] = total_cost
+            # Round-2 of Greg's review: gate the trusted Step 11 post on
+            # s11_success. A failed task (e.g. provider exhaustion) still
+            # returns step output, and posting a "completed" fallback would
+            # both mislead the user and mark this iteration's composite key
+            # (review_iteration*100 + 11) as already-posted in
+            # state["step_comments"]. On a later resume/retry the real
+            # successful Step 11 report would be silently deduped away.
+            if s11_success:
+                try:
+                    s11_report = extract_step_report(s11_output)
+                    if not s11_report:
+                        s11_report = (
+                            "_Step 11 completed; no `<step_report>` block returned "
+                            "by agent. Raw output retained in workflow state._"
+                        )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=review_iteration * 100 + 11,
+                        body=f"## Step 11/13: Review (iteration {review_iteration})\n\n{s11_report}",
+                        posted_steps=step_comments_set,
+                        cwd=current_work_dir,
+                    )
+                    state["step_comments"] = sorted(step_comments_set)
+                except Exception as exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
             if _review_loop_no_issues(s11_output):
                 if not quiet: console.print("   -> No issues found. Proceeding to PR.")
                 context["step11_output"] = s11_output; break
@@ -1986,6 +2048,30 @@ def run_agentic_change_orchestrator(
             total_cost += s12_cost; model_used = s12_model; state["total_cost"] = total_cost
             previous_fixes += f"\n\nIteration {review_iteration}:\n{s12_output}"
             state["previous_fixes"] = previous_fixes
+            # Round-2 of Greg's review: gate the trusted Step 12 post on
+            # s12_success. Same reasoning as Step 11 above — a failed fix
+            # task must not burn the composite key, otherwise a later
+            # successful retry of the same iteration would be deduped.
+            if s12_success:
+                try:
+                    s12_report = extract_step_report(s12_output)
+                    if not s12_report:
+                        s12_report = (
+                            "_Step 12 completed; no `<step_report>` block returned "
+                            "by agent. Raw output retained in workflow state._"
+                        )
+                    post_step_comment_once(
+                        repo_owner=repo_owner,
+                        repo_name=repo_name,
+                        issue_number=issue_number,
+                        step_num=review_iteration * 100 + 12,
+                        body=f"## Step 12/13: Fix (iteration {review_iteration})\n\n{s12_report}",
+                        posted_steps=step_comments_set,
+                        cwd=current_work_dir,
+                    )
+                    state["step_comments"] = sorted(step_comments_set)
+                except Exception as exc:  # pylint: disable=broad-except
+                    console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
             save_result = save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
             if save_result: github_comment_id = save_result; state["github_comment_id"] = github_comment_id
         if review_iteration >= MAX_REVIEW_ITERATIONS:
@@ -2094,8 +2180,28 @@ def run_agentic_change_orchestrator(
         if not s13_success:
              post_step_comment(repo_owner, repo_name, issue_number, 13, 13, "Create PR and link to issue", s13_output, cwd)
              console.print("[red]Step 13 (PR Creation) failed.[/red]")
+             state["step_comments"] = sorted(step_comments_set)
              save_workflow_state(cwd, issue_number, "change", state, state_dir, repo_owner, repo_name, use_github_state, github_comment_id)
              return False, "PR Creation failed", total_cost, model_used, changed_files
+        try:
+            s13_report = extract_step_report(s13_output)
+            if not s13_report:
+                s13_report = (
+                    "_Step 13 completed; no `<step_report>` block returned "
+                    "by agent. Raw output retained in workflow state._"
+                )
+            post_step_comment_once(
+                repo_owner=repo_owner,
+                repo_name=repo_name,
+                issue_number=issue_number,
+                step_num=13,
+                body=f"## Step 13/13: Create PR and link to issue\n\n{s13_report}",
+                posted_steps=step_comments_set,
+                cwd=current_work_dir,
+            )
+            state["step_comments"] = sorted(step_comments_set)
+        except Exception as exc:  # pylint: disable=broad-except
+            console.print(f"[yellow]post_step_comment_once failed: {exc}[/yellow]")
         pr_url = "Unknown"; url_match = re.search(r"https://github.com/\S+/pull/\d+", s13_output)
         if url_match: pr_url = url_match.group(0)
         if not quiet:

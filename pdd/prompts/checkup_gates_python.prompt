@@ -1,7 +1,7 @@
-% Write `pdd/checkup_gates.py`, the deterministic-gate enforcement layer for `pdd checkup --pr --review-loop` (issue promptdriven/pdd#1092).
+% Write `pdd/checkup_gates.py`, the deterministic-gate enforcement layer for
+`pdd checkup --pr --review-loop` (issue promptdriven/pdd#1092).
 
 <include>context/python_preamble.prompt</include>
-<pdd-dependency>checkup_review_loop_python.prompt</pdd-dependency>
 
 % Goal
 Provide a conservative, allowlisted gate-discovery and gate-execution
@@ -13,7 +13,7 @@ loop refuses to ship and the fixer addresses the failure.
 % Public API
 1. `@dataclass Gate(name: str, cmd: List[str], source: str, severity: str = "blocker", timeout: float = 60.0, area: str = "deterministic-gate", required_fix_hint: str = "")` — one discovered gate. `cmd` is the literal list-form argv. `source` is a human-readable origin (e.g. `package.json:scripts.format:check`).
 2. `@dataclass GateResult(gate: Gate, exit_code: Optional[int], stdout_excerpt: str, stderr_excerpt: str, duration_seconds: float, started_at_iso: str, error: str = "")` — execution outcome. `exit_code is None` means the runner itself failed (timeout, FileNotFoundError, OSError). `passed` returns True iff `exit_code == 0`.
-3. `discover_gates(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = (), base_ref: Optional[str] = None) -> List[Gate]` — read-only inspection of the worktree to emit the allowlist set. When `base_ref` is supplied (the PR's target branch, e.g. `"main"`) and verifiable in the worktree, the `git-diff-check` gate runs across the PR range (`<base>...HEAD`) so a committed whitespace/conflict-marker failure is caught even when the worktree itself is clean. With no `base_ref` we still try `origin/main`/`origin/master`/`main`/`master` before falling back to the plain `git diff --check` against unstaged changes.
+3. `discover_gates(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = ()) -> List[Gate]` — read-only inspection of the worktree to emit the allowlist set.
 4. `run_gates(worktree: Path, gates: Sequence[Gate], *, artifacts_dir: Path, round_number: int, mode: str, default_timeout: float = 60.0) -> List[GateResult]` — execute every gate as a list-form subprocess. Persist `round-{R}-{mode}-gates.json` and per-gate `round-{R}-{mode}-gate-{slug}.txt`. Never raises.
 5. `gate_results_to_findings(results: Sequence[GateResult], *, round_number: int) -> List[ReviewFinding]` — convert failing gates into synthetic blocker findings tagged `reviewer=f"gate:{gate.name}"`, `area="deterministic-gate"`, with the gate command and output excerpt in `evidence` and `required_fix`. Passed gates are skipped.
 

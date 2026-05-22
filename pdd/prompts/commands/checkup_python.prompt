@@ -8,6 +8,7 @@
   - `target` arg (positional, optional — required for issue mode)
   - `--no-fix` flag
   - `--timeout-adder` (float, default `0.0`)
+  - `--start-step` recovery override. Accept only `1`, `2`, `3`, `4`, `5`, `6.1`, `6.2`, `6.3`, `7`, or `8`; pass the parsed int/float as `start_step_override` to the legacy `run_agentic_checkup` path.
   - `--no-github-state` flag
   - `--validate-arch-includes` flag (local mode — cross-validates `architecture.json` against module prompt `<include>` tags; mutually exclusive with `target` and `--pr`/`--issue`)
   - `--project-root` (path, used with `--validate-arch-includes`)
@@ -20,6 +21,7 @@
   - `--reviewer` (explicit primary reviewer role; overrides the first `--reviewers` role)
   - `--fixer` (explicit fixer role; overrides the second `--reviewers` role)
   - `--reviewer-fallback` (optional secondary reviewer role invoked once if the primary reviewer cannot complete; must differ from the resolved reviewer and fixer)
+  - `--fixer-fallback` (optional secondary fixer role invoked once if the primary fixer cannot address reviewer findings; must differ from the resolved fixer, active reviewer, and originally configured reviewer)
   - `--max-review-rounds` (int, default `5`)
   - `--max-review-cost` (float, default `50.0`)
   - `--max-review-minutes` (float, default `90.0`)
@@ -36,12 +38,13 @@
 - Mode validation:
   - If `--validate-arch-includes` is set: `target`, `--pr`, `--issue` must all be `None`; dispatch to `run_validate_arch_includes_cli(...)` and return.
   - If `--review-only` is set without `--review-loop`: reject it.
+  - If `--start-step` is combined with `--review-loop`: reject it; the override only applies to the legacy checkup orchestrator.
   - If `--review-loop` is set: require PR mode (`--pr` and `--issue`); reject `--no-fix` unless `--review-only` is also set; validate max-review values are positive (`--max-review-rounds >= 1`, cost/minutes > 0).
   - If `--pr` or `--issue` is set: BOTH must be present; `target` must be `None`; validate `--pr` via `_parse_pr_url(pr_url)` (mention "GitHub pull-request URL" in error); validate `--issue` via `_is_github_issue_url(issue_url_opt)` (mention "GitHub issue URL" in error); use `issue_url_opt` as the effective issue URL.
   - Otherwise (default issue mode): require `target`; validate via `_is_github_issue_url(target)` (BadParameter with `param_hint="'TARGET'"` and message must mention "GitHub issue URL").
-- Force `--no-fix` when `--pr` is set and `--review-loop` is NOT set (legacy PR verification still cannot push fixes). Print a warning to stderr explaining why and how to re-invoke if fixes were intended.
+- Do not force `--no-fix` in PR mode. `pdd checkup --pr <pr-url> --issue <issue-url>` must preserve the user's fix intent so the orchestrator can run the full steps 1-7, commit generated fixes, and push them back to the same PR branch. `--no-fix` remains an explicit user option for verification-only PR checks.
 - `ctx.ensure_object(dict)`; read `quiet = ctx.obj.get("quiet", False)` and `verbose = ctx.obj.get("verbose", False)`.
-- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, reviewer_fallback=reviewer_fallback, fixer_fallback=fixer_fallback, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, fallback_reviewer_on_failure=fallback_reviewer_on_failure, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states, enable_gates=not no_gates, gate_timeout=gate_timeout, gate_allow=tuple(gate_allow))` where `pr_url` is `None` in non-PR modes. The CLI exposes `--fixer-fallback` (string, default `None`) as the analog of `--reviewer-fallback`: when the primary fixer cannot address the reviewer's findings (typically because of Claude Code subscription-tier credential exhaustion classified as `credential-limit`), the review loop invokes the configured fallback fixer once before breaking. The fallback must differ from `--fixer` and `--reviewer` to preserve reviewer/fixer role independence.
+- Call `run_agentic_checkup(issue_url=effective_issue_url, verbose=verbose, quiet=quiet, no_fix=no_fix, timeout_adder=timeout_adder, use_github_state=not no_github_state, pr_url=pr_url, review_loop=review_loop, review_only=review_only, reviewers=reviewers, reviewer=reviewer, fixer=fixer, reviewer_fallback=reviewer_fallback, fixer_fallback=fixer_fallback, max_review_rounds=max_review_rounds, max_review_cost=max_review_cost, max_review_minutes=max_review_minutes, require_all_reviewers_clean=require_all_reviewers_clean, continue_on_reviewer_limit=continue_on_reviewer_limit, fallback_reviewer_on_failure=fallback_reviewer_on_failure, require_final_fresh_review=require_final_fresh_review, blocking_severities=blocking_severities, clean_reviewer_states=clean_reviewer_states, enable_gates=not no_gates, gate_timeout=gate_timeout, gate_allow=tuple(gate_allow), start_step_override=start_step_override)` where `pr_url` is `None` in non-PR modes. The CLI exposes `--fixer-fallback` (string, default `None`) as the analog of `--reviewer-fallback`: when the primary fixer cannot address the reviewer's findings (typically because of Claude Code subscription-tier credential exhaustion classified as `credential-limit`), the review loop invokes the configured fallback fixer once before breaking. The fallback must differ from `--fixer` and `--reviewer` to preserve reviewer/fixer role independence.
 - If not quiet, `click.echo` exactly these lines:
   - `Status: Success|Failed`
   - `Message: {message}`

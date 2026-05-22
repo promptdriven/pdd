@@ -1103,11 +1103,29 @@ def _finalize_single_file_fingerprint(
             )
         return
 
-    from .operation_log import (
-        clear_run_report,
-        infer_module_identity,
-        save_fingerprint,
-    )
+    # Wrap the import itself so the user's successful update tuple is never
+    # broken by an import-time failure (e.g. `_clear_run_report_before_fingerprint`
+    # gets renamed in a future operation_log refactor — it's a private
+    # underscore-prefixed name and therefore more fragile than the public
+    # `clear_run_report` / `infer_module_identity` / `save_fingerprint`
+    # alongside it). An ImportError raised here would propagate up to
+    # `update_main`'s outer `except Exception: return None`, converting a
+    # successful `(prompt, cost, model)` tuple to None — which violates the
+    # issue #1106 acceptance criterion: best-effort metadata cleanup must
+    # never fail the successful update tuple.
+    try:
+        from .operation_log import (
+            _clear_run_report_before_fingerprint,
+            infer_module_identity,
+            save_fingerprint,
+        )
+    except ImportError as exc:
+        if not quiet:
+            rprint(
+                f"[warning][metadata] Could not import finalization helpers: "
+                f"{exc}[/warning]"
+            )
+        return
     basename, language = infer_module_identity(prompt_path)
     if not (basename and language):
         if not quiet:
@@ -1117,13 +1135,33 @@ def _finalize_single_file_fingerprint(
             )
         return
 
+    # Reuse the shared helper so the single-file finalize path enforces the
+    # same invariant the `log_operation` decorator and repo-mode block already
+    # do: a fresh fingerprint must never coexist with a stale `_run.json`
+    # (issue #1106). The helper re-checks that the run report is actually
+    # gone after `clear_run_report()` and emits a console warning if a
+    # silent `os.remove` failure left it behind — see
+    # `pdd.operation_log._clear_run_report_before_fingerprint`. The warning
+    # surfaces unconditionally (the helper does not consult `quiet`): the
+    # contract the issue text quotes is "print a warning" without qualifying
+    # on quiet mode, and the user should learn that runtime verification
+    # state still describes the pre-mutation files even when --quiet
+    # suppresses other chatter (why: informational about a real metadata
+    # problem, not status fluff).
     try:
-        clear_run_report(basename, language)
+        fingerprint_allowed = _clear_run_report_before_fingerprint(basename, language)
     except Exception as exc:
+        # Defensive: surrounding pattern in this function treats metadata
+        # cleanup as best-effort; an unexpected raise must not break the
+        # successful update tuple. Warn and skip the save, matching the
+        # `save_fingerprint` except-arm below.
         if not quiet:
             rprint(
                 f"[warning][metadata] Run report clear failed: {exc}[/warning]"
             )
+        return
+    if not fingerprint_allowed:
+        return
 
     try:
         save_fingerprint(

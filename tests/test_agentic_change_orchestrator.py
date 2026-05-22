@@ -5216,3 +5216,391 @@ def test_preflight_drift_heal_metadata_failure_is_hard_failure(tmp_path):
          patch("pdd.agentic_change_orchestrator.subprocess.run", return_value=result), \
          pytest.raises(RuntimeError, match="preflight metadata finalization failed"):
         _preflight_drift_heal(tmp_path, quiet=True)
+
+
+# =========================================================================
+# Issue #1080: _detect_worktree_changes must use structured -z parser
+# =========================================================================
+
+
+def _git_env_1080() -> dict:
+    return {
+        **os.environ,
+        "GIT_AUTHOR_NAME": "Test",
+        "GIT_AUTHOR_EMAIL": "t@t",
+        "GIT_COMMITTER_NAME": "Test",
+        "GIT_COMMITTER_EMAIL": "t@t",
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_SYSTEM": "/dev/null",
+    }
+
+
+def _init_repo_1080(repo, files):
+    repo.mkdir(parents=True, exist_ok=True)
+    env = _git_env_1080()
+    subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                   check=True, capture_output=True, env=env)
+    for rel, content in files.items():
+        tgt = repo / rel
+        tgt.parent.mkdir(parents=True, exist_ok=True)
+        tgt.write_text(content)
+    subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                   check=True, capture_output=True, env=env)
+    subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                   check=True, capture_output=True, env=env)
+
+
+def _git_1080(repo, *args):
+    subprocess.run(["git", "-C", str(repo), *args], check=True,
+                   capture_output=True, text=True, env=_git_env_1080())
+
+
+class TestDetectWorktreeChangesRename1080:
+    """``_detect_worktree_changes`` must return the CURRENT (new) path
+    of a rename verbatim via the structured ``-z`` parser — never a
+    truncated path produced by ad-hoc ``split(' -> ')``.
+    """
+
+    def test_returns_new_path_only_for_renamed_prompt(self, tmp_path):
+        """For a staged rename the new path appears, the old path does
+        not, and no ``" -> "`` literal leaks into the result."""
+        from pdd.agentic_change_orchestrator import _detect_worktree_changes
+
+        _init_repo_1080(tmp_path, {
+            "prompts/old.prompt": "alpha\n",
+            "code.py": "x\n",
+        })
+        _git_1080(tmp_path, "mv", "prompts/old.prompt", "prompts/new.prompt")
+
+        files = _detect_worktree_changes(tmp_path)
+
+        assert "prompts/new.prompt" in files, (
+            f"Renamed prompt's NEW path missing from {files!r}"
+        )
+        assert "prompts/old.prompt" not in files, (
+            f"Renamed prompt's OLD path leaked into {files!r}"
+        )
+        for entry in files:
+            assert " -> " not in entry, (
+                f"Combined ' -> ' literal leaked into {entry!r}"
+            )
+
+    def test_handles_filename_with_arrow_substring(self, tmp_path):
+        """A filename containing the literal ``" -> "`` must be
+        returned verbatim, not truncated by ``split(' -> ')``."""
+        from pdd.agentic_change_orchestrator import _detect_worktree_changes
+
+        _init_repo_1080(tmp_path, {"anchor.txt": "x\n"})
+        _git_1080(tmp_path, "config", "core.quotePath", "false")
+        prompts_dir = tmp_path / "prompts"
+        prompts_dir.mkdir()
+        weird_name = "weird -> name.prompt"
+        (prompts_dir / weird_name).write_text("body\n")
+
+        files = _detect_worktree_changes(tmp_path)
+
+        expected = f"prompts/{weird_name}"
+        assert expected in files, (
+            f"Filename containing ' -> ' was mis-parsed; got {files!r}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment wiring
+# ---------------------------------------------------------------------------
+
+
+class TestTrustedStepCommentPosting:
+    """The change orchestrator must extract <step_report> from each successful
+    step's output and post via post_step_comment_once with step_num for linear
+    steps and `iter * 100 + step_num` for review-loop steps 11/12."""
+
+    def test_success_path_posts_step_comment_once(self, mock_dependencies, temp_cwd):
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                return (True, "<step_report>step 11</step_report>\nNo Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        for c in mock_post_once.call_args_list:
+            assert "step_num" in c.kwargs
+            assert isinstance(c.kwargs["step_num"], int)
+            assert "posted_steps" in c.kwargs
+
+    def test_step_report_missing_posts_fallback_comment(self, mock_dependencies, temp_cwd):
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (True, "FILES_MODIFIED: file_a.py", 0.5, "gpt-4")
+            if label == "step10":
+                return (True, "ARCHITECTURE_FILES_MODIFIED: arch.json", 0.1, "gpt-4")
+            if label.startswith("step11"):
+                return (True, "No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (True, "PR Created: https://github.com/o/r/pull/1", 0.2, "gpt-4")
+            return (True, f"Output for {label}", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            success, _, _, _, _ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        assert success is True
+        assert mock_post_once.call_count >= 10
+        assert any(
+            "no `<step_report>` block returned by agent" in c.kwargs["body"]
+            and "Raw output retained in workflow state" in c.kwargs["body"]
+            for c in mock_post_once.call_args_list
+        )
+
+    def test_post_exception_does_not_break_run(self, mock_dependencies, temp_cwd):
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                return (True, "<step_report>step 11</step_report>\nNo Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            side_effect=RuntimeError("simulated gh failure"),
+        ):
+            success, _, _, _, _ = run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        assert success is True
+
+    def test_step11_failure_does_not_post_or_mark_iter_key(
+        self, mock_dependencies, temp_cwd
+    ):
+        """Regression for Greg's PR review (round 2).
+
+        Step 11 (review) inside the iterated review-loop must NOT post a
+        trusted step-comment nor add its composite key to
+        ``state["step_comments"]`` when ``s11_success`` is False. Otherwise
+        a later successful retry of the same iteration's Step 11 would be
+        deduped against the failed run's fallback "Step 11 completed" key
+        and the user would see no real Step 11 report.
+        """
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                # Step 11 FAILS — provider exhausted, raw text still returned.
+                # The output deliberately includes "No Issues Found" so the
+                # legacy review-loop short-circuits and we don't need to mock
+                # downstream steps. Even with that sentinel, the trusted post
+                # must be skipped because s11_success is False.
+                return (False, "Provider failure; No Issues Found", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        # Composite key for review_iteration=1, step=11 is 111. It MUST NOT
+        # appear in any post_step_comment_once call because Step 11 failed.
+        step_nums = [
+            c.kwargs.get("step_num")
+            for c in mock_post_once.call_args_list
+        ]
+        assert 111 not in step_nums, (
+            "Failed Step 11 should not have posted a fallback comment "
+            f"or burned composite key 111. Saw: {step_nums}"
+        )
+
+    def test_step12_failure_does_not_post_or_mark_iter_key(
+        self, mock_dependencies, temp_cwd
+    ):
+        """Same regression as above but for Step 12 (fix).
+
+        When ``s12_success`` is False the fix task didn't actually complete,
+        so the trusted Step 12 post must be skipped and key
+        ``review_iteration*100 + 12`` must remain unposted.
+        """
+        mocks = mock_dependencies
+        mock_run = mocks["run"]
+
+        def side_effect_run(**kwargs):
+            label = kwargs.get("label", "")
+            if label == "step9":
+                return (
+                    True,
+                    "<step_report>step 9</step_report>\nFILES_MODIFIED: file_a.py",
+                    0.5, "gpt-4",
+                )
+            if label == "step10":
+                return (
+                    True,
+                    "<step_report>step 10</step_report>\nARCHITECTURE_FILES_MODIFIED: arch.json",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step11"):
+                # Step 11 succeeds but reports issues, driving the loop into
+                # Step 12 where the failure happens.
+                return (
+                    True,
+                    "<step_report>step 11 found issues</step_report>\nIssues Found",
+                    0.1, "gpt-4",
+                )
+            if label.startswith("step12"):
+                return (False, "Provider failure during fix", 0.1, "gpt-4")
+            if label == "step13":
+                return (
+                    True,
+                    "<step_report>step 13</step_report>\nPR Created: https://github.com/o/r/pull/1",
+                    0.2, "gpt-4",
+                )
+            return (True, f"<step_report>step report {label}</step_report>", 0.1, "gpt-4")
+
+        mock_run.side_effect = side_effect_run
+
+        with patch(
+            "pdd.agentic_change_orchestrator.post_step_comment_once",
+            return_value=True,
+        ) as mock_post_once:
+            run_agentic_change_orchestrator(
+                issue_url="http://url",
+                issue_content="Fix bug",
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                issue_author="me",
+                issue_title="Bug fix",
+                cwd=temp_cwd,
+                quiet=True,
+            )
+
+        step_nums = [
+            c.kwargs.get("step_num")
+            for c in mock_post_once.call_args_list
+        ]
+        assert 112 not in step_nums, (
+            "Failed Step 12 should not have posted a fallback comment "
+            f"or burned composite key 112. Saw: {step_nums}"
+        )

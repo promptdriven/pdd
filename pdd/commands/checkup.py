@@ -47,6 +47,13 @@ from ..core.errors import handle_error
     help="Additional seconds to add to each step's timeout.",
 )
 @click.option(
+    "--start-step",
+    "start_step",
+    type=click.Choice(["1", "2", "3", "4", "5", "6.1", "6.2", "6.3", "7", "8"]),
+    default=None,
+    help="Recovery override: start the legacy checkup workflow from this step.",
+)
+@click.option(
     "--no-github-state",
     is_flag=True,
     default=False,
@@ -58,7 +65,9 @@ from ..core.errors import handle_error
     type=str,
     default=None,
     help=(
-        "PR-mode: verify this existing pull request instead of creating a new one. "
+        "PR-mode: run the full checkup against this existing pull request "
+        "instead of creating a new one. Unless --no-fix is set, eligible "
+        "generated fixes are committed and pushed back to the PR head ref. "
         "Requires --issue. TARGET must NOT be passed."
     ),
 )
@@ -70,6 +79,21 @@ from ..core.errors import handle_error
     help=(
         "PR-mode companion to --pr: the original GitHub issue the PR is meant to "
         "resolve. Used as issue context for verification."
+    ),
+)
+@click.option(
+    "--test-scope",
+    "test_scope",
+    type=click.Choice(["full", "targeted"]),
+    default="full",
+    show_default=True,
+    help=(
+        "PR-mode test scope. 'full' (default) runs the full discovered "
+        "test suite in Step 5 and Step 7. 'targeted' is an opt-in fast "
+        "path that passes PR changed-file context into Steps 5/7 so the "
+        "agent runs PR-scoped tests only; the final report explicitly "
+        "labels verification as targeted (full suite not run). Only "
+        "meaningful with --pr."
     ),
 )
 @click.option(
@@ -269,9 +293,11 @@ def checkup(
     strict: bool,
     no_fix: bool,
     timeout_adder: float,
+    start_step: Optional[str],
     no_github_state: bool,
     pr_url: Optional[str],
     issue_url_opt: Optional[str],
+    test_scope: str,
     review_loop: bool,
     review_only: bool,
     reviewers: str,
@@ -297,8 +323,11 @@ def checkup(
 
     \b
     GitHub mode (default): TARGET is an issue URL.
-    PR mode: pass --pr <pr-url> and --issue <issue-url> to verify an existing PR
-             against its source issue without creating a new PR.
+    PR mode: pass --pr <pr-url> and --issue <issue-url> to run the full
+             checkup against an existing PR. Unless --no-fix is set, the
+             fix/verify loop runs against the PR worktree and any eligible
+             generated fixes are committed and pushed back to the PR head
+             ref. Step 8 (create PR) is skipped — no second PR is opened.
     Local mode: pass --validate-arch-includes (no TARGET) to cross-validate
     architecture.json entries against module prompt <include> tags.
     """
@@ -318,10 +347,20 @@ def checkup(
 
     # PR-mode argument validation
     pr_mode = pr_url is not None or issue_url_opt is not None
+    if test_scope == "targeted" and not pr_mode:
+        raise click.BadParameter(
+            "--test-scope targeted requires --pr (PR mode).",
+            param_hint="'--test-scope'",
+        )
     if review_loop and not pr_mode:
         raise click.BadParameter(
             "--review-loop requires --pr and --issue.",
             param_hint="'--review-loop'",
+        )
+    if review_loop and start_step is not None:
+        raise click.BadParameter(
+            "--start-step applies to the legacy checkup workflow, not --review-loop.",
+            param_hint="'--start-step'",
         )
     if review_only and not review_loop:
         raise click.BadParameter(
@@ -371,22 +410,6 @@ def checkup(
                 "(e.g., https://github.com/org/repo/issues/123).",
                 param_hint="'--issue'",
             )
-        # PR mode without --no-fix would generate fix commits inside the
-        # PR-mode worktree (.pdd/worktrees/checkup-pr-N/) and never push
-        # them back to the PR — silently abandoning the work and confusing
-        # the user (who sees "Checkup complete" with no indication that
-        # fixes exist on a local branch). Push-back is a separate follow-up;
-        # until it lands, force --no-fix when --pr is set and warn so the
-        # user can re-invoke without --pr if they wanted fixes applied.
-        if not no_fix and not review_loop:
-            click.echo(
-                "Warning: --pr forces --no-fix because push-back to the PR "
-                "is not yet implemented. Generated fixes inside the PR "
-                "worktree would not reach the PR. Re-invoke without --pr "
-                "(or with an issue TARGET) to apply fixes.",
-                err=True,
-            )
-            no_fix = True
         effective_issue_url = issue_url_opt
     else:
         if not target:
@@ -408,6 +431,11 @@ def checkup(
 
     quiet = ctx.obj.get("quiet", False)
     verbose = ctx.obj.get("verbose", False)
+    start_step_override = None
+    if start_step is not None:
+        start_step_override = float(start_step)
+        if start_step_override.is_integer():
+            start_step_override = int(start_step_override)
 
     try:
         success, message, cost, model = run_agentic_checkup(
@@ -419,6 +447,8 @@ def checkup(
             use_github_state=not no_github_state,
             reasoning_time=ctx.obj.get("time") if ctx.obj.get("time_explicit") else None,
             pr_url=pr_url,
+            test_scope=test_scope,
+            start_step_override=start_step_override,
             review_loop=review_loop,
             review_only=review_only,
             reviewers=reviewers,

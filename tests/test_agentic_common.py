@@ -7120,3 +7120,375 @@ class TestIssue814BillingErrorsPermanent:
         )
         # 3. No backoff sleep — permanent errors must NOT delay the fallback
         sleep_mock.assert_not_called()
+
+
+# =========================================================================
+# Issue #1080: porcelain-rename handling in _revert_out_of_scope_changes
+# =========================================================================
+
+
+class TestRevertOutOfScopeChangesRename1080:
+    """Issue #1080: ``_revert_out_of_scope_changes`` must handle staged
+    renames via the structured ``--porcelain=v1 -z`` parser, never
+    constructing a fake ``"old -> new"`` literal path.
+    """
+
+    @staticmethod
+    def _git_env() -> dict:
+        return {
+            **os.environ,
+            "GIT_AUTHOR_NAME": "Test",
+            "GIT_AUTHOR_EMAIL": "t@t",
+            "GIT_COMMITTER_NAME": "Test",
+            "GIT_COMMITTER_EMAIL": "t@t",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+        }
+
+    def _init_repo(self, repo: Path, files: dict) -> None:
+        repo.mkdir(parents=True, exist_ok=True)
+        env = self._git_env()
+        _subprocess.run(["git", "init", str(repo)], check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "config", "user.email", "t@t"],
+                       check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "config", "user.name", "Test"],
+                       check=True, capture_output=True, env=env)
+        for rel, content in files.items():
+            tgt = repo / rel
+            tgt.parent.mkdir(parents=True, exist_ok=True)
+            tgt.write_text(content)
+        _subprocess.run(["git", "-C", str(repo), "add", "-A"],
+                       check=True, capture_output=True, env=env)
+        _subprocess.run(["git", "-C", str(repo), "commit", "-m", "init"],
+                       check=True, capture_output=True, env=env)
+
+    def _git(self, repo: Path, *args: str) -> None:
+        _subprocess.run(["git", "-C", str(repo), *args], check=True,
+                       capture_output=True, text=True, env=self._git_env())
+
+    def test_reverts_out_of_scope_staged_rename(self, tmp_path):
+        """An out-of-scope staged rename must be reverted on disk and
+        the returned list must not contain a ``Path("old -> new")``
+        literal produced by the buggy ``line[3:]`` parser."""
+        from pdd.agentic_common import _revert_out_of_scope_changes
+
+        proj = tmp_path / "repo"
+        self._init_repo(proj, {
+            "code.py": "def main(): pass\n",
+            "unrelated.py": "def other(): pass\n",
+        })
+        self._git(proj, "mv", "unrelated.py", "renamed_unrelated.py")
+
+        allowed = {(proj / "code.py").resolve()}
+        reverted = _revert_out_of_scope_changes(proj, allowed)
+
+        assert (proj / "unrelated.py").exists(), (
+            "Out-of-scope rename survived: old-side file not restored"
+        )
+        assert not (proj / "renamed_unrelated.py").exists(), (
+            "Out-of-scope rename survived: new-side file still exists"
+        )
+        for p in reverted:
+            assert " -> " not in str(p), (
+                f"Fake combined path leaked into return value: {p!r}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Trusted step-comment helpers
+#
+# Orchestrators own per-step `## Step N/T:` comments via trusted PDD
+# credentials. Step prompts emit `<step_report>...</step_report>` blocks; the
+# orchestrator extracts them, sanitizes/truncates, and posts via
+# `gh issue comment`. Three public helpers form the contract.
+# ---------------------------------------------------------------------------
+
+
+class TestExtractStepReport:
+    """Public helper: extract_step_report(text) -> Optional[str]."""
+
+    def test_returns_inner_block_trimmed(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = (
+            "preamble\n<step_report>\n## Step 1/8: Discovery\n\n"
+            "Details here.\n</step_report>\nFILES_MODIFIED: x.py"
+        )
+        assert extract_step_report(body) == "## Step 1/8: Discovery\n\nDetails here."
+
+    def test_returns_none_when_block_missing(self):
+        from pdd.agentic_common import extract_step_report
+
+        assert extract_step_report("just some text no markers") is None
+
+    def test_returns_none_on_empty_or_none(self):
+        from pdd.agentic_common import extract_step_report
+
+        assert extract_step_report(None) is None
+        assert extract_step_report("") is None
+
+    def test_returns_last_block_when_multiple(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = (
+            "<step_report>first</step_report>\n"
+            "middle text\n"
+            "<step_report>second body</step_report>"
+        )
+        assert extract_step_report(body) == "second body"
+
+    def test_case_insensitive(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = "<STEP_REPORT>UPPERCASE</STEP_REPORT>"
+        assert extract_step_report(body) == "UPPERCASE"
+
+    def test_multiline_dotall(self):
+        from pdd.agentic_common import extract_step_report
+
+        body = "<step_report>line1\nline2\nline3</step_report>"
+        assert extract_step_report(body) == "line1\nline2\nline3"
+
+
+class TestNormalizeStepCommentsState:
+    """Public helper: normalize_step_comments_state(raw) -> Set[int]."""
+
+    def test_none_returns_empty_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        result = normalize_step_comments_state(None)
+        assert result == set()
+        assert isinstance(result, set)
+
+    def test_list_of_ints_returns_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state([1, 2, 3]) == {1, 2, 3}
+
+    def test_tuple_of_ints_returns_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state((4, 5, 6)) == {4, 5, 6}
+
+    def test_set_returns_set_copy(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        src = {1, 2}
+        result = normalize_step_comments_state(src)
+        assert result == {1, 2}
+        result.add(99)
+        assert 99 not in src
+
+    def test_list_of_int_strings_coerces(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state(["1", "2", "3"]) == {1, 2, 3}
+
+    def test_legacy_dict_with_posted_flag_returns_set_of_int_keys(self):
+        """The legacy bug-orchestrator persisted step_comments as a dict:
+        ``{"1": {"posted": True}, "2": {"posted": False}}``. Coerce that
+        into the Set[int] shape, treating both ``posted`` and
+        ``failed_posted`` as signals that GitHub received a comment.
+        """
+        from pdd.agentic_common import normalize_step_comments_state
+
+        legacy = {
+            "1": {"posted": True},
+            "2": {"posted": True, "fallback": True},
+            "3": {"posted": False, "fallback_pending": True},
+            "4": {"failed_posted": True, "failed_pending": False},
+        }
+        result = normalize_step_comments_state(legacy)
+        assert result == {1, 2, 4}
+
+    def test_legacy_dict_with_true_value(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state({"5": True, "6": False}) == {5}
+
+    def test_malformed_entries_are_skipped(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        garbage = ["not-an-int", None, 5, "7", 9.5, True, {"posted": True}]
+        result = normalize_step_comments_state(garbage)
+        assert 5 in result
+        assert 7 in result
+        assert 9 not in result
+        assert "not-an-int" not in result
+        assert all(isinstance(v, int) for v in result)
+
+    def test_empty_collections(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state([]) == set()
+        assert normalize_step_comments_state({}) == set()
+        assert normalize_step_comments_state(set()) == set()
+
+    def test_garbage_input_returns_empty_set(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state(42) == set()
+        assert normalize_step_comments_state("string") == set()
+
+    def test_frozenset_input(self):
+        from pdd.agentic_common import normalize_step_comments_state
+
+        assert normalize_step_comments_state(frozenset({7, 8})) == {7, 8}
+
+
+class TestPostStepCommentOnce:
+    """Public helper: post_step_comment_once(*, repo_owner, repo_name,
+    issue_number, step_num, body, posted_steps, cwd) -> bool.
+
+    Idempotent: returns True immediately if step_num is already in
+    posted_steps. On success, mutates posted_steps in place.
+    """
+
+    def test_idempotent_skip_when_already_posted(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = {1, 2, 3}
+        with patch("pdd.agentic_common.subprocess.run") as mock_run:
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=2,
+                body="some report body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is True
+            assert mock_run.call_count == 0
+        assert posted == {1, 2, 3}
+
+    def test_posts_via_gh_and_mutates_set_on_success(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = {1}
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="## Step 5/8: Test\n\nAll green.",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is True
+            assert 5 in posted
+            assert mock_run.call_count == 1
+            args, kwargs = mock_run.call_args
+            assert args[0][:4] == ["gh", "issue", "comment", "42"]
+            assert "--repo" in args[0]
+            assert "owner/repo" in args[0]
+            body_index = args[0].index("--body")
+            assert "## Step 5/8: Test" in args[0][body_index + 1]
+
+    def test_returns_false_and_does_not_mutate_on_gh_failure(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = {1}
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stdout="", stderr="rate limited")
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is False
+            assert 5 not in posted
+
+    def test_returns_false_when_gh_missing(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = set()
+        with patch("pdd.agentic_common._find_cli_binary", return_value=None):
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=42,
+                step_num=5,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is False
+            assert posted == set()
+
+    def test_redacts_known_secret_formats(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        secret_body = (
+            "GH_TOKEN=ghp_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "google: AIzaSyA-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n"
+            "openai: sk-aaaaaaaaaaaaaaaaaaaaaaaa\n"
+        )
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                step_num=1,
+                body=secret_body,
+                posted_steps=set(),
+                cwd=tmp_path,
+            )
+            sent = mock_run.call_args[0][0]
+            body_index = sent.index("--body")
+            posted_body = sent[body_index + 1]
+            assert "ghp_aaaaaaaaaaaaaaaaaaaaaaaa" not in posted_body
+            assert "AIzaSyA-aaaaaaaaaaaaaaaaaaaa" not in posted_body
+            assert "sk-aaaaaaaaaaaaaaaaaaaaaaaa" not in posted_body
+            assert "[REDACTED" in posted_body
+
+    def test_truncates_oversized_body(self, tmp_path):
+        from pdd.agentic_common import post_step_comment_once
+
+        oversized = "A" * 200_000
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="", stderr="")
+            post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                step_num=1,
+                body=oversized,
+                posted_steps=set(),
+                cwd=tmp_path,
+            )
+            sent = mock_run.call_args[0][0]
+            body_index = sent.index("--body")
+            posted_body = sent[body_index + 1]
+            assert len(posted_body) < 100_000
+            assert "truncated" in posted_body.lower()
+
+    def test_exception_does_not_raise(self, tmp_path):
+        """Any subprocess exception is logged and surfaced as False."""
+        from pdd.agentic_common import post_step_comment_once
+
+        posted = set()
+        with patch("pdd.agentic_common._find_cli_binary", return_value="/usr/bin/gh"), \
+             patch("pdd.agentic_common.subprocess.run", side_effect=OSError("boom")):
+            result = post_step_comment_once(
+                repo_owner="owner",
+                repo_name="repo",
+                issue_number=1,
+                step_num=1,
+                body="body",
+                posted_steps=posted,
+                cwd=tmp_path,
+            )
+            assert result is False
+            assert posted == set()
