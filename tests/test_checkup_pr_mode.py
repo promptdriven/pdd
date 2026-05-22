@@ -4835,3 +4835,183 @@ class TestPrHeadAdvanceAutoRerun:
             f"{len(executed_steps)} total step calls across both "
             f"iterations: {executed_steps}"
         )
+
+    # ----- Issue #1116 round-4: Checkpoint A2 (guards-and-push block) -----
+
+    def test_pr_head_advance_at_guards_block_triggers_rerun(
+        self, tmp_path: Path
+    ) -> None:
+        """Checkpoint A2: head is stable at Step-7-gate Checkpoint A but
+        advances before the registry/prompt-source guard checks. The
+        guards each post the canonical Step 7 verdict on refusal — if the
+        head moved, that verdict belongs to the OLD head and must NOT be
+        published. The orchestrator must reuse the just-fetched
+        pr_metadata (no extra _fetch_pr_metadata call) and restart.
+        """
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # iter 1: entry=A, Checkpoint A=A (no restart), push-block
+        #          fetch=B (Checkpoint A2 -> RESTART).
+        # iter 2: entry=B, Checkpoint A=B, push-block fetch=B, push OK.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 Checkpoint A
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 push-block -> A2
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 Checkpoint A
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 push-block
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ) as metadata_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_changed_files",
+            return_value=[],
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._check_architecture_registry_edit_guard",
+            return_value=None,
+        ) as registry_guard_mock, patch(
+            "pdd.agentic_checkup_orchestrator._check_prompt_source_guard",
+            return_value=None,
+        ) as prompt_guard_mock, patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="bbbbbbbb22222222",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is True, msg
+        # iter 1: 3 metadata calls (entry, ckpt A, push-block A2).
+        # iter 2: 3 metadata calls (entry, ckpt A, push-block).
+        assert metadata_mock.call_count == 6, (
+            f"expected 6 metadata calls total; got {metadata_mock.call_count}"
+        )
+        # The guards must NOT have been consulted in iter 1 (restart
+        # raised before reaching them); they run only in iter 2.
+        assert registry_guard_mock.call_count == 1, (
+            f"registry guard must run once (iter 2 only); got "
+            f"{registry_guard_mock.call_count}"
+        )
+        assert prompt_guard_mock.call_count == 1, (
+            f"prompt-source guard must run once (iter 2 only); got "
+            f"{prompt_guard_mock.call_count}"
+        )
+        push_mock.assert_called_once()
+
+    # ----- Issue #1116 round-4: --no-fix empty entry SHA fail-closed -----
+
+    def test_no_fix_empty_entry_sha_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """Issue #1116 round-4 (entry-SHA gap): when the entry
+        ``_fetch_pr_metadata`` returns no head_sha (transient gh
+        failure) BUT the post-Step-7 freshness refetch succeeds with a
+        non-empty SHA, the orchestrator must fail-closed. Pre-fix, the
+        post-step-7 check at line 1701 was gated on a non-empty
+        ``current_pr_head_sha`` and silently let the clean verdict through
+        in this case.
+
+        Expected: success=False, message indicates the entry SHA was
+        unavailable, no restart budget consumed (--no-fix is fail-closed
+        only by design)."""
+        from pdd.agentic_checkup_orchestrator import (
+            _load_persisted_refresh_count,
+        )
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Entry call returns empty payload (simulates gh hiccup);
+        # post-Step-7 freshness call returns a real SHA.
+        metadata_sequence = [
+            _pr_metadata(""),                  # entry — empty
+            _pr_metadata("ccccccccdddddddd"),  # post-Step-7 refetch
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="ccccccccdddddddd",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ) as pr_comment_mock, patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(
+                tmp_path, no_fix=True, use_github_state=True
+            )
+
+        assert success is False, (
+            "Empty entry SHA + non-empty fresh SHA must downgrade; "
+            f"got success message: {msg!r}"
+        )
+        assert "treated as unverified" in msg, msg
+        # Diagnostic must mention the missing entry baseline, not the
+        # SHA-advance wording (the entry SHA is unknown — we cannot
+        # claim it advanced).
+        assert "entry PR head SHA was unavailable" in msg, (
+            f"Diagnostic must explain WHY freshness is unverifiable; "
+            f"got: {msg!r}"
+        )
+        push_mock.assert_not_called()
+        # Canonical report still posted so the PR thread records the
+        # downgrade.
+        pr_comment_mock.assert_called_once()
+        # No restart budget consumed — fail-closed is not a lease event.
+        assert _load_persisted_refresh_count(tmp_path, 200) == 0
+        assert not self._refresh_counter_path(tmp_path, 200).exists()

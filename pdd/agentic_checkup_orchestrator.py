@@ -1969,12 +1969,18 @@ def _run_agentic_checkup_orchestrator_inner(
         # runs under --review-loop, and the fix-mode freshness lease's
         # checkpoints all explicitly skip ``no_fix``. Refetch the remote PR
         # head before publishing the canonical verification report.
-        # Fail-closed on TWO conditions (no rerun budget consumed — the
+        # Fail-closed on THREE conditions (no rerun budget consumed — the
         # lease is fix-mode only by design):
-        #   • advance confirmed  (fresh_sha != entry_sha, both non-empty)
-        #   • freshness unknown  (refetch failed / returned empty sha)
-        # An empty fresh_sha must NOT let a clean verdict through as if
-        # freshness were confirmed — unknown freshness == unverified.
+        #   • advance confirmed     (fresh_sha != entry_sha, both non-empty)
+        #   • post-run unknown      (refetch failed / returned empty sha)
+        #   • pre-run unknown       (entry sha was empty — we never had a
+        #                            baseline to compare against, so we
+        #                            cannot certify the Step 7 verdict ran
+        #                            against the head we're about to post)
+        # Issue #1116 round-4 (entry-SHA gap): a transient entry-side
+        # _fetch_pr_metadata failure must NOT later be hidden by a working
+        # post-run fetch. If we never had an entry SHA, freshness is
+        # unverifiable in either direction.
         if pr_mode and worktree_path is not None and no_fix and nofix_gate_passed:
             assert pr_owner is not None and pr_repo is not None
             assert pr_number is not None
@@ -1993,7 +1999,16 @@ def _run_agentic_checkup_orchestrator_inner(
                     f"Verdict treated as unverified; rerun pdd checkup --pr "
                     f"--no-fix."
                 )
-            elif current_pr_head_sha and nofix_fresh_sha != current_pr_head_sha:
+            elif not current_pr_head_sha:
+                stale_msg = (
+                    f"--no-fix verification on PR #{pr_number} produced a "
+                    f"clean Step 7 verdict but the entry PR head SHA was "
+                    f"unavailable (the initial _fetch_pr_metadata returned "
+                    f"empty), so freshness against the post-run head "
+                    f"({nofix_fresh_sha[:8]}) cannot be confirmed. Verdict "
+                    f"treated as unverified; rerun pdd checkup --pr --no-fix."
+                )
+            elif nofix_fresh_sha != current_pr_head_sha:
                 stale_msg = (
                     f"--no-fix verification on PR #{pr_number} produced a "
                     f"clean Step 7 verdict but the PR head advanced during "
@@ -2267,6 +2282,42 @@ def _run_agentic_checkup_orchestrator_inner(
             assert pr_number is not None
             if worktree_path is not None:
                 pr_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+
+                # ----------------------------------------------------------
+                # Issue #1116 — Checkpoint A2: registry/prompt-source guard
+                # refusal paths post the canonical Step 7 verdict via
+                # _post_pr_mode_final_report and then return. If the remote
+                # head advanced between Checkpoint A's refetch and now, that
+                # verdict belongs to the OLD head — publishing it as the
+                # canonical report would leak a stale clean verdict. Reuse
+                # the pr_metadata fetch just above (no extra GitHub I/O); if
+                # the head moved, raise restart so the outer wrapper reruns
+                # against the new head.
+                #
+                # Only fires in fix mode (no_fix=False already implied by
+                # being in the fix-mode push block here). Empty current SHA
+                # or empty fresh SHA fail-degrades to current behavior to
+                # avoid false-positive restarts.
+                # ----------------------------------------------------------
+                fresh_head_sha_a2 = str(
+                    (pr_metadata or {}).get("head_sha", "") or ""
+                )
+                if (
+                    fresh_head_sha_a2
+                    and current_pr_head_sha
+                    and fresh_head_sha_a2 != current_pr_head_sha
+                ):
+                    raise _PRHeadAdvancedRestart(
+                        old_sha=current_pr_head_sha,
+                        new_sha=fresh_head_sha_a2,
+                        reason=(
+                            "PR head advanced between Step 7 gate and "
+                            "guards-and-push block"
+                        ),
+                        cost_so_far=total_cost,
+                        model=last_model_used,
+                        step_comments=step_comments_set,
+                    )
 
                 # Codex round-1 blocker #3: prompt-source + architecture-
                 # registry guards. The review-loop runs these BEFORE its
@@ -2581,6 +2632,8 @@ def run_agentic_checkup_orchestrator(
     pr_owner: Optional[str] = None,
     pr_repo: Optional[str] = None,
     pr_number: Optional[int] = None,
+    test_scope: str = "full",
+    start_step_override: Optional[Union[int, float]] = None,
 ) -> Tuple[bool, str, float, str]:
     """Public entry point for the agentic checkup orchestrator.
 
@@ -2619,6 +2672,8 @@ def run_agentic_checkup_orchestrator(
             pr_owner=pr_owner,
             pr_repo=pr_repo,
             pr_number=pr_number,
+            test_scope=test_scope,
+            start_step_override=start_step_override,
         )
 
     # PR-mode rerun loop. ``refresh_count`` is initialized from disk so a
@@ -2656,6 +2711,8 @@ def run_agentic_checkup_orchestrator(
                 pr_owner=pr_owner,
                 pr_repo=pr_repo,
                 pr_number=pr_number,
+                test_scope=test_scope,
+                start_step_override=start_step_override,
                 # External review Finding 3: bypass load_workflow_state
                 # on restarts so a flaky GH state load can't reload
                 # stale cached step outputs even if clear_workflow_state's
