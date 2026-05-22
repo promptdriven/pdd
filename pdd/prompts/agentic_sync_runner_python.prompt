@@ -2,6 +2,7 @@
 <pdd-dependency>architecture_sync_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_langtest_python.prompt</pdd-dependency>
 <pdd-dependency>agentic_test_orchestrator_python.prompt</pdd-dependency>
+<pdd-dependency>sync_order_python.prompt</pdd-dependency>
 
 % Goal
 Write the `pdd/agentic_sync_runner.py` module.
@@ -22,7 +23,14 @@ Parallel sync engine that runs `pdd sync` for multiple modules concurrently usin
    - Tracks per-module state: pending -> running -> success | failed
 2. Method: `run() -> Tuple[bool, str, float]` — returns (all_success, summary_message, total_cost) where total_cost includes initial_cost + per-module costs
 3. Use `concurrent.futures.ThreadPoolExecutor` with `MAX_WORKERS = 4`; when `sync_options["total_budget"]` is set, run sequentially and pass only the remaining total budget to each child process so the total budget is not multiplied per module.
-4. Dependency-aware scheduling: a module starts only when all its dependencies (within target set) have status "success"
+4. Dependency-aware scheduling, SCC-aware so legitimate dependency cycles (Python late-imports, etc.) do not deadlock the runner:
+   - At construction, compute strongly connected components of the basename-induced subgraph of `dep_graph` via `pdd.sync_order.compute_sccs`. Build:
+     - `self._scc_of: Dict[str, frozenset[str]]` mapping every in-target basename to its SCC (frozenset of co-cyclic peers).
+     - `self._cyclic_sccs: Set[frozenset[str]]` containing every SCC that participates in a real cycle (size > 1, or a 1-node SCC with a self-loop). A trivial SCC (single node, no self-loop) is NOT in this set, so soft-edge logic only applies to actual cycle members.
+   - For a non-cycle pending module, it is ready only when every cross-target dep has status "success" — for any in-target dep, EVERY member of the dep's SCC must be "success" (the consumer waits for the whole upstream SCC, not just the named dep). External (not in `basenames`) deps are assumed already synced.
+   - For a pending cycle member, the SCC's effective dependencies are the union of every member's cross-SCC deps; intra-SCC edges (including self-loops) are soft. Soft-edge means a pending or success peer does not block readiness — only a failed peer does. The same whole-upstream-SCC rule applies to every cross-SCC dep of every cycle member, so an SCC may not start while ANY peer's external dep is still pending (or failed).
+   - Execution within a cyclic SCC is serialized: at most one member of a cyclic SCC may be running or scheduled per `_get_ready_modules` pass.
+   - Blocked-module classification operates on the SCC condensation (a DAG): a pending module is blocked if its SCC has any failed member, any cross-SCC dep is failed, or any cross-SCC dep's SCC is itself blocked. Walking the condensation rather than the raw dep_graph avoids the per-module DFS caching incorrect False on cycle re-entry.
 5. Dependencies outside `basenames` are omitted from `dep_graph` (partial sync). Callers should rely on `build_dep_graph_from_architecture` warnings for visibility when an architecture edge points outside the target set; the runner still assumes those deps are out of scope for this run.
 6. Failure scheduling: when a module fails, set `self.failed = True`, but do not globally pause the queue. Failed modules block only modules that depend on them through `dep_graph`; unrelated modules whose own dependencies are satisfied must continue to run so partial progress is preserved and future retries can resume from more completed modules. Blocked-module classification must be transitive: if `a` fails and `b` depends on `a`, then pending modules that depend on `b` are also blocked. Only total-budget exhaustion stops new scheduling globally, and `_budget_exhausted()` must be checked after every completed future, including failed module results, before scheduling more work.
 7. Each module runs as a `pdd sync` subprocess with `--force`, `--agentic`, `--no-steer` flags; append global `--local` before `sync` if `sync_options["local"]` is truthy; append `--target-coverage` if `sync_options["target_coverage"]` is not None; append `--one-session` if `sync_options["one_session"]` is truthy
