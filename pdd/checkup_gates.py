@@ -307,6 +307,25 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
             continue
         if not _script_is_acceptable(script_command):
             continue
+        # npm/yarn/pnpm/bun all execute ``pre<name>`` and ``post<name>``
+        # lifecycle hooks around ``<runner> run <name>``. Discovery only
+        # inspects the named script; if a malicious or untrusted PR adds
+        # ``preformat:check`` with ``curl evil.com`` or ``rm -rf``, that
+        # hook still fires when we invoke the validated script. Refuse to
+        # discover the gate when ANY pre/post hook exists for it, even an
+        # empty string — operators can drop the hook or rename the script
+        # to opt back in. We do not try to validate the hook body, because
+        # the gate value here (a generic format/typecheck) is not worth
+        # the attack surface of allowlisting more shell snippets.
+        if (
+            f"pre{script_name}" in scripts
+            or f"post{script_name}" in scripts
+        ):
+            logger.debug(
+                "checkup-gates: skipping npm:%s — pre/post lifecycle hook present",
+                script_name,
+            )
+            continue
         gates.append(
             Gate(
                 name=f"npm:{script_name}",
@@ -424,7 +443,69 @@ def _discover_python_gates(
     return gates
 
 
-def _git_diff_check_gate() -> Gate:
+def _resolve_pr_base_spec(worktree: Path, base_ref: Optional[str]) -> Optional[str]:
+    """Resolve ``base_ref`` to a refspec verifiable inside ``worktree``.
+
+    Returns the resolved refspec (e.g. ``"origin/main"``) when it exists,
+    or ``None`` when no candidate verifies. Tried in order:
+
+    1. The caller-supplied ``base_ref`` itself (already qualified).
+    2. ``origin/<base_ref>`` (fetched PR base).
+    3. ``origin/main`` / ``origin/master`` / ``main`` / ``master``.
+
+    Verification uses ``git rev-parse --verify`` with a short timeout
+    and never raises: a non-git worktree, missing tool, or hang returns
+    ``None`` and the caller falls back to the working-tree-only check.
+    """
+    candidates: List[str] = []
+    if base_ref:
+        # Prefer the remote-tracking ref so we compare against the PR's
+        # actual target. A naked ``main`` may be ahead of ``origin/main``
+        # if a local merge has happened in the worktree.
+        candidates.append(f"origin/{base_ref}")
+        candidates.append(base_ref)
+    candidates.extend(["origin/main", "origin/master", "main", "master"])
+    seen: set = set()
+    for cand in candidates:
+        if cand in seen:
+            continue
+        seen.add(cand)
+        try:
+            res = subprocess.run(
+                ["git", "-C", str(worktree), "rev-parse", "--verify", cand],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            logger.debug("checkup-gates: base verify failed for %r: %s", cand, exc)
+            continue
+        if res.returncode == 0 and res.stdout.strip():
+            return cand
+    return None
+
+
+def _git_diff_check_gate(base_spec: Optional[str] = None) -> Gate:
+    """Build the ``git diff --check`` gate.
+
+    When ``base_spec`` is provided the gate runs against the PR range
+    (``<base>...HEAD``) so a committed whitespace/conflict-marker
+    failure is caught even when the worktree itself is clean. When no
+    base is resolvable (synthetic tests, detached HEAD, etc.) we fall
+    back to the plain working-tree check — strictly weaker but
+    preserves the existing single-commit smoke-test contract.
+    """
+    if base_spec:
+        return Gate(
+            name="git-diff-check",
+            cmd=["git", "diff", "--check", f"{base_spec}...HEAD"],
+            source=f"git:{base_spec}...HEAD",
+            required_fix_hint=(
+                f"Run `git diff --check {base_spec}...HEAD` locally and fix "
+                "the whitespace/conflict marker issues it reports in the PR diff."
+            ),
+        )
     return Gate(
         name="git-diff-check",
         cmd=["git", "diff", "--check"],
@@ -465,6 +546,7 @@ def discover_gates(
     changed_files: Sequence[str],
     *,
     extra_allow: Sequence[str] = (),
+    base_ref: Optional[str] = None,
 ) -> List[Gate]:
     """Return the conservative deterministic gate set for ``worktree``.
 
@@ -478,11 +560,18 @@ def discover_gates(
     threaded through but not yet used to widen discovery. The argument is
     accepted so the CLI surface and the discovery surface can co-evolve
     without breaking signature stability.
+
+    ``base_ref`` is the PR's target branch (e.g. ``"main"``). When
+    provided and verifiable in ``worktree``, the ``git-diff-check`` gate
+    runs across the PR range (``<base>...HEAD``) so a committed
+    whitespace/conflict-marker failure is caught even when the worktree
+    itself is clean. Acceptance criterion from issue #1092.
     """
     _ = extra_allow  # reserved for v2; CLI plumbing already passes it through.
     gates: List[Gate] = []
     if _is_git_worktree(worktree):
-        gates.append(_git_diff_check_gate())
+        base_spec = _resolve_pr_base_spec(worktree, base_ref)
+        gates.append(_git_diff_check_gate(base_spec))
     gates.extend(_discover_npm_gates(worktree))
     gates.extend(_discover_python_gates(worktree, changed_files))
     # Stable order: git-diff-check first, then language-specific gates

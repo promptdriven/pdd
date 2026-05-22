@@ -3423,11 +3423,15 @@ def _enforce_gates_before_clean(
     except Exception as exc:  # noqa: BLE001 - defensive: never raise
         logger.debug("gates: changed-files resolution crashed: %s", exc, exc_info=True)
         changed_files = []
+    base_ref_value: Optional[str] = None
+    if pr_metadata and pr_metadata.get("base_ref"):
+        base_ref_value = str(pr_metadata["base_ref"]) or None
     try:
         gates = discover_gates(
             worktree,
             changed_files=tuple(changed_files),
             extra_allow=tuple(config.gate_allow),
+            base_ref=base_ref_value,
         )
     except Exception as exc:  # noqa: BLE001 - defensive
         # Discovery is allowlist-only and reads repo config files; a
@@ -3435,14 +3439,22 @@ def _enforce_gates_before_clean(
         # CLOSED with a synthetic blocker finding so the loop refuses
         # the clean verdict rather than silently shipping while the
         # gate layer was offline.
-        logger.warning("gates: discovery crashed: %s", exc, exc_info=True)
+        #
+        # Scrub the exception text BEFORE handing it to ``logger.warning``
+        # (which can otherwise persist tokens/auth URLs into CI/cloud
+        # log streams) and BEFORE storing it on ``state.gate_runs``. The
+        # downstream report/final-state writers also scrub, but the
+        # logger surface fires first.
+        scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+        logger.warning("gates: discovery crashed: %s", scrubbed_exc)
+        logger.debug("gates: discovery crash traceback", exc_info=True)
         state.gate_runs.append(
             {
                 "round": round_number,
                 "mode": mode,
                 "reviewer": reviewer,
                 "results": [],
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": scrubbed_exc,
                 "phase": "discover",
             }
         )
@@ -3477,14 +3489,22 @@ def _enforce_gates_before_clean(
         # caller's normal ``_record_gate_findings`` + pending-findings
         # path then surfaces this in the rendered report exactly like
         # any other deterministic-gate failure.
-        logger.warning("gates: run_gates crashed: %s", exc, exc_info=True)
+        #
+        # External review iter-15 Finding 3: scrub before logging.
+        # ``logger.warning(..., exc_info=True)`` would emit the raw
+        # exception text plus traceback to CI/cloud log capture; the
+        # ``str(exc)`` payload can include tokens, auth URLs, or
+        # Bearer headers that travelled through to the failure.
+        scrubbed_exc = _scrub_secrets(f"{type(exc).__name__}: {exc}")
+        logger.warning("gates: run_gates crashed: %s", scrubbed_exc)
+        logger.debug("gates: run_gates crash traceback", exc_info=True)
         state.gate_runs.append(
             {
                 "round": round_number,
                 "mode": mode,
                 "reviewer": reviewer,
                 "results": [],
-                "error": f"{type(exc).__name__}: {exc}",
+                "error": scrubbed_exc,
                 "phase": "run_gates",
             }
         )

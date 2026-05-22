@@ -5390,7 +5390,7 @@ class TestReviewLoopDeterministicGates:
 
         rounds_seen: List[int] = []
 
-        def fake_discover(worktree, changed_files, *, extra_allow=()):
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
             return [
                 gates_mod.Gate(
                     name=gate_name,
@@ -5698,7 +5698,7 @@ class TestReviewLoopDeterministicGates:
 
         # Stub a single failing gate so we can inspect the persisted
         # artifact path without exercising the full loop.
-        def fake_discover(worktree, changed_files, *, extra_allow=()):
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
             return [
                 gates_mod.Gate(
                     name="prettier-check",
@@ -5787,7 +5787,7 @@ class TestReviewLoopDeterministicGates:
         )
         import pdd.checkup_gates as gates_mod
 
-        def fake_discover(worktree, changed_files, *, extra_allow=()):
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
             return [
                 gates_mod.Gate(
                     name="prettier-check",
@@ -5823,6 +5823,111 @@ class TestReviewLoopDeterministicGates:
             "runtimeerror" in evidence_lower or "runner kaboom" in evidence_lower
         )
 
+    def test_enforce_gates_runner_crash_scrubs_secrets_from_logs_and_state(
+        self, monkeypatch: Any, tmp_path: Path, caplog: Any
+    ) -> None:
+        """Iter-15 Finding 3: ``str(exc)`` from a crashed gate runner can
+        carry tokens (``OPENAI_API_KEY``, ``GITHUB_TOKEN``, ``sk-…``,
+        ``Bearer`` headers). The pre-fix code logged it raw and stored
+        it raw on ``state.gate_runs`` before the report/final-state
+        writers scrubbed downstream. CI/cloud log capture is a public
+        surface — scrub BEFORE the logger and the state row, not after.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
+            return [
+                gates_mod.Gate(
+                    name="prettier-check",
+                    cmd=["echo", "x"],
+                    source="package.json:scripts.format:check",
+                )
+            ]
+
+        secret = "sk-supersecret-ABCDEFGHIJKLMNOPQRSTUVWX"
+        def boom(*a: Any, **k: Any):
+            raise RuntimeError(f"upstream barfed token={secret}")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", fake_discover)
+        monkeypatch.setattr(gates_mod, "run_gates", boom)
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            findings = _enforce_gates_before_clean(
+                state=state,
+                config=ReviewLoopConfig(),
+                worktree=tmp_path,
+                artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+                round_number=1,
+                mode="review",
+                pr_metadata={},
+                reviewer="codex",
+            )
+
+        assert findings, "crash must still fail closed"
+        # The warning-level log line MUST NOT carry the raw secret.
+        warning_text = "\n".join(
+            rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"
+        )
+        assert "gates: run_gates crashed" in warning_text
+        assert secret not in warning_text, (
+            "raw token leaked into WARNING log before _scrub_secrets"
+        )
+        # The state.gate_runs row (persisted into final-state.json) must
+        # also be scrubbed at write time, not just at render time.
+        assert state.gate_runs, "crash must record a gate_runs row"
+        raw_row_error = state.gate_runs[-1].get("error", "")
+        assert secret not in raw_row_error, (
+            "raw token leaked into state.gate_runs[].error"
+        )
+
+    def test_enforce_gates_discover_crash_scrubs_secrets_from_logs(
+        self, monkeypatch: Any, tmp_path: Path, caplog: Any
+    ) -> None:
+        """Iter-15 Finding 3: same scrub guarantee for the discovery
+        crash path (``discover_gates`` raising)."""
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+        import pdd.checkup_gates as gates_mod
+
+        secret = "sk-anothersecret-1234567890ABCDEFGHIJ"
+        def boom_discover(*a: Any, **k: Any):
+            raise RuntimeError(f"pyproject barfed token={secret}")
+
+        monkeypatch.setattr(gates_mod, "discover_gates", boom_discover)
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            findings = _enforce_gates_before_clean(
+                state=state,
+                config=ReviewLoopConfig(),
+                worktree=tmp_path,
+                artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+                round_number=1,
+                mode="review",
+                pr_metadata={},
+                reviewer="codex",
+            )
+
+        assert findings
+        warning_text = "\n".join(
+            rec.getMessage() for rec in caplog.records if rec.levelname == "WARNING"
+        )
+        assert "gates: discovery crashed" in warning_text
+        assert secret not in warning_text
+        raw_row_error = state.gate_runs[-1].get("error", "")
+        assert secret not in raw_row_error
+
     def test_enforce_gates_runner_crash_blocks_clean_verdict(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -5836,7 +5941,7 @@ class TestReviewLoopDeterministicGates:
 
         self._patch_io(monkeypatch, tmp_path)
 
-        def fake_discover(worktree, changed_files, *, extra_allow=()):
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
             return [
                 gates_mod.Gate(
                     name="prettier-check",
@@ -5889,7 +5994,7 @@ class TestReviewLoopDeterministicGates:
 
         self._patch_io(monkeypatch, tmp_path)
 
-        def fake_discover(worktree, changed_files, *, extra_allow=()):
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
             return [
                 gates_mod.Gate(
                     name="prettier-check",
@@ -5965,7 +6070,7 @@ class TestReviewLoopDeterministicGates:
         # repro flagged this exact class.
         secret_token = "sk-ant-fake-1234567890abcdef"
 
-        def fake_discover(worktree, changed_files, *, extra_allow=()):
+        def fake_discover(worktree, changed_files, *, extra_allow=(), base_ref=None):
             return [
                 gates_mod.Gate(
                     name="prettier-check",
