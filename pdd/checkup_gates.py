@@ -477,11 +477,21 @@ def _resolve_pr_base_spec(worktree: Path, base_ref: Optional[str]) -> Optional[s
     """
     candidates: List[str] = []
     if base_ref:
-        # Prefer the remote-tracking ref so we compare against the PR's
-        # actual target. A naked ``main`` may be ahead of ``origin/main``
-        # if a local merge has happened in the worktree.
-        candidates.append(f"origin/{base_ref}")
-        candidates.append(base_ref)
+        # When the caller already resolved a fully-qualified ref
+        # (e.g. ``refs/remotes/pdd-checkup/pr-1095/base`` populated by
+        # ``_refresh_pr_base_ref``), try it FIRST and do not also try
+        # ``origin/refs/...`` — that path is guaranteed to fail and
+        # just wastes a git-rev-parse call on every gate-discovery
+        # invocation.
+        if base_ref.startswith("refs/"):
+            candidates.append(base_ref)
+        else:
+            # Prefer the remote-tracking ref so we compare against the
+            # PR's actual target. A naked ``main`` may be ahead of
+            # ``origin/main`` if a local merge has happened in the
+            # worktree.
+            candidates.append(f"origin/{base_ref}")
+            candidates.append(base_ref)
     candidates.extend(["origin/main", "origin/master", "main", "master"])
     seen: set = set()
     for cand in candidates:

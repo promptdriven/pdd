@@ -44,8 +44,8 @@ from rich.console import Console
 from .agentic_change import _run_gh_command
 from .agentic_checkup_orchestrator import (
     _get_git_root,
+    _refresh_pr_base_ref,
     _setup_pr_worktree,
-    fetch_pr_base_ref,
 )
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
@@ -840,30 +840,44 @@ def run_checkup_review_loop(
         _post_review_loop_report(context, report, use_github_state)
         return True, report, state.total_cost, state.last_model
 
+    # Issue #1092: gates need the PR's actual base_ref so
+    # ``git-diff-check`` runs against the real PR range. Review-only
+    # historically short-circuited the metadata fetch (review-only never
+    # pushed, so the push metadata felt unnecessary), but that path
+    # also dropped ``base_ref`` and left gates unable to compute the PR
+    # range. Fetch metadata whenever gates are enabled, even in
+    # review-only mode, so non-main-base PRs do not silently lose the
+    # PR-range guarantee.
+    skip_metadata = config.review_only and not config.enable_gates
     pr_metadata = (
         {}
-        if config.review_only
+        if skip_metadata
         else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
     )
-    # Issue #1092: fetch the PR's actual base ref into the local clone so
-    # the deterministic gate layer's ``git-diff-check`` runs against the
-    # real PR range. Without this, gates targeting any non-``main`` base
-    # (release branches, fork bases, anything not already in
-    # ``origin/main``/``origin/master``) silently fall back to either a
-    # stale ``origin/main`` comparison or the worktree-only check, which
-    # is the exact gap the issue calls out. The helper never raises and
-    # the gate layer's ``_resolve_pr_base_spec`` already falls back
-    # gracefully when the fetch could not land the ref.
+    # Issue #1092: refresh the PR's base ref into the dedicated
+    # ``refs/remotes/pdd-checkup/pr-<N>/base`` local ref so the
+    # deterministic gate layer's ``git-diff-check`` runs against the
+    # real PR range. We reuse the orchestrator's
+    # ``_refresh_pr_base_ref`` helper (already used by the legacy
+    # checkup orchestrator at the PR-base-resolution boundary) so the
+    # fetched ref lives in a dedicated namespace and does NOT mutate
+    # the user's ``refs/remotes/origin/*`` tracking refs. On success
+    # the helper populates ``pr_metadata['base_local_ref']`` with the
+    # resolved ref; on failure it populates
+    # ``pr_metadata['base_ref_fetch_error']`` and the gate layer falls
+    # back to its standard candidate search (``origin/<base>`` etc.).
     if config.enable_gates and pr_metadata and pr_metadata.get("base_ref"):
         try:
-            fetch_pr_base_ref(
-                cwd,
+            _refresh_pr_base_ref(
+                worktree,
                 context.pr_owner,
                 context.pr_repo,
-                str(pr_metadata["base_ref"]),
+                context.pr_number,
+                pr_metadata,
+                quiet,
             )
         except Exception as exc:  # noqa: BLE001 - defensive
-            logger.debug("gates: PR base-ref fetch failed: %s", exc)
+            logger.debug("gates: PR base-ref refresh failed: %s", exc)
     # Capture the SHA the reviewer will actually see in the worktree.
     # This is the comparison target for the R-V5 re-fetch when a
     # reviewer path returns ``clean`` without ever invoking a fixer
@@ -3781,8 +3795,21 @@ def _enforce_gates_before_clean(
         logger.debug("gates: changed-files resolution crashed: %s", exc, exc_info=True)
         changed_files = []
     base_ref_value: Optional[str] = None
-    if pr_metadata and pr_metadata.get("base_ref"):
-        base_ref_value = str(pr_metadata["base_ref"]) or None
+    # Issue #1092: prefer the dedicated tracking ref populated by
+    # ``_refresh_pr_base_ref`` (``refs/remotes/pdd-checkup/pr-<N>/base``)
+    # because it cannot collide with the user's ``refs/remotes/origin/*``
+    # tracking refs — a real concern when the operator's ``origin`` is
+    # their fork and a PR base named ``release-1.x`` would otherwise
+    # overwrite their own tracking ref. Fall back to the raw branch
+    # name so ``_resolve_pr_base_spec`` can search the standard
+    # ``origin/<base>``/``<base>``/``main``/``master`` candidates when
+    # the refresh helper could not land the ref.
+    if pr_metadata:
+        base_local_ref = pr_metadata.get("base_local_ref")
+        if isinstance(base_local_ref, str) and base_local_ref.strip():
+            base_ref_value = base_local_ref.strip()
+        elif pr_metadata.get("base_ref"):
+            base_ref_value = str(pr_metadata["base_ref"]) or None
     try:
         gates = discover_gates(
             worktree,

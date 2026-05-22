@@ -376,6 +376,47 @@ class TestDiscoverGates:
         if len(diff_gate.cmd) > 3:
             assert diff_gate.cmd[3].endswith("...HEAD")
 
+    def test_git_diff_check_accepts_fully_qualified_local_ref(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-17 Finding 2: ``_refresh_pr_base_ref`` lands the PR base
+        into ``refs/remotes/pdd-checkup/pr-<N>/base`` so it cannot
+        collide with the operator's own ``origin`` tracking refs. The
+        gate resolver MUST accept that fully-qualified ref directly
+        (instead of trying ``origin/refs/...`` and falling through to
+        the generic candidate set, which would silently drop the PR
+        range)."""
+        from pdd.checkup_gates import discover_gates
+
+        subprocess.run(["git", "init", "-q", "-b", "main"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
+             "--allow-empty", "-m", "init", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        # Manufacture the dedicated tracking ref that
+        # ``_refresh_pr_base_ref`` would produce in production.
+        local_ref = "refs/remotes/pdd-checkup/pr-1/base"
+        subprocess.run(
+            ["git", "update-ref", local_ref, "HEAD"],
+            cwd=tmp_path,
+            check=True,
+        )
+        # Synthetic "PR" branch with a clean working tree.
+        subprocess.run(["git", "checkout", "-q", "-b", "feature"], cwd=tmp_path, check=True)
+        subprocess.run(
+            ["git", "-c", "user.name=t", "-c", "user.email=t@x", "commit",
+             "--allow-empty", "-m", "feat", "-q"],
+            cwd=tmp_path,
+            check=True,
+        )
+        gates = discover_gates(tmp_path, changed_files=(), base_ref=local_ref)
+        diff_gate = next(g for g in gates if g.name == "git-diff-check")
+        # The gate must run against the dedicated ref directly, not
+        # ``origin/refs/...`` or a fallback like ``main...HEAD``.
+        assert diff_gate.cmd == ["git", "diff", "--check", f"{local_ref}...HEAD"]
+
     def test_tsc_noemit_skipped_when_node_modules_typescript_absent(
         self, tmp_path: Path
     ) -> None:

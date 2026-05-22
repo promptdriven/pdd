@@ -749,10 +749,22 @@ class TestCheckupReviewLoopRuntime:
         import pdd.checkup_review_loop as mod
 
         monkeypatch.setattr(mod, "_setup_pr_worktree", lambda *a, **k: (tmp_path, None))
+        # Iter-17 Finding 3: review-only with gates enabled (the default)
+        # now fetches PR metadata so the gate layer can compute the PR
+        # range against a non-``main`` base. The test's original
+        # ``pytest.fail`` here predates that change; return a minimal
+        # valid metadata payload instead, and keep the strict
+        # no-commit/no-push assertion below — that is the actual
+        # invariant the test is pinning.
         monkeypatch.setattr(
             mod,
             "_fetch_pr_metadata",
-            lambda *a, **k: pytest.fail("metadata fetch"),
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "main",
+                "head_sha": "a" * 40,
+            },
         )
         monkeypatch.setattr(
             mod,
@@ -10860,3 +10872,130 @@ class TestReviewLoopDeterministicGates:
             round_number=2,
         )
         assert r1[0].key == r2[0].key
+
+    def test_review_loop_calls_refresh_pr_base_ref_when_gates_enabled(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-17 Finding 1+2: gates need the PR's actual base ref, and
+        the refresh MUST land it in the dedicated
+        ``refs/remotes/pdd-checkup/pr-<N>/base`` namespace (NOT
+        ``refs/remotes/origin/<base>``, which would mutate the
+        operator's tracking refs when their origin is a fork)."""
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # The default _fetch_pr_metadata stub omits base_ref; override
+        # to surface a non-main base so the refresh path fires.
+        monkeypatch.setattr(
+            mod,
+            "_fetch_pr_metadata",
+            lambda *a, **k: {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "release-1.4",
+                "head_sha": "a" * 40,
+            },
+        )
+        calls: List[Dict[str, Any]] = []
+
+        def fake_refresh(
+            worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet
+        ):
+            calls.append({"owner": pr_owner, "repo": pr_repo, "n": pr_number})
+            pr_metadata["base_local_ref"] = (
+                f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
+            )
+
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", fake_refresh)
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1, 2, 3))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            if "fix" in kwargs["label"]:
+                return True, json.dumps(
+                    {"summary": "noop", "dispositions": {}}
+                ), 0.05, role
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # The refresh helper must have been invoked exactly once.
+        assert len(calls) == 1, calls
+        # The gate finding must still surface so the loop refuses clean.
+        assert "gate:prettier-check" in report
+
+    def test_review_only_still_fetches_metadata_when_gates_enabled(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-17 Finding 3: review-only used to short-circuit
+        ``_fetch_pr_metadata`` to ``{}``, which dropped ``base_ref``
+        and left gates unable to compute the PR range on non-``main``
+        bases. When gates are enabled the metadata fetch MUST run
+        regardless of ``review_only``."""
+        from pdd.checkup_review_loop import (
+            run_checkup_review_loop,
+            ReviewLoopConfig,
+        )
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        fetch_calls: List[Tuple[str, str, int]] = []
+
+        def fake_fetch(owner, repo, n):
+            fetch_calls.append((owner, repo, n))
+            return {
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "base_ref": "release-1.4",
+                "head_sha": "a" * 40,
+            }
+
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", fake_fetch)
+        refresh_calls: List[int] = []
+
+        def fake_refresh(
+            worktree, pr_owner, pr_repo, pr_number, pr_metadata, quiet
+        ):
+            refresh_calls.append(pr_number)
+            pr_metadata["base_local_ref"] = (
+                f"refs/remotes/pdd-checkup/pr-{pr_number}/base"
+            )
+
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", fake_refresh)
+        self._stub_failing_gate(monkeypatch, fail_rounds=(1,))
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        config = ReviewLoopConfig(
+            reviewers="codex",
+            reviewer="codex",
+            fixer=None,
+            review_only=True,
+            max_rounds=1,
+        )
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=config,
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Metadata fetch AND base-ref refresh must both fire even in
+        # review-only mode.
+        assert fetch_calls, "metadata fetch must run when gates are on"
+        assert refresh_calls, "base-ref refresh must run when gates are on"
+        assert "gate:prettier-check" in report
