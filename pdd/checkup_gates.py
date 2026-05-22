@@ -165,6 +165,13 @@ _FORBIDDEN_SCRIPT_FRAGMENTS: Tuple[str, ...] = (
     "git push",
     "rm -",
     "rimraf",
+    # Iter-26 Finding 2: ``--cache`` produces ``.eslintcache`` /
+    # ``.prettiercache`` / ``.tsbuildinfo`` artifacts next to the
+    # source, which the loop's downstream commit/push helper can
+    # stage into the PR on repos whose .gitignore does not exclude
+    # them. Gates must be non-mutating (issue #1092 product
+    # requirement).
+    "--cache",
 )
 
 
@@ -212,8 +219,20 @@ _SHELL_METACHAR_TOKENS: Tuple[str, ...] = (
 _ACCEPTABLE_SCRIPT_HEADS: Tuple[str, ...] = (
     "prettier --check",
     "tsc --noemit",
+    # Iter-26 Finding 1: ``tsc -p <project>`` without ``--noEmit``
+    # writes .js/.d.ts/.tsbuildinfo files next to the source — bare
+    # ``tsc -p`` is therefore NOT acceptable. ``_script_is_acceptable``
+    # accepts the ``tsc -p`` head only when the script body ALSO
+    # contains ``--noEmit`` somewhere in its argv (see the explicit
+    # check in ``_script_is_acceptable``); the head string itself is
+    # kept as ``tsc -p`` so the head match still works.
     "tsc -p",
-    "eslint",  # ``eslint`` alone is only accepted when no fix flag appears.
+    # ``eslint`` is accepted ONLY when ``--no-fix`` is explicitly
+    # present (the prompt-side contract). ESLint config files can
+    # silently enable ``fix`` mode and mutate the worktree on
+    # certain projects, so we require the operator to opt out
+    # rather than guessing.
+    "eslint",
 )
 
 
@@ -315,10 +334,22 @@ def _script_is_acceptable(command: str) -> bool:
                 break
     for head in _ACCEPTABLE_SCRIPT_HEADS:
         if stripped.startswith(head):
-            # eslint without an explicit ``--fix``/no-fix marker — the
-            # script could mutate the worktree on certain configs, so
-            # we require an explicit ``--no-fix`` to opt in.
-            if head == "eslint" and "--fix" in stripped:
+            # Iter-26 Finding 1: ``tsc -p <project>`` without
+            # ``--noEmit`` writes .js/.d.ts/.tsbuildinfo files. The
+            # ``tsc --noemit`` head matches both ``tsc --noEmit`` and
+            # ``tsc --noEmit -p foo.json`` directly; ``tsc -p`` only
+            # matches when ``--noEmit`` ALSO appears somewhere in the
+            # argv (otherwise reject — gates must be non-mutating).
+            if head == "tsc -p" and "--noemit" not in stripped:
+                return False
+            # Iter-26 Finding 2: ``eslint`` requires explicit
+            # ``--no-fix``. The prior rule (accept unless ``--fix`` is
+            # present) was too permissive: ESLint config files can
+            # silently enable fix mode via ``"fix": true`` in the
+            # config object even when the CLI argv has no ``--fix``,
+            # and the worktree gets mutated. Force operators to opt
+            # out explicitly.
+            if head == "eslint" and "--no-fix" not in stripped:
                 return False
             return True
     return False

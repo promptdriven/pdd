@@ -370,6 +370,59 @@ class TestDiscoverGates:
                 f"shell metachar payload {payload!r} must be rejected"
             )
 
+    def test_script_rejects_tsc_p_without_noemit(self) -> None:
+        """Iter-26 Finding 1: ``tsc -p <project>`` without ``--noEmit``
+        writes .js / .d.ts / .tsbuildinfo files to the worktree. The
+        head match alone is not enough — require ``--noEmit`` in the
+        argv before accepting.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "tsc -p tsconfig.json",
+            "tsc -p .",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"tsc -p without --noEmit must be rejected: {payload!r}"
+            )
+        # The safe forms still pass.
+        assert _script_is_acceptable("tsc --noEmit") is True
+        assert _script_is_acceptable("tsc --noEmit -p tsconfig.json") is True
+        assert _script_is_acceptable("tsc -p tsconfig.json --noEmit") is True
+
+    def test_script_rejects_eslint_without_no_fix(self) -> None:
+        """Iter-26 Finding 2: bare ``eslint .`` is rejected — ESLint
+        config files can enable fix mode silently via
+        ``"fix": true``. Require explicit ``--no-fix`` opt-out.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "eslint .",
+            "eslint src/",
+            "eslint --max-warnings 0 .",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"eslint without --no-fix must be rejected: {payload!r}"
+            )
+        assert _script_is_acceptable("eslint --no-fix .") is True
+
+    def test_script_rejects_cache_flag(self) -> None:
+        """Iter-26 Finding 2: ``--cache`` writes a worktree-resident
+        cache file (``.eslintcache`` / ``.prettiercache``). Gates
+        must be non-mutating, so any ``--cache`` flag is rejected.
+        """
+        from pdd.checkup_gates import _script_is_acceptable
+
+        for payload in (
+            "eslint --no-fix --cache .",
+            "prettier --check --cache .",
+            "npx --no-install eslint --no-fix --cache .",
+        ):
+            assert _script_is_acceptable(payload) is False, (
+                f"--cache payload must be rejected: {payload!r}"
+            )
+
     def test_script_rejects_bare_npx_prefix(self) -> None:
         """Iter-22 Finding 2: ``npm run <script>`` lets the script body
         execute. A script body of ``npx tsc --noEmit`` or
