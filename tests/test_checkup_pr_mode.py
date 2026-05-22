@@ -4303,3 +4303,384 @@ class TestPrHeadAdvanceAutoRerun:
         # No restart consumed -> sidecar never created.
         assert _load_persisted_refresh_count(tmp_path, 200) == 0
         assert not self._refresh_counter_path(tmp_path, 200).exists()
+
+    # ----- External review Finding 1: --no-fix head-freshness -----
+
+    def test_no_fix_head_advance_after_step7_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """External review Finding 1: --no-fix --pr mode must NOT publish
+        a stale clean verdict if the head advanced during the run.
+        ``_finalize``'s fail-closed downgrade only runs under
+        --review-loop, so the orchestrator owns this guardrail.
+
+        Expected: success=False with a diagnostic citing the SHA
+        transition and "treated as unverified"; canonical report still
+        posts (so the PR thread shows the downgrade); no restart budget
+        consumed (--no-fix is fix-mode-exclusive by design)."""
+        from pdd.agentic_checkup_orchestrator import (
+            _load_persisted_refresh_count,
+        )
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Entry SHA = A; post-Step-7 refetch returns B -> stale.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # entry
+            _pr_metadata("bbbbbbbb22222222"),  # post-gate freshness check
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="bbbbbbbb22222222",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ) as pr_comment_mock, patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(
+                tmp_path, no_fix=True, use_github_state=True
+            )
+
+        assert success is False, (
+            "--no-fix + head advance must downgrade to failure; "
+            f"got success message: {msg!r}"
+        )
+        assert "aaaaaaaa" in msg and "bbbbbbbb" in msg, (
+            f"Diagnostic must show SHA transition; got: {msg!r}"
+        )
+        assert "treated as unverified" in msg, msg
+        # No push in --no-fix mode.
+        push_mock.assert_not_called()
+        # Canonical report still posted so the PR thread records what
+        # was verified and why it was downgraded.
+        pr_comment_mock.assert_called_once()
+        # Critical: budget remains unspent — the lease is fix-mode only.
+        assert _load_persisted_refresh_count(tmp_path, 200) == 0
+        assert not self._refresh_counter_path(tmp_path, 200).exists()
+
+    def test_no_fix_head_unchanged_after_step7_succeeds(
+        self, tmp_path: Path
+    ) -> None:
+        """External review Finding 1, happy variant: when the no-fix
+        post-Step-7 refetch confirms the head is unchanged, the verdict
+        is published normally (success=True, no downgrade)."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Entry SHA = A; post-Step-7 refetch returns A again -> clean.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # entry
+            _pr_metadata("aaaaaaaa11111111"),  # post-gate freshness check
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa11111111",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(
+                tmp_path, no_fix=True, use_github_state=True
+            )
+
+        assert success is True, msg
+        # No push in --no-fix mode regardless.
+        push_mock.assert_not_called()
+        # No diagnostic — the verdict is clean.
+        assert "treated as unverified" not in msg
+
+    # ----- External review Finding 2: step_comments preserved on restart -----
+
+    def test_step_comments_preserved_across_restart(
+        self, tmp_path: Path
+    ) -> None:
+        """External review Finding 2: after a restart, the next inner
+        iteration must NOT re-post per-step issue comments that were
+        already posted in the prior iteration.
+
+        Mechanism: ``_PRHeadAdvancedRestart`` carries the inner's
+        ``step_comments_set`` and the outer wrapper replays it into the
+        next iteration via ``_carried_step_comments``. We assert this by
+        intercepting ``post_step_comment_once``: every (step_num,
+        iteration) composite key must appear at most once across the
+        entire wrapper run, even though both iterations exercise the
+        full step pipeline."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+        posted_step_keys: list[int] = []
+
+        def fake_post_once(
+            *,
+            repo_owner,  # noqa: ANN001
+            repo_name,
+            issue_number,
+            step_num,
+            body,
+            posted_steps,
+            cwd,
+        ) -> bool:
+            # Honor the dedup set the orchestrator passes in — the
+            # production helper does the same thing, but stubbing
+            # post_step_comment_once via patch() bypasses that path. We
+            # have to model the dedup contract so the test exercises it.
+            if step_num in posted_steps:
+                return False
+            posted_steps.add(step_num)
+            posted_step_keys.append(step_num)
+            return True
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # iter 1: entry=A, ckptA=B -> restart.
+        # iter 2: entry=B, ckptA=B, push prefetch=B, push OK.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 ckptA -> restart
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 ckptA
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 push prefetch
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="bbbbbbbb22222222",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment_once",
+            side_effect=fake_post_once,
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is True, msg
+        # The dedup contract: every composite key (step_num × iteration)
+        # appears at most once across the entire wrapper invocation.
+        assert len(posted_step_keys) == len(set(posted_step_keys)), (
+            "Per-step comments must be posted at most once across "
+            f"restarts; saw duplicate keys in: {posted_step_keys}"
+        )
+        # And we must have at least one comment posted from iter 1 that
+        # was NOT re-posted in iter 2 — that's the property the
+        # preservation actually buys us.
+        assert len(posted_step_keys) > 0, (
+            "Expected at least one per-step comment to have been posted"
+        )
+
+    # ----- External review Finding 3: skip state-load on restart -----
+
+    def test_restart_skips_load_workflow_state_even_if_clear_fails(
+        self, tmp_path: Path
+    ) -> None:
+        """External review Finding 3: on restart iterations the outer
+        wrapper must bypass ``load_workflow_state`` entirely. This is
+        defense-in-depth against the case where ``clear_workflow_state``'s
+        GitHub DELETE silently fails AND the next ``_fetch_pr_metadata``
+        flakes back to the old SHA — the identity guard would otherwise
+        accept the stale cache.
+
+        We force the worst case: ``clear_workflow_state`` raises (caught
+        by outer's try/except), ``load_workflow_state`` would return a
+        populated stale state if asked, and the next entry-fetch SHA
+        equals the old one. Iter 2 must still treat the worktree as
+        fresh (no resume), which we verify by ``load_workflow_state``
+        being called exactly once (iter 1 only)."""
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        # The stale state that load_workflow_state would return if
+        # iter 2 ever consulted it. Populated mode/SHA so identity
+        # guard would accept it.
+        stale_state = {
+            "workflow": "checkup",
+            "issue_number": 99,
+            "last_completed_step": 7,
+            "step_outputs": {"7": _step7_clean_output()},
+            "total_cost": 0.0,
+            "model_used": "fake-model",
+            "github_comment_id": None,
+            "changed_files": [],
+            "worktree_path": str(wt),
+            "mode": "pr",
+            "pr_number": 200,
+            "pr_owner": "o",
+            "pr_repo": "r",
+            # Old SHA — matches what iter-2 entry-fetch returns below.
+            "pr_head_sha": "aaaaaaaa11111111",
+            "step_comments": [],
+        }
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # iter 1: entry=A, ckptA=B -> restart.
+        # iter 2: entry=A (flake — old SHA returned by the next
+        #         _fetch_pr_metadata), ckptA=A, push prefetch=A.
+        # The flake matters because if iter 2 ALSO went through
+        # load_workflow_state, the identity guard would compare cached
+        # pr_head_sha="A" to current_pr_head_sha="A" and ACCEPT the
+        # stale cache — skipping every step and jumping straight to
+        # push. The fix (_force_skip_state_load on restart) bypasses
+        # load_workflow_state, so iter 2 always runs every step fresh.
+        metadata_sequence = [
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 ckptA -> restart
+            _pr_metadata("aaaaaaaa11111111"),  # iter 2 entry (flake)
+            _pr_metadata("aaaaaaaa11111111"),  # iter 2 ckptA — no restart
+            _pr_metadata("aaaaaaaa11111111"),  # iter 2 push prefetch
+        ]
+        executed_steps: list = []
+
+        def tracking_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            executed_steps.append(step_num)
+            return fake_step(step_num, *_args, **_kwargs)
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=tracking_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(stale_state, None),
+        ) as load_mock, patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            # The first call (outer wrapper's clear-on-restart) raises
+            # to simulate GitHub DELETE flake; subsequent calls
+            # (terminal-success clear in the inner) are no-op. This
+            # mirrors the production failure mode: clear_workflow_state
+            # can silently fail without raising, but if it DID raise the
+            # outer's try/except already absorbs it. Either way iter 2
+            # must still bypass load_workflow_state.
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state",
+            side_effect=[RuntimeError("simulated GitHub DELETE flake"), None, None],
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="aaaaaaaa11111111",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(tmp_path)
+
+        assert success is True, msg
+        # Iter 2 must have BYPASSED load_workflow_state (and therefore
+        # never had a chance to accept the stale cache that would have
+        # short-circuited every step).
+        assert load_mock.call_count == 1, (
+            "load_workflow_state must be called exactly once (iter 1 "
+            f"only); iter 2 must use _force_skip_state_load. Got: "
+            f"{load_mock.call_count} calls"
+        )
+        # Push ran in iter 2 (proves the inner reached the push block).
+        push_mock.assert_called_once()
+        # Iter 2 ran every step fresh — if state-load were honored, the
+        # stale state (last_completed_step=7) would have made the inner
+        # jump directly to push and run zero steps in iter 2. Across
+        # both iterations there should be at least 18 step calls
+        # (9 per iteration × 2). Iter 1 ran steps 1-7 (8 calls) before
+        # restart, iter 2 ran all 9 (steps 1-7 plus step 6 sub-steps).
+        # Lower bound: > 9 confirms iter-2 didn't resume.
+        assert len(executed_steps) > 9, (
+            "iter 2 must have run steps fresh; instead saw only "
+            f"{len(executed_steps)} total step calls across both "
+            f"iterations: {executed_steps}"
+        )

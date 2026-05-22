@@ -85,6 +85,12 @@ class _PRHeadAdvancedRestart(Exception):
 
     Carries the cost and model accumulated by the inner before the
     restart so the outer can produce an honest cumulative-cost return.
+
+    External review Finding 2: also carries the inner's ``step_comments``
+    set so the outer wrapper can replay it into the next iteration and
+    prevent duplicate per-step issue comments (the iteration's
+    composite-key dedup set would otherwise reset to empty after
+    ``clear_workflow_state`` wipes the stored ``step_comments`` field).
     """
 
     def __init__(
@@ -94,6 +100,7 @@ class _PRHeadAdvancedRestart(Exception):
         reason: str,
         cost_so_far: float = 0.0,
         model: str = "unknown",
+        step_comments: Optional[Set[int]] = None,
     ) -> None:
         super().__init__(
             f"PR head advanced from {old_sha[:8]} to {new_sha[:8]}: {reason}"
@@ -103,6 +110,7 @@ class _PRHeadAdvancedRestart(Exception):
         self.reason = reason
         self.cost_so_far = cost_so_far
         self.model = model
+        self.step_comments = set(step_comments) if step_comments else set()
 
 
 def _refresh_count_path(cwd: Path, pr_number: int) -> Path:
@@ -1120,6 +1128,10 @@ def _run_agentic_checkup_orchestrator_inner(
     pr_number: Optional[int] = None,
     test_scope: str = "full",
     start_step_override: Optional[Union[int, float]] = None,
+    # External review (issue #1116). Both default to "off"; set only by
+    # the outer wrapper on restart iterations.
+    _force_skip_state_load: bool = False,
+    _carried_step_comments: Optional[Set[int]] = None,
 ) -> Tuple[bool, str, float, str]:
     """Orchestrate the 8-step agentic checkup workflow.
 
@@ -1186,15 +1198,24 @@ def _run_agentic_checkup_orchestrator_inner(
 
     # Resume: load existing state if available.
     state_dir = _get_state_dir(cwd)
-    state, loaded_gh_id = load_workflow_state(
-        cwd=cwd,
-        issue_number=issue_number,
-        workflow_type="checkup",
-        state_dir=state_dir,
-        repo_owner=repo_owner,
-        repo_name=repo_name,
-        use_github_state=use_github_state,
-    )
+    # External review Finding 3: on restart iterations the outer wrapper
+    # sets ``_force_skip_state_load=True`` so a flaky GitHub state load
+    # cannot reload stale cached step outputs even if ``clear_workflow_
+    # state``'s GitHub DELETE silently failed. Defense-in-depth around
+    # the clear-then-reload path.
+    if _force_skip_state_load:
+        state = None
+        loaded_gh_id = None
+    else:
+        state, loaded_gh_id = load_workflow_state(
+            cwd=cwd,
+            issue_number=issue_number,
+            workflow_type="checkup",
+            state_dir=state_dir,
+            repo_owner=repo_owner,
+            repo_name=repo_name,
+            use_github_state=use_github_state,
+        )
 
     step_outputs: Dict[str, str] = {}
     last_completed_step = 0
@@ -1397,7 +1418,14 @@ def _run_agentic_checkup_orchestrator_inner(
             context["files_to_stage"] = ", ".join(changed_files)
 
     if state is None:
-        step_comments_set: Set[int] = set()
+        # External review Finding 2: when re-entering after a restart,
+        # the outer wrapper passes the previous iteration's
+        # ``step_comments_set`` so per-step issue comments aren't
+        # re-posted on the new iteration. Defaults to a fresh empty set
+        # when not provided (every non-restart entry path).
+        step_comments_set: Set[int] = (
+            set(_carried_step_comments) if _carried_step_comments else set()
+        )
     else:
         step_comments_set = normalize_step_comments_state(state.get("step_comments"))
 
@@ -1936,6 +1964,50 @@ def _run_agentic_checkup_orchestrator_inner(
                 last_model_used,
             )
 
+        # External review Finding 1: in --no-fix --pr mode the orchestrator
+        # is the only authority — ``_finalize``'s fail-closed downgrade only
+        # runs under --review-loop, and the fix-mode freshness lease's
+        # checkpoints all explicitly skip ``no_fix``. Refetch the remote PR
+        # head before publishing the canonical verification report; if the
+        # head advanced during the run, downgrade to failure with a
+        # diagnostic so a stale clean verdict isn't posted as fresh.
+        # Fail-closed (no rerun budget consumed) — the lease is fix-mode
+        # only by design.
+        if pr_mode and worktree_path is not None and no_fix and nofix_gate_passed:
+            assert pr_owner is not None and pr_repo is not None
+            assert pr_number is not None
+            try:
+                nofix_fresh_metadata = _fetch_pr_metadata(pr_owner, pr_repo, pr_number)
+            except Exception:  # noqa: BLE001 — metadata is best-effort
+                nofix_fresh_metadata = {}
+            nofix_fresh_sha = str(
+                (nofix_fresh_metadata or {}).get("head_sha", "") or ""
+            )
+            if (
+                nofix_fresh_sha
+                and current_pr_head_sha
+                and nofix_fresh_sha != current_pr_head_sha
+            ):
+                stale_msg = (
+                    f"--no-fix verification on PR #{pr_number} produced a "
+                    f"clean Step 7 verdict but the PR head advanced during "
+                    f"the run ({current_pr_head_sha[:8]}->{nofix_fresh_sha[:8]}). "
+                    f"Verdict treated as unverified; rerun pdd checkup --pr "
+                    f"--no-fix."
+                )
+                if not quiet:
+                    console.print(f"[red]{stale_msg}[/red]")
+                # Post the canonical report so the PR thread shows what was
+                # verified and why it was downgraded — same pattern as the
+                # gate-fail path above.
+                stale_post_suffix = _post_pr_mode_final_report(nofix_step7_output)
+                return (
+                    False,
+                    f"{stale_msg}{stale_post_suffix}",
+                    total_cost,
+                    last_model_used,
+                )
+
         # No-fix gate passed: post the canonical report so PR consumers see
         # the verification verdict. The fix-mode equivalent runs after the
         # push at the bottom of this function; the no-fix path never pushes,
@@ -2166,6 +2238,7 @@ def _run_agentic_checkup_orchestrator_inner(
                     reason="Step 7 gate passed but PR head advanced before push",
                     cost_so_far=total_cost,
                     model=last_model_used,
+                    step_comments=step_comments_set,
                 )
 
         # ==============================================================
@@ -2333,6 +2406,7 @@ def _run_agentic_checkup_orchestrator_inner(
                                 reason="Push rebase failed against advanced PR head",
                                 cost_so_far=total_cost,
                                 model=last_model_used,
+                                step_comments=step_comments_set,
                             )
                     # Step 7 already ran successfully; the push itself
                     # failed. Post the canonical report so the PR records
@@ -2405,6 +2479,7 @@ def _run_agentic_checkup_orchestrator_inner(
                             ),
                             cost_so_far=total_cost,
                             model=last_model_used,
+                            step_comments=step_comments_set,
                         )
                 pending_post_suffix = _post_pr_mode_final_report(
                     step_outputs.get("7", step7_output)
@@ -2540,8 +2615,13 @@ def run_agentic_checkup_orchestrator(
     refresh_history: List[Tuple[str, str]] = []
     cumulative_cost = 0.0
     last_model = "unknown"
+    # External review Finding 2: carry the per-step issue-comment dedup
+    # set across restart iterations so we don't re-post each step's
+    # comment after ``clear_workflow_state`` wipes the stored field.
+    preserved_step_comments: Set[int] = set()
 
     while True:
+        is_restart_iteration = refresh_count > 0
         try:
             success, message, cost, model = _run_agentic_checkup_orchestrator_inner(
                 issue_url=issue_url,
@@ -2563,11 +2643,27 @@ def run_agentic_checkup_orchestrator(
                 pr_owner=pr_owner,
                 pr_repo=pr_repo,
                 pr_number=pr_number,
+                # External review Finding 3: bypass load_workflow_state
+                # on restarts so a flaky GH state load can't reload
+                # stale cached step outputs even if clear_workflow_state's
+                # DELETE silently failed.
+                _force_skip_state_load=is_restart_iteration,
+                # External review Finding 2: replay the previous
+                # iteration's posted-step-comments set so dedup is
+                # honored across restarts.
+                _carried_step_comments=(
+                    preserved_step_comments if is_restart_iteration else None
+                ),
             )
         except _PRHeadAdvancedRestart as restart:
             cumulative_cost += restart.cost_so_far
             last_model = restart.model
             refresh_history.append((restart.old_sha, restart.new_sha))
+            # External review Finding 2: capture the inner's
+            # step_comments_set so the next iteration sees the same dedup
+            # state and doesn't re-post comments for steps that already
+            # commented on this PR.
+            preserved_step_comments = set(restart.step_comments)
             # Codex round-2 Finding 1: belt-and-suspenders. The restart
             # exception already proves the head advanced; don't depend
             # on the next inner's _fetch_pr_metadata to re-prove it via
