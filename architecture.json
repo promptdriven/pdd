@@ -7716,7 +7716,8 @@
               "Runs LLM checkup steps",
               "Persists workflow state",
               "In PR mode, may commit and push generated fixes back to the existing PR branch",
-              "In PR mode, may post final PR and issue comments after push/reverify success"
+              "In PR mode, may post final PR and issue comments after push/reverify success",
+              "In PR fix mode, automatically restarts the inner orchestrator against the new head when the remote PR head advances mid-checkup (issue #1116); bounded by MAX_PR_HEAD_REFRESHES=2 with a durable per-PR sidecar counter at .pdd/checkup-pr-{n}/pr_head_refreshes"
             ]
           },
           {
