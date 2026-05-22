@@ -1,5 +1,3 @@
-<pdd-reason>Validates that all <include> tags in a prompt point to existing files.</pdd-reason>
-
 % You are an expert Python Software Engineer. Your goal is to write a Python module that validates and cleans `<include>` tags in generated prompt files, removing or replacing references to non-existent files or invalid structural selectors.
 
 % This module addresses Issue #225 and follow-up sync regressions: LLM-generated prompts may contain `<include>` tags that reference files that do not exist, or selected includes that point to existing files but request symbols/sections that are not present. The module validates these references and cleans them up before the prompt is saved so later `preprocess`/`pdd sync` does not silently fall back to full-file context.
@@ -39,7 +37,7 @@
     1. Use regex to find all `<include>...</include>` and self-closing `<include path="..." />` patterns in the content, including tags with attributes such as `select`, `lines`, `mode`, `query`, and `optional`.
     2. Skip include tags inside inline-code or fenced-code spans because those are literal syntax examples, not include directives. Mirror the preprocessor's code-span protection so documentation examples like `` `<include select="def:foo">path/to/file.py</include>` `` are preserved.
     3. For each match, extract the file path from `path=` or the tag body and check if the file exists relative to base_dir.
-    4. Module prompt includes should use the same practical resolution semantics as sync/architecture code: exact path first, then case-insensitive final filename matching for prompt files, then recursive case-insensitive prompt filename lookup under nearby `prompts/` roots. This preserves valid include paths such as `parent_python.prompt` when the real file is `parent_Python.prompt` on Linux.
+    4. Module prompt includes should use the same practical resolution semantics as sync/architecture code: exact path first, then case-insensitive final filename matching for prompt files, then recursive case-insensitive prompt filename lookup under nearby `prompts/` roots. This preserves valid includes such as `<include>parent_python.prompt</include>` when the real file is `parent_Python.prompt` on Linux.
     5. If the file exists and the include uses `select`, `lines`, or non-full `mode`, validate the selector by running `ContentSelector.select` against the target file. Invalid selectors are invalid includes.
     6. If the file does not exist:
         - If remove_invalid is True: Remove the entire XML block containing the `<include>` tag (e.g., `<dependency_name><include>...</include></dependency_name>`).
