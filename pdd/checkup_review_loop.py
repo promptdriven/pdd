@@ -867,6 +867,29 @@ def run_checkup_review_loop(
     # (``CalledProcessError`` or ``TimeoutExpired``) it populates
     # ``pr_metadata['base_ref_fetch_error']`` and the loop's
     # ``_enforce_gates_before_clean`` engages its fail-closed path.
+    # Iter-23 Finding 1: when ``_fetch_pr_metadata`` itself failed
+    # (gh outage, auth error, invalid JSON, network) it returns ``{}``
+    # or a partial payload with no ``base_ref``. The pre-fix
+    # ``if pr_metadata.get("base_ref")`` guard then short-circuited
+    # the refresh, never set ``base_ref_fetch_error``, and gates ran
+    # with a None ``base_ref`` — silently falling back to
+    # ``origin/main`` / worktree-only ``git diff --check``. Fail
+    # closed by populating ``base_ref_fetch_error`` so the same
+    # ``gate:base-ref`` blocker that iter-19 added for the refresh
+    # path also fires for the metadata-fetch path.
+    if config.enable_gates and not skip_metadata:
+        # ``pr_metadata`` is a typed ``Dict[str, str]`` so we can
+        # safely set the sentinel even when the dict is empty (which
+        # is exactly the failure surface we want to catch).
+        if not isinstance(pr_metadata, dict):
+            pr_metadata = {}
+        if not pr_metadata.get("base_ref"):
+            pr_metadata["base_ref_fetch_error"] = (
+                "_fetch_pr_metadata returned no usable base_ref "
+                "(gh API failure, auth error, or invalid JSON); "
+                "refusing to compute PR-range gates against an "
+                "unverified base"
+            )
     if config.enable_gates and pr_metadata and pr_metadata.get("base_ref"):
         try:
             _refresh_pr_base_ref(

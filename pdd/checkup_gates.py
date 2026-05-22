@@ -404,8 +404,16 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
                     cmd=["npx", "--no-install", "tsc", "--noEmit"],
                     source="tsconfig.json",
                     required_fix_hint=(
-                        "Run `npx tsc --noEmit` locally and fix the reported "
-                        "TypeScript errors."
+                        # Iter-23 Finding 3: point the fixer at the
+                        # ``--no-install`` form. Bare ``npx tsc`` lets
+                        # an LLM fixer that follows the hint reach the
+                        # npm registry — defeating the
+                        # local-node_modules safeguard via the
+                        # automated-fix surface.
+                        "Run `npx --no-install tsc --noEmit` locally and fix "
+                        "the reported TypeScript errors. Do NOT use bare "
+                        "`npx tsc` — without `--no-install` it can fall back "
+                        "to a registry download/install."
                     ),
                 )
             )
@@ -460,8 +468,21 @@ def _discover_python_gates(
                 ],
                 source=rel,
                 required_fix_hint=(
-                    f"Fix the syntax error in {rel} so `python -m py_compile` "
-                    "succeeds."
+                    # Iter-23 Finding 3: do NOT point an automated
+                    # fixer at bare ``python -m py_compile``. That
+                    # writes ``__pycache__/*.pyc`` next to the source
+                    # file and the loop's downstream commit-and-push
+                    # path stages untracked files, so a fixer
+                    # following this hint can ship bytecode into the
+                    # PR on repos whose .gitignore does not exclude
+                    # ``__pycache__/``. Point at the same
+                    # non-mutating compile() builtin form the gate
+                    # itself uses.
+                    f"Fix the syntax error in {rel}. To re-check locally "
+                    f"without writing __pycache__ artifacts: "
+                    f"`python -B -c \"import sys; "
+                    f"compile(open(sys.argv[1], 'rb').read(), sys.argv[1], 'exec')\" "
+                    f"{rel}`."
                 ),
             )
         )
@@ -781,6 +802,13 @@ def _execute_one(
         )
     except (FileNotFoundError, PermissionError, OSError) as exc:
         duration = time.monotonic() - started_monotonic
+        # Iter-23 Finding 2: ``FileNotFoundError``'s default repr
+        # embeds the full argv tuple, so when a gate cmd carries an
+        # operator-supplied token in argv the token lands here. Scrub
+        # at the source — once ``GateResult.error`` is set every
+        # downstream consumer (to_dict for state.gate_runs, evidence
+        # builder for synthetic findings, artifact renderer) sees the
+        # redacted form by default.
         return GateResult(
             gate=gate,
             exit_code=None,
@@ -788,7 +816,7 @@ def _execute_one(
             stderr_excerpt="",
             duration_seconds=duration,
             started_at_iso=started,
-            error=f"{type(exc).__name__}: {exc}",
+            error=_scrub(f"{type(exc).__name__}: {exc}"),
         )
     except Exception as exc:  # noqa: BLE001 - defensive: never raise
         duration = time.monotonic() - started_monotonic
@@ -799,7 +827,7 @@ def _execute_one(
             stderr_excerpt="",
             duration_seconds=duration,
             started_at_iso=started,
-            error=f"{type(exc).__name__}: {exc}",
+            error=_scrub(f"{type(exc).__name__}: {exc}"),
         )
     duration = time.monotonic() - started_monotonic
     return GateResult(
@@ -924,15 +952,22 @@ def run_gates(
 
 
 def _render_per_gate_body(result: GateResult) -> str:
+    # Iter-23 Finding 2: the cmd argv and runner ``error`` can carry
+    # operator-supplied secrets (a fork PR could ship a poisoned
+    # ``package.json`` script with a literal token embedded). The
+    # per-gate artifact is the long-term audit record; scrub before
+    # persistence so a future operator review of the artifacts cannot
+    # accidentally surface a token. Output excerpts are already
+    # scrubbed upstream by ``_execute_one``.
     lines: List[str] = []
     lines.append(f"gate: {result.gate.name}")
-    lines.append(f"cmd: {' '.join(result.gate.cmd)}")
+    lines.append(f"cmd: {_scrub(' '.join(result.gate.cmd))}")
     lines.append(f"source: {result.gate.source}")
     lines.append(f"started: {result.started_at_iso}")
     lines.append(f"duration_seconds: {result.duration_seconds:.3f}")
     if result.exit_code is None:
         lines.append("exit_code: <runner-error>")
-        lines.append(f"error: {result.error}")
+        lines.append(f"error: {_scrub(result.error or '')}")
     else:
         lines.append(f"exit_code: {result.exit_code}")
     lines.append("")
@@ -959,13 +994,23 @@ def _build_evidence(result: GateResult) -> str:
     same gate-name; otherwise identical persistence failures across
     rounds produce different keys and the loop spams duplicate findings.
     """
+    # Iter-23 Finding 2: ``result.error`` is the raw ``str(exc)`` of
+    # the subprocess failure (``FileNotFoundError``, ``TimeoutExpired``,
+    # generic ``Exception``). Python's exception representation for
+    # FileNotFoundError includes the full argv tuple — so when an
+    # operator-supplied gate cmd contains a token (intentional or
+    # not), that token lands verbatim in ``result.error`` and then
+    # in ``ReviewFinding.evidence``, which is rendered into the
+    # public GitHub PR comment AND persisted to ``final-state.json``.
+    # Scrub before interpolating. The cmd line itself can carry the
+    # same payload, so scrub it too.
     if result.exit_code is None:
         prefix = "Runner error"
         if result.error:
-            prefix += f": {result.error}"
+            prefix += f": {_scrub(result.error)}"
     else:
         prefix = f"Gate exit_code={result.exit_code}"
-    cmd_line = " ".join(result.gate.cmd)
+    cmd_line = _scrub(" ".join(result.gate.cmd))
     tail = result.stderr_excerpt or result.stdout_excerpt
     if tail:
         tail = tail.strip()
@@ -978,7 +1023,11 @@ def _build_evidence(result: GateResult) -> str:
 
 
 def _build_required_fix(result: GateResult) -> str:
-    cmd_line = " ".join(result.gate.cmd)
+    # Iter-23 Finding 2: same scrub contract as ``_build_evidence`` —
+    # ``required_fix`` is rendered into the public PR comment and
+    # the JSON state artifact, so a token embedded in the cmd argv
+    # must not leak.
+    cmd_line = _scrub(" ".join(result.gate.cmd))
     base = f"Run `{cmd_line}` locally and address the failure"
     if result.gate.required_fix_hint:
         return f"{base}. {result.gate.required_fix_hint}"

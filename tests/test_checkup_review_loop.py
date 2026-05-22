@@ -338,6 +338,7 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 # Issue #1088: the final-report render re-fetches the
                 # remote PR head SHA to detect stale-head drift. Include
                 # ``head_sha`` matching the ``_git_rev_parse_head`` stub
@@ -354,6 +355,7 @@ class TestCheckupReviewLoopRuntime:
             mod, "_git_rev_parse_head", lambda *a, **k: "a" * 40
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
     def test_clean_pass_requires_primary_reviewer_only(
         self, monkeypatch: Any, tmp_path: Path
@@ -762,6 +764,7 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+               "base_ref": "main",
                 "base_ref": "main",
                 "head_sha": "a" * 40,
             },
@@ -772,6 +775,7 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: pytest.fail("commit/push should not run"),
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         calls: List[Tuple[str, str]] = []
         finding = {
             "severity": "critical",
@@ -1023,6 +1027,7 @@ class TestCheckupReviewLoopRuntime:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -1031,6 +1036,7 @@ class TestCheckupReviewLoopRuntime:
             mod, "_commit_and_push_if_changed", lambda *a, **k: (False, "auth failed")
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
         calls: List[Tuple[str, str]] = []
         finding = {
@@ -3280,6 +3286,7 @@ class TestShaBackedVerificationTrustBoundary:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_sha": head_sha,
             },
         )
@@ -3290,6 +3297,7 @@ class TestShaBackedVerificationTrustBoundary:
             mod, "_git_rev_parse_head", lambda *a, **k: rev_parse_head
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
     def _fake_task(
         self,
@@ -3442,6 +3450,7 @@ class TestShaBackedVerificationTrustBoundary:
             base = {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+            "base_ref": "main",
             }
             if len(metadata_calls) == 1:
                 base["head_sha"] = sha_a
@@ -3453,6 +3462,7 @@ class TestShaBackedVerificationTrustBoundary:
         )
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(mod, "_run_role_task", self._fake_task())
 
         success, report, _cost, _model = run_checkup_review_loop(
@@ -3750,6 +3760,7 @@ class TestShaBackedVerificationTrustBoundary:
             return {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_sha": sha_a if len(metadata_calls) == 1 else sha_b,
             }
 
@@ -3765,6 +3776,7 @@ class TestShaBackedVerificationTrustBoundary:
         )
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
         calls: List[str] = []
 
@@ -3831,6 +3843,7 @@ class TestShaBackedVerificationTrustBoundary:
             base: Dict[str, str] = {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+            "base_ref": "main",
             }
             if len(metadata_calls) == 1:
                 base["head_sha"] = sha_a
@@ -3849,6 +3862,7 @@ class TestShaBackedVerificationTrustBoundary:
         )
         monkeypatch.setattr(mod, "_git_rev_parse_head", lambda *a, **k: sha_a)
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
         monkeypatch.setattr(
             mod,
             "_run_role_task",
@@ -6788,11 +6802,13 @@ class TestPromptSourceGuardIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
         )
         monkeypatch.setattr(mod, "_post_review_loop_report", lambda *a, **k: None)
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
     def _seed_registry(
         self, tmp_path: Path, modules: List[Dict[str, Any]]
@@ -7986,6 +8002,7 @@ class TestArchitectureRegistryEditGuardIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -7993,6 +8010,7 @@ class TestArchitectureRegistryEditGuardIntegration:
         monkeypatch.setattr(
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -8568,6 +8586,7 @@ class TestRound6UntrackedDirectoryBypassIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -8575,6 +8594,7 @@ class TestRound6UntrackedDirectoryBypassIntegration:
         monkeypatch.setattr(
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -9098,6 +9118,7 @@ class TestRound7SymlinkedPackageBypassIntegration:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
                 "head_owner": "o",
                 "head_repo": "r",
             },
@@ -9105,6 +9126,7 @@ class TestRound7SymlinkedPackageBypassIntegration:
         monkeypatch.setattr(
             mod, "_post_review_loop_report", lambda *a, **k: None
         )
+        monkeypatch.setattr(mod, "_refresh_pr_base_ref", lambda *a, **k: None)
 
     def _finding(self) -> Dict[str, str]:
         return {
@@ -10053,12 +10075,27 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+                "base_ref": "main",
+                # Iter-23 Finding 1: gates fail closed when metadata
+                # has no base_ref (gh-API failure semantics). Supply
+                # a base_ref so the default _patch_io still
+                # represents a real PR scenario; tests that exercise
+                # the fail-closed path override this stub.
+                "base_ref": "main",
                 # Issue #1088 R-V5 trust boundary: the render-time
                 # PR-head re-fetch compares this against the pushed
                 # SHA; aligning them keeps gate tests on the verifier
                 # path and out of the stale-head downgrade path.
                 "head_sha": sha,
             },
+        )
+        # Iter-23: gates auto-refresh the PR base ref. The default
+        # stub is a no-op success — tests that exercise refresh
+        # failure modes override it.
+        monkeypatch.setattr(
+            mod,
+            "_refresh_pr_base_ref",
+            lambda *a, **k: None,
         )
         monkeypatch.setattr(
             mod, "_commit_and_push_if_changed", lambda *a, **k: (True, "pushed")
@@ -10918,6 +10955,51 @@ class TestReviewLoopDeterministicGates:
         assert state.gate_runs, "refresh error must record a gate_runs row"
         assert state.gate_runs[-1]["phase"] == "base-ref-refresh"
 
+    def test_failed_metadata_fetch_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-23 Finding 1: when ``_fetch_pr_metadata`` itself fails
+        (gh outage, auth, invalid JSON) it returns ``{}`` — and the
+        pre-fix guard ``if pr_metadata.get("base_ref")`` then
+        short-circuited the refresh and let gates run with a None
+        base_ref, silently falling back to ``origin/main`` /
+        worktree-only ``git diff --check``. The metadata path MUST
+        fail closed with the same ``gate:base-ref`` blocker as the
+        refresh path.
+        """
+        from pdd.checkup_review_loop import run_checkup_review_loop
+        import pdd.checkup_review_loop as mod
+
+        self._patch_io(monkeypatch, tmp_path)
+        # Simulate a gh-side failure: _fetch_pr_metadata returns {}.
+        monkeypatch.setattr(mod, "_fetch_pr_metadata", lambda *a, **k: {})
+        refresh_calls: List[Any] = []
+        monkeypatch.setattr(
+            mod,
+            "_refresh_pr_base_ref",
+            lambda *a, **k: refresh_calls.append(a),
+        )
+
+        def fake_task(role: str, instruction: str, cwd: Path, **kwargs: Any):
+            return True, _json("clean"), 0.05, role
+
+        monkeypatch.setattr(mod, "_run_role_task", fake_task)
+
+        success, report, _, _ = run_checkup_review_loop(
+            context=_ctx(tmp_path),
+            config=_config(max_rounds=1),
+            cwd=tmp_path,
+            quiet=True,
+            use_github_state=False,
+        )
+
+        assert success is True
+        # Fail-closed contract: the refresh is NOT called (nothing
+        # to refresh against) and the loop refuses clean.
+        assert refresh_calls == []
+        assert "gate:base-ref" in report
+        assert "reviewer-status: codex=clean" not in report
+
     def test_unexpected_refresh_exception_sets_base_ref_fetch_error(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
@@ -10940,6 +11022,7 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+               "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
@@ -10997,6 +11080,7 @@ class TestReviewLoopDeterministicGates:
             lambda *a, **k: {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+               "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             },
@@ -11059,6 +11143,7 @@ class TestReviewLoopDeterministicGates:
             return {
                 "clone_url": "https://github.com/o/r.git",
                 "head_ref": "change/test",
+               "base_ref": "main",
                 "base_ref": "release-1.4",
                 "head_sha": "a" * 40,
             }
