@@ -3831,6 +3831,56 @@ def _enforce_gates_before_clean(
         run_gates,
     )
 
+    # Issue #1092 fail-closed contract: if ``_refresh_pr_base_ref``
+    # earlier in the loop reported a fetch error, the gate layer would
+    # silently fall back to ``origin/main`` (stale on a non-``main``
+    # base) or the worktree-only ``git diff --check`` (missing the PR
+    # range entirely). Either path lets the loop honour an LLM "clean"
+    # verdict over a check we cannot prove ran against the right base
+    # — exactly the gap the issue forbids. Surface a synthetic blocker
+    # finding instead, so the operator either re-runs once the network
+    # is healthy or passes ``--no-gates`` explicitly.
+    if pr_metadata and pr_metadata.get("base_ref_fetch_error"):
+        base_ref_label = str(pr_metadata.get("base_ref") or "<unknown>")
+        scrubbed_err = _scrub_secrets(
+            str(pr_metadata["base_ref_fetch_error"])
+        )
+        state.gate_runs.append(
+            {
+                "round": round_number,
+                "mode": mode,
+                "reviewer": reviewer,
+                "results": [],
+                "error": scrubbed_err,
+                "phase": "base-ref-refresh",
+            }
+        )
+        return [
+            ReviewFinding(
+                severity="blocker",
+                reviewer="gate:base-ref",
+                area="deterministic-gate",
+                evidence=f"base_ref={base_ref_label} error={scrubbed_err}",
+                finding=(
+                    "Deterministic gate layer cannot prove the PR-range "
+                    "check ran against the correct base: refreshing the "
+                    f"PR base ref {base_ref_label!r} into the local "
+                    "tracking ref failed. Refusing clean verdict until "
+                    "the base can be fetched."
+                ),
+                required_fix=(
+                    "Resolve the upstream/network access for the PR's "
+                    "base repo and re-run `pdd checkup --pr "
+                    "--review-loop`. Pass `--no-gates` only as a "
+                    "last-resort diagnostic; never as a workaround on a "
+                    "PR-side ship gate."
+                ),
+                location="pdd/agentic_checkup_orchestrator.py:_refresh_pr_base_ref",
+                status="open",
+                round_number=round_number,
+            )
+        ]
+
     try:
         changed_files = _pr_changed_files_all(worktree, pr_metadata)
     except Exception as exc:  # noqa: BLE001 - defensive: never raise

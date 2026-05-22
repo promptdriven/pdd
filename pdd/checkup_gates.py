@@ -396,7 +396,32 @@ def _discover_python_gates(
         gates.append(
             Gate(
                 name=f"py-compile:{rel}",
-                cmd=[sys.executable, "-m", "py_compile", str(worktree / rel)],
+                # Bare ``python -m py_compile <abs>`` mutates the
+                # reviewed worktree: ``py_compile.compile`` writes
+                # ``__pycache__/*.pyc`` next to the source file, and
+                # the loop's downstream ``_commit_and_push_if_changed``
+                # stages untracked files, so on a repo whose
+                # ``.gitignore`` does not already exclude
+                # ``__pycache__/`` the gate would push generated
+                # bytecode into the PR. The ``-B`` flag does NOT fix
+                # this because ``py_compile`` writes the artifact
+                # explicitly regardless of ``sys.dont_write_bytecode``;
+                # routing ``cfile=os.devnull`` also does not work on
+                # macOS/Linux because py_compile uses an atomic
+                # write+rename (you cannot rename onto ``/dev/null``).
+                # Use the builtin ``compile()`` directly — it validates
+                # syntax and raises ``SyntaxError`` on bad input without
+                # writing ANY bytecode file (issue #1092 product
+                # requirement: gates must be non-mutating).
+                cmd=[
+                    sys.executable,
+                    "-B",
+                    "-c",
+                    "import sys; "
+                    "src = open(sys.argv[1], 'r', encoding='utf-8').read(); "
+                    "compile(src, sys.argv[1], 'exec')",
+                    str(worktree / rel),
+                ],
                 source=rel,
                 required_fix_hint=(
                     f"Fix the syntax error in {rel} so `python -m py_compile` "

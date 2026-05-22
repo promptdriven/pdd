@@ -121,8 +121,48 @@ class TestDiscoverGates:
         names = [g.name for g in gates]
         assert "py-compile:a.py" in names
         gate = next(g for g in gates if g.name == "py-compile:a.py")
-        assert gate.cmd[:3] == [sys.executable, "-m", "py_compile"]
+        # Iter-19 Finding 3: the gate MUST NOT write
+        # ``__pycache__/*.pyc`` next to the source file. The argv
+        # routes the syntax check through the builtin ``compile()``
+        # so no bytecode is written to disk at all — neither
+        # ``-B`` alone nor ``py_compile(..., cfile=os.devnull)`` are
+        # sufficient (the former because py_compile writes
+        # explicitly, the latter because py_compile uses an atomic
+        # rename onto cfile which cannot target /dev/null).
+        assert gate.cmd[:3] == [sys.executable, "-B", "-c"]
+        assert "compile(" in gate.cmd[3]
+        assert "py_compile" not in gate.cmd[3]
         assert gate.cmd[-1].endswith("a.py")
+
+    def test_py_compile_does_not_write_pycache_to_worktree(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-19 Finding 3 end-to-end: actually run the discovered
+        gate against a valid .py file and confirm no ``__pycache__/``
+        directory appears under the worktree afterwards. This guards
+        against a future refactor that drops ``-B`` from the cmd
+        without us noticing in unit tests that only inspect argv.
+        """
+        from pdd.checkup_gates import discover_gates, run_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
+        gates = [
+            g for g in discover_gates(tmp_path, changed_files=("a.py",))
+            if g.name == "py-compile:a.py"
+        ]
+        assert gates, "discovery should emit py-compile for a.py"
+        artifacts = tmp_path / "artifacts"
+        results = run_gates(
+            tmp_path,
+            gates,
+            artifacts_dir=artifacts,
+            round_number=1,
+            mode="review",
+        )
+        assert results[0].exit_code == 0
+        assert not (tmp_path / "__pycache__").exists()
+        assert not list(tmp_path.glob("**/__pycache__"))
 
     def test_skips_py_compile_when_no_python_files_changed(self, tmp_path: Path) -> None:
         from pdd.checkup_gates import discover_gates

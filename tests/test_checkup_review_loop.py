@@ -10873,6 +10873,51 @@ class TestReviewLoopDeterministicGates:
         )
         assert r1[0].key == r2[0].key
 
+    def test_base_ref_refresh_error_fails_closed_with_blocker_finding(
+        self, monkeypatch: Any, tmp_path: Path
+    ) -> None:
+        """Iter-19 Finding 2: when ``_refresh_pr_base_ref`` reports
+        ``base_ref_fetch_error``, the gate layer would otherwise fall
+        back to ``origin/main`` (stale on a non-``main`` base) or the
+        worktree-only ``git diff --check`` — silently honouring an LLM
+        clean verdict over a check we cannot prove ran against the
+        right base. Refuse clean with a synthetic blocker finding so
+        the operator either fixes the upstream/network access or
+        passes ``--no-gates`` explicitly.
+        """
+        from pdd.checkup_review_loop import (
+            _enforce_gates_before_clean,
+            ReviewLoopConfig,
+            ReviewLoopState,
+        )
+
+        state = ReviewLoopState(reviewer_status={"codex": "missing"})
+        pr_metadata = {
+            "base_ref": "release-1.4",
+            "base_ref_fetch_error": (
+                "fatal: couldn't find remote ref refs/heads/release-1.4"
+            ),
+        }
+        findings = _enforce_gates_before_clean(
+            state=state,
+            config=ReviewLoopConfig(),
+            worktree=tmp_path,
+            artifacts_dir=tmp_path / ".pdd" / "checkup-review-loop",
+            round_number=1,
+            mode="review",
+            pr_metadata=pr_metadata,
+            reviewer="codex",
+        )
+        assert findings, "refresh error must fail closed with a finding"
+        assert len(findings) == 1
+        f = findings[0]
+        assert f.severity == "blocker"
+        assert f.reviewer == "gate:base-ref"
+        assert "release-1.4" in f.evidence
+        # Crash-row written so the renderer surfaces the failure too.
+        assert state.gate_runs, "refresh error must record a gate_runs row"
+        assert state.gate_runs[-1]["phase"] == "base-ref-refresh"
+
     def test_review_loop_calls_refresh_pr_base_ref_when_gates_enabled(
         self, monkeypatch: Any, tmp_path: Path
     ) -> None:
