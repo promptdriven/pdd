@@ -657,7 +657,7 @@ class TestJobsBudgetIntegration:
         assert job.status == JobStatus.RUNNING
 
         # Manually trip the budget-exceeded path (bypasses the CSV watcher).
-        await mgr._handle_budget_exceeded(job.id, spent=42.0, cap=30.0)
+        await mgr._handle_budget_exceeded(job.id, spent=42.0)
         # Give the racing _execute_job handler time to fire its
         # CancelledError handler.
         await asyncio.sleep(0.5)
@@ -725,4 +725,126 @@ class TestExecuteRouteAcceptsIssue:
         manager.submit.assert_called_once_with(
             command="issue", args={}, options={},
             budget_cap=None, node_budget=42.0, max_total_cap=None,
+        )
+
+
+# ----------------------------------------------------------------- follow-up findings
+
+
+class TestSubmitTimeBudgetValidation:
+    """Finding 2 (follow-up review): initial budget fields must be validated.
+
+    Both layers — the CommandRequest pydantic model AND JobManager.submit —
+    must reject malformed amounts so a negative budget cannot enter the
+    system through either the REST route or a programmatic submit.
+    """
+
+    def test_command_request_rejects_negative_budget(self):
+        from pdd.server.models import CommandRequest
+        with pytest.raises(Exception):  # Pydantic ValidationError
+            CommandRequest(command="bug", budget_cap=-1.0)
+
+    def test_command_request_rejects_over_ceiling(self):
+        from pdd.server.models import CommandRequest
+        with pytest.raises(Exception):
+            CommandRequest(command="bug", budget_cap=10001.0)
+
+    def test_command_request_rejects_nan(self):
+        from pdd.server.models import CommandRequest
+        with pytest.raises(Exception):
+            CommandRequest(command="bug", budget_cap=float("nan"))
+
+    def test_command_request_accepts_string_form(self):
+        from pdd.server.models import CommandRequest
+        req = CommandRequest(command="bug", budget_cap="$30")
+        assert req.budget_cap == 30.0
+
+    @pytest.mark.asyncio
+    async def test_job_manager_submit_rejects_negative_budget(self, tmp_path):
+        from pdd.server.jobs import JobManager
+
+        async def noop_executor(job):
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=noop_executor,
+                          project_root=tmp_path)
+        with pytest.raises(ValueError):
+            await mgr.submit("bug", args={}, options={}, budget_cap=-1.0)
+
+    @pytest.mark.asyncio
+    async def test_job_manager_submit_rejects_over_ceiling(self, tmp_path):
+        from pdd.server.jobs import JobManager
+
+        async def noop_executor(job):
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=noop_executor,
+                          project_root=tmp_path)
+        with pytest.raises(ValueError):
+            await mgr.submit("bug", args={}, options={}, budget_cap=99999.0)
+
+    @pytest.mark.asyncio
+    async def test_job_manager_submit_accepts_valid_budget(self, tmp_path):
+        from pdd.server.jobs import JobManager
+
+        async def noop_executor(job):
+            return {"cost": 0.0}
+
+        mgr = JobManager(max_concurrent=1, executor=noop_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=30.0)
+        assert job.budget_cap == 30.0
+
+
+class TestBudgetExceededReportsCurrentCap:
+    """Finding 3 (follow-up review): when update_budget lowers the cap
+    mid-run, the budget-exceeded callback must report the CURRENT
+    effective cap — not the value captured when the watcher was first
+    started.
+    """
+
+    @pytest.mark.asyncio
+    async def test_callback_sees_updated_cap_not_initial(self, tmp_path):
+        import asyncio
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        received: list[tuple[str, float, float]] = []
+
+        async def on_be(job_id: str, spent: float, cap: float) -> None:
+            received.append((job_id, spent, cap))
+
+        mgr.callbacks.on_budget_exceeded(on_be)
+
+        job = await mgr.submit("bug", args={}, options={}, budget_cap=100.0)
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # Update the cap downward AFTER submission (mirrors /pdd budget 5
+        # arriving while the job is in flight).
+        await mgr.update_budget(job.id, budget_cap=5.0)
+
+        # Trip the budget-exceeded path. The callback should see the
+        # updated cap (5), not the initial value (100).
+        await mgr._handle_budget_exceeded(job.id, spent=10.0)
+        await asyncio.sleep(0.3)
+
+        assert received, "on_budget_exceeded was not invoked"
+        _, spent, reported_cap = received[-1]
+        assert spent == 10.0
+        assert reported_cap == 5.0, (
+            f"Finding 3 regression: callback received cap={reported_cap} "
+            f"but current effective cap was 5.0 after /pdd budget update."
         )

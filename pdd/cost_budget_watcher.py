@@ -52,14 +52,17 @@ def _parse_cost(raw: Optional[str]) -> float:
 
 
 def _parse_timestamp(raw: Optional[str]) -> Optional[datetime]:
-    """Parse a CSV timestamp cell into a timezone-aware ``datetime``.
+    """Parse a CSV timestamp cell into a timezone-aware UTC ``datetime``.
 
-    ``track_cost`` historically writes naive local-time timestamps via
-    ``datetime.now().strftime(...)`` — see ``track_cost.py``'s wrapper —
-    even though the reader contract documents UTC. To stay interoperable
-    with both forms, a naive parse result is REINTERPRETED as UTC (so it
-    can be compared with the aware ``started_at`` set by the job manager
-    without raising ``TypeError``). Aware values are returned unchanged.
+    Current ``track_cost`` writes UTC-aware ISO strings (e.g.
+    ``2026-05-22T18:30:00.123+00:00``) — see ``track_cost.py``'s wrapper.
+    Legacy CSV files (rows written before the UTC fix) contain NAIVE
+    local-time strings; ``datetime.now().strftime(...)`` produces them.
+    Naive cells are reinterpreted as LOCAL time and converted to UTC
+    (NOT reinterpreted as UTC outright — that would shift every row by
+    the local UTC offset and silently misattribute spend to the wrong
+    job window). Aware values are converted to UTC for a uniform
+    comparison frame.
     """
     if not raw:
         return None
@@ -68,8 +71,11 @@ def _parse_timestamp(raw: Optional[str]) -> Optional[datetime]:
     except (TypeError, ValueError):
         return None
     if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
+        # naive.astimezone() treats the value as local time and converts
+        # to the target timezone — exactly the right interop for legacy
+        # naive cells produced by datetime.now().strftime(...).
+        return parsed.astimezone(timezone.utc)
+    return parsed.astimezone(timezone.utc)
 
 
 def _normalize_started_at(value: Optional[datetime]) -> Optional[datetime]:

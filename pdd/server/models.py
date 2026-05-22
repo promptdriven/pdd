@@ -119,6 +119,36 @@ class CommandRequest(BaseModel):
     node_budget: Optional[float] = Field(None, description="Optional per-node budget (pdd-issue)")
     max_total_cap: Optional[float] = Field(None, description="Optional tree-wide ceiling (pdd-issue)")
 
+    @field_validator("budget_cap", "node_budget", "max_total_cap", mode="before")
+    @classmethod
+    def _coerce_budget_amount(cls, v: Any) -> Optional[float]:
+        """Validate initial budget fields with the same rules as
+        :class:`BudgetUpdateRequest` so a malformed amount can never enter
+        the system through ``POST /commands/execute`` and bypass the
+        ``update_budget`` validation gate.
+        """
+        if v is None:
+            return None
+        if isinstance(v, bool):
+            raise ValueError(f"Invalid budget amount: {v!r}")
+        if isinstance(v, str):
+            stripped = v.strip().lstrip("$").strip()
+            if not stripped:
+                raise ValueError("Empty budget amount")
+            try:
+                value = float(stripped)
+            except ValueError as exc:
+                raise ValueError(f"Non-numeric budget amount: {v!r}") from exc
+        else:
+            value = float(v)
+        if value != value or value in (float("inf"), float("-inf")):
+            raise ValueError(f"Budget amount must be finite: {v!r}")
+        if value <= 0:
+            raise ValueError(f"Budget amount must be > 0: {v!r}")
+        if value > 10000:
+            raise ValueError(f"Budget amount {value} exceeds hard ceiling $10000")
+        return value
+
 
 class JobStatus(str, Enum):
     """Enumeration of possible job statuses."""

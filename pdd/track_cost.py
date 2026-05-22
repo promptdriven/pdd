@@ -1,5 +1,5 @@
 import functools
-from datetime import datetime
+from datetime import datetime, timezone
 import csv
 import os
 import click
@@ -25,7 +25,13 @@ def track_cost(func):
         if ctx is None:
             return func(*args, **kwargs)
 
-        start_time = datetime.now()
+        # Timestamps written to the cost CSV must be timezone-aware UTC so
+        # downstream readers (notably `pdd.cost_budget_watcher`) can compare
+        # them against the aware `job.started_at` the server records without
+        # raising or — worse — silently misattributing rows after a naive ->
+        # UTC reinterpretation. The reader-contract section below documents
+        # ISO 8601 UTC; this assignment honors it.
+        start_time = datetime.now(timezone.utc)
         result = None
         exception_raised = None
 
@@ -58,7 +64,7 @@ def track_cost(func):
         except Exception as e:
             exception_raised = e
         finally:
-            end_time = datetime.now()
+            end_time = datetime.now(timezone.utc)
 
             try:
                 input_files, output_files = collect_files(args, kwargs)
@@ -87,7 +93,11 @@ def track_cost(func):
                             attempted_models_list = [model_name]
                         attempted_models = ';'.join(str(m).replace(';', ':') for m in attempted_models_list)
 
-                        timestamp = start_time.strftime('%Y-%m-%dT%H:%M:%S.%f')[:-3]
+                        # Emit ISO 8601 with the tz offset preserved so
+                        # readers do not have to guess the timezone. Trim
+                        # microseconds to milliseconds to match the legacy
+                        # column width.
+                        timestamp = start_time.isoformat(timespec='milliseconds')
 
                         row = {
                             'timestamp': timestamp,

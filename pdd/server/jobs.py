@@ -595,9 +595,16 @@ class JobManager:
             ),
         )
 
+        # Do NOT capture `cap` in this closure: it would freeze the cap to
+        # the value at submit time and the budget-exceeded callback would
+        # report a stale cap after a mid-run /pdd budget change.
+        # _handle_budget_exceeded recomputes the current effective cap
+        # from the (potentially updated) job.budget fields when it fires.
+        job_id_capture = job.id
+
         def _on_exceeded(spent: float) -> None:
             asyncio.run_coroutine_threadsafe(
-                self._handle_budget_exceeded(job.id, spent, cap), loop
+                self._handle_budget_exceeded(job_id_capture, spent), loop
             )
 
         try:
@@ -620,7 +627,15 @@ class JobManager:
             except Exception:  # noqa: BLE001
                 pass
 
-    async def _handle_budget_exceeded(self, job_id: str, spent: float, cap: float) -> None:
+    async def _handle_budget_exceeded(self, job_id: str, spent: float) -> None:
+        """Final-status + cancel handler invoked by the watcher's
+        on_exceeded callback.
+
+        Recomputes the current effective cap from the (potentially
+        updated) job budget fields rather than trusting a captured value,
+        so /pdd budget changes during a run are reflected in the
+        emitted ``BudgetExceededMessage``.
+        """
         job = self._jobs.get(job_id)
         if job is None or job.status not in (JobStatus.QUEUED, JobStatus.RUNNING):
             return
@@ -634,6 +649,17 @@ class JobManager:
         job.status = JobStatus.BUDGET_EXCEEDED
         if not job.completed_at:
             job.completed_at = datetime.now(timezone.utc)
+
+        current_cap = None
+        if _effective_cap_fn is not None:
+            current_cap = _effective_cap_fn(
+                job.command,
+                budget_cap=job.budget_cap,
+                node_budget=job.node_budget,
+                max_total_cap=job.max_total_cap,
+                node_count=job.node_count,
+            )
+
         if self._budget_store is not None:
             try:
                 self._budget_store.update(
@@ -647,7 +673,9 @@ class JobManager:
             await self.cancel(job_id)
         except Exception as exc:  # noqa: BLE001
             console.print(f"[red]Cancel after budget exceeded failed: {exc}[/red]")
-        await self.callbacks.emit_budget_exceeded(job_id, spent, cap)
+        await self.callbacks.emit_budget_exceeded(
+            job_id, spent, current_cap if current_cap is not None else spent,
+        )
 
     async def submit(
         self,
@@ -659,6 +687,20 @@ class JobManager:
         node_budget: Optional[float] = None,
         max_total_cap: Optional[float] = None,
     ) -> Job:
+        # Validate at the API boundary even when the route's pydantic
+        # validation has not run (programmatic callers, tests, GitHub App
+        # internal submissions). validate_amount enforces the same > 0 /
+        # <= $10000 rule the budget-update path applies, preventing a
+        # negative or absurd initial budget_cap from sticking on a job
+        # and producing an effective_cap of -1.
+        if validate_amount is not None:
+            if budget_cap is not None:
+                budget_cap = validate_amount(budget_cap)
+            if node_budget is not None:
+                node_budget = validate_amount(node_budget)
+            if max_total_cap is not None:
+                max_total_cap = validate_amount(max_total_cap)
+
         job = Job(
             command=command,
             args=args or {},
