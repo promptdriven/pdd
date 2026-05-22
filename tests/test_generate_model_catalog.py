@@ -350,3 +350,46 @@ def test_committed_csv_includes_vertex_gemini_flash_ci_default():
     text = csv_path.read_text(encoding="utf-8")
 
     assert "Google Vertex AI,vertex_ai/gemini-3-flash-preview," in text
+
+
+def test_build_rows_includes_vertex_gemini_3_5_flash_ga_default(monkeypatch):
+    """Issue #1136: the GA Vertex Gemini Flash row (used as the cloud
+    LLM_INVOKE_DEFAULT_MODEL) must be seeded via _MANDATORY_MODEL_ROWS even
+    when litellm.model_cost doesn't carry it yet. Pricing, provider, and
+    location pin the values reviewers depend on."""
+    fake_litellm = type("L", (), {"model_cost": {
+        "vertex_ai/zai-org/glm-4.7-maas": {
+            "mode": "chat",
+            "input_cost_per_token": 0.6e-6,
+            "output_cost_per_token": 2.2e-6,
+            "litellm_provider": "vertex_ai",
+            "supports_function_calling": True,
+        },
+    }})
+    monkeypatch.setitem(sys.modules, "litellm", fake_litellm)
+    monkeypatch.setattr(gmc, "_fetch_arena_elo", lambda **_kw: {})
+
+    rows = gmc.build_rows()
+
+    row = next(
+        r for r in rows
+        if r["model"] == "vertex_ai/gemini-3.5-flash"
+    )
+    assert row["provider"] == "Google Vertex AI"
+    assert row["api_key"] == "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION"
+    assert row["location"] == "global"
+    assert row["input"] == 1.5
+    assert row["output"] == 9.0
+    assert row["reasoning_type"] == "effort"
+    assert row["structured_output"] is True
+
+
+def test_committed_csv_includes_vertex_gemini_3_5_flash_ga_default():
+    """Issue #1136: the committed catalog must ship the GA Vertex Gemini Flash
+    row so PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash resolves directly
+    instead of falling through to a surrogate row (which lands on
+    vertex_ai/claude-opus-4-7 under the provider lock from PR #1115)."""
+    csv_path = _ROOT / "pdd" / "data" / "llm_model.csv"
+    text = csv_path.read_text(encoding="utf-8")
+
+    assert "Google Vertex AI,vertex_ai/gemini-3.5-flash," in text

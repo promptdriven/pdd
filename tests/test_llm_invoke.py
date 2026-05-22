@@ -4954,6 +4954,52 @@ class TestSelectModelCandidates:
         assert candidates[0]["model"] == "gemini-3.1-pro-preview"
         assert candidates[0]["provider"] == "Google Vertex AI"
 
+    def _make_ga_flash_df(self, llm_mod, tmp_path):
+        """CSV with the GA Vertex Gemini Flash row plus a surrogate-base
+        trap. Mirrors the contract that issue #1136 fixes: the catalog
+        ships vertex_ai/gemini-3.5-flash explicitly so a Vertex-locked
+        deployment doesn't silently surrogate onto vertex_ai/claude-opus-4-7
+        (the first Google Vertex AI row in the bundled CSV)."""
+        content = (
+            "provider,model,input,output,coding_arena_elo,api_key,"
+            "structured_output,reasoning_type,max_tokens,max_completion_tokens,"
+            "max_reasoning_tokens\n"
+            # Surrogate trap — first Vertex row when GA Flash is missing.
+            "Google Vertex AI,vertex_ai/claude-opus-4-7,5.0,25.0,1565,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,200000,8192,128000\n"
+            # The row issue #1136 adds.
+            "Google Vertex AI,vertex_ai/gemini-3.5-flash,1.5,9.0,1442,"
+            "GOOGLE_APPLICATION_CREDENTIALS|VERTEXAI_PROJECT|VERTEXAI_LOCATION,"
+            "True,effort,1000000,8192,0\n"
+        )
+        csv_path = tmp_path / "ga_flash_models.csv"
+        csv_path.write_text(content)
+        return llm_mod._load_model_data(csv_path)
+
+    def test_issue_1136_vertex_gemini_3_5_flash_resolves_directly(self, llm_mod, tmp_path):
+        """Regression for issue #1136: PDD_MODEL_DEFAULT=vertex_ai/gemini-3.5-flash
+        must resolve to the GA Flash row, not silently surrogate onto the
+        first Vertex row (vertex_ai/claude-opus-4-7) when the GA row is
+        present in the catalog."""
+        df = self._make_ga_flash_df(llm_mod, tmp_path)
+        candidates = llm_mod._select_model_candidates(
+            0.5, "vertex_ai/gemini-3.5-flash", df
+        )
+        assert candidates[0]["model"] == "vertex_ai/gemini-3.5-flash"
+        assert candidates[0]["provider"] == "Google Vertex AI"
+        # Pricing must come from the GA row, not the Opus surrogate trap.
+        assert candidates[0]["input"] == 1.5
+        assert candidates[0]["output"] == 9.0
+
+    def test_issue_1136_gemini_3_5_flash_in_gemini_3_family_clamp(self, llm_mod):
+        """The temperature clamp must fire for vertex_ai/gemini-3.5-flash
+        so PDD's default temperature=0.1 is bumped to 1.0, matching the
+        litellm guidance for Gemini 3 models. The regex was already
+        forward-compatible (PR #900) — pin it explicitly for the GA id."""
+        assert llm_mod._is_gemini_3_model("vertex_ai/gemini-3.5-flash") is True
+        assert llm_mod._is_gemini_3_model("gemini-3.5-flash") is True
+
 
 class TestAlternativeBaseLookups:
     """Direct tests for the `_alternative_base_lookups` helper."""
