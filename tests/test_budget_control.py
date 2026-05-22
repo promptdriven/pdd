@@ -1098,3 +1098,183 @@ class TestAutoWireCostCsv:
 
         assert job.id in mgr._watchers
         assert job.options["output_cost"] == str(explicit_path)
+
+
+# ----------------------------------------------------------------- fourth review pass
+
+
+class TestDefaultExecutorRejectsIssue:
+    """Finding 1 (fourth review pass): the public Click CLI has no `issue`
+    subcommand. When a job is submitted with command='issue' AND the
+    JobManager was constructed without a custom executor (i.e. the
+    public default-subprocess path), spawning `pdd issue` would fail
+    with "No such command 'issue'" — a misleading error. Fail loudly
+    in _run_click_command instead.
+    """
+
+    @pytest.mark.asyncio
+    async def test_default_executor_raises_clear_error_for_issue(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        # No custom executor — JobManager uses the default subprocess path.
+        mgr = JobManager(max_concurrent=1, executor=None, project_root=tmp_path)
+        # Submit must still accept "issue" (the route is exercised by the
+        # private executor via a custom JobManager); the failure must
+        # surface only when _run_click_command tries to spawn it.
+        with pytest.raises(RuntimeError, match=r"custom JobManager executor"):
+            await mgr._run_click_command(
+                type("J", (), {"command": "issue", "args": {}, "options": {}})()
+            )
+
+    @pytest.mark.asyncio
+    async def test_custom_executor_handles_issue_normally(self, tmp_path):
+        # When a custom executor IS provided (the private App's path),
+        # command='issue' is dispatched to it and the default click path
+        # is never reached. Regression guard: the failure from the
+        # previous test must NOT fire here.
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def custom_executor(job):
+            return {"cost": 0.0, "stdout": "custom executor handled issue"}
+
+        mgr = JobManager(max_concurrent=1, executor=custom_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("issue", args={}, options={},
+                                 node_budget=80.0, max_total_cap=400.0)
+        # Wait for the custom executor to complete (it returns immediately).
+        import asyncio
+        for _ in range(50):
+            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                break
+            await asyncio.sleep(0.05)
+        assert job.status == JobStatus.COMPLETED
+
+
+class TestNodeCountRejectsFractional:
+    """Finding 2 (fourth review pass): node_count=3.9 must be REJECTED with
+    a clear error rather than silently truncated to 3.
+    """
+
+    def test_pydantic_rejects_fractional_float(self):
+        from pdd.server.models import BudgetUpdateRequest
+        with pytest.raises(Exception, match=r"fractional|integer"):
+            BudgetUpdateRequest(node_count=3.9)
+
+    def test_pydantic_rejects_fractional_string(self):
+        from pdd.server.models import BudgetUpdateRequest
+        with pytest.raises(Exception):
+            BudgetUpdateRequest(node_count="3.9")
+
+    def test_pydantic_accepts_integer_float(self):
+        # 3.0 is unambiguously an integer; accept it (interop with JSON
+        # which may emit 3.0 for integer-valued numbers).
+        from pdd.server.models import BudgetUpdateRequest
+        req = BudgetUpdateRequest(node_count=3.0)
+        assert req.node_count == 3
+        assert isinstance(req.node_count, int)
+
+    def test_pydantic_accepts_int_string(self):
+        from pdd.server.models import BudgetUpdateRequest
+        req = BudgetUpdateRequest(node_count="5")
+        assert req.node_count == 5
+
+    @pytest.mark.asyncio
+    async def test_job_manager_update_budget_rejects_fractional(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("issue", args={}, options={},
+                                 node_budget=80.0, max_total_cap=400.0)
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+        with pytest.raises(ValueError, match=r"fractional|integer"):
+            await mgr.update_budget(job.id, node_count=3.9)
+        # job.node_count must not have changed.
+        assert job.node_count is None
+
+    @pytest.mark.asyncio
+    async def test_update_node_count_helper_rejects_fractional(self, tmp_path):
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("issue", args={}, options={},
+                                 node_budget=80.0, max_total_cap=400.0)
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+        with pytest.raises(ValueError):
+            mgr.update_node_count(job.id, 3.9)
+
+
+class TestExplicitCostPathParentCreated:
+    """Finding 3 (fourth review pass): explicit options.output_cost paths
+    must have their parent directory created so track_cost can write the
+    first row (track_cost swallows OSError on write, which would leave the
+    watcher silently stuck at $0 if the parent dir does not exist).
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_path_parent_is_created(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("PDD_OUTPUT_COST_PATH", raising=False)
+
+        from pdd.server.jobs import JobManager
+        from pdd.server.models import JobStatus
+
+        async def slow_executor(job):
+            import asyncio
+            try:
+                await asyncio.sleep(5)
+                return {"cost": 0.0}
+            except asyncio.CancelledError:
+                raise
+
+        explicit_path = tmp_path / "nested" / "more_nested" / "cost.csv"
+        assert not explicit_path.parent.exists()
+
+        mgr = JobManager(max_concurrent=1, executor=slow_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit(
+            "bug", args={},
+            options={"output_cost": str(explicit_path)},
+            budget_cap=30.0,
+        )
+        import asyncio
+        for _ in range(50):
+            if job.status == JobStatus.RUNNING:
+                break
+            await asyncio.sleep(0.05)
+
+        # The parent directory must exist after submit, even though the
+        # caller passed an explicit path the JobManager has no business
+        # validating in advance.
+        assert explicit_path.parent.is_dir(), (
+            "Finding 3 regression: explicit output_cost parent dir was "
+            "not created — track_cost will silently fail on first write."
+        )

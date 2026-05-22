@@ -89,6 +89,44 @@ PDD_ISSUE_NESTED_COMMANDS = frozenset(
 # from "explicitly set to None". `None` semantically means "clear this field".
 _UNSET = object()
 
+
+def _coerce_node_count_strict(value: Any) -> int:
+    """Reject fractional inputs (3.9 -> error, not silent truncation to 3).
+
+    Mirrors the BudgetUpdateRequest field validator so programmatic callers
+    of JobManager.update_budget / update_node_count get the same strictness
+    as REST callers. bool is rejected even though it subclasses int.
+    """
+    if isinstance(value, bool):
+        raise ValueError(f"node_count must be an integer: {value!r}")
+    if isinstance(value, int):
+        coerced = value
+    elif isinstance(value, float):
+        if not value.is_integer():
+            raise ValueError(
+                f"node_count must be an integer, not a fractional number: {value!r}"
+            )
+        coerced = int(value)
+    elif isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            raise ValueError("Empty node_count")
+        try:
+            coerced = int(stripped)
+        except ValueError as exc:
+            raise ValueError(
+                f"node_count must be an integer string, not {value!r}"
+            ) from exc
+    else:
+        raise ValueError(
+            f"node_count must be int or int-string, got {type(value).__name__}"
+        )
+    if coerced < 0:
+        raise ValueError(f"node_count must be >= 0: {value!r}")
+    if coerced > 10000:
+        raise ValueError(f"node_count {coerced} exceeds the hard ceiling 10000")
+    return coerced
+
 # Once a job reaches one of these statuses, subsequent handlers must NOT
 # overwrite the status field — a later assignment would lose information
 # (most importantly: BUDGET_EXCEEDED set by _handle_budget_exceeded must
@@ -579,7 +617,20 @@ class JobManager:
         if candidate is None:
             candidate = os.environ.get("PDD_OUTPUT_COST_PATH")
         if candidate:
-            return Path(candidate)
+            path = Path(candidate)
+            # Ensure the parent directory exists so track_cost can write
+            # the first row; the subprocess catches the OSError and
+            # swallows it, which would leave the watcher silently
+            # stuck at $0. mkdir is idempotent under parents=True.
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                console.print(
+                    f"[yellow]Could not create cost-CSV parent "
+                    f"{path.parent} for job {job.id}: {exc}; "
+                    f"track_cost writes may fail silently.[/yellow]"
+                )
+            return path
 
         # No explicit path configured. Derive a per-job default ONLY when an
         # effective cap is active; otherwise there is nothing to enforce so
@@ -881,6 +932,23 @@ class JobManager:
         - Process isolation
         - Output streaming
         """
+        # `pdd issue` is the GitHub App's autonomous-solving label-triggered
+        # command — it does not exist as a public Click subcommand and is
+        # only meaningful when JobManager has been constructed with a
+        # custom `executor=` (the private App's executor). Fail loudly
+        # here instead of spawning `pdd issue` and dying with
+        # "No such command 'issue'" — that error misleads operators
+        # into thinking the public CLI is broken when in fact the
+        # job was misrouted.
+        if job.command == "issue":
+            raise RuntimeError(
+                "command='issue' (pdd-issue autonomous solving) requires a "
+                "custom JobManager executor (the private GitHub App). The "
+                "public pdd CLI has no `issue` subcommand. Construct "
+                "JobManager(executor=<your_executor>) or submit a public "
+                "command (sync/generate/bug/change/fix/...)."
+            )
+
         loop = asyncio.get_running_loop()
 
         # Build command args - add --force to skip confirmation prompts
@@ -1174,27 +1242,7 @@ class JobManager:
             if node_count is None:
                 job.node_count = None
             else:
-                # Defensive validation for programmatic callers — the route
-                # has Pydantic gating but JobManager is also called directly
-                # from tests and from the private executor as the solving
-                # tree expands. Reject negatives, non-ints, and absurd
-                # values so a bogus update can never produce
-                # nonsense effective_cap arithmetic.
-                try:
-                    coerced = int(node_count)
-                except (TypeError, ValueError) as exc:
-                    raise ValueError(
-                        f"node_count must be an integer: {node_count!r}"
-                    ) from exc
-                if isinstance(node_count, bool):
-                    raise ValueError(f"node_count must be an integer: {node_count!r}")
-                if coerced < 0:
-                    raise ValueError(f"node_count must be >= 0: {node_count!r}")
-                if coerced > 10000:
-                    raise ValueError(
-                        f"node_count {coerced} exceeds the hard ceiling 10000"
-                    )
-                job.node_count = coerced
+                job.node_count = _coerce_node_count_strict(node_count)
 
         new_cap = _effective_cap_fn(
             job.command,
@@ -1241,10 +1289,7 @@ class JobManager:
         job = self._jobs.get(job_id)
         if job is None:
             raise KeyError(job_id)
-        if not isinstance(node_count, int) or isinstance(node_count, bool):
-            raise ValueError(f"node_count must be an integer: {node_count!r}")
-        if node_count < 0 or node_count > 10000:
-            raise ValueError(f"node_count {node_count} outside [0, 10000]")
+        node_count = _coerce_node_count_strict(node_count)
         job.node_count = node_count
         if _effective_cap_fn is not None:
             new_cap = _effective_cap_fn(

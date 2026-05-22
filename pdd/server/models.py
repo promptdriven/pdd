@@ -319,14 +319,40 @@ class BudgetUpdateRequest(BaseModel):
     @field_validator("node_count", mode="before")
     @classmethod
     def _coerce_node_count(cls, v: Any) -> Optional[int]:
+        # Reject any float with a fractional part (e.g. 3.9) and any string
+        # that does not parse as a whole integer. Truncating silently would
+        # change effective-cap math without telling the caller, which is
+        # the same class of silent failure the prior reviewer flagged on
+        # the parser's node/max verbs. bools are int subclasses but never
+        # a sensible node_count.
         if v is None:
             return None
         if isinstance(v, bool):
             raise ValueError(f"Invalid node_count: {v!r}")
-        try:
+        if isinstance(v, int):
+            value = v
+        elif isinstance(v, float):
+            if not v.is_integer():
+                raise ValueError(
+                    f"node_count must be an integer, not a fractional number: {v!r}"
+                )
             value = int(v)
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f"node_count must be an integer: {v!r}") from exc
+        elif isinstance(v, str):
+            stripped = v.strip()
+            if not stripped:
+                raise ValueError("Empty node_count")
+            try:
+                # Allow "5" but reject "5.5". `int()` rejects fractional
+                # strings outright, so a single parse covers both.
+                value = int(stripped)
+            except ValueError as exc:
+                raise ValueError(
+                    f"node_count must be an integer string, not {v!r}"
+                ) from exc
+        else:
+            raise ValueError(
+                f"node_count must be int or int-string, got {type(v).__name__}"
+            )
         if value < 0:
             raise ValueError(f"node_count must be >= 0: {v!r}")
         if value > 10000:
