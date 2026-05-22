@@ -689,6 +689,50 @@ def _setup_pr_worktree(
     return worktree_path, None
 
 
+def fetch_pr_base_ref(
+    cwd: Path,
+    pr_owner: str,
+    pr_repo: str,
+    base_ref: str,
+) -> bool:
+    """Fetch the PR's base branch into the local clone so the deterministic
+    gate layer can run ``git diff --check <base>...HEAD`` against the
+    actual PR range (issue #1092).
+
+    Without this, gate discovery falls back to ``origin/main``/``origin/master``
+    or the plain worktree-only ``git diff --check`` — meaning a PR
+    targeting any non-``main`` base (release branches, feature
+    branches, fork bases) has no PR-range whitespace/conflict-marker
+    check at all, which is precisely the gap the issue calls out.
+
+    Fetches as ``refs/remotes/origin/<base_ref>`` so ``_resolve_pr_base_spec``
+    finds it first. Returns ``True`` on success, ``False`` otherwise.
+    Never raises: a failure here means the gate falls back to the plain
+    working-tree check, which is the pre-fix behavior and strictly no
+    worse than not calling this helper.
+    """
+    if not base_ref:
+        return False
+    git_root = _get_git_root(cwd)
+    if not git_root:
+        return False
+    remote_target = _resolve_pr_remote(git_root, pr_owner, pr_repo)
+    if remote_target is None:
+        remote_target = f"https://github.com/{pr_owner}/{pr_repo}.git"
+    refspec = f"+refs/heads/{base_ref}:refs/remotes/origin/{base_ref}"
+    try:
+        subprocess.run(
+            ["git", "fetch", remote_target, refspec],
+            cwd=git_root,
+            capture_output=True,
+            check=True,
+            timeout=60,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        return False
+    return True
+
+
 def _setup_worktree(
     cwd: Path,
     issue_number: int,

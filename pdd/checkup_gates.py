@@ -340,7 +340,16 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
     # If a typescript config exists and we did not emit a typecheck
     # script, try ``npx tsc --noEmit`` directly. Discovery rule: only when
     # ``typescript`` appears in the dependency map AND ``tsconfig.json``
-    # exists.
+    # exists AND ``node_modules/typescript/bin/tsc`` is already on disk.
+    #
+    # The local node_modules check is load-bearing for determinism: bare
+    # ``npx tsc`` will silently fall back to a network install (npm
+    # registry hit + arbitrary install lifecycle) when typescript is
+    # declared in ``package.json`` but not actually installed in the
+    # worktree. That turns the "deterministic local gate" into a
+    # network/install/exec, which is exactly the attack surface the
+    # issue forbids (issue #1092 product requirement: gates must be
+    # local, deterministic, bounded, and non-mutating).
     if (
         (worktree / "tsconfig.json").exists()
         and "npm:typecheck" not in {g.name for g in gates}
@@ -352,11 +361,20 @@ def _discover_npm_gates(worktree: Path) -> List[Gate]:
             value = data.get(key) or {}
             if isinstance(value, dict):
                 deps.update(value)
-        if "typescript" in deps and shutil.which("npx"):
+        tsc_local = worktree / "node_modules" / "typescript" / "bin" / "tsc"
+        if (
+            "typescript" in deps
+            and tsc_local.is_file()
+            and shutil.which("npx")
+        ):
             gates.append(
                 Gate(
+                    # Pass ``--no-install`` so npx refuses to fall back
+                    # to a registry fetch even if a future npm rewires
+                    # the local-binary resolution path. Belt-and-braces:
+                    # the local-tsc check above is the primary guard.
                     name="tsc-noemit",
-                    cmd=["npx", "tsc", "--noEmit"],
+                    cmd=["npx", "--no-install", "tsc", "--noEmit"],
                     source="tsconfig.json",
                     required_fix_hint=(
                         "Run `npx tsc --noEmit` locally and fix the reported "

@@ -42,7 +42,11 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from rich.console import Console
 
 from .agentic_change import _run_gh_command
-from .agentic_checkup_orchestrator import _get_git_root, _setup_pr_worktree
+from .agentic_checkup_orchestrator import (
+    _get_git_root,
+    _setup_pr_worktree,
+    fetch_pr_base_ref,
+)
 from .agentic_common import DEFAULT_MAX_RETRIES, run_agentic_task
 from .agentic_e2e_fix_orchestrator import push_with_retry
 from .architecture_registry import extract_modules
@@ -841,6 +845,25 @@ def run_checkup_review_loop(
         if config.review_only
         else _fetch_pr_metadata(context.pr_owner, context.pr_repo, context.pr_number)
     )
+    # Issue #1092: fetch the PR's actual base ref into the local clone so
+    # the deterministic gate layer's ``git-diff-check`` runs against the
+    # real PR range. Without this, gates targeting any non-``main`` base
+    # (release branches, fork bases, anything not already in
+    # ``origin/main``/``origin/master``) silently fall back to either a
+    # stale ``origin/main`` comparison or the worktree-only check, which
+    # is the exact gap the issue calls out. The helper never raises and
+    # the gate layer's ``_resolve_pr_base_spec`` already falls back
+    # gracefully when the fetch could not land the ref.
+    if config.enable_gates and pr_metadata and pr_metadata.get("base_ref"):
+        try:
+            fetch_pr_base_ref(
+                cwd,
+                context.pr_owner,
+                context.pr_repo,
+                str(pr_metadata["base_ref"]),
+            )
+        except Exception as exc:  # noqa: BLE001 - defensive
+            logger.debug("gates: PR base-ref fetch failed: %s", exc)
     # Capture the SHA the reviewer will actually see in the worktree.
     # This is the comparison target for the R-V5 re-fetch when a
     # reviewer path returns ``clean`` without ever invoking a fixer

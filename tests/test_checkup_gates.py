@@ -376,6 +376,66 @@ class TestDiscoverGates:
         if len(diff_gate.cmd) > 3:
             assert diff_gate.cmd[3].endswith("...HEAD")
 
+    def test_tsc_noemit_skipped_when_node_modules_typescript_absent(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-16 Finding 3: tsc-noemit must NOT fire ``npx tsc`` when
+        TypeScript isn't actually installed locally. Bare ``npx tsc``
+        falls back to a registry download + install + exec when the
+        local binary is missing, which violates the deterministic-local
+        contract from issue #1092. Discovery must skip the gate in that
+        case so the gate runner never gets a chance to network-install.
+        """
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text("{}", encoding="utf-8")
+        # NOTE: no ``node_modules/typescript/bin/tsc`` on disk.
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        assert "tsc-noemit" not in names
+
+    def test_tsc_noemit_emitted_with_no_install_flag_when_locally_present(
+        self, tmp_path: Path
+    ) -> None:
+        """Iter-16 Finding 3 inverse: once TypeScript IS installed
+        locally, the gate fires — and it must pass ``--no-install`` so
+        a future npx rewire still cannot reach the registry."""
+        from pdd.checkup_gates import discover_gates
+
+        _git_init(tmp_path)
+        (tmp_path / "package.json").write_text(
+            json.dumps(
+                {
+                    "name": "fake",
+                    "version": "0.0.0",
+                    "scripts": {},
+                    "devDependencies": {"typescript": "^5.0.0"},
+                }
+            ),
+            encoding="utf-8",
+        )
+        (tmp_path / "tsconfig.json").write_text("{}", encoding="utf-8")
+        tsc_dir = tmp_path / "node_modules" / "typescript" / "bin"
+        tsc_dir.mkdir(parents=True)
+        (tsc_dir / "tsc").write_text("#!/usr/bin/env node\n", encoding="utf-8")
+        gates = discover_gates(tmp_path, changed_files=())
+        names = [g.name for g in gates]
+        if "tsc-noemit" in names:  # only when ``npx`` is on PATH
+            gate = next(g for g in gates if g.name == "tsc-noemit")
+            assert "--no-install" in gate.cmd
+
 
 class TestRunGates:
     """``run_gates`` executes each discovered gate and persists artifacts."""

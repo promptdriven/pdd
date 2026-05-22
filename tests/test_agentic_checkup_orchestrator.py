@@ -2358,3 +2358,75 @@ class TestTrustedStepCommentPosting:
             success, _, _, _ = run_agentic_checkup_orchestrator(**default_args)
 
         assert success is True
+
+
+class TestFetchPrBaseRef:
+    """Iter-16 Finding 2: ``fetch_pr_base_ref`` lands the PR's base branch
+    into a local remote-tracking ref so the deterministic-gate layer's
+    ``_resolve_pr_base_spec`` finds it and runs ``git diff --check``
+    against the actual PR range.
+    """
+
+    def test_runs_git_fetch_with_expected_refspec(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import fetch_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+        recorded = {}
+
+        def fake_run(args, **kwargs):
+            recorded["args"] = args
+            recorded["kwargs"] = kwargs
+            return sp.CompletedProcess(args, 0, b"", b"")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value="https://github.com/o/r.git",
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            ok = fetch_pr_base_ref(tmp_path, "o", "r", "release-1.4")
+
+        assert ok is True
+        # The refspec must land the base into ``refs/remotes/origin/<base>``
+        # so ``_resolve_pr_base_spec`` finds it under its standard
+        # candidate set.
+        assert recorded["args"][0] == "git"
+        assert recorded["args"][1] == "fetch"
+        assert recorded["args"][2] == "https://github.com/o/r.git"
+        assert (
+            recorded["args"][3]
+            == "+refs/heads/release-1.4:refs/remotes/origin/release-1.4"
+        )
+
+    def test_returns_false_when_git_fetch_fails(self, tmp_path):
+        import subprocess as sp
+        from pdd.agentic_checkup_orchestrator import fetch_pr_base_ref
+
+        sp.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+
+        def fake_run(args, **kwargs):
+            raise sp.CalledProcessError(128, args, b"", b"missing base")
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._get_git_root",
+            return_value=tmp_path,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._resolve_pr_remote",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.subprocess.run",
+            side_effect=fake_run,
+        ):
+            ok = fetch_pr_base_ref(tmp_path, "o", "r", "release-1.4")
+
+        assert ok is False
+
+    def test_returns_false_on_empty_base_ref(self, tmp_path):
+        from pdd.agentic_checkup_orchestrator import fetch_pr_base_ref
+
+        assert fetch_pr_base_ref(tmp_path, "o", "r", "") is False
