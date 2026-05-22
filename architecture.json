@@ -7620,11 +7620,12 @@
         "functions": [
           {
             "name": "discover_gates",
-            "signature": "(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = ()) -> List[Gate]",
+            "signature": "(worktree: Path, changed_files: Sequence[str], *, extra_allow: Sequence[str] = (), base_ref: Optional[str] = None) -> List[Gate]",
             "returns": "List[Gate]",
             "sideEffects": [
               "Reads package.json, pyproject.toml, tsconfig.json, and .git markers from the loop-owned worktree (read-only)",
-              "Probes PATH for ruff/black/mypy/npx via shutil.which (read-only)"
+              "Probes PATH for ruff/black/mypy/npx via shutil.which (read-only)",
+              "When base_ref resolves in the worktree, emits git-diff-check across <base>...HEAD so a committed whitespace/conflict-marker failure is caught even on a clean worktree"
             ]
           },
           {
