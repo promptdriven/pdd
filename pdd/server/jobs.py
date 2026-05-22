@@ -890,7 +890,30 @@ class JobManager:
             result = None
 
             if self._custom_executor:
-                result = await self._custom_executor(job)
+                # Custom executors (the private GitHub App's pdd-issue
+                # path) spawn their own subprocesses; they do NOT go
+                # through _run_click_command, where PDD_JOB_ID would
+                # otherwise be injected into the subprocess env. Set
+                # the env var in the manager's own process for the
+                # duration of the custom executor call so any
+                # subprocess the executor spawns inherits it and
+                # track_cost can write the job_id column. The
+                # try/finally restore prevents leakage to other
+                # jobs running on this manager (best-effort under
+                # max_concurrent>1 — the documented integration
+                # contract is that the executor itself read job.id
+                # and propagate PDD_JOB_ID to its subprocess env
+                # explicitly so concurrent jobs do not race on
+                # os.environ).
+                _prior_job_id = os.environ.get('PDD_JOB_ID')
+                os.environ['PDD_JOB_ID'] = job.id
+                try:
+                    result = await self._custom_executor(job)
+                finally:
+                    if _prior_job_id is None:
+                        os.environ.pop('PDD_JOB_ID', None)
+                    else:
+                        os.environ['PDD_JOB_ID'] = _prior_job_id
             else:
                 result = await self._run_click_command(job)
 

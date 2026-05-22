@@ -172,11 +172,16 @@ class Watcher:
             ts = _parse_timestamp(row.get("timestamp"))
             if ts is None or ts < self._started_at:
                 return False
-        if self._job_id is not None:
-            # Per-job attribution: only count rows that explicitly carry
-            # this job_id. Legacy rows (no `job_id` column → empty string)
-            # are skipped so two same-command jobs sharing one CSV cannot
-            # contaminate each other's spend.
+        if self._job_id is not None and self._fieldnames and "job_id" in self._fieldnames:
+            # Per-job attribution: only count rows whose `job_id` column
+            # matches. We gate on "is `job_id` actually in the CSV
+            # header" so legacy / mid-format CSVs (those without the
+            # column) keep falling back to the command + timestamp
+            # filter rather than dropping every row and freezing spend
+            # at $0. Concurrent same-command jobs sharing a NEW-format
+            # CSV are still per-job-isolated; concurrent jobs sharing
+            # a LEGACY-format CSV are not (the caller opted into the
+            # shared file).
             if row.get("job_id") != self._job_id:
                 return False
         return True

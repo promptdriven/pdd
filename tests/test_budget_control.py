@@ -1482,11 +1482,14 @@ class TestJobIdScopedWatcherFilter:
         finally:
             watcher_a.stop()
 
-    def test_legacy_rows_without_job_id_skipped_when_filter_active(self, tmp_path):
-        """Per the contract, when a job_id filter is set, rows missing
-        the column (legacy or third-party-written) are skipped rather
-        than counted. This is the conservative choice — never count
-        rows we cannot attribute when attribution is required.
+    def test_legacy_header_falls_back_to_command_timestamp(self, tmp_path):
+        """When the CSV header lacks the job_id column entirely (legacy
+        or mid-format CSV the caller explicitly passed), the watcher
+        MUST NOT enforce its job_id filter — otherwise every row gets
+        dropped and spend stays frozen at $0, breaking enforcement on
+        any pre-existing cost-CSV file. Per-job isolation across
+        concurrent jobs requires a new-format CSV; legacy is opt-out
+        of that protection.
         """
         from pdd.cost_budget_watcher import watch
 
@@ -1494,7 +1497,7 @@ class TestJobIdScopedWatcherFilter:
         ts = "2026-05-22T18:30:00.000+00:00"
         with csv_path.open("w", encoding="utf-8", newline="") as f:
             w = csv.writer(f)
-            # Legacy header without job_id.
+            # Mid-format header — has attempted_models but no job_id.
             w.writerow(["timestamp", "model", "command", "cost",
                         "input_files", "output_files", "attempted_models"])
             w.writerow([ts, "gpt-4", "bug", "50.0", "", "", "gpt-4"])
@@ -1505,9 +1508,54 @@ class TestJobIdScopedWatcherFilter:
         )
         try:
             time.sleep(0.3)
-            assert watcher.spent() == 0.0
+            assert watcher.spent() == pytest.approx(50.0), (
+                "Finding 1 (7th pass) regression: watcher dropped a "
+                "row in a job_id-less CSV; legacy/mid CSVs should "
+                "fall back to command+timestamp enforcement."
+            )
         finally:
             watcher.stop()
+
+
+class TestCustomExecutorPdJobIdEnv:
+    """Sixth-pass Finding 2: custom executors bypass _run_click_command
+    (where PDD_JOB_ID is set on the subprocess env). The manager MUST
+    set os.environ['PDD_JOB_ID'] around the custom executor call so
+    any subprocess the executor spawns inherits it.
+    """
+
+    @pytest.mark.asyncio
+    async def test_pdd_job_id_set_around_custom_executor(self, tmp_path):
+        import asyncio
+        import os as _os
+
+        from pdd.server.jobs import JobManager
+
+        observed: dict = {}
+
+        async def custom_executor(job):
+            observed["pdd_job_id"] = _os.environ.get("PDD_JOB_ID")
+            return {"cost": 0.0}
+
+        # Make sure the env doesn't already have it.
+        _os.environ.pop("PDD_JOB_ID", None)
+        mgr = JobManager(max_concurrent=1, executor=custom_executor,
+                          project_root=tmp_path)
+        job = await mgr.submit("issue", args={}, options={},
+                                 node_budget=80.0, max_total_cap=400.0)
+        from pdd.server.models import JobStatus
+        for _ in range(50):
+            if job.status in (JobStatus.COMPLETED, JobStatus.FAILED):
+                break
+            await asyncio.sleep(0.05)
+        assert observed.get("pdd_job_id") == job.id, (
+            "Finding 2 (7th pass) regression: PDD_JOB_ID not set in "
+            "os.environ while the custom executor ran; subprocesses "
+            "it spawns would write rows with empty job_id and the "
+            "watcher would never count them."
+        )
+        # Env is restored after the executor returns.
+        assert _os.environ.get("PDD_JOB_ID") is None
 
 
 class TestLlmInvokePublishesPartialCost:

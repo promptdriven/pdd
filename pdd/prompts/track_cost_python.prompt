@@ -54,12 +54,25 @@ file concurrently and rely on the following stable, append-only contract.
 Changing this contract is a breaking change.
 
 1. **Header columns (current, in order):** `timestamp`, `model`, `command`,
-   `cost`, `input_files`, `output_files`, `attempted_models`. Legacy files
-   missing the last column are read by appending rows without that column;
-   new files always include all columns.
-2. **`timestamp`:** ISO 8601 UTC string (`datetime.now(timezone.utc).isoformat()`).
-   Readers parse with `datetime.fromisoformat` and compare against a stored
-   `job.started_at` to compute spend-since-job-start.
+   `cost`, `input_files`, `output_files`, `attempted_models`, `job_id`.
+   Three header generations exist in the wild and MUST all be supported by
+   the writer (legacy/mid CSVs are appended to in their existing layout —
+   never rewritten):
+     - **legacy:** `timestamp,model,command,cost,input_files,output_files`
+     - **mid:** legacy + `,attempted_models`
+     - **new:** mid + `,job_id`
+   New files always include all columns. The writer detects which
+   generation a pre-existing file belongs to by reading the header line
+   and trimming the row dict accordingly.
+2. **`timestamp`:** ISO 8601 UTC string with explicit offset, written via
+   `datetime.now(timezone.utc).isoformat(timespec='milliseconds')`. Readers
+   parse with `datetime.fromisoformat` and compare against a stored
+   `job.started_at` (timezone-aware UTC) to compute spend-since-job-start.
+   Legacy rows produced by an earlier writer used naive
+   `datetime.now().strftime(...)` (local time); readers MUST reinterpret
+   such naive cells via `.astimezone(timezone.utc)` (treat as local,
+   convert to UTC) — NOT via `.replace(tzinfo=utc)` (which silently
+   shifts every row by the local UTC offset and misattributes spend).
 3. **`command`:** the bare command name as recognised by the Click context
    (e.g. `generate`, `sync`, `fix`, `change`, `bug`). Watchers attribute
    cost to a specific job by filtering on `timestamp >= job.started_at`
@@ -71,17 +84,31 @@ Changing this contract is a breaking change.
    row. A watcher restricted to `{"issue"}` would sum to `$0` for a
    `pdd-issue` job — do not assume single-name filtering. When multiple
    jobs run the same command concurrently, the filter is best-effort;
-   the GitHub App constrains this by serialising per-issue work.
+   the GitHub App constrains this by serialising per-issue work AND
+   (per row 7 below) by writing a `job_id` column.
 4. **`cost`:** a string-formatted positive `float` in USD. Missing/blank/
    non-numeric values MUST be treated by readers as `0.0` rather than raising.
-5. **Append-only:** rows are written by `track_cost` only on command exit
-   (success or recoverable failure). The file is never truncated or rewritten
-   in-place outside the legacy-header migration path. Readers MAY safely tail
-   the file by line count or by `csv.DictReader`.
+5. **Append-only:** rows are written by `track_cost` on EVERY command exit
+   — success AND failure paths. A failed-but-costly command (one that
+   spent money via `llm_invoke` and then raised) writes a row using
+   cost/model from `ctx.obj['partial_cost']` and
+   `ctx.obj['last_model']` (published by `llm_invoke` on each
+   successful LLM call) so the watcher's running spend stays accurate
+   even when the wrapped Click command crashes after the LLM call. The
+   file is never truncated or rewritten in-place outside the legacy-
+   header migration path. Readers MAY safely tail the file by line
+   count or by `csv.DictReader`.
 6. **Concurrency:** writers append a single row per command invocation under
    the OS's default open-append semantics. Readers MUST tolerate transient
    parse errors on a partially-flushed final row (treat as `0.0` and re-read
    on the next poll).
+7. **`job_id`:** read from the `PDD_JOB_ID` environment variable (set by
+   `pdd/server/jobs.py` around each subprocess so concurrent same-command
+   jobs sharing a CSV can be attributed). Empty string when the env var
+   is unset (CLI use outside the server). The watcher's `job_id` filter
+   is gated on the column being present in the CSV header — legacy and
+   mid-format CSVs without it fall back to the command + timestamp
+   filter so existing files keep working.
 
 % Here is an example of how the `track_cost` decorator will be used in the `pdd` program:
 ```@cli.command()

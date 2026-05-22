@@ -259,6 +259,30 @@
       overwriting with just `list(attempted_models)` would hide an earlier call's fallback in
       the cost CSV. When no Click context exists (library usage, tests), this is a silent
       no-op — never raise from the context publication step.
+    - Publish per-call cost/model on EACH successful LLM call return so
+      `track_cost`'s exception-path row write has real data when the
+      wrapped Click command raises AFTER a successful LLM call.
+      Implement a small module-level helper
+      `_publish_call_outcome_to_ctx(cost: Any, model: Any) -> None` that:
+        * attempts to read `click.get_current_context(silent=True)` and
+          returns silently when no context is active,
+        * initialises `ctx.obj = {}` only when `ctx.obj is None`,
+        * coerces `cost` to a non-negative finite `float` (treats NaN /
+          Inf / negatives / unparseable as `0.0`),
+        * ACCUMULATES `ctx.obj['partial_cost']` (read prior float, add
+          this call's cost) so multi-call commands like
+          `pdd generate` (generation + postprocess) record total
+          per-command spend on exception, not just the most recent
+          call's cost,
+        * OVERWRITES `ctx.obj['last_model']` with `str(model)` when
+          `model` is truthy (latest model used).
+      Call the helper exactly once before each successful return:
+      cloud path (immediately before `return cloud_result`), litellm
+      Responses path, litellm Chat Completions path. The keys are the
+      documented contract surface `track_cost_python.prompt` reads
+      from in its failure-path row write; without producer-side
+      population, the consumer-side fallback is a no-op and failed-
+      but-costly commands record `cost=0` in the CSV.
 
 % Cloud Execution:
     - Define three cloud-related exceptions:

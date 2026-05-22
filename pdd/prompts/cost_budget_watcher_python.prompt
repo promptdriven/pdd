@@ -5,7 +5,7 @@
   "type": "module",
   "module": {
     "functions": [
-      {"name": "watch", "signature": "(csv_path: pathlib.Path, cap: Optional[float], on_exceeded: Callable[[float], None], *, commands: Optional[Iterable[str]] = None, started_at: Optional[datetime] = None, poll_interval: float = 2.0) -> Watcher", "returns": "Watcher"},
+      {"name": "watch", "signature": "(csv_path: pathlib.Path, cap: Optional[float], on_exceeded: Callable[[float], None], *, commands: Optional[Iterable[str]] = None, started_at: Optional[datetime] = None, poll_interval: float = 2.0, job_id: Optional[str] = None) -> Watcher", "returns": "Watcher"},
       {"name": "Watcher.spent", "signature": "() -> float", "returns": "float"},
       {"name": "Watcher.update_cap", "signature": "(new_cap: Optional[float]) -> None", "returns": "None"},
       {"name": "Watcher.stop", "signature": "() -> None", "returns": "None"}
@@ -121,8 +121,22 @@
     The watcher snapshots the iterable into a frozen set on construction;
     callers do not need to keep the original alive.
   - **`started_at`** (optional): a timezone-aware `datetime` UTC; restrict
-    the spend sum to rows with `timestamp >= started_at`.
+    the spend sum to rows with `timestamp >= started_at`. Naive UTC
+    timestamps in the CSV (legacy track_cost output via
+    `datetime.now().strftime(...)`) MUST be reinterpreted as local
+    time and converted to UTC — `.astimezone(timezone.utc)` on the
+    naive parse result — so they compare cleanly without `TypeError`
+    AND without the 7-hour drift a naive `.replace(tzinfo=utc)`
+    would introduce.
   - **`poll_interval`**: seconds (default `2.0`).
+  - **`job_id`** (optional): when set, the watcher counts only rows
+    whose `job_id` column matches this value. The column is gated on
+    presence in the CSV header — legacy / mid-format CSVs without the
+    column keep falling back to the command + timestamp filter rather
+    than dropping every row (and freezing spend at `$0`). Concurrent
+    same-command jobs sharing a NEW-format CSV are per-job-isolated;
+    jobs sharing a LEGACY-format CSV are not (the caller opted into
+    the shared file).
   - **Returns**: a `Watcher` object with `.spent()`, `.update_cap(...)`, and
     `.stop()`.
 

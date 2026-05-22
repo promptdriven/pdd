@@ -53,12 +53,25 @@
      - `__init__`: Initialize semaphore, thread pool, and process tracking.
      - `submit`: Create background task using `asyncio.create_task`. Accepts
        optional `budget_cap`, `node_budget`, `max_total_cap` keyword arguments
-       and stores them on the `Job`. Starts a `cost_budget_watcher` around the
+       and stores them on the `Job`. Validates each budget kwarg via
+       `budget_settings.validate_amount(...)` BEFORE constructing the Job so a
+       malformed amount cannot enter the system through a programmatic
+       submit (the route's Pydantic gating is a separate layer).
+       Resolves the per-job cost-CSV path at submit time regardless of
+       whether a cap is currently set — uncapped jobs still need a CSV
+       writer so a later `/pdd budget N` arriving as a `update_budget`
+       call has spend rows to enforce against. Resolution mutates
+       `job.options["output_cost"]` when the path is derived under
+       `project_root/.pdd/cost-<job_id>.csv`, and relative explicit
+       paths are absolutized against `project_root` so the watcher
+       (server cwd) and the subprocess (project_root cwd) read/write
+       the same file. Starts a `cost_budget_watcher` around the
        subprocess when an effective cap is active. The effective cap is
        computed by `budget_settings.effective_cap(...)`: for `pdd-issue` it is
        `min(node_budget * max(node_count or 1, 1), max_total_cap)`; for other
-       commands it is `budget_cap`. If no cap is set, no watcher is started
-       and enforcement is skipped.
+       commands it is `budget_cap`. When no cap is set, the per-job CSV
+       is still wired so a later update can enforce, but no watcher is
+       started yet.
      - `cancel`: Robustly terminate/kill subprocess and cancel task. Sets
        `JobStatus.CANCELLED`.
      - `update_budget`: Mutate the active job's budget settings mid-run.
@@ -135,11 +148,15 @@
     `.budget_settings` for the effective-cap computation and `pdd-issue`
     defaults (`node=$80`, `max=$400`).
   - Import `cost_budget_watcher.watch` for the polling watcher; pass the
-    project's cost-CSV path (resolved via `track_cost`'s configured output
-    path, falling back to `PDD_OUTPUT_COST_PATH`), the effective cap, an
-    `on_exceeded(spent)` callback, the job's `started_at` (timezone-aware
-    UTC), and a `commands` set used to filter cost-CSV rows. The set MUST
-    be chosen so it actually matches the rows the running job will write:
+    per-job cost-CSV path resolved at submit time (see `submit` above),
+    the effective cap, an `on_exceeded(spent)` callback, the job's
+    `started_at` (timezone-aware UTC), a `commands` set used to filter
+    cost-CSV rows, and `job_id=Job.id` so the watcher's per-job
+    attribution column (new-format CSVs only) is enforced. The watcher
+    falls back to command+timestamp when the CSV header lacks
+    `job_id`, so legacy/mid CSVs keep working without contamination
+    being detectable. The set MUST be chosen so it actually matches
+    the rows the running job will write:
     - For `pdd-issue` runs (`Job.command == "issue"`): pass the nested
       command set the executor spawns — at minimum
       `{"change", "sync", "bug", "fix", "generate", "test", "example",
@@ -160,6 +177,18 @@
     once cumulative spend across nested subprocesses crosses the cap"; for
     single-command jobs, the cap can be overshot by up to one
     subprocess's spend before `on_exceeded` fires.
+  - `PDD_JOB_ID` env propagation. For the default subprocess path
+    (`_run_click_command`), the manager sets
+    `env['PDD_JOB_ID']=job.id` on each subprocess so `track_cost`
+    can write the `job_id` column. For the CUSTOM EXECUTOR path
+    (the private GitHub App's `pdd-issue` driver), the manager sets
+    `os.environ['PDD_JOB_ID']=job.id` for the duration of the
+    custom executor call (with a try/finally restore) so any
+    subprocess the executor spawns inherits the value via process
+    env. Custom executors that fan out concurrently with
+    `max_concurrent>1` should additionally read `job.id` and pass
+    `PDD_JOB_ID` to each spawned subprocess explicitly, since the
+    `os.environ` mutation is best-effort under concurrency.
   - Robust fallback for `rich.console`.
   - Export: Job, JobManager, JobCallbacks.
 
