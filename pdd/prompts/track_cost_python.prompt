@@ -61,11 +61,17 @@ Changing this contract is a breaking change.
    Readers parse with `datetime.fromisoformat` and compare against a stored
    `job.started_at` to compute spend-since-job-start.
 3. **`command`:** the bare command name as recognised by the Click context
-   (e.g. `generate`, `sync`, `fix`, `change`, `bug`). Watchers filter the CSV
-   by `command` and by `timestamp >= job.started_at` to attribute cost to a
-   specific job. When multiple jobs run the same command concurrently, the
-   filter is best-effort; the GitHub App constrains this by serialising
-   per-issue work.
+   (e.g. `generate`, `sync`, `fix`, `change`, `bug`). Watchers attribute
+   cost to a specific job by filtering on `timestamp >= job.started_at`
+   plus an optional accepted-commands SET (not a single name) — see
+   `cost_budget_watcher_python.prompt`'s `commands` parameter. The set
+   form matters for `pdd-issue`: that command never writes a row with
+   `command="issue"` itself; it spawns nested PDD subprocesses (`change`,
+   `sync`, `bug`, `fix`, `generate`, `test`, ...) and each writes its own
+   row. A watcher restricted to `{"issue"}` would sum to `$0` for a
+   `pdd-issue` job — do not assume single-name filtering. When multiple
+   jobs run the same command concurrently, the filter is best-effort;
+   the GitHub App constrains this by serialising per-issue work.
 4. **`cost`:** a string-formatted positive `float` in USD. Missing/blank/
    non-numeric values MUST be treated by readers as `0.0` rather than raising.
 5. **Append-only:** rows are written by `track_cost` only on command exit
