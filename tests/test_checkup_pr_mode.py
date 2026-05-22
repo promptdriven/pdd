@@ -302,6 +302,24 @@ class TestOrchestratorPrMode:
             return_value=None,
         ), patch(
             "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            # Issue #1116 round-5: fix-mode requires a known entry head
+            # SHA; without this mock the entry _fetch_pr_metadata gh call
+            # fails in the sandbox and the orchestrator fail-closes.
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            return_value={
+                "clone_url": "https://github.com/o/r.git",
+                "head_ref": "change/test",
+                "head_owner": "o",
+                "head_repo": "r",
+                "head_sha": "deadbeef",
+            },
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
         ):
             (tmp_path / "wt").mkdir()
 
@@ -783,13 +801,17 @@ class TestPrModeFixPushBack:
                 "head_ref": "change/test",
                 "head_owner": "o",
                 "head_repo": "r",
+                "head_sha": "deadbeef",
             },
             create=True,
         ) as metadata_mock, patch(
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             return_value=(True, "Pushed fixes to PR branch."),
             create=True,
-        ) as push_mock:
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            return_value="deadbeef",
+        ):
             success, msg, _cost, _model = run_agentic_checkup_orchestrator(
                 issue_url="https://github.com/o/r/issues/99",
                 issue_content="stub",
@@ -1283,6 +1305,16 @@ class TestStateIdentityPrHeadSha:
         (val, val mismatch) branches are already covered by
         ``test_resume_reuses_cache_when_pr_head_sha_matches`` and
         ``test_resume_discards_cache_when_pr_head_sha_advanced``.
+
+        Issue #1116 round-5: invoked in ``no_fix=True`` so the new
+        fix-mode-fail-closed-on-empty-entry-SHA gate (which short-
+        circuits before the state-identity guard runs) does not mask
+        the behavior under test. The resume-cache validation logic is
+        mode-agnostic — exercising it via --no-fix preserves test
+        intent. For combos where ``current_sha`` is empty, --no-fix's
+        own post-Step-7 fail-closed downgrade fires; the assertion now
+        focuses on cache-discard evidence (steps 1-5 re-execute) rather
+        than the run's terminal success.
         """
         from pdd.agentic_checkup_orchestrator import run_agentic_checkup_orchestrator
 
@@ -1354,7 +1386,7 @@ class TestStateIdentityPrHeadSha:
                 cwd=tmp_path,
                 verbose=False,
                 quiet=True,
-                no_fix=False,
+                no_fix=True,
                 timeout_adder=0.0,
                 use_github_state=False,
                 pr_url="https://github.com/o/r/pull/200",
@@ -1363,10 +1395,12 @@ class TestStateIdentityPrHeadSha:
                 pr_number=200,
             )
 
-        assert success is True
         # Fail-closed invalidation. With cache discarded, steps 1-5 MUST
         # re-execute. Without the tightening they'd be replayed from cache
-        # and never appear.
+        # and never appear. (We do not assert ``success`` here because the
+        # combos with empty ``current_sha`` legitimately trigger the
+        # post-Step-7 no-fix freshness downgrade; the contract under test
+        # is cache discard, not terminal success.)
         assert 1 in executed_steps, (
             f"[{combo}] Step 1 must re-run when pr_head_sha cannot be "
             f"verified (cached={cached_sha!r}, current={current_sha!r}); "
@@ -1377,6 +1411,11 @@ class TestStateIdentityPrHeadSha:
             f"verified (cached={cached_sha!r}, current={current_sha!r}); "
             f"ran: {executed_steps}"
         )
+        if current_sha:
+            assert success is True, (
+                f"[{combo}] non-empty current_sha must yield success=True; "
+                f"got {success!r}"
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -3522,13 +3561,17 @@ class TestPrHeadAdvanceAutoRerun:
 
         # Iteration 1: head=A at entry, head=B at checkpoint A -> restart.
         # Iteration 2: head=B at entry, head=B at checkpoint A, head=B at
-        # push block -> no restart, push succeeds, return clean.
+        # push block, head=B at Checkpoint D post-push -> no restart, push
+        # succeeds, return clean. Round-5 Checkpoint D fires after every
+        # successful push (not just no-change), so iter 2 has one extra
+        # metadata fetch compared to the round-4 baseline.
         metadata_sequence = [
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
             _pr_metadata("bbbbbbbb22222222"),  # iter 1 checkpoint A -> RESTART
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 checkpoint A
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 push-block prefetch
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 Checkpoint D
         ]
         setup_calls: list = []
 
@@ -3573,8 +3616,9 @@ class TestPrHeadAdvanceAutoRerun:
         # The first refetch (iter-1 checkpoint A) consumed the second
         # sequence entry; push runs only in iteration 2.
         push_mock.assert_called_once()
-        # 5 calls total: 2 in iter-1, 3 in iter-2.
-        assert metadata_mock.call_count == 5
+        # 6 calls total: 2 in iter-1, 4 in iter-2 (entry + ckpt A +
+        # push-block prefetch + Checkpoint D post-push freshness).
+        assert metadata_mock.call_count == 6
 
     def test_pr_head_advance_via_rebase_conflict_triggers_rerun(
         self, tmp_path: Path
@@ -3594,7 +3638,8 @@ class TestPrHeadAdvanceAutoRerun:
 
         # iter 1: entry=A, checkpoint A=A (no restart), push prefetch=A,
         #         push rebase-conflict, checkpoint B refetch=B -> RESTART.
-        # iter 2: entry=B, checkpoint A=B, push prefetch=B, push OK.
+        # iter 2: entry=B, checkpoint A=B, push prefetch=B, push OK,
+        #         Checkpoint D (round-5) post-push refetch=B -> no restart.
         metadata_sequence = [
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 checkpoint A
@@ -3603,6 +3648,7 @@ class TestPrHeadAdvanceAutoRerun:
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 checkpoint A
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 push prefetch
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 Checkpoint D
         ]
         push_responses = [
             (
@@ -3636,8 +3682,11 @@ class TestPrHeadAdvanceAutoRerun:
             "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
             side_effect=push_responses,
         ) as push_mock, patch(
+            # Local HEAD after a successful push equals what we pushed —
+            # which equals the remote HEAD in iter 2 (Checkpoint D needs
+            # this match to avoid a false-positive restart).
             "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
-            return_value="ffffffff99999999",
+            return_value="bbbbbbbb22222222",
         ), patch(
             "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
         ), patch(
@@ -4154,12 +4203,20 @@ class TestPrHeadAdvanceAutoRerun:
     def test_no_change_push_head_advance_before_final_report_triggers_rerun(
         self, tmp_path: Path, no_change_message: str
     ) -> None:
-        """Codex round-2 Finding 3b: Checkpoint C — a no-change push
-        outcome means we never touched the PR branch. If the head moved
-        between Checkpoint A and the final report, the Step 7 verdict
-        is stale and posting it would be wrong. Checkpoint C must
-        refetch and restart; the stale verdict from iteration 1 must
-        NOT be posted (post_pr_comment seen exactly once for iter 2)."""
+        """Round-5 Finding 1 (was round-1 Finding 2): Checkpoint D — a
+        successful push outcome (including the no-change variants
+        exercised here) opens a window where a third party can advance
+        the remote head before we publish the canonical Step 7 report.
+        Checkpoint D refetches and restarts; the stale verdict from
+        iteration 1 must NOT be posted (post_pr_comment seen exactly
+        once for iter 2).
+
+        Round-5 baseline change: Checkpoint D compares the refetched
+        remote head against ``_git_rev_parse_head(worktree_path)`` (the
+        local pushed SHA) rather than the entry SHA — for a no-change
+        push these are the same value, so behavior is preserved; for a
+        real push the comparison correctly accounts for our own pushed
+        commit moving the head."""
         wt = tmp_path / "wt"
         wt.mkdir()
 
@@ -4171,21 +4228,29 @@ class TestPrHeadAdvanceAutoRerun:
             return (True, output, 0.0, "fake-model")
 
         # iter 1: entry=A, ckptA=A, push prefetch=A, push=(True, no-change),
-        #         ckptC refetch=B -> RESTART.
-        # iter 2: entry=B, ckptA=B, push prefetch=B, push OK, no Checkpoint
-        #         C trigger because push message is the normal "Pushed ..."
+        #         CheckpointD: local=A (no commits), fresh=B -> RESTART.
+        # iter 2: entry=B, ckptA=B, push prefetch=B, push OK (committed C),
+        #         CheckpointD: local=C (our commit), fresh=C -> no restart.
         metadata_sequence = [
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 checkpoint A
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 push prefetch
-            _pr_metadata("bbbbbbbb22222222"),  # iter 1 Checkpoint C refetch
+            _pr_metadata("bbbbbbbb22222222"),  # iter 1 Checkpoint D refetch
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 checkpoint A
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 push prefetch
+            _pr_metadata("cccccccc33333333"),  # iter 2 Checkpoint D refetch
         ]
         push_responses = [
             (True, no_change_message),
             (True, "Pushed fixes to PR branch."),
+        ]
+        # _git_rev_parse_head fires once per Checkpoint D — iter 1 sees
+        # the entry head (no commits made), iter 2 sees the pushed-fix
+        # commit. Round-5 baseline change for Checkpoint D.
+        local_head_sequence = [
+            "aaaaaaaa11111111",  # iter 1 Checkpoint D — entry head
+            "cccccccc33333333",  # iter 2 Checkpoint D — our pushed commit
         ]
 
         with patch(
@@ -4210,7 +4275,7 @@ class TestPrHeadAdvanceAutoRerun:
             side_effect=push_responses,
         ) as push_mock, patch(
             "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
-            return_value="bbbbbbbb22222222",
+            side_effect=local_head_sequence,
         ), patch(
             "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
         ) as pr_comment_mock, patch(
@@ -4235,18 +4300,28 @@ class TestPrHeadAdvanceAutoRerun:
             f"post_pr_comment was called {pr_comment_mock.call_count} times"
         )
 
-    def test_empty_entry_pr_head_sha_does_not_consume_refresh_budget(
+    # ----- Issue #1116 round-5: Checkpoint D (post-successful-push) -----
+
+    def test_pr_head_advance_after_successful_real_push_triggers_rerun(
         self, tmp_path: Path
     ) -> None:
-        """Codex round-2 Finding 4 (nit): when the orchestrator's entry
-        fetch returns ``head_sha=""`` (PR metadata flake), every
-        downstream checkpoint must fail-degrade rather than treat a
-        later non-empty SHA as a head-advance signal. No restart, no
-        sidecar counter file, push runs once."""
-        from pdd.agentic_checkup_orchestrator import (
-            _load_persisted_refresh_count,
-        )
+        """Round-5 Finding 1: Checkpoint D fires after EVERY successful
+        push, not just the no-change variants. The original round-1
+        Checkpoint C only triggered on "No changes to push." / "No
+        eligible changes to push." messages, leaving a stale-verdict
+        window when a real push succeeded and a third party landed
+        further commits before the final report posted. Checkpoint D
+        compares the local pushed SHA (``_git_rev_parse_head``) against
+        the refetched remote head; divergence means *additional*
+        commits landed after ours.
 
+        iter 1: real push of our fix commit (X), but the remote
+        advanced to Y (third-party push) before _post_pr_mode_final_
+        report. Checkpoint D detects local=X vs remote=Y -> restart.
+
+        iter 2: real push from updated baseline, Checkpoint D matches
+        local=Z vs remote=Z -> no restart, verdict published cleanly.
+        """
         wt = tmp_path / "wt"
         wt.mkdir()
 
@@ -4257,14 +4332,105 @@ class TestPrHeadAdvanceAutoRerun:
             )
             return (True, output, 0.0, "fake-model")
 
-        # Entry SHA empty; subsequent fetches return a non-empty SHA
-        # that would otherwise look like an advance. With the
-        # ``current_pr_head_sha and fresh_head_sha`` AND clause in
-        # every checkpoint, the empty entry must fail-degrade.
+        # iter 1: entry=A, ckptA=A, push prefetch=A, push OK,
+        #         Checkpoint D: local=X (our pushed commit) vs fresh=Y
+        #         (third-party push landed after ours) -> RESTART.
+        # iter 2: entry=Y, ckptA=Y, push prefetch=Y, push OK,
+        #         Checkpoint D: local=Z vs fresh=Z -> no restart.
         metadata_sequence = [
-            _pr_metadata(""),                  # entry: empty SHA
-            _pr_metadata("bbbbbbbb22222222"),  # checkpoint A
-            _pr_metadata("bbbbbbbb22222222"),  # push prefetch
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 checkpoint A
+            _pr_metadata("aaaaaaaa11111111"),  # iter 1 push prefetch
+            _pr_metadata("yyyyyyyy55555555"),  # iter 1 Checkpoint D -> advance
+            _pr_metadata("yyyyyyyy55555555"),  # iter 2 entry
+            _pr_metadata("yyyyyyyy55555555"),  # iter 2 checkpoint A
+            _pr_metadata("yyyyyyyy55555555"),  # iter 2 push prefetch
+            _pr_metadata("zzzzzzzz77777777"),  # iter 2 Checkpoint D matches local
+        ]
+        local_head_sequence = [
+            "xxxxxxxx44444444",  # iter 1 Checkpoint D — our pushed commit
+            "zzzzzzzz77777777",  # iter 2 Checkpoint D — final pushed commit
+        ]
+
+        with patch(
+            "pdd.agentic_checkup_orchestrator._setup_pr_worktree",
+            return_value=(wt, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._run_single_step",
+            side_effect=fake_step,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.load_workflow_state",
+            return_value=(None, None),
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.save_workflow_state",
+            return_value=None,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.clear_workflow_state"
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._fetch_pr_metadata",
+            side_effect=metadata_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator._commit_and_push_if_changed",
+            return_value=(True, "Pushed fixes to PR branch."),
+        ) as push_mock, patch(
+            "pdd.agentic_checkup_orchestrator._git_rev_parse_head",
+            side_effect=local_head_sequence,
+        ), patch(
+            "pdd.agentic_checkup_orchestrator.post_pr_comment", return_value=True
+        ) as pr_comment_mock, patch(
+            "pdd.agentic_checkup_orchestrator.post_step_comment", return_value=True
+        ):
+            success, msg, _cost, _model = self._invoke(
+                tmp_path, use_github_state=True
+            )
+
+        assert success is True, msg
+        # Push attempted twice: once per iteration. The first push is
+        # stale (head advanced post-push); the second is clean.
+        assert push_mock.call_count == 2
+        # Critical: only iter 2's (clean) Step 7 verdict published.
+        # The iter-1 stale verdict must NEVER reach the PR thread.
+        assert pr_comment_mock.call_count == 1, (
+            "Stale Step 7 verdict from iter 1 must not be posted; "
+            f"post_pr_comment was called {pr_comment_mock.call_count} times"
+        )
+
+    def test_empty_entry_pr_head_sha_fix_mode_fails_closed(
+        self, tmp_path: Path
+    ) -> None:
+        """Round-5 Finding 2: when the orchestrator's entry
+        ``_fetch_pr_metadata`` returns ``head_sha=""`` (PR metadata
+        flake), fix mode (``no_fix=False``) MUST fail-closed at entry.
+        Every downstream freshness checkpoint gates on a non-empty
+        ``current_pr_head_sha``; without that baseline the entire
+        lease silently disables, leaving a stale-verdict hole if the
+        remote advances mid-run.
+
+        Symmetric with the round-3 --no-fix fail-closed: no restart
+        budget consumed (we don't lease, we abort); no Step 7 runs (the
+        guard fires at PR-mode entry SHA capture, before the step
+        loop); no push attempted. The user retries once gh recovers."""
+        from pdd.agentic_checkup_orchestrator import (
+            _load_persisted_refresh_count,
+        )
+
+        wt = tmp_path / "wt"
+        wt.mkdir()
+
+        step_calls: list = []
+
+        def fake_step(step_num, *_args, **_kwargs):  # noqa: ANN001
+            step_calls.append(step_num)
+            output = (
+                _step7_clean_output() if step_num == 7
+                else f"Step {step_num} output"
+            )
+            return (True, output, 0.0, "fake-model")
+
+        # Entry SHA empty; this is the ONLY metadata call exercised —
+        # the fail-closed guard returns before any checkpoint refetch.
+        metadata_sequence = [
+            _pr_metadata(""),  # entry: empty SHA -> fail-closed
         ]
 
         with patch(
@@ -4297,10 +4463,18 @@ class TestPrHeadAdvanceAutoRerun:
         ):
             success, msg, _cost, _model = self._invoke(tmp_path)
 
-        assert success is True, msg
-        # Single inner run -> push ran exactly once.
-        push_mock.assert_called_once()
-        # No restart consumed -> sidecar never created.
+        assert success is False, msg
+        assert (
+            "Could not determine entry PR head SHA" in msg
+            or "could not determine entry head" in msg.lower()
+        ), f"Diagnostic must explain the missing baseline; got: {msg!r}"
+        # No steps ran — the guard short-circuits before the step loop.
+        assert step_calls == [], (
+            f"Fail-closed must short-circuit before steps; ran: {step_calls}"
+        )
+        # No push attempted — the guard short-circuits before push.
+        push_mock.assert_not_called()
+        # No restart consumed — fail-closed is not a lease event.
         assert _load_persisted_refresh_count(tmp_path, 200) == 0
         assert not self._refresh_counter_path(tmp_path, 200).exists()
 
@@ -4860,7 +5034,8 @@ class TestPrHeadAdvanceAutoRerun:
 
         # iter 1: entry=A, Checkpoint A=A (no restart), push-block
         #          fetch=B (Checkpoint A2 -> RESTART).
-        # iter 2: entry=B, Checkpoint A=B, push-block fetch=B, push OK.
+        # iter 2: entry=B, Checkpoint A=B, push-block fetch=B, push OK,
+        #          Checkpoint D fetch=B (matches local) -> no restart.
         metadata_sequence = [
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 entry
             _pr_metadata("aaaaaaaa11111111"),  # iter 1 Checkpoint A
@@ -4868,6 +5043,7 @@ class TestPrHeadAdvanceAutoRerun:
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 entry
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 Checkpoint A
             _pr_metadata("bbbbbbbb22222222"),  # iter 2 push-block
+            _pr_metadata("bbbbbbbb22222222"),  # iter 2 Checkpoint D
         ]
 
         with patch(
@@ -4911,9 +5087,9 @@ class TestPrHeadAdvanceAutoRerun:
 
         assert success is True, msg
         # iter 1: 3 metadata calls (entry, ckpt A, push-block A2).
-        # iter 2: 3 metadata calls (entry, ckpt A, push-block).
-        assert metadata_mock.call_count == 6, (
-            f"expected 6 metadata calls total; got {metadata_mock.call_count}"
+        # iter 2: 4 metadata calls (entry, ckpt A, push-block, Checkpoint D).
+        assert metadata_mock.call_count == 7, (
+            f"expected 7 metadata calls total; got {metadata_mock.call_count}"
         )
         # The guards must NOT have been consulted in iter 1 (restart
         # raised before reaching them); they run only in iter 2.

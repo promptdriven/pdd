@@ -1245,6 +1245,39 @@ def _run_agentic_checkup_orchestrator_inner(
             metadata_for_guard = {}
         current_pr_head_sha = str(metadata_for_guard.get("head_sha", "") or "")
 
+    # Issue #1116 round-5 Finding 2: fix mode (no_fix=False) requires a
+    # known entry head SHA. All four fix-mode freshness checkpoints
+    # (A, A2, B, D) gate on a non-empty ``current_pr_head_sha`` — with an
+    # empty baseline they all skip, leaving a stale-verdict hole if the
+    # remote advances mid-run. Fail-closed at entry instead, mirroring
+    # the --no-fix round-3 precedent (the --no-fix path detects the same
+    # condition after Step 7). The user retries once gh recovers.
+    #
+    # ``_force_skip_state_load`` (set by the outer wrapper on restart
+    # iterations) means we already discarded prior state — so an empty
+    # SHA here is a fresh transient failure, not a resumed run. Either
+    # way, the outer wrapper does not retry on a plain return; it returns
+    # the message to the caller (pdd-issue / pdd_cloud).
+    if pr_mode and not no_fix and not current_pr_head_sha:
+        if not quiet:
+            console.print(
+                f"[red]PR #{pr_number}: could not determine entry head "
+                f"SHA via _fetch_pr_metadata (transient gh / network "
+                f"failure). Fix-mode checkup needs a known baseline to "
+                f"validate freshness before pushing. Rerun pdd checkup "
+                f"--pr once gh recovers.[/red]"
+            )
+        return (
+            False,
+            (
+                f"Could not determine entry PR head SHA for PR "
+                f"#{pr_number}; fix-mode freshness lease requires a "
+                f"baseline. Rerun pdd checkup --pr."
+            ),
+            total_cost,
+            last_model_used,
+        )
+
     if state is not None:
         # State-identity guard. A state from a prior run on the same
         # issue_number must match the current invocation across FOUR
@@ -2505,46 +2538,56 @@ def _run_agentic_checkup_orchestrator_inner(
                         abort_model,
                     )
                 # ------------------------------------------------------
-                # Codex round-1 Finding 2 — Checkpoint C: a no-change
-                # push outcome means we never actually touched the PR
-                # branch. The head could have advanced between
-                # Checkpoint A's refetch and now, and neither
-                # Checkpoint B (only fires on push failure) nor the
-                # post-push reverify (only fires on rebase-success
-                # marker) covers this gap. Refetch one more time
-                # before publishing the Step 7 verdict; restart if
-                # the head moved so we don't post a stale verdict as
-                # fresh.
+                # Issue #1116 round-5 Finding 1 — Checkpoint D: between
+                # the successful-push paths and the canonical Step 7
+                # report there is a final stale-verdict window where a
+                # third party can push more commits on top of ours. The
+                # narrow round-1 Checkpoint C only fired on
+                # "No changes to push." / "No eligible changes to push.";
+                # plain success and post-rebase reverify-passed paths
+                # skipped the boundary. Broaden the check to fire on
+                # every successful push outcome (the failure paths are
+                # already covered by Checkpoint B above).
+                #
+                # The baseline must NOT be ``current_pr_head_sha`` here
+                # — that's the entry SHA, and after a real push the
+                # remote head moved BECAUSE of us; comparing fresh
+                # against entry would false-positive every push into a
+                # restart. The correct baseline is the local worktree
+                # HEAD: after a normal push it equals our pushed commit,
+                # after a rebase-then-push it equals the rebased commit,
+                # and after a no-change push it equals the entry SHA
+                # (which subsumes round-1 Checkpoint C). A divergence
+                # between local HEAD and the refetched remote head
+                # means *additional* commits landed after ours — the
+                # stale-verdict case.
                 # ------------------------------------------------------
-                if push_message in (
-                    "No changes to push.",
-                    "No eligible changes to push.",
-                ):
-                    try:
-                        fresh_meta_c = _fetch_pr_metadata(
-                            pr_owner, pr_repo, pr_number
-                        )
-                    except Exception:  # noqa: BLE001
-                        fresh_meta_c = {}
-                    fresh_head_sha_c = str(
-                        (fresh_meta_c or {}).get("head_sha", "") or ""
+                local_head_sha_d = _git_rev_parse_head(worktree_path)
+                try:
+                    fresh_meta_d = _fetch_pr_metadata(
+                        pr_owner, pr_repo, pr_number
                     )
-                    if (
-                        fresh_head_sha_c
-                        and current_pr_head_sha
-                        and fresh_head_sha_c != current_pr_head_sha
-                    ):
-                        raise _PRHeadAdvancedRestart(
-                            old_sha=current_pr_head_sha,
-                            new_sha=fresh_head_sha_c,
-                            reason=(
-                                "No-change push completed but PR head "
-                                "advanced before final report"
-                            ),
-                            cost_so_far=total_cost,
-                            model=last_model_used,
-                            step_comments=step_comments_set,
-                        )
+                except Exception:  # noqa: BLE001
+                    fresh_meta_d = {}
+                fresh_head_sha_d = str(
+                    (fresh_meta_d or {}).get("head_sha", "") or ""
+                )
+                if (
+                    fresh_head_sha_d
+                    and local_head_sha_d
+                    and fresh_head_sha_d != local_head_sha_d
+                ):
+                    raise _PRHeadAdvancedRestart(
+                        old_sha=local_head_sha_d,
+                        new_sha=fresh_head_sha_d,
+                        reason=(
+                            "Push completed but PR head advanced "
+                            "beyond pushed commit before final report"
+                        ),
+                        cost_so_far=total_cost,
+                        model=last_model_used,
+                        step_comments=step_comments_set,
+                    )
                 pending_post_suffix = _post_pr_mode_final_report(
                     step_outputs.get("7", step7_output)
                 )
